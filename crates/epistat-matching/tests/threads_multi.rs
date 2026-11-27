@@ -11,7 +11,11 @@ use epistat_matching::imputation::{
     CompleteDataDf, ImputationApproach, ImputedSet, estimate_pooled, match_imputed,
 };
 use epistat_matching::multigroup::{VectorMatchSpec, vector_match};
-use epistat_matching::prelude::*;
+use epistat_matching::output::MatchDataOptions;
+use epistat_matching::{
+    BalanceRecord, CovariateValue, MatchingCriteria, NearestSelection, PropensityScoreConfig,
+    estimate_propensity_and_match,
+};
 use epistat_testkit::{POOLS, assert_same_on_pools, load_json};
 use std::collections::BTreeMap;
 
@@ -59,8 +63,8 @@ fn vector_matching_does_not_depend_on_the_number_of_threads() {
         let mut values = out.gps.probabilities.clone();
         for comparison in &out.comparisons {
             for pair in &comparison.outcome.pairs {
-                values.push(pair.anchor_id()[1..].parse().unwrap());
-                values.push(pair.comparator_id()[1..].parse().unwrap());
+                values.push(pair.case_id.as_str()[1..].parse().unwrap());
+                values.push(pair.control_id.as_str()[1..].parse().unwrap());
             }
         }
         values
@@ -125,11 +129,14 @@ fn imputation_matching_does_not_depend_on_the_number_of_threads() {
     let sets: Vec<ImputedSet<'_, BalanceRecord>> = prepared
         .iter()
         .map(|(a, c)| ImputedSet {
-            anchors: a,
-            candidates: c,
+            cases: a,
+            controls: c,
         })
         .collect();
-    let criteria = MatchingCriteria::builder().match_ratio(1).build();
+    let criteria = MatchingCriteria {
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    };
     for approach in [ImputationApproach::Within, ImputationApproach::Across] {
         assert_same_on_pools(&POOLS, || {
             let matches = match_imputed(
@@ -155,8 +162,8 @@ fn imputation_matching_does_not_depend_on_the_number_of_threads() {
             let mut values = vec![p.estimate, p.within, p.between, p.total, p.df.unwrap()];
             for set in &matches.sets {
                 for pair in &set.outcome.pairs {
-                    values.push(pair.anchor_id().parse().unwrap());
-                    values.push(pair.comparator_id().parse().unwrap());
+                    values.push(pair.case_id.as_str().parse().unwrap());
+                    values.push(pair.control_id.as_str().parse().unwrap());
                 }
             }
             values
@@ -172,11 +179,14 @@ fn within_imputation_matches_each_set_as_a_single_set() {
     let sets: Vec<ImputedSet<'_, BalanceRecord>> = prepared
         .iter()
         .map(|(a, c)| ImputedSet {
-            anchors: a,
-            candidates: c,
+            cases: a,
+            controls: c,
         })
         .collect();
-    let criteria = MatchingCriteria::builder().match_ratio(1).build();
+    let criteria = MatchingCriteria {
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    };
     let config = PropensityScoreConfig::default();
     let matches = match_imputed(
         &sets,
@@ -190,8 +200,8 @@ fn within_imputation_matches_each_set_as_a_single_set() {
     .unwrap();
     for (set, together) in sets.iter().zip(&matches.sets) {
         let alone = estimate_propensity_and_match(
-            set.anchors,
-            set.candidates,
+            set.cases,
+            set.controls,
             &criteria,
             NearestSelection::new(0),
             &[],

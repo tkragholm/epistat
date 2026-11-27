@@ -2,10 +2,18 @@
 //! support against a brute-force scan, input checks, thread independence and
 //! the options of the trial loop.
 
+#[path = "common/trial_panel.rs"]
+mod trial_panel;
 use chrono::{Days, NaiveDate};
 use epistat_matching::DeterministicSelection;
+use epistat_matching::TrialMatching;
 use epistat_matching::prelude::*;
+use epistat_matching::{
+    CommonSupport, ControlReuse, DefaultRiskSetPolicy, DistanceConfig, RiskSetPolicy, TrialOptions,
+    TrialOutcome, exposure_density_sets, match_trials, trial_seed,
+};
 use std::collections::{BTreeMap, BTreeSet};
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows};
 
 type Rec = RoleTransitionRecord<BaseRecord>;
 
@@ -88,14 +96,21 @@ fn trimmed_count(c: &[P], alive: bool, scan: bool, policy: CommonSupport) -> (us
         .with_common_support(Some(policy))
         .with_strategy(DeterministicSelection);
     let o = match (alive, scan) {
-        (false, false) => job.run(),
-        (true, false) => job.with_alive_check().run(),
-        (false, true) => job.with_risk_set_policy(SameRule).run(),
-        (true, true) => job.with_alive_check().with_risk_set_policy(SameRule).run(),
+        (false, false) => job.run().expect("a valid job"),
+        (true, false) => job.with_alive_check().run().expect("a valid job"),
+        (false, true) => job
+            .with_risk_set_policy(SameRule)
+            .run()
+            .expect("a valid job"),
+        (true, true) => job
+            .with_alive_check()
+            .with_risk_set_policy(SameRule)
+            .run()
+            .expect("a valid job"),
     };
     (
-        o.diagnostics.common_support_trimmed_anchors,
-        o.diagnostics.common_support_trimmed_candidates,
+        o.diagnostics.common_support_trimmed_cases,
+        o.diagnostics.common_support_trimmed_controls,
         o.pairs.is_empty() && o.diagnostics.common_support_overlap.is_none(),
     )
 }
@@ -192,13 +207,11 @@ fn event_before_birth_is_an_error_naming_the_id() {
         .with_age_limit(AgeLimitYears::new(18).unwrap())
         .with_strategy(DeterministicSelection)
         .run();
-    assert_eq!(o.pairs, vec![]);
-    assert!(
-        o.diagnostics
-            .exclusion_counts
-            .contains_key(&ExclusionReason::EventBeforeBirth("bad".to_string())),
-        "{:?}",
-        o.diagnostics.exclusion_counts
+    assert_eq!(
+        o.unwrap_err(),
+        Error::EventBeforeBirth {
+            id: "bad".to_string()
+        }
     );
 }
 
@@ -216,13 +229,11 @@ fn duplicate_ids_are_an_error_naming_the_id() {
         .with_birth_window(BirthDateWindowDays::new(30_000).unwrap())
         .with_age_limit(AgeLimitYears::new(100).unwrap())
         .run();
-    assert_eq!(o.pairs, vec![]);
-    assert!(
-        o.diagnostics
-            .exclusion_counts
-            .contains_key(&ExclusionReason::DuplicateId("b".to_string())),
-        "{:?}",
-        o.diagnostics.exclusion_counts
+    assert_eq!(
+        o.unwrap_err(),
+        Error::DuplicateId {
+            id: "b".to_string()
+        }
     );
 }
 
@@ -238,17 +249,18 @@ fn tied_cases_are_not_each_others_controls_and_without_replacement_is_distinct()
             .with_age_limit(AgeLimitYears::new(100).unwrap())
             .with_replacement(false)
             .with_strategy(DeterministicSelection)
-            .run();
+            .run()
+            .expect("a valid job");
         let by: BTreeMap<&str, &P> = c.iter().map(|p| (p.id.as_str(), p)).collect();
         let mut seen = BTreeSet::new();
         for pair in &o.pairs {
-            let a = by[pair.anchor_id()];
-            let k = by[pair.comparator_id()];
+            let a = by[pair.case_id.as_str()];
+            let k = by[pair.control_id.as_str()];
             let d = a.event.unwrap();
             assert!(k.entry.is_none_or(|e| e <= d));
             assert!(k.event.is_none_or(|e| e > d));
             assert!(
-                seen.insert(pair.comparator_id().to_string()),
+                seen.insert(pair.control_id.as_str().to_string()),
                 "control reused"
             );
         }
@@ -276,9 +288,10 @@ fn wide_scan_is_the_same_on_one_and_many_threads() {
             .with_age_limit(AgeLimitYears::new(100).unwrap())
             .with_replacement(false)
             .run()
+            .expect("a valid job")
             .pairs
             .iter()
-            .map(|p| format!("{}>{}", p.anchor_id(), p.comparator_id()))
+            .map(|p| format!("{}>{}", p.case_id.as_str(), p.control_id.as_str()))
             .collect::<Vec<_>>()
     };
     let pool = |t| {
@@ -306,7 +319,8 @@ fn exposure_density_invariants() {
             .with_birth_window(b)
             .with_age_limit(AgeLimitYears::new(100).unwrap())
             .with_replacement(replacement)
-            .run();
+            .run()
+            .expect("a valid job");
         let r = exposure_density_sets(&cohort, o).unwrap();
         let mut total = 0;
         for e in &r.exposed {
@@ -332,12 +346,12 @@ fn exposure_density_invariants() {
     }
 }
 
-fn tp(id: &str, rows: &[(i64, Option<bool>)]) -> TrialPerson<BaseRecord> {
-    TrialPerson {
+fn tp(id: &str, rows: &[(i64, Option<bool>)]) -> PanelPerson<BaseRecord> {
+    PanelPerson {
         record: BaseRecord::new(id, birth()),
         periods: rows
             .iter()
-            .map(|&(period, treatment)| TrialPeriod {
+            .map(|&(period, treatment)| PanelPeriod {
                 period,
                 date: day(period.unsigned_abs() * 30),
                 eligible: true,
@@ -349,19 +363,18 @@ fn tp(id: &str, rows: &[(i64, Option<bool>)]) -> TrialPerson<BaseRecord> {
 }
 
 fn run_trials(
-    panel: &[TrialPerson<BaseRecord>],
+    panel: &[PanelPerson<BaseRecord>],
     options: &TrialOptions,
     replacement: bool,
 ) -> TrialOutcome {
-    match_trials(panel, options, |pool| {
-        Ok::<_, std::convert::Infallible>(
-            pool.job(trial_seed(1, pool.period()))
-                .with_ratio(MatchRatio::new(1).unwrap())
-                .with_birth_window(BirthDateWindowDays::new(30_000).unwrap())
-                .with_age_limit(AgeLimitYears::new(100).unwrap())
-                .with_replacement(replacement)
-                .run(),
-        )
+    let rows = PanelRows::of(panel);
+    match_trials(&rows.panel(), options, &TrialMatching::default(), |pool| {
+        pool.job(trial_seed(1, pool.period()))
+            .with_ratio(MatchRatio::new(1).unwrap())
+            .with_birth_window(BirthDateWindowDays::new(30_000).unwrap())
+            .with_age_limit(AgeLimitYears::new(100).unwrap())
+            .with_replacement(replacement)
+            .run()
     })
     .unwrap()
 }
@@ -409,13 +422,13 @@ fn trial_reuse_options() {
     for t in &once.trials {
         for p in &t.outcome.pairs {
             let at = *first_trial
-                .entry(p.comparator_id().to_string())
+                .entry(p.control_id.as_str().to_string())
                 .or_insert(t.period);
             assert_eq!(
                 at,
                 t.period,
                 "{} served in trials {at} and {}",
-                p.comparator_id(),
+                p.control_id.as_str(),
                 t.period
             );
         }

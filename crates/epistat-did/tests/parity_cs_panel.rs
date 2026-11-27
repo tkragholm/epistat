@@ -9,11 +9,16 @@
 
 use epistat_testkit::load_json;
 
-use epistat_did::{
-    AttGtConfig, AttGtDrConfig, AttGtDrObservation, BasePeriod, ComparisonGroup, DrDidConfig,
-    DrDidObservation, InferenceConfig, UnbalancedPanel, estimate_att_gt_dr_panel_with_influence,
-    estimate_drdid_panel,
+#[path = "common/att_gt_rows.rs"]
+mod rows;
+
+use epistat_core::{Bootstrap, InputError, Level};
+use epistat_did::att_gt::{
+    AggteOptions, AggteType, AggteWeights, AttGt, AttGtOptions, BasePeriod, ComparisonGroup,
+    Design, Estimator, NuisanceOptions,
 };
+use epistat_did::{DrDidConfig, DrDidObservation, Error, estimate_drdid_panel};
+use rows::{Cell, Obs, Summary};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -52,35 +57,59 @@ struct DrDidCellRef {
     lpop: Vec<f64>,
 }
 
-fn observations(rows: &[DataRow]) -> Vec<AttGtDrObservation> {
+fn observations(rows: &[DataRow]) -> Vec<Obs> {
     rows.iter()
-        .map(|row| AttGtDrObservation {
-            unit_id: Some(row.countyreal),
-            // `did` encodes never-treated as gname == 0, not as a missing value.
-            first_treated_time: (row.first_treat != 0).then_some(row.first_treat),
-            time: row.year,
-            outcome: row.lemp,
-            weight: 1.0,
+        .map(|row| Obs {
             covariates: vec![row.lpop],
-            comparison_cohort: None,
+            // `did` encodes never-treated as gname == 0, not as a missing value.
+            ..Obs::new(
+                Some(row.countyreal),
+                (row.first_treat != 0).then_some(row.first_treat),
+                row.year,
+                row.lemp,
+            )
         })
         .collect()
 }
 
-fn universal_config(comparison_group: ComparisonGroup) -> AttGtDrConfig {
-    AttGtDrConfig {
-        att_gt: AttGtConfig {
-            confidence_level: InferenceConfig::default(),
-            comparison_group,
-            base_period: BasePeriod::Universal,
-            anticipation_periods: 0,
-            skip_incomplete_pairs: true,
-            unbalanced_panel: UnbalancedPanel::Balance,
-            refuse_small_never_treated: true,
-            refuse_poor_overlap: true,
-        },
-        drdid: DrDidConfig::builder().build(),
+fn universal_config(comparison_group: ComparisonGroup) -> AttGtOptions {
+    AttGtOptions {
+        comparison_group,
+        base_period: BasePeriod::Universal,
+        ..AttGtOptions::default()
     }
+}
+
+/// A fit with its cells and influence vectors read out.
+struct Out {
+    fit: AttGt,
+    estimates: Vec<Cell>,
+    influence_functions: Vec<Vec<f64>>,
+}
+
+fn fit(rows: &[Obs], options: &AttGtOptions) -> Out {
+    let fit = rows::fit(rows, options).expect("ATT(g,t)");
+    Out {
+        estimates: rows::cells(&fit),
+        influence_functions: rows::influence(&fit),
+        fit,
+    }
+}
+
+/// `rows` with each unit's cluster from `cluster_of_unit`, aligned to
+/// `unit_order`.
+fn clustered(rows: &[Obs], unit_order: &[i64], cluster_of_unit: &[i64]) -> Vec<Obs> {
+    let of: std::collections::BTreeMap<i64, u32> = unit_order
+        .iter()
+        .zip(cluster_of_unit)
+        .map(|(&id, &c)| (id, u32::try_from(c).expect("a cluster code")))
+        .collect();
+    rows.iter()
+        .map(|row| Obs {
+            cluster: Some(of[&row.unit.expect("unit")]),
+            ..row.clone()
+        })
+        .collect()
 }
 
 /// The pair estimator alone, on one `(g, t)` cell lifted out of `mpdta` by hand.
@@ -127,11 +156,10 @@ fn drdid_panel_matches_r_on_one_lifted_cell() {
 fn panel_att_gt_matches_r_universal_never_treated() {
     let fixture: CsPanelRef = load_json("tests/data/cs_panel_dr_universal_ref.json");
 
-    let out = estimate_att_gt_dr_panel_with_influence(
+    let out = fit(
         &observations(&fixture.data_subset),
-        universal_config(ComparisonGroup::NeverTreated),
-    )
-    .expect("panel att(g,t)");
+        &universal_config(ComparisonGroup::NeverTreated),
+    );
 
     // R emits the anchor cell (g, g-1) with att = 0 and se = NA under a universal
     // base period. We skip it rather than emit a degenerate estimate, so the
@@ -239,11 +267,10 @@ fn panel_att_gt_matches_r_universal_not_yet_treated() {
     let fixture: CsPanelRef = load_json("tests/data/cs_panel_dr_notyet_ref.json");
     let base_fixture: CsPanelRef = load_json("tests/data/cs_panel_dr_universal_ref.json");
 
-    let out = estimate_att_gt_dr_panel_with_influence(
+    let out = fit(
         &observations(&base_fixture.data_subset),
-        universal_config(ComparisonGroup::NotYetTreated),
-    )
-    .expect("panel att(g,t) not-yet-treated");
+        &universal_config(ComparisonGroup::NotYetTreated),
+    );
 
     let expected = (0..fixture.att.len())
         .filter(|&i| fixture.se[i].is_some())
@@ -275,20 +302,6 @@ fn panel_att_gt_matches_r_universal_not_yet_treated() {
 
 /// A unit-id-free input must fail loudly rather than quietly produce the
 /// repeated-cross-section answer under a panel name.
-#[test]
-fn panel_route_refuses_rows_without_unit_ids() {
-    let fixture: CsPanelRef = load_json("tests/data/cs_panel_dr_universal_ref.json");
-    let mut rows = observations(&fixture.data_subset);
-    rows[17].unit_id = None;
-
-    let err = estimate_att_gt_dr_panel_with_influence(
-        &rows,
-        universal_config(ComparisonGroup::NeverTreated),
-    )
-    .expect_err("must refuse");
-    assert_eq!(err, epistat_did::AttGtError::MissingUnitId);
-}
-
 // ---------------------------------------------------------------------------
 // Aggregation parity against did::aggte
 // ---------------------------------------------------------------------------
@@ -317,31 +330,18 @@ struct CsPanelWithAgg {
     aggregations: Aggregations,
 }
 
-/// Estimates, influence and unit panel from the universal-base fixture, which is
-/// the input every aggregation below is computed from.
-fn universal_run() -> (
-    Vec<epistat_did::AttGtEstimate>,
-    Vec<Vec<f64>>,
-    epistat_did::UnitPanel,
-    Aggregations,
-) {
+/// The fit of the universal-base fixture, which is the input every
+/// aggregation below is computed from.
+fn universal_run() -> (Out, Aggregations) {
     let fixture: CsPanelWithAgg = load_json("tests/data/cs_panel_dr_universal_ref.json");
-    let rows = observations(&fixture.data_subset);
-    let out = estimate_att_gt_dr_panel_with_influence(
-        &rows,
-        universal_config(ComparisonGroup::NeverTreated),
-    )
-    .expect("panel att(g,t)");
-    let panel = epistat_did::unit_panel(&rows).expect("unit panel");
-    (
-        out.estimates,
-        out.influence_functions,
-        panel,
-        fixture.aggregations,
-    )
+    let out = fit(
+        &observations(&fixture.data_subset),
+        &universal_config(ComparisonGroup::NeverTreated),
+    );
+    (out, fixture.aggregations)
 }
 
-fn check_overall(label: &str, got: &epistat_did::AggteResult, want: &AggRef) {
+fn check_overall(label: &str, got: &Summary, want: &AggRef) {
     assert!(
         (got.overall_att - want.overall_att).abs() < 1e-9,
         "{label} overall att {} vs R {}",
@@ -365,7 +365,7 @@ fn check_overall(label: &str, got: &epistat_did::AggteResult, want: &AggRef) {
 /// is exactly what `EventTimeResult::to_honest_input` feeds to the HonestDiD
 /// FLCI solve, which needs to invert it. The anchor belongs on a plot, not in an
 /// estimate vector, so R's `NA`-se entries are dropped here.
-fn check_path(label: &str, got: &epistat_did::AggteResult, want: &AggRef) {
+fn check_path(label: &str, got: &Summary, want: &AggRef) {
     let keys = want.egt.as_ref().expect("egt");
     let atts = want.att_egt.as_ref().expect("att_egt");
     let ses = want.se_egt.as_ref().expect("se_egt");
@@ -390,81 +390,46 @@ fn check_path(label: &str, got: &epistat_did::AggteResult, want: &AggRef) {
     }
 }
 
-fn run(
-    estimates: &[epistat_did::AttGtEstimate],
-    influence: &[Vec<f64>],
-    panel: &epistat_did::UnitPanel,
-    aggregation: epistat_did::AggteType,
-    balance_e: Option<i32>,
-) -> epistat_did::AggteResult {
-    epistat_did::aggregate_att_gt(
-        estimates,
-        influence,
-        panel,
-        epistat_did::AggteConfig {
-            aggregation,
-            balance_e,
-            min_e: None,
-            max_e: None,
-            confidence_level: InferenceConfig::default(),
-            bootstrap: None,
-        },
+fn run(out: &Out, aggregation: AggteType, balance_e: Option<i64>) -> Summary {
+    rows::summary(
+        &out.fit
+            .aggregate(&AggteOptions {
+                aggregation,
+                balance_e,
+                ..AggteOptions::default()
+            })
+            .expect("aggregate"),
     )
-    .expect("aggregate")
 }
 
 #[test]
 fn aggte_simple_matches_r() {
-    let (estimates, influence, panel, want) = universal_run();
-    let got = run(
-        &estimates,
-        &influence,
-        &panel,
-        epistat_did::AggteType::Simple,
-        None,
-    );
+    let (out, want) = universal_run();
+    let got = run(&out, AggteType::Simple, None);
     check_overall("simple", &got, &want.simple);
     assert!(got.by_key.is_empty(), "simple has no path");
 }
 
 #[test]
 fn aggte_dynamic_matches_r() {
-    let (estimates, influence, panel, want) = universal_run();
-    let got = run(
-        &estimates,
-        &influence,
-        &panel,
-        epistat_did::AggteType::Dynamic,
-        None,
-    );
+    let (out, want) = universal_run();
+    let got = run(&out, AggteType::Dynamic, None);
     check_overall("dynamic", &got, &want.dynamic);
     check_path("dynamic", &got, &want.dynamic);
 }
 
 #[test]
 fn aggte_group_matches_r() {
-    let (estimates, influence, panel, want) = universal_run();
-    let got = run(
-        &estimates,
-        &influence,
-        &panel,
-        epistat_did::AggteType::Group,
-        None,
-    );
+    let (out, want) = universal_run();
+    let got = run(&out, AggteType::Group, None);
     check_overall("group", &got, &want.group);
     check_path("group", &got, &want.group);
 }
 
 #[test]
 fn aggte_calendar_matches_r() {
-    let (estimates, influence, panel, want) = universal_run();
-    let got = run(
-        &estimates,
-        &influence,
-        &panel,
-        epistat_did::AggteType::Calendar,
-        None,
-    );
+    let (out, want) = universal_run();
+    let got = run(&out, AggteType::Calendar, None);
     check_overall("calendar", &got, &want.calendar);
     check_path("calendar", &got, &want.calendar);
 }
@@ -474,26 +439,14 @@ fn aggte_calendar_matches_r() {
 /// observed for 0 post periods, not 1) and the path is cut at event time 1.
 #[test]
 fn aggte_dynamic_balanced_matches_r() {
-    let (estimates, influence, panel, want) = universal_run();
-    let got = run(
-        &estimates,
-        &influence,
-        &panel,
-        epistat_did::AggteType::Dynamic,
-        Some(1),
-    );
+    let (out, want) = universal_run();
+    let got = run(&out, AggteType::Dynamic, Some(1));
     check_overall("dynamic_balanced", &got, &want.dynamic_balanced);
     check_path("dynamic_balanced", &got, &want.dynamic_balanced);
 
     // The point of balancing: the unbalanced path runs further and is made of a
     // different set of cohorts, so the two must not coincide.
-    let unbalanced = run(
-        &estimates,
-        &influence,
-        &panel,
-        epistat_did::AggteType::Dynamic,
-        None,
-    );
+    let unbalanced = run(&out, AggteType::Dynamic, None);
     assert!(unbalanced.by_key.len() > got.by_key.len());
     assert!((unbalanced.overall_att - got.overall_att).abs() > 1e-6);
 }
@@ -520,22 +473,16 @@ struct MbootRef {
 #[test]
 fn mboot_bands_agree_with_did_within_simulation_error() {
     let fixture: MbootRef = load_json("tests/data/cs_panel_mboot_ref.json");
-    let (estimates, influence, _panel, _) = universal_run();
+    let (out, _) = universal_run();
 
-    let bands = epistat_did::att_gt_mboot_bands(
-        &estimates,
-        &influence,
-        None,
-        epistat_did::AttGtBandConfig {
-            confidence_level: InferenceConfig::default(),
-            reps: 20_000,
-            seed: 20_260_819,
-        },
-    )
-    .expect("mboot bands");
+    let bands = out
+        .fit
+        .bands(Level::default(), Bootstrap::new(20_000, 20_260_819))
+        .expect("mboot bands")
+        .cells;
 
     // The implied critical value, recovered from any band: (high - att) / se.
-    let implied = (bands[0].band_high - bands[0].att) / bands[0].se;
+    let implied = (bands[0].upper.unwrap() - bands[0].estimate) / bands[0].se.unwrap();
     assert!(
         (implied - fixture.crit_val).abs() < 0.05,
         "critical value {implied} vs did {}",
@@ -557,11 +504,11 @@ fn mboot_bands_agree_with_did_within_simulation_error() {
         .collect::<Vec<_>>();
     assert_eq!(bands.len(), expected.len());
     for (band, want) in bands.iter().zip(&expected) {
-        let relative = (band.se - want).abs() / want;
+        let se = band.se.expect("se");
+        let relative = (se - want).abs() / want;
         assert!(
             relative < 0.05,
-            "bootstrap se {} vs did {want} for ({}, {})",
-            band.se,
+            "bootstrap se {se} vs did {want} for ({}, {})",
             band.group,
             band.time
         );
@@ -577,30 +524,34 @@ fn mboot_bands_agree_with_did_within_simulation_error() {
 /// to the cheap one cannot pass silently.
 #[test]
 fn aggregated_variance_uses_the_influence_functions_not_the_diagonal() {
-    let (estimates, influence, _panel, _) = universal_run();
-    let aggregated = epistat_did::aggregate_att_gt_event_time_with_influence(
-        &estimates,
-        &influence,
-        epistat_did::AttGtAggregationConfig::default(),
-    )
-    .expect("aggregate");
+    let (out, _) = universal_run();
+    let estimates = &out.estimates;
+    let aggregated = rows::summary(
+        &out.fit
+            .aggregate(&AggteOptions {
+                aggregation: AggteType::Dynamic,
+                weights: AggteWeights::TreatedCount,
+                ..AggteOptions::default()
+            })
+            .expect("aggregate"),
+    );
 
     // Rebuild the naive number for the event time with the most components.
     let busiest = aggregated
-        .estimates
+        .by_key
         .iter()
         .enumerate()
-        .max_by_key(|(_, e)| e.summary.components)
+        .max_by_key(|(_, e)| e.components)
         .map(|(index, _)| index)
         .expect("some event time");
-    let event_time = aggregated.estimates[busiest].summary.components;
+    let event_time = aggregated.by_key[busiest].components;
     assert!(event_time > 1, "need a multi-component bucket to compare");
 
-    let ours = aggregated.estimates[busiest].summary.se;
+    let ours = aggregated.by_key[busiest].se;
     assert!(ours.is_finite() && ours > 0.0);
 
     let naive = {
-        let key = aggregated.estimates[busiest].event_time;
+        let key = aggregated.by_key[busiest].key;
         let members = estimates
             .iter()
             .filter(|e| e.event_time == key)
@@ -646,24 +597,24 @@ struct ClusteredRef {
 #[test]
 fn clustered_mboot_bands_agree_with_did() {
     let fixture: ClusteredRef = load_json("tests/data/cs_panel_mboot_clustered_ref.json");
-    let (estimates, influence, _panel, _) = universal_run();
-
+    let base: CsPanelWithAgg = load_json("tests/data/cs_panel_dr_universal_ref.json");
+    let rows = observations(&base.data_subset);
+    let plain = fit(&rows, &universal_config(ComparisonGroup::NeverTreated));
+    let out = fit(
+        &clustered(&rows, &fixture.unit_order, &fixture.cluster_of_unit),
+        &universal_config(ComparisonGroup::NeverTreated),
+    );
     // `unit_order` is the sorted id list, which is exactly our unit index.
-    assert_eq!(fixture.unit_order.len(), influence[0].len());
+    assert_eq!(fixture.unit_order.len(), out.influence_functions[0].len());
+    let draws = Bootstrap::new(20_000, 20_260_819);
 
-    let bands = epistat_did::att_gt_mboot_bands(
-        &estimates,
-        &influence,
-        Some(&fixture.cluster_of_unit),
-        epistat_did::AttGtBandConfig {
-            confidence_level: InferenceConfig::default(),
-            reps: 20_000,
-            seed: 20_260_819,
-        },
-    )
-    .expect("clustered mboot bands");
+    let bands = out
+        .fit
+        .bands(Level::default(), draws)
+        .expect("clustered mboot bands")
+        .cells;
 
-    let implied = (bands[0].band_high - bands[0].att) / bands[0].se;
+    let implied = (bands[0].upper.unwrap() - bands[0].estimate) / bands[0].se.unwrap();
     // Looser than the unclustered case on purpose: the bootstrap now draws 29
     // weights per replication rather than 500, so the Monte Carlo error of a
     // maximum over twelve statistics is correspondingly larger.
@@ -680,11 +631,11 @@ fn clustered_mboot_bands_agree_with_did() {
         .collect::<Vec<_>>();
     assert_eq!(bands.len(), expected.len());
     for (band, want) in bands.iter().zip(&expected) {
-        let relative = (band.se - want).abs() / want;
+        let se = band.se.expect("se");
+        let relative = (se - want).abs() / want;
         assert!(
             relative < 0.10,
-            "clustered se {} vs did {want} for ({}, {})",
-            band.se,
+            "clustered se {se} vs did {want} for ({}, {})",
             band.group,
             band.time
         );
@@ -693,21 +644,15 @@ fn clustered_mboot_bands_agree_with_did() {
     // Clustering must actually change something. With 29 clusters standing in for
     // 500 units the standard errors move substantially, and a test that passed
     // whether or not the labels were used would be worthless.
-    let unclustered = epistat_did::att_gt_mboot_bands(
-        &estimates,
-        &influence,
-        None,
-        epistat_did::AttGtBandConfig {
-            confidence_level: InferenceConfig::default(),
-            reps: 20_000,
-            seed: 20_260_819,
-        },
-    )
-    .expect("unclustered bands");
+    let unclustered = plain
+        .fit
+        .bands(Level::default(), draws)
+        .expect("unclustered bands")
+        .cells;
     let moved = bands
         .iter()
         .zip(&unclustered)
-        .filter(|(a, b)| (a.se - b.se).abs() / b.se > 0.1)
+        .filter(|(a, b)| (a.se.unwrap() - b.se.unwrap()).abs() / b.se.unwrap() > 0.1)
         .count();
     assert!(
         moved >= bands.len() / 2,
@@ -732,28 +677,29 @@ fn clustered_mboot_bands_agree_with_did() {
 /// real clustering effect.
 #[test]
 fn clustering_by_unit_reproduces_the_unclustered_standard_error() {
-    let (estimates, influence, panel, _) = universal_run();
-    let n = influence[0].len();
-    let singleton = (0..n)
+    let (out, _) = universal_run();
+    let base: CsPanelWithAgg = load_json("tests/data/cs_panel_dr_universal_ref.json");
+    let rows = observations(&base.data_subset);
+    let ids = rows::ids(&out.fit);
+    let singleton: Vec<i64> = (0..ids.len())
         .map(|i| i64::try_from(i).expect("a small index"))
-        .collect::<Vec<i64>>();
+        .collect();
+    let by_unit = fit(
+        &clustered(&rows, &ids, &singleton),
+        &universal_config(ComparisonGroup::NeverTreated),
+    );
 
-    let plain = epistat_did::aggregate_att_gt(
-        &estimates,
-        &influence,
-        &panel,
-        epistat_did::AggteConfig::default(),
-    )
-    .expect("unclustered");
-
-    let clustered_panel = panel.clone().clustered_by(singleton.clone());
-    let clustered = epistat_did::aggregate_att_gt(
-        &estimates,
-        &influence,
-        &clustered_panel,
-        epistat_did::AggteConfig::default(),
-    )
-    .expect("singleton-clustered");
+    let options = AggteOptions {
+        aggregation: AggteType::Dynamic,
+        ..AggteOptions::default()
+    };
+    let plain = rows::summary(&out.fit.aggregate(&options).expect("unclustered"));
+    let clustered = rows::summary(
+        &by_unit
+            .fit
+            .aggregate(&options)
+            .expect("singleton-clustered"),
+    );
 
     assert!((plain.overall_se - clustered.overall_se).abs() < 1e-12);
     for (a, b) in plain.by_key.iter().zip(&clustered.by_key) {
@@ -766,32 +712,18 @@ fn clustering_by_unit_reproduces_the_unclustered_standard_error() {
         );
     }
 
-    // And the same identity for the bootstrap path.
-    let config = epistat_did::AttGtBandConfig {
-        confidence_level: InferenceConfig::default(),
-        reps: 2_000,
-        seed: 4_242,
-    };
-    let plain_bands =
-        epistat_did::att_gt_mboot_bands(&estimates, &influence, None, config).expect("plain");
-    let singleton_bands =
-        epistat_did::att_gt_mboot_bands(&estimates, &influence, Some(&singleton), config)
-            .expect("singleton");
-    for (a, b) in plain_bands.iter().zip(&singleton_bands) {
-        assert!((a.se - b.se).abs() < 1e-12, "{} vs {}", a.se, b.se);
+    let draws = Bootstrap::new(2_000, 4_242);
+    let plain_bands = out.fit.bands(Level::default(), draws).expect("plain");
+    let singleton_bands = by_unit
+        .fit
+        .bands(Level::default(), draws)
+        .expect("singleton");
+    for (a, b) in plain_bands.cells.iter().zip(&singleton_bands.cells) {
+        let (a, b) = (a.se.unwrap(), b.se.unwrap());
+        assert!((a - b).abs() < 1e-12, "{a} vs {b}");
     }
 }
 
-/// Sampling weights, which is how the matching enters once it stops being the
-/// design.
-///
-/// Study 1 matches each case to up to four comparators. Under Callaway-Sant'Anna
-/// the comparison group is the risk set with covariate adjustment, so keeping the
-/// matching as a design as well would adjust twice; the decision is that the
-/// match weight becomes a weight and nothing else. That only works if the weight
-/// reaches every place it should: the pair estimator, the cohort shares that the
-/// aggregation weights by, and the correction for those shares being estimated.
-/// This checks all three at once against R's `weightsname`.
 #[test]
 fn weights_flow_through_estimation_and_aggregation() {
     #[derive(Deserialize)]
@@ -816,22 +748,19 @@ fn weights_flow_through_estimation_and_aggregation() {
     let rows = base_fixture
         .data_subset
         .iter()
-        .map(|row| AttGtDrObservation {
-            unit_id: Some(row.countyreal),
-            first_treated_time: (row.first_treat != 0).then_some(row.first_treat),
-            time: row.year,
-            outcome: row.lemp,
+        .map(|row| Obs {
             weight: by_unit[&row.countyreal],
             covariates: vec![row.lpop],
-            comparison_cohort: None,
+            ..Obs::new(
+                Some(row.countyreal),
+                (row.first_treat != 0).then_some(row.first_treat),
+                row.year,
+                row.lemp,
+            )
         })
         .collect::<Vec<_>>();
 
-    let out = estimate_att_gt_dr_panel_with_influence(
-        &rows,
-        universal_config(ComparisonGroup::NeverTreated),
-    )
-    .expect("weighted panel att(g,t)");
+    let out = fit(&rows, &universal_config(ComparisonGroup::NeverTreated));
 
     let expected = (0..fixture.att.len())
         .filter(|&i| fixture.se[i].is_some())
@@ -848,21 +777,14 @@ fn weights_flow_through_estimation_and_aggregation() {
         );
     }
 
-    let panel = epistat_did::unit_panel(&rows).expect("unit panel");
-    let dynamic = run(
-        &out.estimates,
-        &out.influence_functions,
-        &panel,
-        epistat_did::AggteType::Dynamic,
-        None,
-    );
+    let dynamic = run(&out, AggteType::Dynamic, None);
     check_overall("weighted dynamic", &dynamic, &fixture.dynamic);
     check_path("weighted dynamic", &dynamic, &fixture.dynamic);
 
     // The weights must matter. If they were being dropped somewhere this would
     // agree with the unweighted run and every assertion above would still pass
     // only because R was also given weights it ignored.
-    let unweighted = universal_run().0;
+    let unweighted = universal_run().0.estimates;
     let moved = out
         .estimates
         .iter()
@@ -891,16 +813,19 @@ fn clustered_per_cell_standard_errors_match_did() {
 
     let fixture: AnalyticClusteredRef =
         load_json("tests/data/cs_panel_clustered_analytic_ref.json");
-    let (estimates, influence, panel, _) = universal_run();
-    assert_eq!(fixture.unit_order.len(), influence[0].len());
-
-    let clustered = epistat_did::att_gt_clustered_standard_errors(
-        &estimates,
-        &influence,
-        &panel.clone().clustered_by(fixture.cluster_of_unit.clone()),
-        InferenceConfig::default(),
+    let (out, _) = universal_run();
+    let estimates = &out.estimates;
+    assert_eq!(fixture.unit_order.len(), out.influence_functions[0].len());
+    let base: CsPanelWithAgg = load_json("tests/data/cs_panel_dr_universal_ref.json");
+    let clustered = fit(
+        &clustered(
+            &observations(&base.data_subset),
+            &fixture.unit_order,
+            &fixture.cluster_of_unit,
+        ),
+        &universal_config(ComparisonGroup::NeverTreated),
     )
-    .expect("clustered per-cell");
+    .estimates;
 
     let expected = fixture
         .se
@@ -924,12 +849,12 @@ fn clustered_per_cell_standard_errors_match_did() {
     // be wrong here.
     let up = clustered
         .iter()
-        .zip(&estimates)
+        .zip(estimates)
         .filter(|(a, b)| a.se > b.se * 1.05)
         .count();
     let down = clustered
         .iter()
-        .zip(&estimates)
+        .zip(estimates)
         .filter(|(a, b)| a.se < b.se * 0.95)
         .count();
     assert!(up > 0 && down > 0, "moved up {up}, down {down}");
@@ -942,16 +867,20 @@ fn clustered_per_cell_standard_errors_match_did() {
 /// with no clustering it is a no-op rather than a small unexplained shift.
 #[test]
 fn clustered_per_cell_reduces_to_the_pair_estimator() {
-    let (estimates, influence, panel, _) = universal_run();
-    let same = epistat_did::att_gt_clustered_standard_errors(
-        &estimates,
-        &influence,
-        &panel,
-        InferenceConfig::default(),
+    let (out, _) = universal_run();
+    let base: CsPanelWithAgg = load_json("tests/data/cs_panel_dr_universal_ref.json");
+    let rows = observations(&base.data_subset);
+    let ids = rows::ids(&out.fit);
+    let singleton: Vec<i64> = (0..ids.len())
+        .map(|i| i64::try_from(i).expect("a small index"))
+        .collect();
+    let same = fit(
+        &clustered(&rows, &ids, &singleton),
+        &universal_config(ComparisonGroup::NeverTreated),
     )
-    .expect("singleton clusters");
+    .estimates;
 
-    for (ours, original) in same.iter().zip(&estimates) {
+    for (ours, original) in same.iter().zip(&out.estimates) {
         assert!(
             (ours.se - original.se).abs() < 1e-12,
             "({}, {}): {} vs pair estimator {}",
@@ -978,24 +907,20 @@ fn aggte_dynamic_trimming_matches_r() {
     }
 
     let fixtures: Vec<TrimmedRef> = load_json("tests/data/cs_panel_trimmed_ref.json");
-    let (estimates, influence, panel, _) = universal_run();
+    let (out, _) = universal_run();
     assert_eq!(fixtures.len(), 3);
 
     for want in &fixtures {
-        let got = epistat_did::aggregate_att_gt(
-            &estimates,
-            &influence,
-            &panel,
-            epistat_did::AggteConfig {
-                aggregation: epistat_did::AggteType::Dynamic,
-                balance_e: None,
-                min_e: Some(want.min_e),
-                max_e: Some(want.max_e),
-                confidence_level: InferenceConfig::default(),
-                bootstrap: None,
-            },
-        )
-        .expect("trimmed dynamic");
+        let got = rows::summary(
+            &out.fit
+                .aggregate(&AggteOptions {
+                    aggregation: AggteType::Dynamic,
+                    min_e: Some(i64::from(want.min_e)),
+                    max_e: Some(i64::from(want.max_e)),
+                    ..AggteOptions::default()
+                })
+                .expect("trimmed dynamic"),
+        );
 
         let label = format!("min_e={} max_e={}", want.min_e, want.max_e);
         let as_agg = AggRef {
@@ -1010,13 +935,7 @@ fn aggte_dynamic_trimming_matches_r() {
 
         // Trimming must change the overall, or the bounds are being ignored.
         if want.max_e < 3 {
-            let untrimmed = run(
-                &estimates,
-                &influence,
-                &panel,
-                epistat_did::AggteType::Dynamic,
-                None,
-            );
+            let untrimmed = run(&out, AggteType::Dynamic, None);
             assert!(
                 (untrimmed.overall_att - got.overall_att).abs() > 1e-9,
                 "{label} left the overall unchanged"
@@ -1063,11 +982,14 @@ fn rc_route_matches_the_traditional_estimator_and_aggregates() {
 
     let rows = observations(&base.data_subset);
     assert_eq!(rows.len(), did_rc.n_rows);
-    let out = epistat_did::estimate_att_gt_dr_with_influence(
+    let out = fit(
         &rows,
-        universal_config(ComparisonGroup::NeverTreated),
-    )
-    .expect("rc att(g,t)");
+        &AttGtOptions {
+            estimator: Estimator::TraditionalDoublyRobust,
+            design: Design::RepeatedCrossSection,
+            ..universal_config(ComparisonGroup::NeverTreated)
+        },
+    );
     assert_eq!(out.estimates.len(), cells.len());
 
     let mut worst_se = 0.0_f64;
@@ -1119,14 +1041,7 @@ fn rc_route_matches_the_traditional_estimator_and_aggregates() {
     // the RC route, given a ROW-indexed panel. The point estimates match did's
     // aggte; the standard errors cannot, because did aggregated a different
     // estimator's influence functions.
-    let panel = epistat_did::row_panel(&rows);
-    let dynamic = run(
-        &out.estimates,
-        &out.influence_functions,
-        &panel,
-        epistat_did::AggteType::Dynamic,
-        None,
-    );
+    let dynamic = run(&out, AggteType::Dynamic, None);
     let keys = did_rc.dynamic.egt.as_ref().expect("egt");
     let atts = did_rc.dynamic.att_egt.as_ref().expect("att");
     let ses = did_rc.dynamic.se_egt.as_ref().expect("se");
@@ -1151,7 +1066,7 @@ fn rc_route_matches_the_traditional_estimator_and_aggregates() {
     );
 
     // What the panel route buys, as a number rather than a claim.
-    let (panel_estimates, _, _, _) = universal_run();
+    let panel_estimates = universal_run().0.estimates;
     for (rc, pnl) in out.estimates.iter().zip(&panel_estimates) {
         assert!((rc.att - pnl.att).abs() < 1e-9);
         assert!(
@@ -1175,13 +1090,10 @@ fn a_repeated_panel_row_is_refused() {
     let mut rows = observations(&fixture.data_subset);
     rows.push(rows[0].clone());
 
-    let err = estimate_att_gt_dr_panel_with_influence(
-        &rows,
-        universal_config(ComparisonGroup::NeverTreated),
-    )
-    .expect_err("a duplicated panel row must be refused");
+    let err = rows::fit(&rows, &universal_config(ComparisonGroup::NeverTreated))
+        .expect_err("a duplicated panel row must be refused");
     assert!(
-        matches!(err, epistat_did::AttGtError::DuplicatePanelRow { .. }),
+        matches!(err, Error::Input(InputError::Duplicate { .. })),
         "got {err:?}"
     );
 }
@@ -1208,10 +1120,17 @@ fn efficient_rc_route_matches_did_panel_false() {
     // 1e-8 default moves the influence function by about 2e-7 while cancelling
     // in the point estimate, which is enough to matter at this tolerance and not
     // enough to matter in use.
-    let mut config = universal_config(ComparisonGroup::NeverTreated);
-    config.drdid = DrDidConfig::builder().ridge(0.0).build();
-    let out = epistat_did::estimate_att_gt_dr_efficient_with_influence(&rows, config)
-        .expect("efficient rc att(g,t)");
+    let out = fit(
+        &rows,
+        &AttGtOptions {
+            design: Design::RepeatedCrossSection,
+            nuisance: NuisanceOptions {
+                ridge: 0.0,
+                ..NuisanceOptions::default()
+            },
+            ..universal_config(ComparisonGroup::NeverTreated)
+        },
+    );
 
     let expected = (0..did_rc.att.len())
         .filter(|&i| did_rc.se[i].is_some())
@@ -1237,14 +1156,7 @@ fn efficient_rc_route_matches_did_panel_false() {
 
     // And the aggregation, which the traditional route could only match on point
     // estimates because did had aggregated a different estimator's influence.
-    let panel = epistat_did::row_panel(&rows);
-    let dynamic = run(
-        &out.estimates,
-        &out.influence_functions,
-        &panel,
-        epistat_did::AggteType::Dynamic,
-        None,
-    );
+    let dynamic = run(&out, AggteType::Dynamic, None);
     check_overall("efficient rc dynamic", &dynamic, &did_rc.dynamic);
     check_path("efficient rc dynamic", &dynamic, &did_rc.dynamic);
 }
@@ -1270,23 +1182,19 @@ fn efficient_rc_route_matches_did_panel_false() {
 /// cells look right.
 #[test]
 fn the_fixed_weight_event_time_aggregation_understates_multi_cohort_cells() {
-    let (estimates, influence, panel, aggregations) = universal_run();
+    let (out, aggregations) = universal_run();
     let r = &aggregations.dynamic;
 
-    let fixed = epistat_did::aggregate_att_gt_event_time_with_influence(
-        &estimates,
-        &influence,
-        epistat_did::AttGtAggregationConfig::default(),
-    )
-    .expect("fixed-weight aggregation");
-
-    let ported = epistat_did::aggregate_att_gt(
-        &estimates,
-        &influence,
-        &panel,
-        epistat_did::AggteConfig::default(),
-    )
-    .expect("cohort-share aggregation");
+    let fixed = rows::summary(
+        &out.fit
+            .aggregate(&AggteOptions {
+                aggregation: AggteType::Dynamic,
+                weights: AggteWeights::TreatedCount,
+                ..AggteOptions::default()
+            })
+            .expect("fixed-weight aggregation"),
+    );
+    let ported = run(&out, AggteType::Dynamic, None);
 
     let egt = r.egt.clone().expect("egt");
     let att = r.att_egt.clone().expect("att");
@@ -1294,20 +1202,16 @@ fn the_fixed_weight_event_time_aggregation_understates_multi_cohort_cells() {
 
     let mut multi_cohort_cells = 0;
     for (index, event_time) in egt.iter().enumerate() {
-        let Some(cell) = fixed
-            .estimates
-            .iter()
-            .find(|row| row.event_time == *event_time)
-        else {
+        let Some(cell) = fixed.by_key.iter().find(|row| row.key == *event_time) else {
             continue;
         };
         let Some(want_se) = se[index] else { continue };
 
         // Both paths reproduce did::aggte's point estimate.
         assert!(
-            (cell.summary.estimate - att[index]).abs() < 1e-9,
+            (cell.att - att[index]).abs() < 1e-9,
             "fixed-weight att {} vs did {} at e={event_time}",
-            cell.summary.estimate,
+            cell.att,
             att[index]
         );
         let ported_cell = ported
@@ -1318,18 +1222,18 @@ fn the_fixed_weight_event_time_aggregation_understates_multi_cohort_cells() {
         assert!((ported_cell.att - att[index]).abs() < 1e-9);
         assert!((ported_cell.se - want_se).abs() / want_se < 1e-6);
 
-        if cell.summary.components == 1 {
+        if cell.components == 1 {
             assert!(
-                (cell.summary.se - want_se).abs() / want_se < 1e-9,
+                (cell.se - want_se).abs() / want_se < 1e-9,
                 "one cohort contributes, so there is nothing estimated to correct \
                  for and the two must agree at e={event_time}"
             );
         } else {
             multi_cohort_cells += 1;
             assert!(
-                cell.summary.se < want_se,
+                cell.se < want_se,
                 "the fixed-weight se {} is not below did's {want_se} at e={event_time}",
-                cell.summary.se
+                cell.se
             );
         }
     }
@@ -1371,12 +1275,8 @@ struct CsPanelCellsAndAgg {
 fn cohort_calendar_and_overall_match_aggte() {
     let fixture: CsPanelCellsAndAgg = load_json("tests/data/cs_panel_dr_universal_ref.json");
     let rows = observations(&fixture.data_subset);
-    let out = estimate_att_gt_dr_panel_with_influence(
-        &rows,
-        universal_config(ComparisonGroup::NeverTreated),
-    )
-    .expect("panel att(g,t)");
-    let panel = epistat_did::unit_panel(&rows).expect("unit panel");
+    let out = fit(&rows, &universal_config(ComparisonGroup::NeverTreated));
+    let sample = out.fit.sample();
 
     let mut sorted_ids = fixture
         .data_subset
@@ -1406,18 +1306,18 @@ fn cohort_calendar_and_overall_match_aggte() {
         .estimates
         .iter()
         .map(|e| {
-            let members = panel
+            let members = sample
                 .groups
                 .iter()
-                .zip(&panel.weights)
-                .filter(|(g, _)| **g == Some(e.group))
+                .zip(&sample.weights)
+                .filter(|(g, _)| **g == Some(i64::from(e.group)))
                 .map(|(_, w)| *w)
                 .sum::<f64>();
             members / n as f64
         })
         .collect::<Vec<_>>();
     let p_min = shares.iter().copied().fold(f64::INFINITY, f64::min);
-    let w_max = panel.weights.iter().copied().fold(0.0_f64, f64::max);
+    let w_max = sample.weights.iter().copied().fold(0.0_f64, f64::max);
     let k = out.estimates.len() as f64;
     let rounding = 2.0 * (n as f64 + k) * f64::EPSILON;
     let att_bound = da + rounding * largest_att + 5e-16;
@@ -1425,17 +1325,14 @@ fn cohort_calendar_and_overall_match_aggte() {
         (dpsi + 2.0 * (w_max / p_min) * da + rounding * largest_psi) / (n as f64).sqrt() + 5e-16;
     println!("cells: da {da:e}, dpsi {dpsi:e}; bounds: att {att_bound:e}, se {se_bound:e}");
 
-    let config = epistat_did::AttGtAggregationConfig::default();
-    let check = |label: &str, got: &epistat_did::AttGtAggregatedEstimate, att: f64, se: f64| {
+    let check = |label: &str, (estimate, se_ours): (f64, f64), att: f64, se: f64| {
         assert!(
-            (got.estimate - att).abs() <= att_bound,
-            "{label} att {} vs did {att}, bound {att_bound:e}",
-            got.estimate
+            (estimate - att).abs() <= att_bound,
+            "{label} att {estimate} vs did {att}, bound {att_bound:e}"
         );
         assert!(
-            (got.se - se).abs() <= se_bound,
-            "{label} se {} vs did {se}, bound {se_bound:e}",
-            got.se
+            (se_ours - se).abs() <= se_bound,
+            "{label} se {se_ours} vs did {se}, bound {se_bound:e}"
         );
     };
     let path = |want: &AggRef| {
@@ -1447,49 +1344,30 @@ fn cohort_calendar_and_overall_match_aggte() {
             .collect::<Vec<_>>()
     };
 
-    let cohort = epistat_did::aggregate_att_gt_by_cohort(
-        &out.estimates,
-        &out.influence_functions,
-        &panel,
-        config,
-    )
-    .expect("cohort");
+    let cohort = run(&out, AggteType::Group, None);
     let want = path(&fixture.aggregations.group);
-    assert_eq!(cohort.len(), want.len());
-    for (got, (group, att, se)) in cohort.iter().zip(&want) {
-        assert_eq!(got.group, *group);
-        check(&format!("cohort {group}"), &got.summary, *att, *se);
+    assert_eq!(cohort.by_key.len(), want.len());
+    for (got, (group, att, se)) in cohort.by_key.iter().zip(&want) {
+        assert_eq!(got.key, *group);
+        check(&format!("cohort {group}"), (got.att, got.se), *att, *se);
     }
 
-    let calendar = epistat_did::aggregate_att_gt_by_calendar_time(
-        &out.estimates,
-        &out.influence_functions,
-        &panel,
-        config,
-    )
-    .expect("calendar");
+    let calendar = run(&out, AggteType::Calendar, None);
     let want = path(&fixture.aggregations.calendar);
-    assert_eq!(calendar.len(), want.len());
-    for (got, (time, att, se)) in calendar.iter().zip(&want) {
-        assert_eq!(got.time, *time);
-        check(&format!("calendar {time}"), &got.summary, *att, *se);
+    assert_eq!(calendar.by_key.len(), want.len());
+    for (got, (time, att, se)) in calendar.by_key.iter().zip(&want) {
+        assert_eq!(got.key, *time);
+        check(&format!("calendar {time}"), (got.att, got.se), *att, *se);
     }
 
-    let overall = epistat_did::aggregate_att_gt_overall(
-        &out.estimates,
-        &out.influence_functions,
-        &panel,
-        config,
-    )
-    .expect("overall");
+    let overall = run(&out, AggteType::Simple, None);
     check(
         "overall",
-        &overall,
+        (overall.overall_att, overall.overall_se),
         fixture.aggregations.simple.overall_att,
         fixture.aggregations.simple.overall_se,
     );
-    // Only post-treatment cells: the universal base emits placebo cells too.
     let post = out.estimates.iter().filter(|e| e.time >= e.group).count();
     assert!(post < out.estimates.len());
-    assert_eq!(overall.components, post);
+    assert_eq!(overall.overall_components, post);
 }

@@ -95,8 +95,8 @@ fn periods_agree_with_heaven() {
         // With pauses, only the persons for whom the two rules coincide.
         let compared = |person: u32| !case.pauses || r.pause_ok.contains(&person);
         let got: Vec<(u32, i64, i64)> = (0..p.len())
-            .filter(|&i| compared(p.person[i]))
-            .map(|i| (p.person[i], p.start[i], p.end_day(i)))
+            .filter(|&i| compared(p.person()[i]))
+            .map(|i| (p.person()[i], p.start()[i], p.end_day(i).unwrap()))
             .collect();
         let want: Vec<(u32, i64, i64)> = (0..want.id.len())
             .filter(|&i| compared(want.id[i]))

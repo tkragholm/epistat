@@ -1,3 +1,4 @@
+use crate::Error;
 use crate::matching::constraints::BirthWindowConstraint;
 use crate::matching::engine::{StandardMatchRequest, match_standard};
 use crate::matching::{
@@ -8,6 +9,7 @@ use crate::matching::{
 use crate::role_transition::{
     DefaultRiskSetPolicy, IdOrder, RiskSetPolicy, TransitionMatchRequest, match_transition_ordered,
 };
+use crate::types::reject_invalid;
 use crate::types::{
     AgeLimitYears, BirthDateWindowDays, Estimand, MatchOutcome, MatchRatio, MatchingCriteria,
     RoleTransitionOptions,
@@ -76,20 +78,21 @@ type WithResidentConstraint<Mode, R, S, G, P> =
 ///     record.strata.insert("sex".to_string(), sex.to_string());
 ///     record
 /// };
-/// let anchors = vec![person("case1", "F", 3), person("case2", "M", 10)];
-/// let candidates = vec![
+/// let cases = vec![person("case1", "F", 3), person("case2", "M", 10)];
+/// let controls = vec![
 ///     person("control1", "F", 5),
 ///     person("control2", "M", 12),
 ///     person("control3", "F", 28),
 /// ];
 ///
-/// let job = MatchJob::new_standard(&anchors, &candidates, 42)
+/// let job = MatchJob::new_standard(&cases, &controls, 42)
 ///     .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
 ///     .with_birth_window(BirthDateWindowDays::new(30).expect("non-negative birth window"))
 ///     .with_gender_match();
 ///
-/// let result = job.run();
+/// let result = job.run()?;
 /// assert_eq!(result.pairs.len(), 2);
+/// # Ok::<(), epistat_matching::Error>(())
 /// ```
 ///
 /// ### Example (Role-Transition)
@@ -101,7 +104,7 @@ type WithResidentConstraint<Mode, R, S, G, P> =
 ///     .with_age_limit(AgeLimitYears::new(6).expect("positive age limit"))
 ///     .with_alive_check();
 ///
-/// let result = job.run();
+/// let result = job.run()?;
 /// ```
 pub struct MatchJob<Mode, R, S, G = (), P = DefaultRiskSetPolicy> {
     mode: Mode,
@@ -138,7 +141,7 @@ impl<'a, R: RoleIndexedRecord>
 impl<'a, R: MatchingRecord>
     MatchJob<StandardMode<'a, R>, R, RandomSelection, (), DefaultRiskSetPolicy>
 {
-    /// Create a new matching job for standard anchor-to-candidate matching.
+    /// Create a new matching job for standard case-to-control matching.
     #[must_use]
     pub fn new_standard(anchors: &'a [R], candidates: &'a [R], seed: u64) -> Self {
         Self {
@@ -164,14 +167,14 @@ where
 {
     /// Set the matching ratio (number of controls per case).
     ///
-    /// Without replacement, anchors take their controls one anchor at a time
+    /// Without replacement, cases take their controls one case at a time
     /// by default: each takes all its controls before the next starts. When
-    /// controls run short this leaves the last anchors with fewer controls or
-    /// none. `matchit()` gives every anchor one control before any gets a
-    /// second, which leaves every anchor with at least one for as long as
+    /// controls run short this leaves the last cases with fewer controls or
+    /// none. `matchit()` gives every case one control before any gets a
+    /// second, which leaves every case with at least one for as long as
     /// controls last. That order is the default in nearest mode
     /// (`with_nearest`) and can be chosen with
-    /// `with_round_assignment`. An anchor that finds fewer than the ratio gets
+    /// `with_round_assignment`. An case that finds fewer than the ratio gets
     /// what is available.
     #[must_use]
     pub const fn with_ratio(mut self, ratio: MatchRatio) -> Self {
@@ -181,7 +184,7 @@ where
 
     /// Set the birth date caliper window in days.
     ///
-    /// Candidates must have a birth date within `+/- days` of the case.
+    /// Controls must have a birth date within `+/- days` of the case.
     ///
     /// The window also holds when a distance configuration is set, where it
     /// is applied as a constraint on top of the distance. A job that never
@@ -199,7 +202,7 @@ where
 
     /// Add a required exact-match strata key.
     ///
-    /// The engine will only consider candidates that have the same value for this
+    /// The engine will only consider controls that have the same value for this
     /// strata key as the case. A record with no value for the key has the
     /// value "absent", and matches another record with none.
     #[must_use]
@@ -223,9 +226,9 @@ where
         self
     }
 
-    /// Enable or disable replacement (candidate reuse).
+    /// Enable or disable replacement (control reuse).
     ///
-    /// If `true`, a candidate can be matched to multiple cases.
+    /// If `true`, a control can be matched to multiple cases.
     #[must_use]
     pub const fn with_replacement(mut self, allow: bool) -> Self {
         self.criteria.allow_replacement = allow;
@@ -306,7 +309,7 @@ where
     /// let outcome = MatchJob::new_transition(&cohort, seed)
     ///     .with_exact_matches(["sex", "municipality"])
     ///     .with_constraints(calipers)
-    ///     .run();
+    ///     .run()?;
     /// ```
     #[must_use]
     pub fn with_constraints<C>(
@@ -362,14 +365,14 @@ impl<'a, R: MatchingRecord, S, G, P> MatchJob<StandardMode<'a, R>, R, S, G, P>
 where
     G: ConstraintGroup<R>,
 {
-    /// Give every anchor a first control before any gets a second, and so on
+    /// Give every case a first control before any gets a second, and so on
     /// up to the ratio, as `matchit()` does.
     ///
     /// This applies to standard matching without replacement at a ratio above
     /// 1, with the strategy still choosing each control. It cannot be combined
     /// with ratio fallbacks, and a job that does so returns an
     /// [`InvalidCriteriaReason::NearestOptions`](crate::InvalidCriteriaReason)
-    /// outcome. Each round builds every anchor's candidate pool again, so the
+    /// outcome. Each round builds every case's control pool again, so the
     /// cost is the ratio times that of the default order.
     #[must_use]
     pub fn with_round_assignment(self) -> MatchJob<StandardMode<'a, R>, R, Rounds<S>, G, P> {
@@ -388,12 +391,12 @@ impl<'a, R: MatchingRecord, G, P> MatchJob<StandardMode<'a, R>, R, RandomSelecti
 where
     G: ConstraintGroup<R>,
 {
-    /// Rank candidates by the distance instead of choosing among them, as
+    /// Rank controls by the distance instead of choosing among them, as
     /// `matchit(method = "nearest")` does. See [`NearestSelection`] for the
-    /// rules. The job's seed is used for the random order of anchors.
+    /// rules. The job's seed is used for the random order of cases.
     ///
     /// The distance is the one set with [`Self::with_distance_config`], or the
-    /// birth date. Anchors take their controls in rounds unless
+    /// birth date. Cases take their controls in rounds unless
     /// [`Self::with_assignment`] says otherwise.
     #[must_use]
     pub fn with_nearest(self) -> MatchJob<StandardMode<'a, R>, R, NearestSelection, G, P> {
@@ -406,7 +409,7 @@ impl<R: MatchingRecord, G, P> MatchJob<StandardMode<'_, R>, R, NearestSelection,
 where
     G: ConstraintGroup<R>,
 {
-    /// Set the order in which anchors are matched (`m.order`).
+    /// Set the order in which cases are matched (`m.order`).
     #[must_use]
     pub fn with_m_order(mut self, order: MatchOrder) -> Self {
         self.strategy = self.strategy.with_order(order);
@@ -428,7 +431,7 @@ where
         self
     }
 
-    /// Match a variable number of controls to each anchor, between the
+    /// Match a variable number of controls to each case, between the
     /// ratio's minimum and maximum, with the ratio's average as the mean
     /// (`ratio`, `min.controls` and `max.controls`). The job's own ratio is
     /// not used. See [`VariableRatio`](crate::VariableRatio). It cannot be
@@ -439,8 +442,8 @@ where
         self
     }
 
-    /// Rank candidates by this distance and use the job's distance as a
-    /// caliper and for the order of anchors (`mahvars`).
+    /// Rank controls by this distance and use the job's distance as a
+    /// caliper and for the order of cases (`mahvars`).
     #[must_use]
     pub fn with_mahvars(mut self, ranking: DistanceConfig) -> Self {
         self.strategy = self.strategy.with_mahvars(ranking);
@@ -563,7 +566,7 @@ where
         self
     }
 
-    /// Trim cases and candidates outside the common support of the scores
+    /// Trim cases and controls outside the common support of the scores
     /// of the distance configuration. A case is judged against the people at
     /// risk on its event date; see [`CommonSupport`](crate::CommonSupport).
     /// Needs a score distance; without one the job returns an invalid outcome.
@@ -598,16 +601,26 @@ where
     }
 
     /// Execute role-transition matching.
-    pub fn run(self) -> MatchOutcome
+    ///
+    /// # Errors
+    ///
+    /// [`Error::DuplicateId`] when two records share an id,
+    /// [`Error::EventBeforeBirth`] for a case whose event date is before its
+    /// birth date, an [`Error::Input`] for a constraint whose window is
+    /// negative or not finite, and the errors of invalid criteria or of
+    /// common support that could not be set. A case that finds no control is
+    /// not an error: it is counted in the outcome.
+    pub fn run(self) -> Result<MatchOutcome, Error>
     where
         S: SelectionStrategy<R> + Clone + Send + Sync,
         P: RiskSetPolicy<R> + Send + Sync,
     {
+        self.constraints.check()?;
         let window = BirthWindowConstraint::new(
             (self.mode.birth_window_set && self.mode.distance_config.is_some())
                 .then_some(self.criteria.birth_date_window_days),
         );
-        match_transition_ordered(
+        reject_invalid(match_transition_ordered(
             self.mode.cohort,
             TransitionMatchRequest {
                 criteria: &self.criteria,
@@ -618,22 +631,7 @@ where
                 risk_set_policy: &self.risk_set_policy,
             },
             self.mode.id_order,
-        )
-    }
-
-    /// Execute role-transition matching and compute balance diagnostics in one call.
-    pub fn run_with_balance<B: crate::CovariateRecord>(
-        self,
-        cases: &[B],
-        controls: &[B],
-    ) -> (MatchOutcome, crate::types::BalanceReport)
-    where
-        S: SelectionStrategy<R> + Clone + Send + Sync,
-        P: RiskSetPolicy<R> + Send + Sync,
-    {
-        let outcome = self.run();
-        let report = crate::balance_report(cases, controls, &outcome);
-        (outcome, report)
+        ))
     }
 }
 
@@ -668,15 +666,23 @@ where
     }
 
     /// Execute standard matching.
-    pub fn run(self) -> MatchOutcome
+    ///
+    /// # Errors
+    ///
+    /// An [`Error::Input`] for a constraint whose window is negative or not
+    /// finite, and the errors of invalid criteria or of common support that
+    /// could not be set. A case that finds no control is not an error: it is
+    /// counted in the outcome.
+    pub fn run(self) -> Result<MatchOutcome, Error>
     where
         S: SelectionStrategy<R> + Clone + Send + Sync,
     {
+        self.constraints.check()?;
         let window = BirthWindowConstraint::new(
             (self.mode.birth_window_set && self.mode.distance_config.is_some())
                 .then_some(self.criteria.birth_date_window_days),
         );
-        match_standard(
+        reject_invalid(match_standard(
             self.mode.anchors,
             self.mode.candidates,
             StandardMatchRequest {
@@ -686,21 +692,7 @@ where
                 ratio_fallback: &self.mode.ratio_fallback,
                 distance_config: self.mode.distance_config.as_ref(),
             },
-        )
-    }
-
-    /// Execute standard matching and compute balance diagnostics in one call.
-    pub fn run_with_balance<B: crate::CovariateRecord>(
-        self,
-        cases: &[B],
-        controls: &[B],
-    ) -> (MatchOutcome, crate::types::BalanceReport)
-    where
-        S: SelectionStrategy<R> + Clone + Send + Sync,
-    {
-        let outcome = self.run();
-        let report = crate::balance_report(cases, controls, &outcome);
-        (outcome, report)
+        ))
     }
 }
 
@@ -724,7 +716,8 @@ mod tests {
 
         let result = MatchJob::new_transition(&records, 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs.len(), 1);
@@ -743,16 +736,17 @@ mod tests {
             let result = MatchJob::new_standard(&anchors, &candidates, 42)
                 .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
                 .with_replacement(replacement)
-                .run();
+                .run()
+                .expect("a valid job");
             // a3 is outside the birth window of every candidate. Without
             // replacement a2 finds c1 used already.
             assert_eq!(result.unmatched_cases, if replacement { 1 } else { 2 });
-            assert_eq!(result.diagnostics.total_anchors_evaluated, 3);
+            assert_eq!(result.diagnostics.total_cases_evaluated, 3);
             assert!(
                 result
                     .diagnostics
                     .estimand_drift_reasons
-                    .contains(&EstimandDriftReason::UnmatchedAnchors)
+                    .contains(&EstimandDriftReason::UnmatchedCases)
             );
         }
     }
@@ -764,7 +758,8 @@ mod tests {
 
         let result = MatchJob::new_standard(&anchors, &candidates, 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs.len(), 1);
@@ -787,7 +782,8 @@ mod tests {
         let result = MatchJob::new_standard(&anchors, &candidates, 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
             .with_gender_match()
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs[0].control_id, "c1_m");
@@ -819,7 +815,8 @@ mod tests {
         let result = MatchJob::new_standard(&anchors, &candidates, 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
             .with_exact_matches(["sex", "region"])
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs[0].control_id, "c1_match");
@@ -847,7 +844,8 @@ mod tests {
         let result = MatchJob::new_transition(&records, 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
             .with_alive_check()
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs[0].control_id, "c2_alive");
@@ -907,7 +905,8 @@ mod tests {
         let result = MatchJob::new_transition(&records, 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
             .with_resident_check()
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs[0].control_id, "c2_resident");
@@ -937,7 +936,8 @@ mod tests {
             .with_resident_check_by(|record: &RoleTransitionRecord<BaseRecord>, _index_date| {
                 record.record.id == "c2_resident"
             })
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs[0].control_id, "c2_resident");
@@ -968,7 +968,8 @@ mod tests {
         let result = MatchJob::new_transition(&records, 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
             .with_resident_check()
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs[0].control_id, "c2_resident");
@@ -994,7 +995,8 @@ mod tests {
         let result = MatchJob::new_transition(&records, 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
             .with_resident_check()
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 0);
         assert!(result.pairs.is_empty(), "{:?}", result.pairs);
@@ -1031,7 +1033,8 @@ mod tests {
         let result = MatchJob::new_transition(&records, 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
             .with_constraints(vec![caliper_on_field("mother_birth_year", 1.0)])
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs[0].control_id, "near");
@@ -1063,7 +1066,8 @@ mod tests {
         let result = MatchJob::new_transition(&refused, 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
             .with_constraints(rules())
-            .run();
+            .run()
+            .expect("a valid job");
         assert_eq!(result.matched_cases, 0);
         assert!(result.pairs.is_empty(), "{:?}", result.pairs);
 
@@ -1077,7 +1081,8 @@ mod tests {
         let result = MatchJob::new_transition(&admitted, 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
             .with_constraints(rules())
-            .run();
+            .run()
+            .expect("a valid job");
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs[0].control_id, "both");
     }
@@ -1108,7 +1113,8 @@ mod tests {
         let result = MatchJob::new_transition(&records, 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
             .with_constraints(empty)
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs[0].control_id, "far");
@@ -1140,7 +1146,8 @@ mod tests {
                 1.0,
             ))
             .with_constraints(vec![caliper_on_field("mother_birth_year", 1.0)])
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs[0].control_id, "passes_both");
@@ -1185,7 +1192,8 @@ mod tests {
         let result = MatchJob::new_transition(&[case, wrong_sex, far, right], 42)
             .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
             .with_constraints(rules)
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs[0].control_id, "right");

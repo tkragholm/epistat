@@ -30,9 +30,9 @@
 //! 1. Rosenbaum PR. Design of Observational Studies. Springer, 2010, section
 //!    8.3.
 
-use super::EstimationError;
 use super::config::MahalanobisCovarianceStrategy;
 use super::encoding::CovariateMatrix;
+use crate::Error;
 use crate::matching::to_f64;
 use itertools::Itertools;
 
@@ -40,12 +40,12 @@ fn pooled_covariance_matrix(
     matrix: &CovariateMatrix,
     n_anchor: usize,
     n_candidate: usize,
-) -> Result<Vec<f64>, EstimationError> {
+) -> Result<Vec<f64>, Error> {
     if matrix.n_cols == 0 || matrix.n_rows != n_anchor.saturating_add(n_candidate) {
-        return Err(EstimationError::InvalidCovarianceMatrix);
+        return Err(Error::InvalidCovariance);
     }
     if n_anchor == 0 || n_candidate == 0 {
-        return Err(EstimationError::EmptyInput);
+        return Err(Error::EmptyGroup);
     }
 
     let anchor_cov = covariance_for_slice(matrix, 0, n_anchor);
@@ -62,7 +62,7 @@ pub(super) fn covariance_matrix(
     n_anchor: usize,
     n_candidate: usize,
     strategy: MahalanobisCovarianceStrategy,
-) -> Result<Vec<f64>, EstimationError> {
+) -> Result<Vec<f64>, Error> {
     match strategy {
         MahalanobisCovarianceStrategy::PooledWithinGroups => {
             pooled_covariance_matrix(matrix, n_anchor, n_candidate)
@@ -72,10 +72,10 @@ pub(super) fn covariance_matrix(
         }
         MahalanobisCovarianceStrategy::FullSample => {
             if matrix.n_cols == 0 || matrix.n_rows != n_anchor.saturating_add(n_candidate) {
-                return Err(EstimationError::InvalidCovarianceMatrix);
+                return Err(Error::InvalidCovariance);
             }
             if matrix.n_rows <= 1 {
-                return Err(EstimationError::EmptyInput);
+                return Err(Error::EmptyGroup);
             }
             Ok(covariance_for_slice(matrix, 0, matrix.n_rows))
         }
@@ -119,12 +119,12 @@ fn pooled_by_degrees_of_freedom(
     matrix: &CovariateMatrix,
     n_anchor: usize,
     n_candidate: usize,
-) -> Result<Vec<f64>, EstimationError> {
+) -> Result<Vec<f64>, Error> {
     if matrix.n_cols == 0 || matrix.n_rows != n_anchor.saturating_add(n_candidate) {
-        return Err(EstimationError::InvalidCovarianceMatrix);
+        return Err(Error::InvalidCovariance);
     }
     if n_anchor == 0 || n_candidate == 0 || matrix.n_rows <= 2 {
-        return Err(EstimationError::EmptyInput);
+        return Err(Error::EmptyGroup);
     }
     let anchor = scatter_for_slice(matrix, 0, n_anchor);
     let candidate = scatter_for_slice(matrix, n_anchor, n_candidate);
@@ -184,14 +184,14 @@ pub(super) fn rescale_rank_covariance(
     covariance: &mut [f64],
     n_cols: usize,
     n_rows: usize,
-) -> Result<(), EstimationError> {
+) -> Result<(), Error> {
     let untied = (to_f64(n_rows) * (to_f64(n_rows) + 1.0) / 12.0).sqrt();
     let mut multiplier = Vec::with_capacity(n_cols);
     for col in 0..n_cols {
         let variance = covariance[col * n_cols + col];
         let valid = variance.is_finite() && variance > 0.0;
         if !valid {
-            return Err(EstimationError::InvalidCovarianceMatrix);
+            return Err(Error::InvalidCovariance);
         }
         multiplier.push(untied / variance.sqrt());
     }

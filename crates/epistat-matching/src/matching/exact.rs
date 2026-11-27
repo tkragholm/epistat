@@ -6,11 +6,11 @@
 //! The values of each variable are numbered by first appearance, and the
 //! columns of numbers are combined into one stratum number per unit, so two
 //! units share a stratum when they agree on every variable. A unit with no
-//! value for a variable is an error. The anchors and candidates of each
+//! value for a variable is an error. The cases and controls of each
 //! stratum are counted, and a stratum without both groups drops its units.
 //! The weights of a subclass are those of
-//! [`subclassification`](super::subclassification): with `p` the anchor share
-//! of the stratum, an anchor weighs 1 and a candidate `p / (1 - p)` for the
+//! [`subclassification`](super::subclassification): with `p` the case share
+//! of the stratum, an case weighs 1 and a control `p / (1 - p)` for the
 //! ATT, and the reverse for the ATC.
 //!
 //! The work is `O(n v)` for `n` units and `v` variables.
@@ -25,72 +25,36 @@ use super::records::MatchingRecord;
 use super::subclassification::{
     SubclassSummary, build_subclass_summaries, subclass_weight_for_estimand,
 };
+use crate::Error;
 use crate::types::Estimand;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::fmt;
-
-/// Why exact matching could not run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ExactMatchError {
-    /// No exact matching variable was given.
-    NoVariables,
-    /// A unit has no value for one of the variables.
-    MissingValue {
-        /// Id of the unit.
-        id: String,
-        /// Name of the variable.
-        variable: String,
-    },
-    /// No stratum holds units of both groups.
-    NoSharedStratum,
-}
-
-impl fmt::Display for ExactMatchError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoVariables => write!(f, "no exact matching variable was given"),
-            Self::MissingValue { id, variable } => {
-                write!(f, "unit {id} has no value for the variable {variable}")
-            }
-            Self::NoSharedStratum => write!(f, "no stratum holds units of both groups"),
-        }
-    }
-}
-
-impl std::error::Error for ExactMatchError {}
 
 /// Units sorted into subclasses, with the weights of each subclass.
 ///
 /// The result of exact, coarsened exact and quick matching. Units are
-/// numbered by position: the anchors in the order given, then the candidates
+/// numbered by position: the cases in the order given, then the controls
 /// in the order given. Every column is indexed by that position. A unit that
 /// fits no subclass has no subclass and no weight.
 ///
-/// The weights are not stored. Each is derived from the anchor share of the
+/// The weights are not stored. Each is derived from the case share of the
 /// unit's subclass in [`subclasses`](Self::subclasses) when asked for, so the
 /// result holds one id and one subclass number per unit and nothing else.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SubclassedUnits {
     /// The id of each unit.
     pub ids: Vec<String>,
-    /// Number of anchors. The units before this position are anchors.
-    pub anchor_count: usize,
+    /// Number of cases. The units before this position are cases.
+    pub case_count: usize,
     /// Subclass of each unit, `None` for a unit that is dropped.
     pub subclass: Vec<Option<usize>>,
-    /// Counts and anchor share of each subclass.
+    /// Counts and case share of each subclass.
     pub subclasses: Vec<SubclassSummary>,
     /// The units that common-support trimming left out before matching, empty
     /// when the match did not trim. They are not among the units above.
     #[serde(default)]
     pub trimmed: crate::TrimmedUnits,
 }
-
-/// Result of exact matching into strata, and of coarsened exact matching.
-///
-/// Subclasses are numbered from 0 in the order in which their stratum first
-/// appears among the anchors.
-pub type ExactMatchOutcome = SubclassedUnits;
 
 impl SubclassedUnits {
     /// Number of units, kept or dropped.
@@ -115,10 +79,10 @@ impl SubclassedUnits {
         &self.ids[position]
     }
 
-    /// Whether the unit at `position` is an anchor.
+    /// Whether the unit at `position` is an case.
     #[must_use]
-    pub const fn is_anchor(&self, position: usize) -> bool {
-        position < self.anchor_count
+    pub const fn is_case(&self, position: usize) -> bool {
+        position < self.case_count
     }
 
     /// Number of kept units.
@@ -135,7 +99,7 @@ impl SubclassedUnits {
             .filter_map(|(id, subclass)| subclass.map(|subclass| (id.as_str(), subclass)))
     }
 
-    /// Ids of the units that fit no subclass, anchors first, each group in the
+    /// Ids of the units that fit no subclass, cases first, each group in the
     /// order given.
     #[must_use]
     pub fn dropped_ids(&self) -> Vec<&str> {
@@ -163,14 +127,14 @@ impl SubclassedUnits {
         Some(subclass_weight_for_estimand(
             estimand,
             share,
-            self.is_anchor(position),
+            self.is_case(position),
         ))
     }
 
     /// The weights of all units for an estimand, by position, with 0 for a
     /// dropped unit, or `None` for the matched-sample effect.
     ///
-    /// Subclass weights for the effect in the anchor group, in the candidate
+    /// Subclass weights for the effect in the case group, in the control
     /// group or in the whole population. They are not rescaled. MatchIt
     /// rescales the weights of each group to sum to the number of its kept
     /// units.
@@ -188,7 +152,7 @@ impl SubclassedUnits {
     }
 }
 
-/// Ids of the anchors and then the candidates.
+/// Ids of the cases and then the controls.
 pub(super) fn unit_ids<R: MatchingRecord>(anchors: &[R], candidates: &[R]) -> Vec<String> {
     anchors
         .par_iter()
@@ -200,51 +164,51 @@ pub(super) fn unit_ids<R: MatchingRecord>(anchors: &[R], candidates: &[R]) -> Ve
 /// Match exactly on the named strata fields.
 ///
 /// A stratum is a combination of the values of `variables` in
-/// [`MatchingRecord::strata`]. Every unit in a stratum that holds both anchors
-/// and candidates is kept and the stratum is a subclass. Units in a stratum
+/// [`MatchingRecord::strata`]. Every unit in a stratum that holds both cases
+/// and controls is kept and the stratum is a subclass. Units in a stratum
 /// that holds one group only are dropped. This is MatchIt's
 /// `method = "exact"`, which differs from
 /// [`with_exact_matches`](crate::MatchJob::with_exact_matches) in keeping all
 /// units of a stratum, with weights, rather than pairing them.
 ///
 /// The weights of each subclass are those of propensity-score
-/// subclassification, with the anchor share of the subclass in the place of
-/// the propensity: for the anchor effect an anchor weighs 1 and a candidate the
-/// ratio of anchors to candidates in its subclass, for the candidate effect the
-/// reverse, and for the whole population an anchor weighs the subclass size over
-/// its anchors and a candidate the subclass size over its candidates. They are
+/// subclassification, with the case share of the subclass in the place of
+/// the propensity: for the case effect an case weighs 1 and a control the
+/// ratio of cases to controls in its subclass, for the control effect the
+/// reverse, and for the whole population an case weighs the subclass size over
+/// its cases and a control the subclass size over its controls. They are
 /// not rescaled. MatchIt rescales the weights of each group to sum to the
 /// number of its kept units.
 ///
 /// MatchIt numbers the subclasses in the order of first appearance within the
-/// group of the first row of its data, where this function uses the anchors.
+/// group of the first row of its data, where this function uses the cases.
 /// The strata and weights are the same.
 ///
 /// # Algorithm
 ///
 /// The values of each variable are numbered by first appearance, and the
 /// columns of numbers are joined into one stratum number per unit, as
-/// described in the module `codes`. Counting the anchors and candidates of each
+/// described in the module `codes`. Counting the cases and controls of each
 /// stratum then gives the subclasses. The work is `O(n * v)` for `n` units and
 /// `v` variables, in parallel apart from the merge of distinct values, and the
 /// outcome holds one string and one number per unit.
 ///
 /// # Errors
 ///
-/// [`ExactMatchError::NoVariables`] without variables,
-/// [`ExactMatchError::MissingValue`] when a unit lacks a variable, and
-/// [`ExactMatchError::NoSharedStratum`] when no stratum holds both groups.
+/// [`Error::NoVariables`] without variables,
+/// [`Error::MissingValue`] when a unit lacks a variable, and
+/// [`Error::NoSharedStratum`] when no stratum holds both groups.
 pub fn exact_match_subclasses<R: MatchingRecord, V: AsRef<str>>(
     anchors: &[R],
     candidates: &[R],
     variables: &[V],
-) -> Result<ExactMatchOutcome, ExactMatchError> {
+) -> Result<SubclassedUnits, Error> {
     if variables.is_empty() {
-        return Err(ExactMatchError::NoVariables);
+        return Err(Error::NoVariables);
     }
     let (numbers, count) =
         stratum_numbers(anchors, candidates, variables).map_err(|(position, variable)| {
-            ExactMatchError::MissingValue {
+            Error::MissingValue {
                 id: unit_at(anchors, candidates, position).id().to_string(),
                 variable: variables[variable].as_ref().to_string(),
             }
@@ -260,7 +224,7 @@ pub(super) fn unit_at<'a, R>(anchors: &'a [R], candidates: &'a [R], position: us
     }
 }
 
-/// The stratum number of every unit, anchors then candidates, numbered from 0
+/// The stratum number of every unit, cases then controls, numbered from 0
 /// in order of first appearance, and the number of strata. The error is the
 /// position of the first unit that lacks a value, with the index of the first
 /// variable it lacks.
@@ -298,8 +262,8 @@ pub(super) fn stratum_numbers<R: MatchingRecord, V: AsRef<str>>(
 
 /// Subclasses and weights of units that already have a stratum number.
 ///
-/// `numbers` holds the stratum of the anchors and then of the candidates, from
-/// 0 in order of first appearance, anchors first, as `exact_match_subclasses`
+/// `numbers` holds the stratum of the cases and then of the controls, from
+/// 0 in order of first appearance, cases first, as `exact_match_subclasses`
 /// numbers them, and `strata` is their count. The subclasses are the strata
 /// that hold both groups, and they keep that order. Coarsened exact matching
 /// uses this with strata from binned values.
@@ -308,7 +272,7 @@ pub(crate) fn subclasses_of_strata<R: MatchingRecord>(
     candidates: &[R],
     numbers: &[u32],
     strata: usize,
-) -> Result<ExactMatchOutcome, ExactMatchError> {
+) -> Result<SubclassedUnits, Error> {
     let mut anchor_counts = vec![0_usize; strata];
     let mut candidate_counts = vec![0_usize; strata];
     let (anchor_numbers, candidate_numbers) = numbers.split_at(anchors.len());
@@ -333,11 +297,11 @@ pub(crate) fn subclasses_of_strata<R: MatchingRecord>(
         }
     }
     if kept_anchor_counts.is_empty() {
-        return Err(ExactMatchError::NoSharedStratum);
+        return Err(Error::NoSharedStratum);
     }
     Ok(SubclassedUnits {
         ids: unit_ids(anchors, candidates),
-        anchor_count: anchors.len(),
+        case_count: anchors.len(),
         subclass: numbers
             .par_iter()
             .map(|stratum| subclass_of[*stratum as usize])
@@ -372,17 +336,17 @@ pub(super) mod reference {
         anchors: &[R],
         candidates: &[R],
         variables: &[V],
-    ) -> Result<Maps, ExactMatchError> {
+    ) -> Result<Maps, Error> {
         if variables.is_empty() {
-            return Err(ExactMatchError::NoVariables);
+            return Err(Error::NoVariables);
         }
-        let key = |row: &R| -> Result<Vec<String>, ExactMatchError> {
+        let key = |row: &R| -> Result<Vec<String>, Error> {
             variables
                 .iter()
                 .map(|variable| {
                     row.stratum(variable.as_ref())
                         .map(str::to_owned)
-                        .ok_or_else(|| ExactMatchError::MissingValue {
+                        .ok_or_else(|| Error::MissingValue {
                             id: row.id().to_string(),
                             variable: variable.as_ref().to_string(),
                         })
@@ -416,7 +380,7 @@ pub(super) mod reference {
         anchor_strata: &[usize],
         candidate_strata: &[usize],
         strata: usize,
-    ) -> Result<Maps, ExactMatchError> {
+    ) -> Result<Maps, Error> {
         let mut anchor_counts = vec![0_usize; strata];
         let mut candidate_counts = vec![0_usize; strata];
         for stratum in anchor_strata {
@@ -436,14 +400,14 @@ pub(super) mod reference {
             }
         }
         if kept_anchor_counts.is_empty() {
-            return Err(ExactMatchError::NoSharedStratum);
+            return Err(Error::NoSharedStratum);
         }
         let subclasses = build_subclass_summaries(&kept_anchor_counts, &kept_candidate_counts);
         let mut outcome = Maps {
             subclasses,
             ..Maps::default()
         };
-        for (rows, strata, is_anchor) in [
+        for (rows, strata, is_case) in [
             (anchors, anchor_strata, true),
             (candidates, candidate_strata, false),
         ] {
@@ -463,7 +427,7 @@ pub(super) mod reference {
                 ] {
                     weights.insert(
                         id.clone(),
-                        subclass_weight_for_estimand(estimand, share, is_anchor),
+                        subclass_weight_for_estimand(estimand, share, is_case),
                     );
                 }
                 outcome.assignments.insert(id, subclass);
@@ -542,7 +506,7 @@ pub(super) mod reference {
         }
     }
 
-    /// Anchors and candidates with `sex`, `area` and `region` strata and a
+    /// Cases and controls with `sex`, `area` and `region` strata and a
     /// numeric `x` taken from few values, so that many units tie exactly.
     /// With `holes`, about 1 in 60 values is missing.
     pub fn records(
@@ -609,13 +573,13 @@ mod tests {
         record
     }
 
-    fn map(out: &ExactMatchOutcome) -> HashMap<String, usize> {
+    fn map(out: &SubclassedUnits) -> HashMap<String, usize> {
         out.assignments()
             .map(|(id, subclass)| (id.to_owned(), subclass))
             .collect()
     }
 
-    fn weight(out: &ExactMatchOutcome, estimand: Estimand, id: &str) -> f64 {
+    fn weight(out: &SubclassedUnits, estimand: Estimand, id: &str) -> f64 {
         let position = out.ids.iter().position(|x| x == id).expect("unit");
         out.weight(estimand, position).expect("kept unit")
     }
@@ -663,7 +627,7 @@ mod tests {
         let error = exact_match_subclasses(&a, &c, &["area", "sex"]).unwrap_err();
         assert_eq!(
             error,
-            ExactMatchError::MissingValue {
+            Error::MissingValue {
                 id: "a10".into(),
                 variable: "sex".into()
             }
@@ -726,15 +690,15 @@ mod tests {
         let candidates = vec![record("c1", "m", "n")];
         assert_eq!(
             exact_match_subclasses::<_, &str>(&anchors, &candidates, &[]).unwrap_err(),
-            ExactMatchError::NoVariables
+            Error::NoVariables
         );
         assert_eq!(
             exact_match_subclasses(&anchors, &candidates, &["sex"]).unwrap_err(),
-            ExactMatchError::NoSharedStratum
+            Error::NoSharedStratum
         );
         assert_eq!(
             exact_match_subclasses(&anchors, &candidates, &["age"]).unwrap_err(),
-            ExactMatchError::MissingValue {
+            Error::MissingValue {
                 id: "a1".into(),
                 variable: "age".into()
             }

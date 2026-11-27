@@ -14,6 +14,8 @@ use std::fmt;
 
 use epistat_core::{Classify, ErrorKind, InputError};
 
+use crate::methods::att_gt::SkipReason;
+
 /// Why the input of an estimator could not be used.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -27,7 +29,8 @@ pub enum Error {
     /// treatment term.
     #[error("no row carries a treatment indicator")]
     NoTreatment,
-    /// Never-treated controls were asked for and no unit is never treated.
+    /// Never-treated comparators were asked for and no unit is never
+    /// treated, before or after `did`'s pre-processing.
     #[error("no unit is never treated in the panel")]
     NoNeverTreated,
     /// The periods span more than 2^32 values, or a period relative to
@@ -68,6 +71,63 @@ pub enum Error {
         /// What was asked for.
         what: &'static str,
     },
+    /// No ATT(g,t) cell could be estimated.
+    #[error("no ATT(g,t) cell could be estimated")]
+    NoEstimableCells,
+    /// The never-treated comparison group has fewer rows per period than the
+    /// number of covariates plus 5, which `did::att_gt` refuses.
+    #[error(
+        "the never-treated group is too small to serve as a reliable comparison \
+         ({per_period} rows per period, fewer than {required}, the number of covariates \
+         plus 5); the not-yet-treated comparison group adds the units not yet treated"
+    )]
+    SmallNeverTreatedGroup {
+        /// Never-treated rows divided by the number of periods.
+        per_period: f64,
+        /// The number of covariates plus 5.
+        required: usize,
+    },
+    /// A cell could not be fitted and failed cells are not skipped.
+    #[error("the ATT(g,t) cell (group {group}, time {time}, base {base}) failed: {reason}")]
+    CellFailed {
+        /// The cell's cohort.
+        group: i64,
+        /// The cell's later period.
+        time: i64,
+        /// The cell's base period.
+        base: i64,
+        /// Why the cell failed.
+        reason: SkipReason,
+    },
+    /// The efficient estimator found a cohort without pre-treatment periods.
+    #[error("cohort {group} has no pre-treatment period")]
+    NoPrePeriods {
+        /// The cohort.
+        group: i64,
+    },
+    /// The efficient estimator found a cohort without post-treatment periods.
+    #[error("cohort {group} has no post-treatment period")]
+    NoPostPeriods {
+        /// The cohort.
+        group: i64,
+    },
+    /// An aggregation, band, pre-test or event study was asked of an ATT(g,t)
+    /// whose influence function was not kept.
+    #[error("the ATT(g,t) influence function was not kept, so it cannot be aggregated")]
+    NoInfluence,
+    /// No post-treatment cell, or for a fixed-weight event study no cell,
+    /// survives the restrictions of a summary.
+    #[error("no post-treatment cell survives the requested aggregation")]
+    NoPostTreatmentCells,
+    /// No pre-treatment cell has a standard error to test.
+    #[error("no pre-treatment cell with a standard error to test")]
+    NoPreTreatmentCells,
+    /// A system to solve was singular.
+    #[error("a system to solve is singular")]
+    Singular,
+    /// A result was not finite.
+    #[error("a result is not finite")]
+    NotFinite,
     /// A regression, an absorption of fixed effects or a covariance of the
     /// fit failed.
     #[error(transparent)]
@@ -135,7 +195,6 @@ impl Classify for Error {
             Self::Glm(error) => error.kind(),
             Self::Inference(error) => error.kind(),
             Self::Optim(error) => error.kind(),
-            Self::Collinear { .. } => ErrorKind::Numerical,
             Self::NoEffect
             | Self::EmptyPeriod
             | Self::Controls { .. }
@@ -152,8 +211,17 @@ impl Classify for Error {
             | Self::Reference(_)
             | Self::TargetOnUntreated { .. }
             | Self::Unbalanced
-            | Self::Groups => ErrorKind::Input,
-            Self::Unsupported { .. } => ErrorKind::Unsupported,
+            | Self::Groups
+            | Self::NoEstimableCells
+            | Self::SmallNeverTreatedGroup { .. }
+            | Self::NoPrePeriods { .. }
+            | Self::NoPostPeriods { .. }
+            | Self::NoPostTreatmentCells
+            | Self::NoPreTreatmentCells => ErrorKind::Input,
+            Self::Unsupported { .. } | Self::NoInfluence => ErrorKind::Unsupported,
+            Self::CellFailed { .. } | Self::Singular | Self::NotFinite | Self::Collinear { .. } => {
+                ErrorKind::Numerical
+            }
         }
     }
 
@@ -182,6 +250,16 @@ impl Classify for Error {
             Self::Unbalanced => "did.unbalanced",
             Self::Groups => "did.groups",
             Self::Unsupported { .. } => "did.unsupported",
+            Self::NoEstimableCells => "did.no_estimable_cells",
+            Self::SmallNeverTreatedGroup { .. } => "did.small_never_treated",
+            Self::CellFailed { .. } => "did.cell_failed",
+            Self::NoPrePeriods { .. } => "did.no_pre_periods",
+            Self::NoPostPeriods { .. } => "did.no_post_periods",
+            Self::NoInfluence => "did.no_influence",
+            Self::NoPostTreatmentCells => "did.no_post_treatment_cells",
+            Self::NoPreTreatmentCells => "did.no_pre_treatment_cells",
+            Self::Singular => "did.singular",
+            Self::NotFinite => "did.not_finite",
         }
     }
 }
@@ -223,6 +301,24 @@ mod tests {
             Error::Unbalanced,
             Error::Groups,
             Error::Unsupported { what: "weights" },
+            Error::NoEstimableCells,
+            Error::SmallNeverTreatedGroup {
+                per_period: 1.0,
+                required: 6,
+            },
+            Error::CellFailed {
+                group: 2,
+                time: 3,
+                base: 1,
+                reason: SkipReason::NoTreated,
+            },
+            Error::NoPrePeriods { group: 2 },
+            Error::NoPostPeriods { group: 2 },
+            Error::NoInfluence,
+            Error::NoPostTreatmentCells,
+            Error::NoPreTreatmentCells,
+            Error::Singular,
+            Error::NotFinite,
             Error::NoEffect,
             Error::EmptyPeriod,
             Error::Controls {

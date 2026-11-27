@@ -18,7 +18,9 @@
 mod r_reference;
 
 use chrono::NaiveDate;
-use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, CovariateValue, DistanceCaliper, MatchingCriteria, PropensityScoreConfig,
+};
 use epistat_matching::{CommonSupport, NearestSelection, estimate_propensity_and_match};
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};
@@ -109,17 +111,18 @@ fn matching_after_reestimation_keeps_the_units_matchit_keeps() {
                 candidates.push(record);
             }
         }
-        let criteria = MatchingCriteria::builder()
-            .match_ratio(run.ratio)
-            .common_support(policy_of(&run.policy))
-            .build();
-        let config = PropensityScoreConfig::builder()
-            .reestimate(true)
-            .maybe_caliper(
-                run.caliper
-                    .map(|width| DistanceCaliper::new(width).expect("positive")),
-            )
-            .build();
+        let criteria = MatchingCriteria {
+            match_ratio: run.ratio,
+            common_support: Some(policy_of(&run.policy)),
+            ..MatchingCriteria::default()
+        };
+        let config = PropensityScoreConfig {
+            reestimate: true,
+            caliper: run
+                .caliper
+                .map(|width| DistanceCaliper::new(width).expect("positive")),
+            ..PropensityScoreConfig::default()
+        };
         let matched = estimate_propensity_and_match(
             &anchors,
             &candidates,
@@ -137,9 +140,9 @@ fn matching_after_reestimation_keeps_the_units_matchit_keeps() {
         );
         let mut discarded: Vec<usize> = matched
             .propensity
-            .discarded_anchors
+            .discarded_cases
             .iter()
-            .chain(&matched.propensity.discarded_candidates)
+            .chain(&matched.propensity.discarded_controls)
             .map(|id| id.parse().expect("row"))
             .collect();
         discarded.sort_unstable();
@@ -148,9 +151,9 @@ fn matching_after_reestimation_keeps_the_units_matchit_keeps() {
         let mut by_anchor: HashMap<usize, Vec<usize>> = HashMap::new();
         for pair in &matched.outcome.pairs {
             by_anchor
-                .entry(pair.anchor_id().parse().expect("row"))
+                .entry(pair.case_id.as_str().parse().expect("row"))
                 .or_default()
-                .push(pair.comparator_id().parse().expect("row"));
+                .push(pair.control_id.as_str().parse().expect("row"));
         }
         let ours: Vec<Vec<usize>> = run
             .treated_rows
@@ -161,19 +164,16 @@ fn matching_after_reestimation_keeps_the_units_matchit_keeps() {
         assert_eq!(ours, expected, "{label}: pairs");
         let reported = &matched.outcome.diagnostics.common_support_trimmed_ids;
         let mut reported_rows: Vec<usize> = reported
-            .anchors
+            .cases
             .iter()
-            .chain(&reported.candidates)
+            .chain(&reported.controls)
             .map(|id| id.parse().expect("row"))
             .collect();
         reported_rows.sort_unstable();
         assert_eq!(reported_rows, run.discarded, "{label}: reported ids");
         assert_eq!(
-            matched.outcome.diagnostics.common_support_trimmed_anchors
-                + matched
-                    .outcome
-                    .diagnostics
-                    .common_support_trimmed_candidates,
+            matched.outcome.diagnostics.common_support_trimmed_cases
+                + matched.outcome.diagnostics.common_support_trimmed_controls,
             run.discarded.len(),
             "{label}: trimmed count"
         );

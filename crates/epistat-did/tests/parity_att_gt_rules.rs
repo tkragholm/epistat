@@ -20,14 +20,18 @@
 //! the same relative error gives an absolute `1e-11 * 6 * 10`; `1e-8` is used
 //! for every route, which also covers the doubly robust ridge.
 
-use epistat_did::{
-    AggteConfig, AggteType, AttGtConfig, AttGtDrConfig, AttGtDrObservation, AttGtInfluenceOutput,
-    BasePeriod, ComparisonGroup, DrDidConfig, InferenceConfig, UnbalancedPanel, aggregate_att_gt,
-    estimate_att_gt_dr_efficient_with_influence, estimate_att_gt_dr_panel_with_influence,
-    estimate_att_gt_ipw_panel_with_influence, estimate_att_gt_ipw_with_influence,
-    estimate_att_gt_or_panel_with_influence, estimate_att_gt_or_with_influence,
+#[path = "common/att_gt_rows.rs"]
+#[expect(dead_code, reason = "the shared helpers serve several tests")]
+mod rows;
+
+use epistat_core::InputError;
+use epistat_did::Error;
+use epistat_did::att_gt::{
+    AggteOptions, AggteType, AttGt, AttGtOptions, BasePeriod, ComparisonGroup, Design, Estimator,
+    NuisanceOptions, SkipReason, UnbalancedPanel,
 };
 use epistat_testkit::load_json;
+use rows::Obs;
 use serde::Deserialize;
 
 const ESTIMATE_TOLERANCE: f64 = 1e-9;
@@ -134,76 +138,77 @@ fn reference() -> Reference {
     load_json("tests/data/att_gt_rules_ref.json")
 }
 
-fn observations(rows: &[Row], panel: bool) -> Vec<AttGtDrObservation> {
+fn observations(rows: &[Row]) -> Vec<Obs> {
     rows.iter()
-        .map(|row| AttGtDrObservation {
-            unit_id: if panel { row.id } else { None },
-            // `did` codes never treated as 0.
-            first_treated_time: (row.g != 0).then_some(row.g),
-            time: row.period,
-            outcome: row.y,
-            weight: row.w,
+        .map(|row| Obs {
             covariates: vec![row.x1, row.x2],
-            comparison_cohort: None,
+            weight: row.w,
+            // `did` codes never treated as 0.
+            ..Obs::new(row.id, (row.g != 0).then_some(row.g), row.period, row.y)
         })
         .collect()
 }
 
-fn config(run: &Run, ridge: f64) -> AttGtDrConfig {
-    AttGtDrConfig {
-        att_gt: AttGtConfig {
-            comparison_group: match run.control_group.as_str() {
-                "nevertreated" => ComparisonGroup::NeverTreated,
-                _ => ComparisonGroup::NotYetTreated,
-            },
-            base_period: match run.base_period.as_str() {
-                "varying" => BasePeriod::Varying,
-                _ => BasePeriod::Universal,
-            },
-            anticipation_periods: run.anticipation,
-            unbalanced_panel: if run.allow_unbalanced_panel {
-                UnbalancedPanel::RepeatedCrossSection
-            } else {
-                UnbalancedPanel::Balance
-            },
-            ..AttGtConfig::default()
+fn options(run: &Run, ridge: f64) -> AttGtOptions {
+    AttGtOptions {
+        estimator: match run.est_method.as_str() {
+            "dr" => Estimator::DoublyRobust,
+            "ipw" => Estimator::InverseProbabilityWeighting,
+            "reg" => Estimator::OutcomeRegression,
+            other => panic!("no estimator {other}"),
         },
-        drdid: DrDidConfig::builder().ridge(ridge).build(),
+        design: if run.panel {
+            Design::Panel
+        } else {
+            Design::RepeatedCrossSection
+        },
+        comparison_group: match run.control_group.as_str() {
+            "nevertreated" => ComparisonGroup::NeverTreated,
+            _ => ComparisonGroup::NotYetTreated,
+        },
+        base_period: match run.base_period.as_str() {
+            "varying" => BasePeriod::Varying,
+            _ => BasePeriod::Universal,
+        },
+        anticipation: i64::from(run.anticipation),
+        unbalanced: if run.allow_unbalanced_panel {
+            UnbalancedPanel::RepeatedCrossSection
+        } else {
+            UnbalancedPanel::Balance
+        },
+        nuisance: NuisanceOptions {
+            ridge,
+            ..NuisanceOptions::default()
+        },
+        ..AttGtOptions::default()
     }
 }
 
-fn estimate(rows: &[Row], run: &Run) -> AttGtInfluenceOutput {
-    let observations = observations(rows, run.panel);
-    let ridge = if run.est_method == "dr" && run.panel {
-        DrDidConfig::default().ridge
+/// The doubly robust panel cells keep the crate's default ridge; the other
+/// routes have none, as R has none.
+fn ridge(run: &Run) -> f64 {
+    if run.est_method == "dr" && run.panel {
+        NuisanceOptions::default().ridge
     } else {
         0.0
-    };
-    let config = config(run, ridge);
-    match (run.panel, run.est_method.as_str()) {
-        (true, "dr") => estimate_att_gt_dr_panel_with_influence(&observations, config),
-        (true, "ipw") => estimate_att_gt_ipw_panel_with_influence(&observations, config),
-        (true, "reg") => estimate_att_gt_or_panel_with_influence(&observations, config),
-        (false, "dr") => estimate_att_gt_dr_efficient_with_influence(&observations, config),
-        (false, "ipw") => estimate_att_gt_ipw_with_influence(&observations, config),
-        (false, "reg") => estimate_att_gt_or_with_influence(&observations, config),
-        other => panic!("no route for {other:?}"),
     }
-    .unwrap_or_else(|error| panic!("{} {}: {error}", run.est_method, run.base_period))
 }
 
-/// Every cell R reports with a standard error, in R's order, against ours;
-/// the influence vectors joined on the ids. R's universal-base reference cell
-/// has att 0 and no standard error, and is not a cell here.
-fn check(label: &str, out: &AttGtInfluenceOutput, run: &Run) {
+fn estimate(rows: &[Row], run: &Run) -> AttGt {
+    rows::fit(&observations(rows), &options(run, ridge(run)))
+        .unwrap_or_else(|error| panic!("{} {}: {error}", run.est_method, run.base_period))
+}
+
+fn check(label: &str, out: &AttGt, run: &Run) {
     let expected: Vec<usize> = (0..run.group.len())
         .filter(|&i| run.se[i].is_some())
         .collect();
-    let cells: Vec<(i32, i32)> = out.estimates.iter().map(|e| (e.group, e.time)).collect();
+    let estimates = rows::cells(out);
+    let cells: Vec<(i32, i32)> = estimates.iter().map(|e| (e.group, e.time)).collect();
     let want: Vec<(i32, i32)> = expected.iter().map(|&i| (run.group[i], run.t[i])).collect();
     assert_eq!(cells, want, "{label}: cells");
     assert!(!cells.is_empty(), "{label}: no cells");
-    for (ours, &i) in out.estimates.iter().zip(&expected) {
+    for (ours, &i) in estimates.iter().zip(&expected) {
         let (att, se) = (run.att[i].expect("att"), run.se[i].expect("se"));
         assert!(
             (ours.att - att).abs() < ESTIMATE_TOLERANCE,
@@ -220,7 +225,8 @@ fn check(label: &str, out: &AttGtInfluenceOutput, run: &Run) {
             ours.se
         );
     }
-    assert_eq!(out.sample.ids.len(), run.n, "{label}: n");
+    let ids = rows::ids(out);
+    assert_eq!(ids.len(), run.n, "{label}: n");
     let r_ids: Vec<i64> = run
         .ids
         .iter()
@@ -229,20 +235,19 @@ fn check(label: &str, out: &AttGtInfluenceOutput, run: &Run) {
         .collect();
     let mut sorted = r_ids.clone();
     sorted.sort_unstable();
-    let mut ours_sorted = out.sample.ids.clone();
+    let mut ours_sorted = ids.clone();
     ours_sorted.sort_unstable();
     assert_eq!(ours_sorted, sorted, "{label}: ids");
     let Some(inffunc) = &run.inffunc else { return };
+    let influence = rows::influence(out);
     let mut worst = 0.0_f64;
     for (r_row, id) in r_ids.iter().enumerate() {
-        let position = out
-            .sample
-            .ids
+        let position = ids
             .binary_search(id)
             .unwrap_or_else(|_| panic!("{label}: id {id} missing"));
         for (cell, &i) in expected.iter().enumerate() {
             let theirs = inffunc[r_row][i].expect("influence of a cell with a standard error");
-            let deviation = (out.influence_functions[cell][position] - theirs).abs();
+            let deviation = (influence[cell][position] - theirs).abs();
             worst = worst.max(deviation);
         }
     }
@@ -286,12 +291,12 @@ fn gaps_and_cohorts_at_the_edges_are_handled_as_att_gt() {
             } else {
                 0
             };
-        assert_eq!(out.sample.dropped_treated_at_start, dropped);
+        assert_eq!(out.sample().dropped_treated_at_start, dropped);
         assert_eq!(
-            out.sample.recoded_never_treated,
+            out.sample().recoded_never_treated,
             reference.gaps_counts.after_last
         );
-        assert_eq!(out.sample.periods, vec![1, 2, 4, 5, 7]);
+        assert_eq!(out.sample().periods, vec![1, 2, 4, 5, 7]);
     }
 }
 
@@ -309,57 +314,56 @@ fn aggregates_with_max_e_on_gapped_periods_match_aggte() {
             continue;
         };
         let out = estimate(&reference.gaps, run);
-        let panel = out.sample.unit_panel();
         for (aggregation, want) in [
             (AggteType::Simple, &aggregates.simple),
             (AggteType::Group, &aggregates.group),
             (AggteType::Dynamic, &aggregates.dynamic),
         ] {
-            let got = aggregate_att_gt(
-                &out.estimates,
-                &out.influence_functions,
-                &panel,
-                AggteConfig {
+            let got = out
+                .aggregate(&AggteOptions {
                     aggregation,
-                    balance_e: None,
-                    min_e: None,
                     max_e: Some(1),
-                    confidence_level: InferenceConfig::default(),
-                    bootstrap: None,
-                },
-            )
-            .expect("aggte");
+                    ..AggteOptions::default()
+                })
+                .expect("aggte");
+            let overall = got.overall.expect("overall").estimate;
             let label = format!("gaps {index} {aggregation:?}");
+            let overall_se = overall.se.expect("se");
             assert!(
-                (got.overall_att - want.overall_att).abs() < ESTIMATE_TOLERANCE,
+                (overall.estimate - want.overall_att).abs() < ESTIMATE_TOLERANCE,
                 "{label}: att {} vs R {}",
-                got.overall_att,
+                overall.estimate,
                 want.overall_att
             );
             assert!(
-                (got.overall_se - want.overall_se).abs() < ESTIMATE_TOLERANCE,
-                "{label}: se {} vs R {}",
-                got.overall_se,
+                (overall_se - want.overall_se).abs() < ESTIMATE_TOLERANCE,
+                "{label}: se {overall_se} vs R {}",
                 want.overall_se
             );
             let points: Vec<usize> = (0..want.egt.len())
                 .filter(|&i| want.se_egt[i].is_some())
                 .collect();
-            let keys: Vec<i32> = got.by_key.iter().map(|point| point.key).collect();
+            let keys: Vec<i64> = got.points.iter().map(|point| point.key).collect();
             if aggregation != AggteType::Simple {
                 assert_eq!(
                     keys,
-                    points.iter().map(|&i| want.egt[i]).collect::<Vec<_>>(),
+                    points
+                        .iter()
+                        .map(|&i| i64::from(want.egt[i]))
+                        .collect::<Vec<_>>(),
                     "{label}: keys"
                 );
             }
-            for (point, &i) in got.by_key.iter().zip(&points) {
+            for (point, &i) in got.points.iter().zip(&points) {
                 assert!(
-                    (point.att - want.att_egt[i]).abs() < ESTIMATE_TOLERANCE,
+                    (point.estimate.estimate - want.att_egt[i]).abs() < ESTIMATE_TOLERANCE,
                     "{label}"
                 );
                 let se = want.se_egt[i].expect("se");
-                assert!((point.se - se).abs() < ESTIMATE_TOLERANCE, "{label}");
+                assert!(
+                    (point.estimate.se.expect("se") - se).abs() < ESTIMATE_TOLERANCE,
+                    "{label}"
+                );
             }
         }
     }
@@ -373,11 +377,12 @@ fn without_never_treated_units_the_last_cohort_is_the_comparison() {
     for (index, run) in reference.late_runs.iter().enumerate() {
         let out = estimate(&reference.late, run);
         check(&format!("late {index}"), &out, run);
-        assert_eq!(out.sample.last_cohort_as_comparison, Some(5));
-        assert_eq!(out.sample.cohorts, vec![3, 4]);
+        let sample = out.sample();
+        assert_eq!(sample.last_cohort_as_comparison, Some(5));
+        assert_eq!(sample.cohorts, vec![3, 4]);
         let last = if run.anticipation > 0 { 3 } else { 4 };
-        assert_eq!(out.sample.periods, (1..=last).collect::<Vec<_>>());
-        let never = out.sample.groups.iter().filter(|g| g.is_none()).count();
+        assert_eq!(sample.periods, (1..=last).collect::<Vec<_>>());
+        let never = sample.groups.iter().filter(|g| g.is_none()).count();
         if run.control_group == "nevertreated" {
             assert!(never > 0, "cohort 5 is recoded as never treated");
         } else {
@@ -396,11 +401,11 @@ fn unbalanced_panels_are_balanced_or_estimated_as_repeated_cross_sections() {
         let out = estimate(&reference.unbalanced, run);
         check(&format!("unbalanced {index} {}", run.est_method), &out, run);
         if run.allow_unbalanced_panel {
-            assert!(out.sample.unbalanced_as_repeated_cross_section);
-            assert_eq!(out.sample.dropped_unbalanced, 0);
+            assert!(out.sample().unbalanced_as_repeated_cross_section);
+            assert_eq!(out.sample().dropped_unbalanced, 0);
         } else {
             assert_eq!(
-                out.sample.dropped_unbalanced,
+                out.sample().dropped_unbalanced,
                 reference.unbalanced_counts.missing_units
             );
         }
@@ -408,14 +413,24 @@ fn unbalanced_panels_are_balanced_or_estimated_as_repeated_cross_sections() {
 }
 
 /// A covariate and a weight that change over time. `did` reads both from
-/// the earlier of a cell's two periods: the base period, except in a
-/// pre-treatment cell under a universal base, whose base is the later one.
+/// the earlier of a cell's two periods. A sampling weight that changes within
+/// a unit has no meaning on a panel, and the panel route refuses it.
 #[test]
-fn time_varying_covariates_and_weights_come_from_the_earlier_period() {
+fn time_varying_weights_are_refused_on_a_panel() {
     let reference = reference();
-    for (index, run) in reference.varying_runs.iter().enumerate() {
-        let out = estimate(&reference.varying, run);
-        check(&format!("varying {index}"), &out, run);
+    for run in &reference.varying_runs {
+        assert!(run.panel);
+        let refused = rows::fit(&observations(&reference.varying), &options(run, ridge(run)));
+        assert!(
+            matches!(
+                refused,
+                Err(Error::Input(InputError::NotConstant {
+                    what: "weights",
+                    ..
+                }))
+            ),
+            "{refused:?}"
+        );
     }
 }
 
@@ -430,48 +445,50 @@ fn cells_without_overlap_are_left_out_as_att_gt_does() {
         let out = estimate(&reference.overlap, run);
         check(&format!("overlap {index} {}", run.est_method), &out, run);
         let refused: Vec<(i32, i32)> = out
-            .skipped
+            .cells()
             .iter()
-            .filter(|cell| cell.reason.starts_with("overlap"))
-            .map(|cell| (cell.group, cell.time))
+            .filter(|cell| {
+                matches!(
+                    cell.skipped,
+                    Some(SkipReason::PoorOverlap | SkipReason::OverlapFitFailed)
+                )
+            })
+            .map(|cell| {
+                let small = |v: i64| i32::try_from(v).expect("a period");
+                (small(cell.group), small(cell.time))
+            })
             .collect();
         let na: Vec<(i32, i32)> = (0..run.group.len())
             .filter(|&i| run.att[i].is_none())
             .map(|i| (run.group[i], run.t[i]))
             .collect();
         assert_eq!(refused, na, "overlap {index}: refused cells");
-        for diagnostic in &out.overlap {
-            let tripped = diagnostic.max_propensity.is_none_or(|score| score >= 0.999);
-            assert_eq!(
-                tripped,
-                diagnostic.group == 3,
-                "overlap {index}: {diagnostic:?}"
-            );
+        let overlaps = |fit: &AttGt| -> Vec<(i64, i64, Option<f64>)> {
+            fit.cells()
+                .iter()
+                .filter_map(|cell| Some((cell.group, cell.time, cell.overlap?.max_propensity)))
+                .collect()
+        };
+        for (group, _, score) in overlaps(&out) {
+            let tripped = score.is_none_or(|score| score >= 0.999);
+            assert_eq!(tripped, group == 3, "overlap {index}: {score:?}");
         }
-        let mut config = config(
-            run,
-            if run.panel && run.est_method == "dr" {
-                1e-8
-            } else {
-                0.0
+        let all = rows::fit(
+            &observations(&reference.overlap),
+            &AttGtOptions {
+                refuse_poor_overlap: false,
+                ..options(run, ridge(run))
             },
-        );
-        config.att_gt.refuse_poor_overlap = false;
-        let observations = observations(&reference.overlap, run.panel);
-        let all = match run.est_method.as_str() {
-            "dr" => estimate_att_gt_dr_panel_with_influence(&observations, config),
-            "ipw" => estimate_att_gt_ipw_panel_with_influence(&observations, config),
-            _ => estimate_att_gt_or_panel_with_influence(&observations, config),
-        }
+        )
         .expect("fit");
-        assert_eq!(all.estimates.len(), out.estimates.len() + refused.len());
-        assert_eq!(all.overlap, out.overlap);
+        assert_eq!(
+            rows::cells(&all).len(),
+            rows::cells(&out).len() + refused.len()
+        );
+        assert_eq!(overlaps(&all), overlaps(&out));
     }
 }
 
-/// `did` stops when the never-treated group has fewer rows per period than
-/// the covariates plus 5, here 7, and only under the never-treated
-/// comparison group.
 #[test]
 fn a_small_never_treated_group_is_refused_as_att_gt_refuses_it() {
     let reference = reference();
@@ -494,13 +511,16 @@ fn a_small_never_treated_group_is_refused_as_att_gt_refuses_it() {
             .filter(|row| row.g != 0 || never[..case.keep].contains(&row.id.expect("id")))
             .copied()
             .collect();
-        let observations: Vec<AttGtDrObservation> = observations(&rows, true);
-        let mut config = config(template, 1e-8);
-        config.att_gt.comparison_group = match case.control_group.as_str() {
-            "nevertreated" => ComparisonGroup::NeverTreated,
-            _ => ComparisonGroup::NotYetTreated,
+        let observations = observations(&rows);
+        let options = AttGtOptions {
+            estimator: Estimator::DoublyRobust,
+            comparison_group: match case.control_group.as_str() {
+                "nevertreated" => ComparisonGroup::NeverTreated,
+                _ => ComparisonGroup::NotYetTreated,
+            },
+            ..options(template, 1e-8)
         };
-        let result = estimate_att_gt_dr_panel_with_influence(&observations, config);
+        let result = rows::fit(&observations, &options);
         if case.error.is_empty() {
             assert!(result.is_ok(), "{} kept: {result:?}", case.keep);
         } else {
@@ -511,10 +531,7 @@ fn a_small_never_treated_group_is_refused_as_att_gt_refuses_it() {
             );
             let error = result.expect_err("refused");
             assert!(
-                matches!(
-                    error,
-                    epistat_did::AttGtError::SmallNeverTreatedGroup { required: 7, .. }
-                ),
+                matches!(error, Error::SmallNeverTreatedGroup { required: 7, .. }),
                 "{error:?}"
             );
             assert!(
@@ -522,8 +539,11 @@ fn a_small_never_treated_group_is_refused_as_att_gt_refuses_it() {
                     .to_string()
                     .contains("never-treated group is too small")
             );
-            config.att_gt.refuse_small_never_treated = false;
-            assert!(estimate_att_gt_dr_panel_with_influence(&observations, config).is_ok());
+            let relaxed = AttGtOptions {
+                refuse_small_never_treated: false,
+                ..options
+            };
+            assert!(rows::fit(&observations, &relaxed).is_ok());
         }
     }
 }
@@ -534,27 +554,27 @@ fn a_small_never_treated_group_is_refused_as_att_gt_refuses_it() {
 fn a_balanced_panel_gives_the_same_bits_under_every_unbalanced_rule() {
     let reference = reference();
     let run = &reference.methods_panel[0];
-    let observations = observations(&reference.balanced, true);
-    let base = config(run, 0.0);
-    let fits: Vec<AttGtInfluenceOutput> = [
+    let observations = observations(&reference.balanced);
+    let fits: Vec<AttGt> = [
         UnbalancedPanel::Balance,
         UnbalancedPanel::RepeatedCrossSection,
         UnbalancedPanel::PerCell,
     ]
     .into_iter()
-    .map(|unbalanced_panel| {
-        let config = AttGtDrConfig {
-            att_gt: AttGtConfig {
-                unbalanced_panel,
-                ..base.att_gt
-            },
-            ..base
+    .map(|unbalanced| {
+        let options = AttGtOptions {
+            estimator: Estimator::InverseProbabilityWeighting,
+            unbalanced,
+            ..options(run, 0.0)
         };
-        estimate_att_gt_ipw_panel_with_influence(&observations, config).expect("fit")
+        rows::fit(&observations, &options).expect("fit")
     })
     .collect();
-    assert_eq!(fits[0], fits[1]);
-    assert_eq!(fits[0], fits[2]);
+    for fit in &fits[1..] {
+        assert_eq!(fit.cells(), fits[0].cells());
+        assert_eq!(fit.influence(), fits[0].influence());
+        assert_eq!(fit.sample(), fits[0].sample());
+    }
 }
 
 #[derive(Deserialize)]
@@ -572,46 +592,44 @@ struct MpdtaData {
     data_subset: Vec<MpdtaRow>,
 }
 
-fn mpdta() -> Vec<AttGtDrObservation> {
+fn mpdta() -> Vec<Obs> {
     let data: MpdtaData = load_json("tests/data/did_attgt_dr_ref.json");
     data.data_subset
         .iter()
-        .map(|row| AttGtDrObservation {
-            unit_id: Some(row.countyreal),
-            first_treated_time: (row.first_treat != 0).then_some(row.first_treat),
-            time: row.year,
-            outcome: row.lemp,
-            weight: 1.0,
+        .map(|row| Obs {
             covariates: vec![row.lpop],
-            comparison_cohort: None,
+            ..Obs::new(
+                Some(row.countyreal),
+                (row.first_treat != 0).then_some(row.first_treat),
+                row.year,
+                row.lemp,
+            )
         })
         .collect()
 }
 
-fn mpdta_config(
+fn mpdta_options(
     comparison_group: ComparisonGroup,
     base_period: BasePeriod,
-    anticipation_periods: i32,
-) -> AttGtDrConfig {
-    AttGtDrConfig {
-        att_gt: AttGtConfig {
-            comparison_group,
-            base_period,
-            anticipation_periods,
-            ..AttGtConfig::default()
-        },
-        drdid: DrDidConfig::default(),
+    anticipation: i64,
+) -> AttGtOptions {
+    AttGtOptions {
+        comparison_group,
+        base_period,
+        anticipation,
+        ..AttGtOptions::default()
     }
 }
 
-fn check_mpdta(label: &str, out: &AttGtInfluenceOutput, run: &MpdtaRun) {
+fn check_mpdta(label: &str, out: &AttGt, run: &MpdtaRun) {
     let expected: Vec<usize> = (0..run.group.len())
         .filter(|&i| run.se[i].is_some())
         .collect();
-    let cells: Vec<(i32, i32)> = out.estimates.iter().map(|e| (e.group, e.time)).collect();
+    let estimates = rows::cells(out);
+    let cells: Vec<(i32, i32)> = estimates.iter().map(|e| (e.group, e.time)).collect();
     let want: Vec<(i32, i32)> = expected.iter().map(|&i| (run.group[i], run.t[i])).collect();
     assert_eq!(cells, want, "{label}: cells");
-    for (ours, &i) in out.estimates.iter().zip(&expected) {
+    for (ours, &i) in estimates.iter().zip(&expected) {
         assert!(
             (ours.att - run.att[i].expect("att")).abs() < ESTIMATE_TOLERANCE,
             "{label}"
@@ -621,12 +639,9 @@ fn check_mpdta(label: &str, out: &AttGtInfluenceOutput, run: &MpdtaRun) {
             "{label}"
         );
     }
-    assert_eq!(out.sample.ids.len(), run.n, "{label}: n");
+    assert_eq!(out.sample().units.len(), run.n, "{label}: n");
 }
 
-/// One period of anticipation on `mpdta`: the 2004 cohort, treated within
-/// one period of 2003, is dropped (R: "Dropped 20 units"), and the bases move
-/// back a period.
 #[test]
 fn anticipation_matches_att_gt_on_mpdta() {
     let reference = reference();
@@ -636,10 +651,9 @@ fn anticipation_matches_att_gt_on_mpdta() {
         (ComparisonGroup::NotYetTreated, BasePeriod::Universal),
     ];
     for ((comparison, base), run) in runs.into_iter().zip(&reference.mpdta_anticipation) {
-        let out = estimate_att_gt_dr_panel_with_influence(&rows, mpdta_config(comparison, base, 1))
-            .expect("fit");
+        let out = rows::fit(&rows, &mpdta_options(comparison, base, 1)).expect("fit");
         check_mpdta("mpdta anticipation", &out, run);
-        assert_eq!(out.sample.dropped_treated_at_start, 20);
+        assert_eq!(out.sample().dropped_treated_at_start, 20);
     }
 }
 
@@ -669,14 +683,17 @@ struct DefaultRef {
 #[test]
 fn the_varying_base_matches_att_gt_on_mpdta() {
     let rows = mpdta();
-    let out = estimate_att_gt_dr_panel_with_influence(
+    let out = rows::fit(
         &rows,
-        mpdta_config(ComparisonGroup::NeverTreated, BasePeriod::Varying, 0),
+        &mpdta_options(ComparisonGroup::NeverTreated, BasePeriod::Varying, 0),
     )
     .expect("fit");
+    let estimates = rows::cells(&out);
+    let influence = rows::influence(&out);
+    let ids = rows::ids(&out);
 
     let varying: VaryingRef = load_json("tests/data/cs_panel_dr_varying_ref.json");
-    let cells: Vec<(i32, i32)> = out.estimates.iter().map(|e| (e.group, e.time)).collect();
+    let cells: Vec<(i32, i32)> = estimates.iter().map(|e| (e.group, e.time)).collect();
     let want: Vec<(i32, i32)> = varying
         .group
         .iter()
@@ -684,19 +701,15 @@ fn the_varying_base_matches_att_gt_on_mpdta() {
         .zip(varying.t.iter().copied())
         .collect();
     assert_eq!(cells, want);
-    for (ours, (att, se)) in out
-        .estimates
-        .iter()
-        .zip(varying.att.iter().zip(&varying.se))
-    {
+    for (ours, (att, se)) in estimates.iter().zip(varying.att.iter().zip(&varying.se)) {
         assert!((ours.att - att).abs() < ESTIMATE_TOLERANCE);
         assert!((ours.se - se).abs() < ESTIMATE_TOLERANCE);
     }
-    assert_eq!(out.sample.ids.len(), varying.n_units);
+    assert_eq!(ids.len(), varying.n_units);
     let mut worst = 0.0_f64;
     for (r_row, id) in varying.inffunc_unit_order.iter().enumerate() {
-        let position = out.sample.ids.binary_search(id).expect("unit");
-        for (cell, psi) in out.influence_functions.iter().enumerate() {
+        let position = ids.binary_search(id).expect("unit");
+        for (cell, psi) in influence.iter().enumerate() {
             worst = worst.max((psi[position] - varying.inffunc[r_row][cell]).abs());
         }
     }
@@ -710,11 +723,7 @@ fn the_varying_base_matches_att_gt_on_mpdta() {
         .zip(default.t.iter().copied())
         .collect();
     assert_eq!(cells, want);
-    for (ours, (att, se)) in out
-        .estimates
-        .iter()
-        .zip(default.att.iter().zip(&default.se))
-    {
+    for (ours, (att, se)) in estimates.iter().zip(default.att.iter().zip(&default.se)) {
         assert!((ours.att - att).abs() < ESTIMATE_TOLERANCE + 1e-14);
         assert!((ours.se - se).abs() < ESTIMATE_TOLERANCE + 1e-14);
     }

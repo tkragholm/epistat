@@ -18,11 +18,33 @@
 mod common;
 
 use common::{Level, Person, cohort, records};
+use epistat_matching::Error;
+use epistat_matching::output::{MatchDataOptions, Units, get_matches, match_data};
 use epistat_matching::prelude::*;
+use epistat_matching::spec::{
+    AssignmentSpec, BinningSpec, CardinalitySpec, CemSpec, CemVariableSpec, CovarianceSpec,
+    CovariatesSpec, DiscardSpec, DistanceSpec, EstimatorSpec, FitFuncSpec, FullSpec, GeneticSpec,
+    K2kSpec, LambdaSpec, LinkSpec, LossSpec, MatchMethod, MatchMode, MissingSpec, NearestSpec,
+    OrderSpec, ScaleSpec, StdCaliperEach, StdCaliperSpec, SubclassSpec, TransformSpec,
+    VariableRatioSpec,
+};
 use epistat_matching::{
-    CardinalityError, CardinalityLimits, CardinalityRequest, CbpsConfig, CbpsEstimand, CbpsMethod,
-    GeneticFit, GeneticMatchOptions, GeneticProblem, GeneticSearch, QuickMatchOptions,
-    match_cardinality, quick_match_subclasses,
+    BalanceRecord, BalanceReportOptions, BalanceWeights, CemBinning, CemVariable, CommonSupport,
+    CovariateEncodingConfig, CovariateValue, DeterministicSelection, DistanceCaliper,
+    DistanceConfig, ElasticNetCvConfig, Estimand, EuclideanPreparationConfig, EuclideanScale,
+    LambdaRule, LogisticRegressionConfig, MahalanobisPreparationConfig, MatchOrder,
+    MatchWeightMethod, MatchingCriteria, NearestBirthDateSelection, PairDistanceMatrix,
+    PropensityEstimator, PropensityLink, PropensityScoreConfig, PropensityScoreEstimate,
+    PropensityScoreOutputScale, Rounds, SpecOutput, SubclassificationConfig, UnitRole,
+    VariableRatio, balance_summary, cem_k2k_pairs, cem_strata, cem_subclasses,
+    estimate_propensity_and_match, exact_match_subclasses, match_weights_from_pairs,
+    pair_weights_from_pairs, prepare_euclidean_distance_config,
+    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
+    subclassify_by_propensity_score_map,
+};
+use epistat_matching::{
+    CardinalityLimits, CardinalityRequest, CbpsConfig, CbpsMethod, GeneticFit, GeneticMatchOptions,
+    GeneticProblem, GeneticSearch, QuickMatchOptions, match_cardinality, quick_match_subclasses,
 };
 use std::collections::BTreeMap;
 
@@ -36,19 +58,18 @@ fn fnv(text: &str) -> u64 {
 }
 
 fn hashes(outcome: &MatchOutcome) -> (u64, u64) {
-    let unit = match_weights_from_pairs(
-        &outcome.pairs,
-        MatchWeightMethod::AnchorUnitCandidateFractional,
-    )
-    .to_table();
-    let pair = pair_weights_from_pairs(
-        &outcome.pairs,
-        MatchWeightMethod::AnchorUnitCandidateFractional,
-    )
-    .to_table();
+    let unit =
+        match_weights_from_pairs(&outcome.pairs, MatchWeightMethod::CaseUnitControlFractional)
+            .to_table();
+    let pair =
+        pair_weights_from_pairs(&outcome.pairs, MatchWeightMethod::CaseUnitControlFractional)
+            .to_table();
     (
         fnv(&common::golden_debug(outcome)),
-        fnv(&format!("{unit:?}{pair:?}")),
+        fnv(&common::golden_weights_debug(
+            &format!("{unit:?}"),
+            &format!("{pair:?}"),
+        )),
     )
 }
 
@@ -102,8 +123,8 @@ fn run_pairs(
     match run_spec(
         spec,
         SpecInput::Standard {
-            anchors,
-            candidates,
+            cases: anchors,
+            controls: candidates,
         },
     )
     .expect("valid spec")
@@ -138,7 +159,8 @@ fn spec_reproduces_golden_standard_without_replacement_with_fallback() {
         ])
         .with_birth_window(BirthDateWindowDays::new(20).unwrap())
         .with_exact_matches(["sex", "municipality"])
-        .run();
+        .run()
+        .expect("a valid job");
     same(&by_spec, &by_hand);
     assert_eq!(hashes(&by_spec), (0x1520dffbb17aef3e, 0x08198f3ecb4ed043));
 }
@@ -219,7 +241,8 @@ fn spec_reproduces_golden_risk_set_nearest_birth_date() {
         .with_exact_matches(["sex", "municipality"])
         .with_alive_check()
         .with_strategy(NearestBirthDateSelection)
-        .run();
+        .run()
+        .expect("a valid job");
     same(&outcome, &by_hand);
     assert_eq!(hashes(&outcome), (0x2c4ad6fd67c312f7, 0x585c1833c1e022cf));
 }
@@ -278,7 +301,8 @@ fn spec_with_sex_antiexact_and_caliper_matches_the_typed_job() {
         .with_constraint(epistat_matching::constraints::caliper_on_field::<
             BalanceRecord,
         >("x", 6.0))
-        .run();
+        .run()
+        .expect("a valid job");
     same(&by_spec, &by_hand);
 }
 
@@ -300,7 +324,10 @@ fn spec_with_rounds_and_each_selection_matches_the_typed_job() {
             .with_exact_matches(["sex"])
     };
     let random = run_pairs(&base, &anchors, &candidates);
-    same(&random, &job().with_round_assignment().run());
+    same(
+        &random,
+        &job().with_round_assignment().run().expect("a valid job"),
+    );
     let lowest = run_pairs(
         &MatchSpec {
             method: MatchMethod::LowestIndex,
@@ -314,7 +341,8 @@ fn spec_with_rounds_and_each_selection_matches_the_typed_job() {
         &job()
             .with_strategy(DeterministicSelection)
             .with_round_assignment()
-            .run(),
+            .run()
+            .expect("a valid job"),
     );
     let birth = run_pairs(
         &MatchSpec {
@@ -329,7 +357,8 @@ fn spec_with_rounds_and_each_selection_matches_the_typed_job() {
         &job()
             .with_strategy(NearestBirthDateSelection)
             .with_round_assignment()
-            .run(),
+            .run()
+            .expect("a valid job"),
     );
 }
 
@@ -405,8 +434,8 @@ fn spec_nearest_on_a_propensity_score_matches_the_typed_job() {
     } = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec")
@@ -415,16 +444,17 @@ fn spec_nearest_on_a_propensity_score_matches_the_typed_job() {
     };
     assert!(propensity.is_some());
 
-    let config = PropensityScoreConfig::builder()
-        .encoding(
-            CovariateEncodingConfig::builder()
-                .covariate_keys(vec!["age".into(), "income".into(), "region".into()])
-                .include_intercept(true)
-                .build(),
-        )
-        .caliper(DistanceCaliper::new(0.2).unwrap())
-        .build();
-    let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config).unwrap();
+    let config = PropensityScoreConfig {
+        encoding: CovariateEncodingConfig {
+            covariate_keys: vec!["age".into(), "income".into(), "region".into()],
+            include_intercept: true,
+            ..CovariateEncodingConfig::default()
+        },
+        caliper: Some(DistanceCaliper::new(0.2).unwrap()),
+        ..PropensityScoreConfig::default()
+    };
+    let prepared =
+        prepare_propensity_distance_config(&anchors, &candidates, &config, None).unwrap();
     let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
         .with_ratio(MatchRatio::new(2).unwrap())
         .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
@@ -432,7 +462,8 @@ fn spec_nearest_on_a_propensity_score_matches_the_typed_job() {
         .with_nearest()
         .with_m_order(MatchOrder::Smallest)
         .with_std_caliper(true)
-        .run();
+        .run()
+        .expect("a valid job");
     same(&outcome, &by_hand);
 }
 
@@ -462,13 +493,13 @@ fn spec_nearest_on_mahalanobis_with_replacement_matches_the_typed_job() {
         &anchors,
         &candidates,
         None,
-        &MahalanobisPreparationConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .build(),
-            )
-            .build(),
+        &MahalanobisPreparationConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                ..CovariateEncodingConfig::default()
+            },
+            ..MahalanobisPreparationConfig::default()
+        },
     )
     .unwrap();
     let by_hand = MatchJob::new_standard(&anchors, &candidates, 9)
@@ -477,7 +508,8 @@ fn spec_nearest_on_mahalanobis_with_replacement_matches_the_typed_job() {
         .with_distance_config(prepared.distance_config)
         .with_nearest()
         .with_m_order(MatchOrder::Random)
-        .run();
+        .run()
+        .expect("a valid job");
     same(&by_spec, &by_hand);
 }
 
@@ -513,34 +545,34 @@ fn spec_nearest_with_mahvars_and_euclidean_match_the_typed_jobs() {
     let score = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .logistic(
-                LogisticRegressionConfig::builder()
-                    .link(PropensityLink::Probit)
-                    .build(),
-            )
-            .output_scale(PropensityScoreOutputScale::LinearPredictor)
-            .caliper(DistanceCaliper::new(1.0).unwrap())
-            .build(),
+        &PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            logistic: LogisticRegressionConfig {
+                link: PropensityLink::Probit,
+                ..LogisticRegressionConfig::default()
+            },
+            output_scale: PropensityScoreOutputScale::LinearPredictor,
+            caliper: Some(DistanceCaliper::new(1.0).unwrap()),
+            ..PropensityScoreConfig::default()
+        },
+        None,
     )
     .unwrap();
     let ranking = prepare_mahalanobis_distance_config(
         &anchors,
         &candidates,
         None,
-        &MahalanobisPreparationConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .build(),
-            )
-            .build(),
+        &MahalanobisPreparationConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                ..CovariateEncodingConfig::default()
+            },
+            ..MahalanobisPreparationConfig::default()
+        },
     )
     .unwrap();
     let by_hand = MatchJob::new_standard(&anchors, &candidates, 0)
@@ -548,7 +580,8 @@ fn spec_nearest_with_mahvars_and_euclidean_match_the_typed_jobs() {
         .with_distance_config(score.distance_config)
         .with_nearest()
         .with_mahvars(ranking.distance_config)
-        .run();
+        .run()
+        .expect("a valid job");
     same(&by_spec, &by_hand);
 
     let euclidean = MatchSpec {
@@ -566,21 +599,21 @@ fn spec_nearest_with_mahvars_and_euclidean_match_the_typed_jobs() {
         &anchors,
         &candidates,
         None,
-        &EuclideanPreparationConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into(), "region".into()])
-                    .build(),
-            )
-            .scale(EuclideanScale::PooledWithinGroupSd)
-            .build(),
+        &EuclideanPreparationConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into(), "region".into()],
+                ..CovariateEncodingConfig::default()
+            },
+            scale: EuclideanScale::PooledWithinGroupSd,
+        },
     )
     .unwrap();
     let by_hand = MatchJob::new_standard(&anchors, &candidates, 0)
         .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
         .with_distance_config(prepared.distance_config)
         .with_nearest()
-        .run();
+        .run()
+        .expect("a valid job");
     same(&by_spec, &by_hand);
 }
 
@@ -595,8 +628,8 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
     let SpecOutput::Exact(outcome) = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec") else {
@@ -635,8 +668,8 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
     let SpecOutput::Subclass { outcome, .. } = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec") else {
@@ -645,14 +678,15 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
     let prepared = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .build(),
+        &PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        },
+        None,
     )
     .unwrap();
     let by_hand = subclassify_by_propensity_score_map(
@@ -698,8 +732,8 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
     let SpecOutput::Quick(outcome) = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec") else {
@@ -708,14 +742,15 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
     let prepared = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .build(),
+        &PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        },
+        None,
     )
     .unwrap();
     let by_hand = quick_match_subclasses::<_, &str, _>(
@@ -743,12 +778,13 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
         outcome.unit_weights(Estimand::Att).expect("weights"),
     );
     weights.validate().unwrap();
-    let report = balance_report_on_weights(
+    let report = balance_summary(
         &anchors,
         &candidates,
         &weights,
         &BalanceReportOptions::default(),
     )
+    .map(|summary| summary.report)
     .unwrap();
     assert!(!report.numeric.is_empty());
 
@@ -756,8 +792,8 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
         run_spec(
             &spec,
             SpecInput::Standard {
-                anchors: &anchors,
-                candidates: &candidates,
+                cases: &anchors,
+                controls: &candidates,
             },
         )
         .unwrap_err()
@@ -827,8 +863,8 @@ fn message(spec: &MatchSpec) -> String {
     match run_spec(
         spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     ) {
         Ok(_) => panic!("the spec should be refused"),
@@ -953,13 +989,12 @@ fn a_covariate_that_is_missing_from_the_units_is_a_distance_error() {
     let error = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect_err("weight is not a covariate of the units");
-    assert!(matches!(error, SpecError::Distance(_)), "{error}");
-    assert!(error.to_string().contains("distance could not be built"));
+    assert!(matches!(error, Error::NoObservedValues { .. }), "{error}");
 }
 
 #[test]
@@ -987,8 +1022,8 @@ fn the_typed_jobs_invalid_outcome_is_an_error_from_the_spec() {
     let error = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect_err("refused");
@@ -998,13 +1033,13 @@ fn the_typed_jobs_invalid_outcome_is_an_error_from_the_spec() {
         &anchors,
         &candidates,
         None,
-        &MahalanobisPreparationConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .build(),
-            )
-            .build(),
+        &MahalanobisPreparationConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                ..CovariateEncodingConfig::default()
+            },
+            ..MahalanobisPreparationConfig::default()
+        },
     )
     .unwrap();
     let outcome = MatchJob::new_standard(&anchors, &candidates, 0)
@@ -1012,31 +1047,24 @@ fn the_typed_jobs_invalid_outcome_is_an_error_from_the_spec() {
         .with_nearest()
         .with_m_order(MatchOrder::Largest)
         .run();
-    assert_eq!(outcome.pairs.len(), 0);
-    assert!(
-        outcome
-            .diagnostics
-            .exclusion_counts
-            .keys()
-            .any(|reason| matches!(reason, ExclusionReason::InvalidCriteria(_)))
-    );
+    assert!(matches!(outcome, Err(Error::InvalidCriteria(_))));
 }
 
 #[test]
 fn error_types_display_and_are_errors() {
     fn is_error<E: std::error::Error>(_: &E) {}
-    let criteria = CriteriaValidationError::ZeroMatchRatio;
+    let criteria = Error::ZeroMatchRatio;
     is_error(&criteria);
     assert!(criteria.to_string().contains("ratio"));
-    let negative = CriteriaValidationError::NegativeBirthDateWindow;
+    let negative = Error::NegativeBirthDateWindow;
     assert!(negative.to_string().contains("window"));
-    let estimation = EstimationError::NoCovariatesAvailable;
+    let estimation = Error::NoCovariates;
     is_error(&estimation);
     assert!(estimation.to_string().contains("covariate"));
-    let mahalanobis = MahalanobisError::ZeroDimension;
+    let mahalanobis = Error::ZeroDimension;
     is_error(&mahalanobis);
     assert!(mahalanobis.to_string().contains("covariates"));
-    let spec_error = SpecError::InputMode {
+    let spec_error = Error::InputMode {
         mode: MatchMode::Standard,
     };
     is_error(&spec_error);
@@ -1068,18 +1096,12 @@ fn a_configuration_the_matcher_refuses_is_an_error_not_an_empty_match() {
     let error = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect_err("refused by the matcher");
-    assert!(
-        matches!(
-            error,
-            SpecError::Rejected(ExclusionReason::InvalidCriteria(_))
-        ),
-        "{error}"
-    );
+    assert!(matches!(error, Error::InvalidCriteria(_)), "{error}");
     assert!(error.to_string().contains("nearest_options"));
 }
 
@@ -1124,7 +1146,8 @@ fn spec_risk_set_with_resident_check_and_caliper_matches_the_typed_job() {
         >("y", 4.0)])
         .with_alive_check()
         .with_resident_check()
-        .run();
+        .run()
+        .expect("a valid job");
     same(&outcome, &by_hand);
 }
 
@@ -1158,8 +1181,8 @@ fn cem_variables() -> Vec<CemVariableSpec> {
 fn spec_cem_matches_the_functions_it_wraps() {
     let (anchors, candidates) = cem_inputs();
     let input = SpecInput::Standard {
-        anchors: &anchors,
-        candidates: &candidates,
+        cases: &anchors,
+        controls: &candidates,
     };
     let by_hand_variables = [
         CemVariable::numeric("age", CemBinning::Bins(4)),
@@ -1213,14 +1236,14 @@ fn spec_cem_matches_the_functions_it_wraps() {
         &anchors,
         &candidates,
         None,
-        &MahalanobisPreparationConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(false)
-                    .build(),
-            )
-            .build(),
+        &MahalanobisPreparationConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: false,
+                ..CovariateEncodingConfig::default()
+            },
+            ..MahalanobisPreparationConfig::default()
+        },
     )
     .unwrap();
     let by_hand = cem_k2k_pairs(
@@ -1257,8 +1280,8 @@ fn spec_nearest_on_a_distance_matrix_matches_the_typed_job() {
     let spec = MatchSpec {
         method: MatchMethod::Nearest,
         distance: DistanceSpec::Matrix {
-            anchor_ids: ids(&anchors),
-            candidate_ids: ids(&candidates),
+            case_ids: ids(&anchors),
+            control_ids: ids(&candidates),
             values: rows.clone(),
             caliper: Some(4.0),
         },
@@ -1274,8 +1297,8 @@ fn spec_nearest_on_a_distance_matrix_matches_the_typed_job() {
     let SpecOutput::Pairs { outcome, .. } = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec") else {
@@ -1296,7 +1319,8 @@ fn spec_nearest_on_a_distance_matrix_matches_the_typed_job() {
         .with_ratio(MatchRatio::new(2).unwrap())
         .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
         .with_distance_config(DistanceConfig::matrix(matrix, DistanceCaliper::new(4.0)))
-        .run();
+        .run()
+        .expect("a valid job");
     assert!(!by_hand.pairs.is_empty(), "no output, test is vacuous");
     same(&outcome, &by_hand);
 }
@@ -1353,8 +1377,8 @@ fn invalid_cem_and_matrix_specs_are_errors_that_name_the_option() {
     let ragged = MatchSpec {
         method: MatchMethod::Nearest,
         distance: DistanceSpec::Matrix {
-            anchor_ids: vec!["a".into()],
-            candidate_ids: vec!["x".into(), "y".into()],
+            case_ids: vec!["a".into()],
+            control_ids: vec!["x".into(), "y".into()],
             values: vec![vec![Some(1.0)]],
             caliper: None,
         },
@@ -1364,8 +1388,8 @@ fn invalid_cem_and_matrix_specs_are_errors_that_name_the_option() {
     let scored = MatchSpec {
         method: MatchMethod::Nearest,
         distance: DistanceSpec::Matrix {
-            anchor_ids: vec!["a".into()],
-            candidate_ids: vec!["x".into()],
+            case_ids: vec!["a".into()],
+            control_ids: vec!["x".into()],
             values: vec![vec![Some(1.0)]],
             caliper: None,
         },
@@ -1385,8 +1409,8 @@ fn cem_and_matrix_specs_round_trip_through_json() {
         r#"{"method": "cem", "cem": {"variables": [
               {"kind": "numeric", "name": "age", "binning": {"kind": "quantiles", "n": 4}},
               {"kind": "categorical", "name": "region", "groups": [["r0", "r1"]]}],
-            "k2k": {"distance": {"kind": "matrix", "anchor_ids": ["a"],
-                                 "candidate_ids": ["x"], "values": [[null]]},
+            "k2k": {"distance": {"kind": "matrix", "case_ids": ["a"],
+                                 "control_ids": ["x"], "values": [[null]]},
                     "m_order": "farthest"}}}"#,
     )
     .unwrap();
@@ -1414,29 +1438,31 @@ fn optimal_and_full_specs_equal_the_typed_calls() {
     let prepared = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .build(),
+        &PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        },
+        None,
     )
     .unwrap();
     let input = SpecInput::Standard {
-        anchors: &anchors,
-        candidates: &candidates,
+        cases: &anchors,
+        controls: &candidates,
     };
     let base = MatchSpec {
         distance,
         birth_window_days: 36_500,
         ..MatchSpec::default()
     };
-    let criteria = MatchingCriteria::builder()
-        .birth_date_window_days(36_500)
-        .match_ratio(2)
-        .build();
+    let criteria = MatchingCriteria {
+        birth_date_window_days: 36_500,
+        match_ratio: 2,
+        ..MatchingCriteria::default()
+    };
     let request =
         OptimalRequest::new(&criteria, &()).with_distance_config(&prepared.distance_config);
 
@@ -1495,7 +1521,7 @@ fn optimal_and_full_specs_equal_the_typed_calls() {
     ] {
         assert!(matches!(
             run_spec(&bad, input.clone()),
-            Err(SpecError::Option { .. })
+            Err(Error::Option { .. })
         ));
     }
 }
@@ -1512,15 +1538,15 @@ fn propensity_spec(caliper: Option<f64>) -> DistanceSpec {
 }
 
 fn propensity_config_by_hand(caliper: Option<f64>) -> PropensityScoreConfig {
-    PropensityScoreConfig::builder()
-        .encoding(
-            CovariateEncodingConfig::builder()
-                .covariate_keys(vec!["age".into(), "income".into(), "region".into()])
-                .include_intercept(true)
-                .build(),
-        )
-        .maybe_caliper(caliper.map(|width| DistanceCaliper::new(width).unwrap()))
-        .build()
+    PropensityScoreConfig {
+        encoding: CovariateEncodingConfig {
+            covariate_keys: vec!["age".into(), "income".into(), "region".into()],
+            include_intercept: true,
+            ..CovariateEncodingConfig::default()
+        },
+        caliper: caliper.map(|width| DistanceCaliper::new(width).unwrap()),
+        ..PropensityScoreConfig::default()
+    }
 }
 
 #[test]
@@ -1542,21 +1568,26 @@ fn spec_nearest_with_a_variable_ratio_matches_the_typed_job() {
         ..MatchSpec::default()
     };
     let by_spec = run_pairs(&spec, &anchors, &candidates);
-    let prepared =
-        prepare_propensity_distance_config(&anchors, &candidates, &propensity_config_by_hand(None))
-            .unwrap();
+    let prepared = prepare_propensity_distance_config(
+        &anchors,
+        &candidates,
+        &propensity_config_by_hand(None),
+        None,
+    )
+    .unwrap();
     let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
         .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
         .with_distance_config(prepared.distance_config)
         .with_nearest()
         .with_variable_ratio(VariableRatio::new(2.5, 1, 4).unwrap())
-        .run();
+        .run()
+        .expect("a valid job");
     same(&by_spec, &by_hand);
     let counts: std::collections::BTreeSet<usize> = by_spec
         .pairs
         .iter()
         .fold(BTreeMap::<&str, usize>::new(), |mut counts, pair| {
-            *counts.entry(pair.anchor_id()).or_default() += 1;
+            *counts.entry(pair.case_id.as_str()).or_default() += 1;
             counts
         })
         .into_values()
@@ -1587,6 +1618,7 @@ fn spec_discard_matches_the_typed_job_with_common_support() {
                 &anchors,
                 &candidates,
                 &propensity_config_by_hand(None),
+                None,
             )
             .unwrap();
             let job = MatchJob::new_standard(&anchors, &candidates, 5)
@@ -1594,13 +1626,15 @@ fn spec_discard_matches_the_typed_job_with_common_support() {
                 .with_common_support(Some(typed_policy))
                 .with_distance_config(prepared.distance_config);
             let by_hand = if method == MatchMethod::Nearest {
-                job.with_nearest().run()
+                job.with_nearest().run().expect("a valid job")
             } else {
-                job.with_strategy(DeterministicSelection).run()
+                job.with_strategy(DeterministicSelection)
+                    .run()
+                    .expect("a valid job")
             };
             same(&by_spec, &by_hand);
-            trimmed_somewhere |= by_spec.diagnostics.common_support_trimmed_anchors
-                + by_spec.diagnostics.common_support_trimmed_candidates
+            trimmed_somewhere |= by_spec.diagnostics.common_support_trimmed_cases
+                + by_spec.diagnostics.common_support_trimmed_controls
                 > 0;
         }
     }
@@ -1632,28 +1666,29 @@ fn spec_reestimate_matches_estimate_propensity_and_match() {
             } = run_spec(
                 &spec,
                 SpecInput::Standard {
-                    anchors: &anchors,
-                    candidates: &candidates,
+                    cases: &anchors,
+                    controls: &candidates,
                 },
             )
             .expect("valid spec")
             else {
                 panic!("expected pairs");
             };
-            let criteria = MatchingCriteria::builder()
-                .match_ratio(2)
-                .birth_date_window_days(wide_window())
-                .common_support(typed_policy)
-                .build();
-            let config = PropensityScoreConfig::builder()
-                .encoding(
-                    CovariateEncodingConfig::builder()
-                        .covariate_keys(vec!["age".into(), "income".into(), "region".into()])
-                        .include_intercept(true)
-                        .build(),
-                )
-                .reestimate(true)
-                .build();
+            let criteria = MatchingCriteria {
+                match_ratio: 2,
+                birth_date_window_days: wide_window(),
+                common_support: Some(typed_policy),
+                ..MatchingCriteria::default()
+            };
+            let config = PropensityScoreConfig {
+                encoding: CovariateEncodingConfig {
+                    covariate_keys: vec!["age".into(), "income".into(), "region".into()],
+                    include_intercept: true,
+                    ..CovariateEncodingConfig::default()
+                },
+                reestimate: true,
+                ..PropensityScoreConfig::default()
+            };
             let by_hand = if rounds {
                 estimate_propensity_and_match(
                     &anchors,
@@ -1688,16 +1723,15 @@ fn spec_reestimate_matches_estimate_propensity_and_match() {
             };
             assert_eq!(by_id(&propensity), by_id(&by_hand.propensity));
             assert_eq!(
-                propensity.discarded_anchors,
-                by_hand.propensity.discarded_anchors
+                propensity.discarded_cases,
+                by_hand.propensity.discarded_cases
             );
             assert_eq!(
-                propensity.discarded_candidates,
-                by_hand.propensity.discarded_candidates
+                propensity.discarded_controls,
+                by_hand.propensity.discarded_controls
             );
             assert!(
-                !propensity.discarded_anchors.is_empty()
-                    || !propensity.discarded_candidates.is_empty(),
+                !propensity.discarded_cases.is_empty() || !propensity.discarded_controls.is_empty(),
                 "the policy trims units"
             );
         }
@@ -1737,38 +1771,38 @@ fn spec_elastic_net_with_a_penalty_ratio_matches_the_typed_job() {
         } = run_spec(
             &spec,
             SpecInput::Standard {
-                anchors: &anchors,
-                candidates: &candidates,
+                cases: &anchors,
+                controls: &candidates,
             },
         )
         .expect("valid spec")
         else {
             panic!("expected pairs");
         };
-        let config = PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into(), "region".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .estimator(PropensityEstimator::ElasticNetCv(
-                ElasticNetCvConfig::builder()
-                    .seed(5)
-                    .alpha(0.5)
-                    .nfolds(4)
-                    .nlambda(20)
-                    .maybe_lambda_min_ratio(ratio)
-                    .rule(LambdaRule::Min)
-                    .build(),
-            ))
-            .build();
-        let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config).unwrap();
+        let config = PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into(), "region".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            estimator: PropensityEstimator::ElasticNetCv(ElasticNetCvConfig {
+                alpha: 0.5,
+                nfolds: 4,
+                nlambda: 20,
+                lambda_min_ratio: ratio,
+                rule: LambdaRule::Min,
+                ..ElasticNetCvConfig::new(5)
+            }),
+            ..PropensityScoreConfig::default()
+        };
+        let prepared =
+            prepare_propensity_distance_config(&anchors, &candidates, &config, None).unwrap();
         let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
             .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
             .with_distance_config(prepared.distance_config)
             .with_nearest()
-            .run();
+            .run()
+            .expect("a valid job");
         same(&outcome, &by_hand);
         paths.push(format!("{:?}", propensity.expect("reported").probabilities));
     }
@@ -1779,8 +1813,8 @@ fn spec_elastic_net_with_a_penalty_ratio_matches_the_typed_job() {
 fn spec_cbps_matches_the_typed_job() {
     let (anchors, candidates) = covariate_inputs();
     for (over, estimand, method, cbps_estimand) in [
-        (true, Estimand::Att, CbpsMethod::Over, CbpsEstimand::Att),
-        (false, Estimand::Ate, CbpsMethod::Exact, CbpsEstimand::Ate),
+        (true, Estimand::Att, CbpsMethod::Over, Estimand::Att),
+        (false, Estimand::Ate, CbpsMethod::Exact, Estimand::Ate),
     ] {
         let spec = MatchSpec {
             method: MatchMethod::Nearest,
@@ -1803,35 +1837,36 @@ fn spec_cbps_matches_the_typed_job() {
         } = run_spec(
             &spec,
             SpecInput::Standard {
-                anchors: &anchors,
-                candidates: &candidates,
+                cases: &anchors,
+                controls: &candidates,
             },
         )
         .expect("valid spec")
         else {
             panic!("expected pairs");
         };
-        let config = PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .estimator(PropensityEstimator::Cbps(
-                CbpsConfig::builder()
-                    .estimand(cbps_estimand)
-                    .method(method)
-                    .build(),
-            ))
-            .build();
-        let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config).unwrap();
+        let config = PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            estimator: PropensityEstimator::Cbps(CbpsConfig {
+                estimand: cbps_estimand,
+                method,
+                ..CbpsConfig::default()
+            }),
+            ..PropensityScoreConfig::default()
+        };
+        let prepared =
+            prepare_propensity_distance_config(&anchors, &candidates, &config, None).unwrap();
         let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
             .with_estimand(estimand)
             .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
             .with_distance_config(prepared.distance_config)
             .with_nearest()
-            .run();
+            .run()
+            .expect("a valid job");
         same(&outcome, &by_hand);
         let reported = propensity.expect("reported");
         assert!(reported.converged);
@@ -1866,8 +1901,8 @@ fn spec_cbps_refuses_an_estimand_it_does_not_define() {
     let result = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     );
     assert!(result.is_err());
@@ -1885,6 +1920,7 @@ fn spec_std_caliper_can_be_set_for_each_caliper() {
             &anchors,
             &candidates,
             &propensity_config_by_hand(Some(0.3)),
+            None,
         )
         .unwrap();
         MatchJob::new_standard(&anchors, &candidates, 5)
@@ -1895,6 +1931,7 @@ fn spec_std_caliper_can_be_set_for_each_caliper() {
             .with_nearest()
             .with_std_caliper(std_distance)
             .run()
+            .expect("a valid job")
     };
     let spec = |std_caliper: StdCaliperSpec| MatchSpec {
         method: MatchMethod::Nearest,
@@ -1953,8 +1990,8 @@ fn invalid_support_and_ratio_options_are_errors_that_name_the_option() {
         run_spec(
             &spec,
             SpecInput::Standard {
-                anchors: &anchors,
-                candidates: &candidates,
+                cases: &anchors,
+                controls: &candidates,
             },
         )
         .expect_err("invalid spec")
@@ -2085,9 +2122,12 @@ fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
     let units = Units::without_fixed_roles(ids).expect("unique ids");
     let long = get_matches(&outcome, &units, false).expect("long form of a risk-set match");
 
-    let cases: std::collections::BTreeSet<&str> =
-        outcome.pairs.iter().map(MatchedPair::anchor_id).collect();
-    let anchor_rows = long.role.iter().filter(|r| **r == UnitRole::Anchor).count();
+    let cases: std::collections::BTreeSet<&str> = outcome
+        .pairs
+        .iter()
+        .map(|pair: &MatchedPair| pair.case_id.as_str())
+        .collect();
+    let anchor_rows = long.role.iter().filter(|r| **r == UnitRole::Case).count();
     assert_eq!(anchor_rows, cases.len(), "one pair per case");
     assert_eq!(long.len(), cases.len() + outcome.pairs.len());
     assert_eq!(long.pair_id.last().copied().flatten(), Some(cases.len()));
@@ -2096,7 +2136,7 @@ fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
     let controls: std::collections::BTreeSet<&str> = outcome
         .pairs
         .iter()
-        .map(MatchedPair::comparator_id)
+        .map(|pair: &MatchedPair| pair.control_id.as_str())
         .collect();
     let both: Vec<&str> = cases.intersection(&controls).copied().collect();
     assert!(!both.is_empty(), "some case is also a control");
@@ -2117,11 +2157,11 @@ fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
         let end = (start..long.len())
             .find(|row| long.pair_id[*row] != pair)
             .unwrap_or(long.len());
-        assert_eq!(long.role[start], UnitRole::Anchor);
+        assert_eq!(long.role[start], UnitRole::Case);
         assert!(
             long.role[start + 1..end]
                 .iter()
-                .all(|r| *r == UnitRole::Candidate)
+                .all(|r| *r == UnitRole::Control)
         );
         let controls: f64 = long.weight[start + 1..end].iter().sum();
         assert!((controls - 1.0).abs() < 1e-12);
@@ -2131,7 +2171,7 @@ fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
     let mut from_long: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     let mut current = "";
     for (id, role) in long.id.iter().zip(&long.role) {
-        if *role == UnitRole::Anchor {
+        if *role == UnitRole::Case {
             current = id;
         } else {
             from_long.entry(current).or_default().push(id);
@@ -2140,9 +2180,9 @@ fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
     let mut from_outcome: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for pair in &outcome.pairs {
         from_outcome
-            .entry(pair.anchor_id())
+            .entry(pair.case_id.as_str())
             .or_default()
-            .push(pair.comparator_id());
+            .push(pair.control_id.as_str());
     }
     for controls in from_long.values_mut().chain(from_outcome.values_mut()) {
         controls.sort_unstable();
@@ -2160,8 +2200,8 @@ fn fine_balance_spec_equals_the_typed_call() {
     let anchors: Vec<_> = anchors.into_iter().take(40).collect();
     let candidates: Vec<_> = candidates.into_iter().take(300).collect();
     let input = SpecInput::Standard {
-        anchors: &anchors,
-        candidates: &candidates,
+        cases: &anchors,
+        controls: &candidates,
     };
     let balance = FineBalance::on_keys(["sex", "municipality"]);
     let spec = MatchSpec {
@@ -2175,10 +2215,11 @@ fn fine_balance_spec_equals_the_typed_call() {
     else {
         panic!("expected pairs");
     };
-    let criteria = MatchingCriteria::builder()
-        .birth_date_window_days(36_500)
-        .match_ratio(2)
-        .build();
+    let criteria = MatchingCriteria {
+        birth_date_window_days: 36_500,
+        match_ratio: 2,
+        ..MatchingCriteria::default()
+    };
     let request = OptimalRequest::new(&criteria, &());
     let by_hand = match_fine_balance(&anchors, &candidates, &request, &balance).expect("feasible");
     assert_eq!(outcome.pairs, by_hand.outcome.pairs);
@@ -2189,10 +2230,7 @@ fn fine_balance_spec_equals_the_typed_call() {
         fine_balance: Some(balance),
         ..MatchSpec::default()
     };
-    assert!(matches!(
-        run_spec(&bad, input),
-        Err(SpecError::Option { .. })
-    ));
+    assert!(matches!(run_spec(&bad, input), Err(Error::Option { .. })));
     let again: MatchSpec = serde_json::from_str(&serde_json::to_string(&spec).unwrap()).unwrap();
     assert_eq!(spec, again);
 }
@@ -2239,11 +2277,12 @@ fn spec_discard_in_risk_set_mode_matches_the_typed_job_with_common_support() {
         ))
         .with_common_support(Some(CommonSupport::Both))
         .with_strategy(DeterministicSelection)
-        .run();
+        .run()
+        .expect("a valid job");
     same(&outcome, &by_hand);
     assert!(
-        outcome.diagnostics.common_support_trimmed_anchors
-            + outcome.diagnostics.common_support_trimmed_candidates
+        outcome.diagnostics.common_support_trimmed_cases
+            + outcome.diagnostics.common_support_trimmed_controls
             > 0,
         "nothing was trimmed, test is vacuous"
     );
@@ -2268,9 +2307,9 @@ fn spec_discard_in_risk_set_mode_matches_the_typed_job_with_common_support() {
     assert!(error.to_string().contains("discard"), "{error}");
 }
 
-fn option_named(error: &SpecError) -> &str {
+fn option_named(error: &Error) -> &str {
     match error {
-        SpecError::Option { option, .. } => option,
+        Error::Option { option, .. } => option,
         other => panic!("expected an option error, got {other}"),
     }
 }
@@ -2326,8 +2365,8 @@ fn spec_genetic_equals_the_direct_search() {
     let SpecOutput::Genetic { outcome, search } = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec") else {
@@ -2337,14 +2376,15 @@ fn spec_genetic_equals_the_direct_search() {
     let prepared = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .build(),
+        &PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        },
+        None,
     )
     .unwrap();
     let ids: Vec<&str> = anchors
@@ -2414,8 +2454,8 @@ fn spec_genetic_equals_the_direct_search() {
     let again = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .unwrap();
@@ -2445,8 +2485,8 @@ fn spec_genetic_constraints_hold_in_the_pairs() {
     let SpecOutput::Genetic { outcome, .. } = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec") else {
@@ -2472,8 +2512,8 @@ fn spec_genetic_constraints_hold_in_the_pairs() {
 fn spec_genetic_rejects_invalid_options() {
     let (anchors, candidates) = covariate_inputs();
     let input = SpecInput::Standard {
-        anchors: &anchors,
-        candidates: &candidates,
+        cases: &anchors,
+        controls: &candidates,
     };
     let base = MatchSpec {
         method: MatchMethod::Genetic,
@@ -2564,8 +2604,8 @@ fn spec_genetic_feeds_effects_and_balance() {
     let SpecOutput::Genetic { outcome, .. } = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .unwrap() else {
@@ -2600,12 +2640,13 @@ fn spec_genetic_feeds_effects_and_balance() {
 
     let weights = BalanceWeights::from_outcome(&outcome);
     weights.validate().unwrap();
-    let report = balance_report_on_weights(
+    let report = balance_summary(
         &anchors,
         &candidates,
         &weights,
         &BalanceReportOptions::default(),
     )
+    .map(|summary| summary.report)
     .unwrap();
     assert!(!report.numeric.is_empty());
 }
@@ -2639,8 +2680,8 @@ fn spec_cardinality_equals_the_direct_call() {
     let income = numeric_column(&anchors, &candidates, "income");
     let columns = vec![age, income];
     let input = SpecInput::Standard {
-        anchors: &anchors,
-        candidates: &candidates,
+        cases: &anchors,
+        controls: &candidates,
     };
     let limits = CardinalityLimits {
         time: None,
@@ -2694,8 +2735,8 @@ fn spec_cardinality_equals_the_direct_call() {
 fn spec_cardinality_profile_and_errors() {
     let (anchors, candidates) = covariate_inputs();
     let input = SpecInput::Standard {
-        anchors: &anchors,
-        candidates: &candidates,
+        cases: &anchors,
+        controls: &candidates,
     };
     let mut profile = cardinality_spec();
     profile.cardinality.ratio = None;
@@ -2829,16 +2870,13 @@ fn spec_cardinality_profile_and_errors() {
     let error = run_spec(
         &infeasible,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect_err("no subset meets the tolerance");
     assert!(
-        matches!(
-            error,
-            SpecError::Cardinality(CardinalityError::Infeasible { key: 0 })
-        ),
+        matches!(error, Error::InfeasibleBalance { stratum: 0 }),
         "{error}"
     );
 }
@@ -2854,8 +2892,8 @@ fn spec_cardinality_feeds_effects_and_balance() {
     let SpecOutput::Cardinality(found) = run_spec(
         &cardinality_spec(),
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .unwrap() else {
@@ -2896,12 +2934,13 @@ fn spec_cardinality_feeds_effects_and_balance() {
         Estimand::Att,
     );
     weights.validate().unwrap();
-    let report = balance_report_on_weights(
+    let report = balance_summary(
         &anchors,
         &candidates,
         &weights,
         &BalanceReportOptions::default(),
     )
+    .map(|summary| summary.report)
     .unwrap();
     assert!(!report.numeric.is_empty());
 }

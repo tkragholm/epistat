@@ -3,10 +3,10 @@
 //! `tests/data/abadie_imbens.json` with the ATE, three matches, the bias
 //! adjustment and the conditional variances.
 
+use epistat_matching::Estimand;
 use epistat_matching::abadie_imbens::{
     AbadieImbensData, AbadieImbensSpec, DistanceWeight, abadie_imbens,
 };
-use epistat_matching::effects::Target;
 use epistat_testkit::{POOLS, assert_same_on_pools, load_json};
 use serde::Deserialize;
 
@@ -39,7 +39,7 @@ fn estimate_does_not_depend_on_the_number_of_threads() {
     )
     .unwrap();
     let spec = AbadieImbensSpec {
-        target: Target::Ate,
+        target: Estimand::Ate,
         matches: 3,
         bias_adjust: true,
         var_calc: 2,

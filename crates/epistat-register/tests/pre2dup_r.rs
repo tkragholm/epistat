@@ -101,15 +101,15 @@ fn periods_agree_with_the_method_written_in_r() {
         max_refill_days: r.group.max_refill,
     };
     let got = drug_use_periods(&p, &[g], &GlobalParameters::TANSKANEN_2015, Some(&stays)).unwrap();
-    assert_eq!(got.person, r.periods.person);
-    assert_eq!(got.start, r.periods.start);
-    assert_eq!(got.n_purchases, r.periods.n);
+    assert_eq!(got.person(), r.periods.person);
+    assert_eq!(got.start(), r.periods.start);
+    assert_eq!(got.n_purchases(), r.periods.n);
     let tol = Tolerance::exact().rel(1e-13);
-    assert_close(&got.end, &r.periods.end, tol);
-    let total: Vec<f64> = got.ddd.iter().map(|d| d.unwrap()).collect();
+    assert_close(got.end(), &r.periods.end, tol);
+    let total: Vec<f64> = got.ddd().iter().map(|d| d.unwrap()).collect();
     assert_close(&total, &r.periods.ddd, tol);
-    assert_close(&got.hospital_days, &r.periods.hd, tol);
-    let per_day: Vec<f64> = got.ddd_per_day.iter().map(|d| d.unwrap()).collect();
+    assert_close(got.hospital_days(), &r.periods.hd, tol);
+    let per_day: Vec<f64> = got.ddd_per_day().iter().map(|d| d.unwrap()).collect();
     assert_close(&per_day, &r.periods.per_day, tol);
     // The data reach the stockpiling test, the lower limit, hospital days
     // and lone purchases.

@@ -4,8 +4,8 @@
 //! The estimator matches every unit of the target group on the covariates,
 //! with replacement, to the `M` nearest units of the other treatment group,
 //! and averages the differences in outcome. It estimates the average effect
-//! in the treated ([`Target::Att`]), the controls ([`Target::Atc`]) or
-//! everyone ([`Target::Ate`]). Its variance is not the variance of a mean of
+//! in the treated ([`Estimand::Att`]), the controls ([`Estimand::Atc`]) or
+//! everyone ([`Estimand::Ate`]). Its variance is not the variance of a mean of
 //! independent differences, since a unit used as a match for several others
 //! enters several differences. Abadie and Imbens \[1\] give a variance that
 //! allows for it. This module is a separate estimator from
@@ -43,7 +43,7 @@
 //! the groups are swapped and the sign of the difference reversed.
 //!
 //! With `bias_adjust`, the outcome of a match is first corrected for the
-//! difference in covariates to its anchor (Abadie and Imbens \[2\]). The
+//! difference in covariates to its case (Abadie and Imbens \[2\]). The
 //! outcome of a control `j` matched to unit `i` becomes
 //! `Y_j + (Z_i - Z_j)' a_0`, with `a_0` the coefficients of the weighted
 //! least squares regression of the outcome on an intercept and `Z` among the
@@ -55,12 +55,12 @@
 //!
 //! With `N` target units, `sigma_i^2` the conditional variance of the outcome
 //! of unit `i` given its covariates, `tau` the estimate and `D_i` the
-//! difference `Y_i - Y_i(other)` of an anchor (adjusted when the estimate
+//! difference `Y_i - Y_i(other)` of an case (adjusted when the estimate
 //! is), the estimated variance of the population effect is
 //!
 //! ```text
 //! V = (1 / N^2) ( sum_i sigma_i^2 c_i (K_i^2 + e K_i - KK_i)
-//!                 + sum_{i in anchors} (D_i - tau)^2 )
+//!                 + sum_{i in cases} (D_i - tau)^2 )
 //! ```
 //!
 //! where for the ATT and ATC the sum over `i` is over the units of the other
@@ -71,7 +71,7 @@
 //! V_sample = (1 / N^2) sum_i sigma_i^2 (a_i + c_i K_i)^2
 //! ```
 //!
-//! with `a_i` 1 for an anchor and 0 for a unit of the other group when
+//! with `a_i` 1 for an case and 0 for a unit of the other group when
 //! estimating an effect in one group, and 1 for every unit for the ATE. The
 //! conditional part is `max(V_sample, V) - V_sample`. With bias adjustment
 //! `D_i` is the adjusted difference. The standard error is the square root
@@ -112,13 +112,13 @@
 //! 3. Abadie A, Imbens GW. Matching on the estimated propensity score.
 //!    Econometrica. 2016;84(2):781-807.
 
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+use crate::Error;
 
 use epistat_linalg::{Attempt, Factor, Mat, Method, solve, weighted_gram, weighted_xtz};
 use rayon::prelude::*;
 
-use crate::effects::{Target, UnitData};
+use crate::Estimand;
+use crate::effects::UnitData;
 use crate::kdtree::{Euclidean, KdTree, worth_a_tree};
 
 /// The distance the matches are found with.
@@ -136,7 +136,7 @@ pub enum DistanceWeight {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AbadieImbensSpec {
     /// The group the effect is for.
-    pub target: Target,
+    pub target: Estimand,
     /// The number of matches per unit, `M` in `Match`.
     pub matches: usize,
     /// Whether to correct the outcome of a match for the covariate
@@ -158,7 +158,7 @@ impl AbadieImbensSpec {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            target: Target::Att,
+            target: Estimand::Att,
             matches: 1,
             bias_adjust: false,
             var_calc: 0,
@@ -174,89 +174,6 @@ impl Default for AbadieImbensSpec {
     }
 }
 
-/// What is wrong with the input of the estimator.
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub enum AbadieImbensError {
-    /// Columns of different length.
-    Length {
-        /// The column.
-        what: &'static str,
-        /// Its length.
-        got: usize,
-        /// The expected length.
-        expected: usize,
-    },
-    /// A value that is not finite.
-    NotFinite {
-        /// The column.
-        what: &'static str,
-        /// The row.
-        row: usize,
-    },
-    /// Everyone is treated or no one is.
-    OneGroup,
-    /// No covariates.
-    NoCovariates,
-    /// A covariate with no variation.
-    ConstantCovariate(usize),
-    /// The covariance of the covariates cannot be inverted.
-    SingularCovariance,
-    /// The regression for the bias adjustment is singular.
-    SingularRegression,
-    /// More matches asked for than the other group has units.
-    TooManyMatches {
-        /// The matches asked for.
-        asked: usize,
-        /// The units in the smaller group the matches come from.
-        available: usize,
-    },
-    /// `var_calc` is at least the size of a group.
-    TooManyVarianceMatches {
-        /// The neighbours asked for.
-        asked: usize,
-        /// The units in the smallest group, one of which is the unit itself.
-        group: usize,
-    },
-    /// Zero matches asked for.
-    NoMatches,
-    /// A tolerance that is negative or not finite.
-    Tolerance,
-}
-
-impl Display for AbadieImbensError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Length {
-                what,
-                got,
-                expected,
-            } => write!(f, "{what} has {got} values, expected {expected}"),
-            Self::NotFinite { what, row } => write!(f, "{what} is not finite at row {row}"),
-            Self::OneGroup => write!(f, "the units are all treated or all untreated"),
-            Self::NoCovariates => write!(f, "there are no covariates to match on"),
-            Self::ConstantCovariate(k) => write!(f, "covariate {k} has no variation"),
-            Self::SingularCovariance => {
-                write!(f, "the covariance of the covariates is singular")
-            }
-            Self::SingularRegression => {
-                write!(f, "the regression for the bias adjustment is singular")
-            }
-            Self::TooManyMatches { asked, available } => {
-                write!(f, "{asked} matches asked for from a group of {available}")
-            }
-            Self::TooManyVarianceMatches { asked, group } => write!(
-                f,
-                "{asked} neighbours asked for the variance in a group of {group}"
-            ),
-            Self::NoMatches => write!(f, "the number of matches is zero"),
-            Self::Tolerance => write!(f, "the distance tolerance must be finite and non-negative"),
-        }
-    }
-}
-
-impl Error for AbadieImbensError {}
-
 /// The units of the estimator: treatment, outcome and covariates.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AbadieImbensData {
@@ -266,21 +183,13 @@ pub struct AbadieImbensData {
     bias_covariates: Option<Vec<Vec<f64>>>,
 }
 
-fn check_columns(
-    what: &'static str,
-    columns: &[Vec<f64>],
-    n: usize,
-) -> Result<(), AbadieImbensError> {
+fn check_columns(what: &'static str, columns: &[Vec<f64>], n: usize) -> Result<(), Error> {
     for column in columns {
         if column.len() != n {
-            return Err(AbadieImbensError::Length {
-                what,
-                got: column.len(),
-                expected: n,
-            });
+            return Err(Error::length(what, n, column.len()));
         }
         if let Some(row) = column.iter().position(|v| !v.is_finite()) {
-            return Err(AbadieImbensError::NotFinite { what, row });
+            return Err(Error::not_finite(what, row));
         }
     }
     Ok(())
@@ -291,34 +200,28 @@ impl AbadieImbensData {
     ///
     /// # Errors
     ///
-    /// [`AbadieImbensError::Length`], [`AbadieImbensError::NotFinite`],
-    /// [`AbadieImbensError::NoCovariates`] and [`AbadieImbensError::OneGroup`].
+    /// [`Error::Input`] for a column of the wrong length or with a value that
+    /// is not finite,
+    /// [`Error::NoCovariates`] and [`Error::OneGroup`].
     pub fn new(
         treated: Vec<bool>,
         outcome: Vec<f64>,
         covariates: Vec<Vec<f64>>,
-    ) -> Result<Self, AbadieImbensError> {
+    ) -> Result<Self, Error> {
         let n = treated.len();
         if outcome.len() != n {
-            return Err(AbadieImbensError::Length {
-                what: "outcome",
-                got: outcome.len(),
-                expected: n,
-            });
+            return Err(Error::length("outcome", n, outcome.len()));
         }
         if let Some(row) = outcome.iter().position(|v| !v.is_finite()) {
-            return Err(AbadieImbensError::NotFinite {
-                what: "outcome",
-                row,
-            });
+            return Err(Error::not_finite("outcome", row));
         }
         if covariates.is_empty() {
-            return Err(AbadieImbensError::NoCovariates);
+            return Err(Error::NoCovariates);
         }
         check_columns("covariate", &covariates, n)?;
         let n_treated = treated.iter().filter(|t| **t).count();
         if n_treated == 0 || n_treated == n {
-            return Err(AbadieImbensError::OneGroup);
+            return Err(Error::OneGroup);
         }
         Ok(Self {
             treated,
@@ -333,7 +236,7 @@ impl AbadieImbensData {
     /// # Errors
     ///
     /// As [`AbadieImbensData::new`].
-    pub fn from_unit_data(units: &UnitData) -> Result<Self, AbadieImbensError> {
+    pub fn from_unit_data(units: &UnitData) -> Result<Self, Error> {
         Self::new(
             units.treated_flags().to_vec(),
             units.outcomes().to_vec(),
@@ -346,11 +249,9 @@ impl AbadieImbensData {
     ///
     /// # Errors
     ///
-    /// [`AbadieImbensError::Length`] and [`AbadieImbensError::NotFinite`].
-    pub fn with_bias_covariates(
-        mut self,
-        columns: Vec<Vec<f64>>,
-    ) -> Result<Self, AbadieImbensError> {
+    /// [`Error::Input`] for a column of the wrong length or with a value that
+    /// is not finite.
+    pub fn with_bias_covariates(mut self, columns: Vec<Vec<f64>>) -> Result<Self, Error> {
         check_columns("bias covariate", &columns, self.treated.len())?;
         self.bias_covariates = Some(columns);
         Ok(self)
@@ -398,11 +299,11 @@ pub struct AbadieImbensEstimate {
 ///
 /// # Errors
 ///
-/// [`AbadieImbensError`] for the data and the spec that cannot be used.
+/// [`Error`] for the data and the spec that cannot be used.
 pub fn abadie_imbens(
     data: &AbadieImbensData,
     spec: &AbadieImbensSpec,
-) -> Result<AbadieImbensEstimate, AbadieImbensError> {
+) -> Result<AbadieImbensEstimate, Error> {
     Estimator::new(data, spec, true)?.run()
 }
 
@@ -421,7 +322,7 @@ struct Estimator<'a> {
     trees: [Option<KdTree>; 2],
 }
 
-/// One anchor with its matches.
+/// One case with its matches.
 struct Anchor {
     unit: usize,
     matches: Vec<usize>,
@@ -434,38 +335,38 @@ impl<'a> Estimator<'a> {
         data: &'a AbadieImbensData,
         spec: &'a AbadieImbensSpec,
         use_trees: bool,
-    ) -> Result<Self, AbadieImbensError> {
+    ) -> Result<Self, Error> {
         if spec.matches == 0 {
-            return Err(AbadieImbensError::NoMatches);
+            return Err(Error::ZeroMatches);
         }
         if !(spec.distance_tolerance.is_finite() && spec.distance_tolerance >= 0.0) {
-            return Err(AbadieImbensError::Tolerance);
+            return Err(Error::InvalidTolerance);
         }
         let n = data.len();
         let n_treated = data.treated.iter().filter(|t| **t).count();
         let n_control = n - n_treated;
         let role: Vec<bool> = match spec.target {
-            Target::Atc => data.treated.iter().map(|t| !t).collect(),
+            Estimand::Atc => data.treated.iter().map(|t| !t).collect(),
             _ => data.treated.clone(),
         };
-        let (n_role, n_other) = if matches!(spec.target, Target::Atc) {
+        let (n_role, n_other) = if matches!(spec.target, Estimand::Atc) {
             (n_control, n_treated)
         } else {
             (n_treated, n_control)
         };
-        let available = if matches!(spec.target, Target::Ate) {
+        let available = if matches!(spec.target, Estimand::Ate) {
             n_role.min(n_other)
         } else {
             n_other
         };
         if spec.matches > available {
-            return Err(AbadieImbensError::TooManyMatches {
+            return Err(Error::TooManyMatches {
                 asked: spec.matches,
                 available,
             });
         }
         if spec.var_calc > 0 && spec.var_calc >= n_treated.min(n_control) {
-            return Err(AbadieImbensError::TooManyVarianceMatches {
+            return Err(Error::TooManyVarianceMatches {
                 asked: spec.var_calc,
                 group: n_treated.min(n_control),
             });
@@ -539,9 +440,9 @@ impl<'a> Estimator<'a> {
         self.nearest(unit, pool, count)
     }
 
-    fn run(&self) -> Result<AbadieImbensEstimate, AbadieImbensError> {
+    fn run(&self) -> Result<AbadieImbensEstimate, Error> {
         let n = self.data.len();
-        let all = matches!(self.spec.target, Target::Ate);
+        let all = matches!(self.spec.target, Estimand::Ate);
         let role_units: Vec<usize> = (0..n).filter(|&i| self.role[i]).collect();
         let other_units: Vec<usize> = (0..n).filter(|&i| !self.role[i]).collect();
         let anchor_units: Vec<usize> = if all {
@@ -657,8 +558,8 @@ impl<'a> Estimator<'a> {
         let mut v_sample = 0.0;
         let mut v_pop = 0.0;
         for i in 0..n {
-            let is_anchor = all || self.role[i];
-            let a_i = f64::from(u8::from(is_anchor));
+            let is_case = all || self.role[i];
+            let a_i = f64::from(u8::from(is_case));
             let c_i = if all {
                 1.0
             } else {
@@ -678,7 +579,7 @@ impl<'a> Estimator<'a> {
         let v_cond = v_pop.max(v_sample) - v_sample;
 
         let se_standard = (row_square(&raw_rows, est_raw) / n2).sqrt();
-        let sign = if matches!(self.spec.target, Target::Atc) {
+        let sign = if matches!(self.spec.target, Estimand::Atc) {
             -1.0
         } else {
             1.0
@@ -734,18 +635,13 @@ impl<'a> Estimator<'a> {
     /// The coefficients of the regression of the outcome on `z` with an
     /// intercept, over the units with the given role, each weighted by its
     /// match count. The intercept is dropped.
-    fn regression(
-        &self,
-        z: &[Vec<f64>],
-        weight: &[f64],
-        role: bool,
-    ) -> Result<Vec<f64>, AbadieImbensError> {
+    fn regression(&self, z: &[Vec<f64>], weight: &[f64], role: bool) -> Result<Vec<f64>, Error> {
         let rows: Vec<usize> = (0..self.data.len())
             .filter(|&i| self.role[i] == role && weight[i] > 0.0)
             .collect();
         let p = z.len() + 1;
         if rows.len() < p {
-            return Err(AbadieImbensError::SingularRegression);
+            return Err(Error::SingularRegression);
         }
         let x = Mat::from_fn(
             rows.len(),
@@ -754,10 +650,8 @@ impl<'a> Estimator<'a> {
         );
         let w: Vec<f64> = rows.iter().map(|&i| weight[i]).collect();
         let yv: Vec<f64> = rows.iter().map(|&i| self.data.outcome[i]).collect();
-        let gram =
-            weighted_gram(x.as_ref(), &w).map_err(|_| AbadieImbensError::SingularRegression)?;
-        let rhs =
-            weighted_xtz(x.as_ref(), &w, &yv).map_err(|_| AbadieImbensError::SingularRegression)?;
+        let gram = weighted_gram(x.as_ref(), &w).map_err(|_| Error::SingularRegression)?;
+        let rhs = weighted_xtz(x.as_ref(), &w, &yv).map_err(|_| Error::SingularRegression)?;
         let largest = (0..p).map(|c| gram[(c, c)]).fold(0.0_f64, f64::max);
         // The threshold applies to the diagonal of the Cholesky factor, whose
         // square is a pivot of the Gram matrix. A pivot at most machine
@@ -766,7 +660,7 @@ impl<'a> Estimator<'a> {
         let attempt =
             Attempt::plain(Method::Cholesky).with_min_pivot(f64::EPSILON.sqrt() * largest.sqrt());
         let solution = solve(gram.as_ref(), rhs.as_ref(), &[attempt])
-            .map_err(|_| AbadieImbensError::SingularRegression)?;
+            .map_err(|_| Error::SingularRegression)?;
         Ok((1..p).map(|c| solution.x[(c, 0)]).collect())
     }
 }
@@ -806,7 +700,7 @@ fn sum(values: &[f64]) -> f64 {
 fn standardised_coordinates(
     covariates: &[Vec<f64>],
     weight: DistanceWeight,
-) -> Result<(Vec<f64>, usize), AbadieImbensError> {
+) -> Result<(Vec<f64>, usize), Error> {
     let k = covariates.len();
     let n = covariates[0].len();
     let mut cols: Vec<Vec<f64>> = Vec::with_capacity(k);
@@ -818,7 +712,7 @@ fn standardised_coordinates(
         }
         let sd = (ss / (n - 1) as f64).sqrt();
         if !(sd > 0.0 && sd.is_finite()) {
-            return Err(AbadieImbensError::ConstantCovariate(c));
+            return Err(Error::ConstantCovariate(c));
         }
         cols.push(column.iter().map(|v| (v - mean) / sd).collect());
     }
@@ -846,11 +740,9 @@ fn standardised_coordinates(
             // machine epsilon times its largest diagonal entry is zero.
             let attempt = Attempt::plain(Method::Cholesky)
                 .with_min_pivot(f64::EPSILON.sqrt() * largest.sqrt());
-            let factor = Factor::new(gram.as_ref(), &[attempt])
-                .map_err(|_| AbadieImbensError::SingularCovariance)?;
-            let l = factor
-                .cholesky_factor()
-                .ok_or(AbadieImbensError::SingularCovariance)?;
+            let factor =
+                Factor::new(gram.as_ref(), &[attempt]).map_err(|_| Error::SingularCovariance)?;
+            let l = factor.cholesky_factor().ok_or(Error::SingularCovariance)?;
             let root_n = (n as f64).sqrt();
             for i in 0..n {
                 // Forward substitution L u = x_i.
@@ -901,7 +793,7 @@ mod tests {
         // control, so the effect is 1 - 0 = 1), 2 matches 0 (1 - 3 = -2) and
         // 9 matches 10 (6 - 4 = 2). The mean is 1/3.
         let spec = AbadieImbensSpec {
-            target: Target::Atc,
+            target: Estimand::Atc,
             ..AbadieImbensSpec::new()
         };
         let e = abadie_imbens(&tiny(), &spec).unwrap();
@@ -930,7 +822,7 @@ mod tests {
             .map(|i| (next() % 100) as f64 / 10.0 + covariates[0][i])
             .collect();
         let data = AbadieImbensData::new(treated, outcome, covariates).unwrap();
-        for target in [Target::Att, Target::Atc, Target::Ate] {
+        for target in [Estimand::Att, Estimand::Atc, Estimand::Ate] {
             for (matches, var_calc, bias_adjust, weight) in [
                 (1, 0, false, DistanceWeight::Diagonal),
                 (3, 2, true, DistanceWeight::Diagonal),
@@ -965,16 +857,13 @@ mod tests {
         };
         assert!(matches!(
             abadie_imbens(&tiny(), &spec),
-            Err(AbadieImbensError::TooManyMatches { .. })
+            Err(Error::TooManyMatches { .. })
         ));
         let spec = AbadieImbensSpec {
             matches: 0,
             ..AbadieImbensSpec::new()
         };
-        assert_eq!(
-            abadie_imbens(&tiny(), &spec),
-            Err(AbadieImbensError::NoMatches)
-        );
+        assert_eq!(abadie_imbens(&tiny(), &spec), Err(Error::ZeroMatches));
         let constant = AbadieImbensData::new(
             vec![true, false, false],
             vec![1.0, 2.0, 3.0],
@@ -983,7 +872,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             abadie_imbens(&constant, &AbadieImbensSpec::new()),
-            Err(AbadieImbensError::ConstantCovariate(0))
+            Err(Error::ConstantCovariate(0))
         );
         assert!(
             AbadieImbensData::new(vec![true, true], vec![1.0, 2.0], vec![vec![0.0, 1.0]]).is_err()

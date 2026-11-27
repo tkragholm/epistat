@@ -18,13 +18,16 @@
 //! `did`'s numbers differ from the weighted means by rounding alone, and the
 //! same bound applies.
 
-use epistat_did::{
-    AttGtAggregatedEstimate, AttGtAggregationConfig, AttGtAggregationWeighting, AttGtObservation,
-    EfficientDidConfig, EfficientDidEstimate, aggregate_efficient_att_gt_by_calendar_time,
-    aggregate_efficient_att_gt_by_cohort, aggregate_efficient_att_gt_event_time_with_influence,
-    aggregate_efficient_att_gt_overall, estimate_att_gt_efficient,
+#[path = "common/att_gt_rows.rs"]
+#[expect(dead_code, reason = "the shared helpers serve several tests")]
+mod rows;
+
+use epistat_did::att_gt::{
+    AggteOptions, AggteType, AggteWeights, AttGt, AttGtCell, AttGtOptions, EfficientWeights,
+    Estimator,
 };
 use epistat_testkit::load_json;
+use rows::Obs;
 use serde::Deserialize;
 
 const EPS: f64 = f64::EPSILON;
@@ -137,14 +140,44 @@ fn load() -> Reference {
     reference
 }
 
-fn observations(rows: &Rows) -> Vec<AttGtObservation> {
+fn observations(rows: &Rows) -> Vec<Obs> {
     (0..rows.id.len())
-        .map(|i| AttGtObservation {
-            unit_id: Some(rows.id[i]),
-            first_treated_time: (rows.g[i] != 0).then_some(rows.g[i]),
-            time: rows.t[i],
-            outcome: rows.y[i],
+        .map(|i| Obs {
             weight: rows.w[i],
+            ..Obs::new(
+                Some(rows.id[i]),
+                (rows.g[i] != 0).then_some(rows.g[i]),
+                rows.t[i],
+                rows.y[i],
+            )
+        })
+        .collect()
+}
+
+/// An efficient cell with its estimate, weights and influence vector.
+struct Efficient<'a> {
+    cell: &'a AttGtCell,
+    att: f64,
+    se: f64,
+    weights: &'a EfficientWeights,
+    influence: &'a [f64],
+}
+
+fn efficient(fit: &AttGt) -> Vec<Efficient<'_>> {
+    let influence = fit.influence().expect("influence");
+    fit.cells()
+        .iter()
+        .filter(|cell| cell.estimate.is_some())
+        .enumerate()
+        .map(|(j, cell)| {
+            let estimate = cell.estimate.expect("estimated");
+            Efficient {
+                cell,
+                att: estimate.estimate,
+                se: estimate.se.expect("se"),
+                weights: cell.efficient.as_ref().expect("weights"),
+                influence: influence.column(j),
+            }
         })
         .collect()
 }
@@ -166,66 +199,63 @@ fn assert_within(label: &str, got: f64, want: f64, bound: f64) {
     );
 }
 
-fn find(estimates: &[EfficientDidEstimate], group: i32, time: i32) -> &EfficientDidEstimate {
+fn find<'a>(estimates: &'a [Efficient<'a>], group: i32, time: i32) -> &'a Efficient<'a> {
     estimates
         .iter()
-        .find(|e| e.group == group && e.time == time)
+        .find(|e| e.cell.group == i64::from(group) && e.cell.time == i64::from(time))
         .unwrap_or_else(|| panic!("no cell ({group}, {time})"))
 }
 
-fn weighting(name: &str) -> AttGtAggregationWeighting {
+fn weights(name: &str) -> AggteWeights {
     match name {
-        "equal" => AttGtAggregationWeighting::Equal,
-        "treated_count" => AttGtAggregationWeighting::ByTreatedCount,
-        "total_weight" => AttGtAggregationWeighting::ByTotalWeight,
+        "equal" => AggteWeights::Equal,
+        "treated_count" => AggteWeights::TreatedCount,
+        "total_weight" => AggteWeights::TotalWeight,
         other => panic!("unknown weighting {other}"),
     }
 }
 
+/// The fixed-weight summary `kind` at `key`: its estimate, standard error and
+/// number of cells, and for the event time its influence vector.
 fn ours_aggregate(
-    estimates: &[EfficientDidEstimate],
+    fit: &AttGt,
     kind: &str,
     key: i32,
-    config: AttGtAggregationConfig,
-) -> (AttGtAggregatedEstimate, Option<Vec<f64>>) {
-    match kind {
-        "event_time" => {
-            let out = aggregate_efficient_att_gt_event_time_with_influence(estimates, config)
-                .expect("event time");
-            let index = out
-                .estimates
-                .iter()
-                .position(|e| e.event_time == key)
-                .expect("event time present");
-            (
-                out.estimates[index].summary,
-                Some(out.influence_functions[index].clone()),
-            )
-        }
-        "cohort" => (
-            aggregate_efficient_att_gt_by_cohort(estimates, config)
-                .expect("cohort")
-                .into_iter()
-                .find(|e| e.group == key)
-                .expect("cohort present")
-                .summary,
-            None,
-        ),
-        "calendar" => (
-            aggregate_efficient_att_gt_by_calendar_time(estimates, config)
-                .expect("calendar")
-                .into_iter()
-                .find(|e| e.time == key)
-                .expect("calendar present")
-                .summary,
-            None,
-        ),
-        "overall" => (
-            aggregate_efficient_att_gt_overall(estimates, config).expect("overall"),
-            None,
-        ),
+    weights: AggteWeights,
+) -> ((f64, f64, usize), Option<Vec<f64>>) {
+    let aggregation = match kind {
+        "event_time" => AggteType::Dynamic,
+        "cohort" => AggteType::Group,
+        "calendar" => AggteType::Calendar,
+        "overall" => AggteType::Simple,
         other => panic!("unknown aggregation {other}"),
+    };
+    let result = fit
+        .aggregate(&AggteOptions {
+            aggregation,
+            weights,
+            ..AggteOptions::default()
+        })
+        .expect("aggregate");
+    if aggregation == AggteType::Simple {
+        let overall = result.overall.expect("overall");
+        let e = overall.estimate;
+        return ((e.estimate, e.se.expect("se"), overall.n_cells), None);
     }
+    let index = result
+        .points
+        .iter()
+        .position(|p| p.key == i64::from(key))
+        .expect("key present");
+    let point = &result.points[index];
+    let summary = (
+        point.estimate.estimate,
+        point.estimate.se.expect("se"),
+        point.n_cells,
+    );
+    let influence =
+        (aggregation == AggteType::Dynamic).then(|| result.influence().column(index).to_vec());
+    (summary, influence)
 }
 
 #[test]
@@ -233,8 +263,15 @@ fn efficient_cells_and_aggregates_match_r() {
     let reference = load();
     for case in &reference.cases {
         let rows = observations(&case.rows);
-        let estimates =
-            estimate_att_gt_efficient(&rows, EfficientDidConfig::default()).expect("estimates");
+        let fit = rows::fit(
+            &rows,
+            &AttGtOptions {
+                estimator: Estimator::Efficient,
+                ..AttGtOptions::default()
+            },
+        )
+        .expect("estimates");
+        let estimates = efficient(&fit);
         assert_eq!(estimates.len(), case.cells.len(), "{}", case.name);
         let n = case.ids.len();
         let n_f = n as f64;
@@ -246,12 +283,12 @@ fn efficient_cells_and_aggregates_match_r() {
         for cell in &case.cells {
             let ours = find(&estimates, cell.group, cell.time);
             let label = format!("{} ({}, {})", case.name, cell.group, cell.time);
-            assert_eq!(ours.influence_function.len(), n, "{label}");
-            assert_eq!(ours.treated_n, cell.treated_n, "{label}");
-            assert_eq!(ours.control_n, cell.control_n, "{label}");
+            assert_eq!(ours.influence.len(), n, "{label}");
+            assert_eq!(ours.cell.n_treated, cell.treated_n, "{label}");
+            assert_eq!(ours.cell.n_control, cell.control_n, "{label}");
             assert_within(
                 &format!("{label} total weight"),
-                ours.total_weight,
+                ours.cell.total_weight,
                 cell.total_weight,
                 2.0 * n_f * EPS * cell.total_weight,
             );
@@ -270,56 +307,52 @@ fn efficient_cells_and_aggregates_match_r() {
                 rounding * psi / n_f.sqrt(),
             );
             let baselines = ours
-                .baseline_weights
+                .weights
+                .baselines
                 .iter()
-                .map(|b| b.baseline_time)
+                .map(|b| i32::try_from(b.base).expect("a period"))
                 .collect::<Vec<_>>();
             assert_eq!(baselines, cell.baselines, "{label}");
-            for (j, baseline) in ours.baseline_weights.iter().enumerate() {
+            for (j, baseline) in ours.weights.baselines.iter().enumerate() {
                 assert_within(
-                    &format!("{label} theta_{}", baseline.baseline_time),
-                    baseline.att,
+                    &format!("{label} theta_{}", baseline.base),
+                    baseline.estimate,
                     cell.baseline_att[j],
                     rounding * change,
                 );
                 assert_within(
-                    &format!("{label} a_{}", baseline.baseline_time),
+                    &format!("{label} a_{}", baseline.base),
                     baseline.weight,
                     cell.baseline_weight[j],
                     rounding,
                 );
             }
-            for (i, (got, want)) in ours
-                .influence_function
-                .iter()
-                .zip(&cell.influence)
-                .enumerate()
-            {
+            for (i, (got, want)) in ours.influence.iter().zip(&cell.influence).enumerate() {
                 assert_within(&format!("{label} psi[{i}]"), *got, *want, rounding * psi);
             }
         }
 
         for aggregate in &case.aggregates {
-            let config = AttGtAggregationConfig {
-                weighting: weighting(&aggregate.weighting),
-                ..AttGtAggregationConfig::default()
-            };
-            let (summary, influence) =
-                ours_aggregate(&estimates, &aggregate.kind, aggregate.key, config);
+            let ((estimate, se, components), influence) = ours_aggregate(
+                &fit,
+                &aggregate.kind,
+                aggregate.key,
+                weights(&aggregate.weighting),
+            );
             let label = format!(
                 "{} {} {} {}",
                 case.name, aggregate.kind, aggregate.weighting, aggregate.key
             );
-            assert_eq!(summary.components, aggregate.components, "{label}");
+            assert_eq!(components, aggregate.components, "{label}");
             assert_within(
                 &format!("{label} estimate"),
-                summary.estimate,
+                estimate,
                 aggregate.estimate,
                 rounding * change,
             );
             assert_within(
                 &format!("{label} se"),
-                summary.se,
+                se,
                 aggregate.se,
                 rounding * largest_psi / n_f.sqrt(),
             );
@@ -355,12 +388,13 @@ fn efficient_cells_and_aggregates_match_r() {
                 let ours = find(&estimates, cell.group, cell.time);
                 let label = format!("{} did ({}, {})", case.name, cell.group, cell.time);
                 let at_previous = ours
-                    .baseline_weights
+                    .weights
+                    .baselines
                     .iter()
-                    .find(|b| b.baseline_time == cell.group - 1)
+                    .find(|b| b.base == i64::from(cell.group - 1))
                     .expect("baseline g - 1");
-                assert_within(&label, at_previous.att, cell.att, rounding * change);
-                if ours.baseline_weights.len() == 1 {
+                assert_within(&label, at_previous.estimate, cell.att, rounding * change);
+                if ours.weights.baselines.len() == 1 {
                     let psi = largest(&cell.influence);
                     assert_within(
                         &format!("{label} se"),
@@ -368,35 +402,21 @@ fn efficient_cells_and_aggregates_match_r() {
                         cell.se,
                         rounding * psi / n_f.sqrt(),
                     );
-                    for (i, (got, want)) in ours
-                        .influence_function
-                        .iter()
-                        .zip(&cell.influence)
-                        .enumerate()
-                    {
+                    for (i, (got, want)) in ours.influence.iter().zip(&cell.influence).enumerate() {
                         assert_within(&format!("{label} psi[{i}]"), *got, *want, rounding * psi);
                     }
                 }
             }
-            let config = AttGtAggregationConfig {
-                weighting: AttGtAggregationWeighting::Equal,
-                ..AttGtAggregationConfig::default()
-            };
-            let cohort = aggregate_efficient_att_gt_by_cohort(&estimates, config)
-                .expect("cohort")
-                .into_iter()
-                .find(|e| e.group == 2)
-                .expect("cohort 2")
-                .summary;
+            let ((estimate, se, _), _) = ours_aggregate(&fit, "cohort", 2, AggteWeights::Equal);
             assert_within(
                 "did cohort 2 estimate",
-                cohort.estimate,
+                estimate,
                 did.cohort2_equal_estimate,
                 rounding * change,
             );
             assert_within(
                 "did cohort 2 se",
-                cohort.se,
+                se,
                 did.cohort2_equal_se,
                 rounding * largest_psi / n_f.sqrt(),
             );

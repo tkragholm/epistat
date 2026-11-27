@@ -27,13 +27,15 @@
 //! `2 N eps` times the largest outcome change, and the difference quotient
 //! multiplies it by `N / h`.
 
-use epistat_did::{
-    AttGtAggregationConfig, AttGtAggregationWeighting, AttGtObservation, EfficientDidConfig,
-    EfficientDidError, EfficientDidEstimate, aggregate_efficient_att_gt_by_calendar_time,
-    aggregate_efficient_att_gt_by_cohort, aggregate_efficient_att_gt_event_time_with_influence,
-    aggregate_efficient_att_gt_overall, estimate_att_gt_efficient,
-};
+#[path = "common/att_gt_rows.rs"]
+#[expect(dead_code, reason = "the shared helpers serve several tests")]
+mod rows;
+
+use epistat_core::InputError;
+use epistat_did::Error;
+use epistat_did::att_gt::{AggteOptions, AggteType, AggteWeights, AttGt, AttGtOptions, Estimator};
 use epistat_testkit::{SplitMix64, on_threads};
+use rows::Obs;
 
 const EPS: f64 = f64::EPSILON;
 const H: f64 = 1e-4;
@@ -53,7 +55,7 @@ const PATTERNS: [&[i32]; 5] = [
 const UNITS_PER_GROUP: usize = 6;
 
 /// The rows and the largest absolute outcome.
-fn panel(seed: u64) -> (Vec<AttGtObservation>, f64) {
+fn panel(seed: u64) -> (Vec<Obs>, f64) {
     let mut rng = SplitMix64::new(seed);
     let lambda = [0.0, 0.3, 0.5, 0.9, 1.2];
     let mut rows = Vec::new();
@@ -83,12 +85,14 @@ fn panel(seed: u64) -> (Vec<AttGtObservation>, f64) {
                         _ => 0.0,
                     };
                     let idx = usize::try_from(t - 1).expect("period");
-                    rows.push(AttGtObservation {
-                        unit_id: Some(*id),
-                        first_treated_time: cohort,
-                        time: t,
-                        outcome: alpha + lambda[idx] + effect + (noise[k] - mean),
+                    rows.push(Obs {
                         weight: *weight,
+                        ..Obs::new(
+                            Some(*id),
+                            cohort,
+                            t,
+                            alpha + lambda[idx] + effect + (noise[k] - mean),
+                        )
                     });
                 }
             }
@@ -98,18 +102,18 @@ fn panel(seed: u64) -> (Vec<AttGtObservation>, f64) {
     (rows, largest)
 }
 
-fn unit_count(rows: &[AttGtObservation]) -> usize {
-    let mut ids = rows.iter().filter_map(|r| r.unit_id).collect::<Vec<_>>();
+fn unit_count(rows: &[Obs]) -> usize {
+    let mut ids = rows.iter().filter_map(|r| r.unit).collect::<Vec<_>>();
     ids.sort_unstable();
     ids.dedup();
     ids.len()
 }
 
-fn reweighted(rows: &[AttGtObservation], unit_id: i64, factor: f64) -> Vec<AttGtObservation> {
+fn reweighted(rows: &[Obs], unit_id: i64, factor: f64) -> Vec<Obs> {
     rows.iter()
         .map(|r| {
-            let mut r = *r;
-            if r.unit_id == Some(unit_id) {
+            let mut r = r.clone();
+            if r.unit == Some(unit_id) {
                 r.weight *= factor;
             }
             r
@@ -117,67 +121,65 @@ fn reweighted(rows: &[AttGtObservation], unit_id: i64, factor: f64) -> Vec<AttGt
         .collect()
 }
 
-fn config(weighting: AttGtAggregationWeighting) -> AttGtAggregationConfig {
-    AttGtAggregationConfig {
-        weighting,
-        ..AttGtAggregationConfig::default()
-    }
+fn efficient(rows: &[Obs]) -> AttGt {
+    let options = AttGtOptions {
+        estimator: Estimator::Efficient,
+        ..AttGtOptions::default()
+    };
+    rows::fit(rows, &options).expect("cells")
 }
 
-/// Every number the jackknife differentiates, in a fixed order: the cells'
-/// estimates, then the event-time, cohort, calendar and overall aggregates
-/// under equal and treated-count weighting.
-fn summaries(rows: &[AttGtObservation]) -> Vec<f64> {
-    let cells = estimate_att_gt_efficient(rows, EfficientDidConfig::default()).expect("cells");
-    let mut out = cells.iter().map(|c| c.att).collect::<Vec<_>>();
-    for weighting in [
-        AttGtAggregationWeighting::Equal,
-        AttGtAggregationWeighting::ByTreatedCount,
-    ] {
-        let config = config(weighting);
-        let event = aggregate_efficient_att_gt_event_time_with_influence(&cells, config).unwrap();
-        out.extend(event.estimates.iter().map(|e| e.summary.estimate));
-        let cohort = aggregate_efficient_att_gt_by_cohort(&cells, config).unwrap();
-        out.extend(cohort.iter().map(|e| e.summary.estimate));
-        let calendar = aggregate_efficient_att_gt_by_calendar_time(&cells, config).unwrap();
-        out.extend(calendar.iter().map(|e| e.summary.estimate));
-        out.push(
-            aggregate_efficient_att_gt_overall(&cells, config)
-                .unwrap()
-                .estimate,
-        );
+/// Each summary under the equal and the treated-count weights: the event
+/// times, cohorts and periods, then the overall effect, with the standard
+/// error and the influence function of each.
+fn aggregates(fit: &AttGt) -> Vec<(f64, f64, Vec<f64>)> {
+    let mut out = Vec::new();
+    for weights in [AggteWeights::Equal, AggteWeights::TreatedCount] {
+        for aggregation in [
+            AggteType::Dynamic,
+            AggteType::Group,
+            AggteType::Calendar,
+            AggteType::Simple,
+        ] {
+            let result = fit
+                .aggregate(&AggteOptions {
+                    aggregation,
+                    weights,
+                    ..AggteOptions::default()
+                })
+                .expect("aggregate");
+            let influence = result.influence();
+            let estimates = result
+                .points
+                .iter()
+                .map(|p| p.estimate)
+                .chain(result.overall.map(|o| o.estimate));
+            for (j, estimate) in estimates.enumerate() {
+                out.push((
+                    estimate.estimate,
+                    estimate.se.expect("se"),
+                    influence.column(j).to_vec(),
+                ));
+            }
+        }
     }
     out
 }
 
-/// The influence vectors and standard errors the estimator reports, in the
-/// order of `summaries`.
-fn reported(cells: &[EfficientDidEstimate]) -> (Vec<Option<Vec<f64>>>, Vec<f64>) {
-    let mut influence = cells
-        .iter()
-        .map(|c| Some(c.influence_function.clone()))
-        .collect::<Vec<_>>();
-    let mut se = cells.iter().map(|c| c.se).collect::<Vec<_>>();
-    for weighting in [
-        AttGtAggregationWeighting::Equal,
-        AttGtAggregationWeighting::ByTreatedCount,
-    ] {
-        let config = config(weighting);
-        let event = aggregate_efficient_att_gt_event_time_with_influence(cells, config).unwrap();
-        influence.extend(event.influence_functions.iter().cloned().map(Some));
-        se.extend(event.estimates.iter().map(|e| e.summary.se));
-        let cohort = aggregate_efficient_att_gt_by_cohort(cells, config).unwrap();
-        influence.extend(cohort.iter().map(|_| None));
-        se.extend(cohort.iter().map(|e| e.summary.se));
-        let calendar = aggregate_efficient_att_gt_by_calendar_time(cells, config).unwrap();
-        influence.extend(calendar.iter().map(|_| None));
-        se.extend(calendar.iter().map(|e| e.summary.se));
-        influence.push(None);
-        se.push(
-            aggregate_efficient_att_gt_overall(cells, config)
-                .unwrap()
-                .se,
-        );
+fn summaries(rows: &[Obs]) -> Vec<f64> {
+    let fit = efficient(rows);
+    let mut out: Vec<f64> = rows::cells(&fit).iter().map(|c| c.att).collect();
+    out.extend(aggregates(&fit).iter().map(|a| a.0));
+    out
+}
+
+/// The influence function and the standard error of every cell and summary.
+fn reported(fit: &AttGt) -> (Vec<Option<Vec<f64>>>, Vec<f64>) {
+    let mut influence: Vec<Option<Vec<f64>>> = rows::influence(fit).into_iter().map(Some).collect();
+    let mut se: Vec<f64> = rows::cells(fit).iter().map(|c| c.se).collect();
+    for (_, s, psi) in aggregates(fit) {
+        influence.push(Some(psi));
+        se.push(s);
     }
     (influence, se)
 }
@@ -187,7 +189,9 @@ fn influence_functions_match_the_jackknife_on_an_unbalanced_weighted_panel() {
     let (rows, largest_outcome) = panel(20_261_124);
     let n = unit_count(&rows);
     let n_f = n as f64;
-    let cells = estimate_att_gt_efficient(&rows, EfficientDidConfig::default()).unwrap();
+    let fit = efficient(&rows);
+    let cells = rows::cells(&fit);
+    let psi = rows::influence(&fit);
 
     // The cells of one cohort use different units, and a cell's influence is
     // zero at every unit it does not use.
@@ -197,21 +201,18 @@ fn influence_functions_match_the_jackknife_on_an_unbalanced_weighted_panel() {
             .windows(2)
             .any(|pair| pair[0].treated_n != pair[1].treated_n)
     );
-    for cell in &cells {
-        assert_eq!(cell.influence_function.len(), n);
-        let nonzero = cell
-            .influence_function
-            .iter()
-            .filter(|v| **v != 0.0)
-            .count();
+    let efficient_cells = fit.cells().iter().filter(|c| c.estimate.is_some());
+    for ((cell, column), full) in cells.iter().zip(&psi).zip(efficient_cells) {
+        assert_eq!(column.len(), n);
+        let nonzero = column.iter().filter(|v| **v != 0.0).count();
         assert!(nonzero <= cell.treated_n + cell.control_n);
         assert_eq!(
-            cell.baseline_weights.len(),
+            full.efficient.as_ref().unwrap().baselines.len(),
             usize::try_from(cell.group - 1).unwrap()
         );
     }
 
-    let (influence, se) = reported(&cells);
+    let (influence, se) = reported(&fit);
     let per_unit = (0..n)
         .map(|i| {
             let unit_id = i64::try_from(i).unwrap();
@@ -255,29 +256,30 @@ fn influence_functions_match_the_jackknife_on_an_unbalanced_weighted_panel() {
 #[test]
 fn independent_combination_understates_the_variance_of_correlated_cells() {
     let (rows, _) = panel(20_261_125);
-    let cells = estimate_att_gt_efficient(&rows, EfficientDidConfig::default()).unwrap();
+    let fit = efficient(&rows);
+    let cells = rows::cells(&fit);
     let cohort_two = cells.iter().filter(|c| c.group == 2).collect::<Vec<_>>();
     let k = cohort_two.len() as f64;
     let naive = (cohort_two.iter().map(|c| c.se * c.se).sum::<f64>() / (k * k)).sqrt();
-    let summary =
-        aggregate_efficient_att_gt_by_cohort(&cells, config(AttGtAggregationWeighting::Equal))
-            .unwrap()
-            .into_iter()
-            .find(|c| c.group == 2)
-            .unwrap()
-            .summary;
+    let group = fit
+        .aggregate(&AggteOptions {
+            aggregation: AggteType::Group,
+            weights: AggteWeights::Equal,
+            ..AggteOptions::default()
+        })
+        .unwrap();
+    let se = group.point(2).unwrap().estimate.se.unwrap();
     // The shared period-1 shock makes the cells of cohort 2 nearly perfectly
     // correlated, so the variance is close to that of a single cell, about k
     // times the independent one.
-    assert!(summary.se > 1.5 * naive, "{} against {naive}", summary.se);
+    assert!(se > 1.5 * naive, "{se} against {naive}");
 }
 
 #[test]
 fn results_do_not_depend_on_the_thread_count() {
     let (rows, _) = panel(7);
     let runs = on_threads(&[1, 4, 12], || {
-        let cells = estimate_att_gt_efficient(&rows, EfficientDidConfig::default()).unwrap();
-        let (influence, se) = reported(&cells);
+        let (influence, se) = reported(&efficient(&rows));
         let mut bits = summaries(&rows)
             .iter()
             .chain(&se)
@@ -297,17 +299,16 @@ fn a_common_factor_in_the_weights_changes_nothing() {
     let (rows, _) = panel(11);
     let scaled = rows
         .iter()
-        .map(|r| AttGtObservation {
+        .map(|r| Obs {
             weight: 4.0 * r.weight,
-            ..*r
+            ..r.clone()
         })
         .collect::<Vec<_>>();
-    let a = estimate_att_gt_efficient(&rows, EfficientDidConfig::default()).unwrap();
-    let b = estimate_att_gt_efficient(&scaled, EfficientDidConfig::default()).unwrap();
-    for (x, y) in a.iter().zip(&b) {
+    let (a, b) = (efficient(&rows), efficient(&scaled));
+    assert_eq!(a.influence(), b.influence());
+    for (x, y) in rows::cells(&a).iter().zip(&rows::cells(&b)) {
         assert_eq!(x.att.to_bits(), y.att.to_bits());
         assert_eq!(x.se.to_bits(), y.se.to_bits());
-        assert_eq!(x.influence_function, y.influence_function);
         assert_eq!((4.0 * x.total_weight).to_bits(), y.total_weight.to_bits());
     }
 }
@@ -318,24 +319,30 @@ fn a_weight_of_two_is_a_unit_counted_twice_in_the_estimate() {
     let n_f = unit_count(&rows) as f64;
     let doubled = rows
         .iter()
-        .map(|r| AttGtObservation { weight: 2.0, ..*r })
+        .map(|r| Obs {
+            weight: 2.0,
+            ..r.clone()
+        })
         .collect::<Vec<_>>();
     let copied = rows
         .iter()
         .flat_map(|r| {
-            let id = r.unit_id.unwrap();
+            let id = r.unit.unwrap();
             [
-                AttGtObservation { weight: 1.0, ..*r },
-                AttGtObservation {
-                    unit_id: Some(id + 1_000_000),
+                Obs {
                     weight: 1.0,
-                    ..*r
+                    ..r.clone()
+                },
+                Obs {
+                    unit: Some(id + 1_000_000),
+                    weight: 1.0,
+                    ..r.clone()
                 },
             ]
         })
         .collect::<Vec<_>>();
-    let a = estimate_att_gt_efficient(&doubled, EfficientDidConfig::default()).unwrap();
-    let b = estimate_att_gt_efficient(&copied, EfficientDidConfig::default()).unwrap();
+    let a = rows::cells(&efficient(&doubled));
+    let b = rows::cells(&efficient(&copied));
     let bound = 4.0 * 2.0 * n_f * EPS * 2.0 * largest_outcome;
     for (x, y) in a.iter().zip(&b) {
         assert_eq!((x.group, x.time), (y.group, y.time));
@@ -351,12 +358,9 @@ fn a_weight_of_two_is_a_unit_counted_twice_in_the_estimate() {
 
 #[test]
 fn inconsistent_panels_are_errors() {
-    let row = |id: i64, g: Option<i32>, t: i32, w: f64| AttGtObservation {
-        unit_id: Some(id),
-        first_treated_time: g,
-        time: t,
-        outcome: f64::from(t),
+    let row = |id: i64, g: Option<i32>, t: i32, w: f64| Obs {
         weight: w,
+        ..Obs::new(Some(id), g, t, f64::from(t))
     };
     let base = vec![
         row(1, Some(2), 1, 1.0),
@@ -364,29 +368,36 @@ fn inconsistent_panels_are_errors() {
         row(2, None, 1, 1.0),
         row(2, None, 2, 1.0),
     ];
-    let config = EfficientDidConfig::default();
+    let options = AttGtOptions {
+        estimator: Estimator::Efficient,
+        ..AttGtOptions::default()
+    };
+    let refused = |rows: &[Obs]| rows::fit(rows, &options).map(|_| ()).unwrap_err();
 
     let mut duplicate = base.clone();
     duplicate.push(row(2, None, 2, 1.0));
-    assert_eq!(
-        estimate_att_gt_efficient(&duplicate, config),
-        Err(EfficientDidError::DuplicateObservation {
-            unit_id: 2,
-            time: 2
-        })
-    );
+    assert!(matches!(
+        refused(&duplicate),
+        Error::Input(InputError::Duplicate { .. })
+    ));
 
     let mut weight = base.clone();
     weight[1].weight = 2.0;
     assert_eq!(
-        estimate_att_gt_efficient(&weight, config),
-        Err(EfficientDidError::TimeVaryingWeight { unit_id: 1 })
+        refused(&weight),
+        Error::Input(InputError::NotConstant {
+            what: "weights",
+            unit: 1
+        })
     );
 
     let mut cohort = base;
-    cohort[3].first_treated_time = Some(3);
+    cohort[3].cohort = Some(3);
     assert_eq!(
-        estimate_att_gt_efficient(&cohort, config),
-        Err(EfficientDidError::TimeVaryingCohort { unit_id: 2 })
+        refused(&cohort),
+        Error::Input(InputError::NotConstant {
+            what: "first_treated",
+            unit: 2
+        })
     );
 }

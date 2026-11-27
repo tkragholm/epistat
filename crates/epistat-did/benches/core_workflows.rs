@@ -4,15 +4,16 @@ use criterion::{
     BenchmarkGroup, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
     measurement::WallTime,
 };
+use epistat_did::att_gt::{self, AttGtOptions, Design, Estimator};
 use epistat_did::{
-    AttGtConfig, AttGtDrConfig, AttGtDrObservation, DidCcConfig, DrDidConfig, DrDidObservation,
-    DrDidRepeatedObservation, HonestEventStudyInput, HonestJointPathConfig, HonestPostFunctional,
-    HonestSensitivity, HonestWorkflowConfig, HonestWorkflowDirectionMode, InferenceConfig,
-    RelativeMagnitudeConfidenceSetConfig, assess_honest_event_study_directional_region_with_config,
+    DidCcConfig, DrDidConfig, DrDidObservation, DrDidRepeatedObservation, HonestEventStudyInput,
+    HonestJointPathConfig, HonestPostFunctional, HonestSensitivity, HonestWorkflowConfig,
+    HonestWorkflowDirectionMode, InferenceConfig, RelativeMagnitudeConfidenceSetConfig,
+    StaggeredPanel, assess_honest_event_study_directional_region_with_config,
     assess_honest_event_study_joint_path_region_with_config,
     assess_honest_event_study_post_functional_multi_flci_with_config,
     assess_honest_event_study_post_functional_with_config, assess_honest_event_study_workflow,
-    estimate_att_gt_dr_with_influence, estimate_did_cc_robust, estimate_did_cc_stationary,
+    estimate_did_cc_robust, estimate_did_cc_stationary,
     estimate_drdid_improved_repeated_cross_section, estimate_drdid_panel, test_did_cc_stationarity,
 };
 
@@ -49,8 +50,26 @@ fn build_drdid_panel_rows(num_units: usize, num_covariates: usize) -> Vec<DrDidO
         .collect()
 }
 
-fn build_att_gt_rows(num_units: usize, start_year: i32, periods: usize) -> Vec<AttGtDrObservation> {
-    let mut observations = Vec::with_capacity(num_units * periods);
+/// A repeated cross-section of `num_units * periods` rows, each its own
+/// observation: the unit, period, cohort and outcome columns and two
+/// covariates, column-major.
+struct AttGtColumns {
+    unit: Vec<u32>,
+    period: Vec<i64>,
+    cohort: Vec<Option<i64>>,
+    outcome: Vec<f64>,
+    covariates: Vec<f64>,
+}
+
+fn build_att_gt_rows(num_units: usize, start_year: i64, periods: usize) -> AttGtColumns {
+    let n = num_units * periods;
+    let mut columns = AttGtColumns {
+        unit: Vec::with_capacity(n),
+        period: Vec::with_capacity(n),
+        cohort: Vec::with_capacity(n),
+        outcome: Vec::with_capacity(n),
+        covariates: vec![0.0; 2 * n],
+    };
     for unit_index in 0..num_units {
         let first_treated_time = match unit_index % 5 {
             0 => Some(start_year + 2),
@@ -60,29 +79,26 @@ fn build_att_gt_rows(num_units: usize, start_year: i32, periods: usize) -> Vec<A
         };
         let baseline = usize_to_f64(unit_index % 17) * 0.2;
         for period_offset in 0..periods {
-            let time = start_year + i32::try_from(period_offset).expect("period offset fits i32");
+            let row = columns.unit.len();
+            let time = start_year + i64::try_from(period_offset).expect("period offset fits i64");
             let event_time = first_treated_time.map_or(-99, |group| time - group);
             let treated_effect = if event_time >= 0 {
-                0.8 + f64::from(event_time) * 0.15
+                0.8 + event_time as f64 * 0.15
             } else {
                 0.0
             };
-            let trend = f64::from(time - start_year) * 0.05;
-            observations.push(AttGtDrObservation {
-                unit_id: i64::try_from(unit_index).ok(),
-                first_treated_time,
-                time,
-                outcome: baseline + trend + treated_effect,
-                weight: 1.0,
-                covariates: vec![
-                    usize_to_f64(unit_index % 7) * 0.1,
-                    usize_to_f64(period_offset) * 0.05,
-                ],
-                comparison_cohort: None,
-            });
+            let trend = (time - start_year) as f64 * 0.05;
+            columns
+                .unit
+                .push(u32::try_from(row).expect("row count fits u32"));
+            columns.period.push(time);
+            columns.cohort.push(first_treated_time);
+            columns.outcome.push(baseline + trend + treated_effect);
+            columns.covariates[row] = usize_to_f64(unit_index % 7) * 0.1;
+            columns.covariates[n + row] = usize_to_f64(period_offset) * 0.05;
         }
     }
-    observations
+    columns
 }
 
 fn build_honest_input(num_pre_periods: usize, num_post_periods: usize) -> HonestEventStudyInput {
@@ -216,20 +232,22 @@ fn bench_drdid_improved_repeated(criterion: &mut Criterion) {
 
 fn bench_att_gt_dr(criterion: &mut Criterion) {
     let rows = build_att_gt_rows(8_000, 2000, 6);
-    let throughput = u64::try_from(rows.len()).expect("row count fits u64");
+    let n = rows.unit.len();
+    let covariates = epistat_linalg::MatRef::from_column_major_slice(&rows.covariates, n, 2);
+    let panel = StaggeredPanel::builder(&rows.unit, &rows.period, &rows.cohort, &rows.outcome)
+        .covariates(covariates)
+        .build()
+        .expect("panel");
+    let options = AttGtOptions {
+        estimator: Estimator::TraditionalDoublyRobust,
+        design: Design::RepeatedCrossSection,
+        ..AttGtOptions::default()
+    };
+    let throughput = u64::try_from(n).expect("row count fits u64");
     let mut group = criterion.benchmark_group("att_gt_dr");
     group.throughput(Throughput::Elements(throughput));
     group.bench_function("8k_units_6_periods", |bencher| {
-        bencher.iter(|| {
-            estimate_att_gt_dr_with_influence(
-                &rows,
-                AttGtDrConfig {
-                    att_gt: AttGtConfig::default(),
-                    drdid: DrDidConfig::default(),
-                },
-            )
-            .expect("att_gt dr")
-        });
+        bencher.iter(|| att_gt::estimate(&panel, &options).expect("att_gt dr"));
     });
     group.finish();
 }

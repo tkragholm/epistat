@@ -53,9 +53,11 @@ mod r_reference;
 use chrono::NaiveDate;
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::prelude::*;
-use epistat_matching::{Assignment, DeterministicSelection, MatchOrder, RapidHashMap};
+use epistat_matching::{Assignment, DeterministicSelection, MatchOrder};
+use epistat_matching::{DistanceCaliper, DistanceConfig, Estimand};
 use epistat_testkit::load_json;
 use r_reference::{Versions, assert_r_version, reference as load_reference};
+use rapidhash::RapidHashMap;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -252,9 +254,9 @@ fn run_ours(
         .collect();
     let job = job.with_constraints(calipers);
     let outcome = if spec.anti {
-        job.with_antiexact("fam").run()
+        job.with_antiexact("fam").run().expect("a valid job")
     } else {
-        job.run()
+        job.run().expect("a valid job")
     };
     (focal_rows, outcome)
 }
@@ -263,9 +265,9 @@ fn rows_of(outcome: &MatchOutcome, focal_rows: &[usize]) -> Vec<Vec<usize>> {
     let mut by_anchor: HashMap<usize, Vec<usize>> = HashMap::new();
     for pair in &outcome.pairs {
         by_anchor
-            .entry(pair.anchor_id().parse().expect("row number"))
+            .entry(pair.case_id.as_str().parse().expect("row number"))
             .or_default()
-            .push(pair.comparator_id().parse().expect("row number"));
+            .push(pair.control_id.as_str().parse().expect("row number"));
     }
     focal_rows
         .iter()
@@ -378,9 +380,13 @@ fn ties_are_broken_by_row_order_where_matchit_is_not() {
             .with_nearest()
             .with_replacement(true)
             .with_distance_config(DistanceConfig::propensity_score_map(scores, None))
-            .run();
+            .run()
+            .expect("a valid job");
         assert_eq!(outcome.pairs.len(), 1);
-        assert_eq!(outcome.pairs[0].comparator_id(), ours_expected.to_string());
+        assert_eq!(
+            outcome.pairs[0].control_id.as_str(),
+            ours_expected.to_string()
+        );
     }
 }
 
@@ -428,8 +434,8 @@ fn random_order_keeps_the_rules_and_is_reproducible() {
             let mut used = HashSet::new();
             let mut matched_rows = HashSet::new();
             for pair in &outcome.pairs {
-                let a: usize = pair.anchor_id().parse().expect("row");
-                let c: usize = pair.comparator_id().parse().expect("row");
+                let a: usize = pair.case_id.as_str().parse().expect("row");
+                let c: usize = pair.control_id.as_str().parse().expect("row");
                 matched_rows.insert(a);
                 if !replace {
                     assert!(used.insert(c), "{name}: control {c} used twice");
@@ -558,7 +564,8 @@ fn rounds_for_the_existing_strategies_follow_matchit() {
             .with_birth_window(BirthDateWindowDays::new(36_500).expect("window"))
             .with_exact_matches(run.exact.clone())
             .with_constraints(calipers)
-            .run();
+            .run()
+            .expect("a valid job");
         assert_eq!(
             rows_of(&outcome, &focal_rows),
             expected(&run.matchit.rows),
@@ -593,7 +600,8 @@ fn sequential_assignment_is_still_available_in_the_nearest_mode() {
         .with_ratio(MatchRatio::new(3).expect("ratio"))
         .with_assignment(Assignment::Sequential)
         .with_distance_config(DistanceConfig::propensity_score_map(scores(scenario), None))
-        .run();
+        .run()
+        .expect("a valid job");
     let rounds = run_ours(scenario, &spec, Some(MatchOrder::Largest), 0).1;
     assert_eq!(sequential.pairs.len(), rounds.pairs.len());
     assert_ne!(sequential.pairs, rounds.pairs);

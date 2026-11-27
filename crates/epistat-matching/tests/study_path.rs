@@ -17,12 +17,18 @@
 //! `STUDY_PATH_PRINT=1 cargo test --test study_path -- --nocapture`.
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 
+use epistat_matching::{
+    AtRiskSpan, DefaultRiskSetPolicy, MatchWeightMethod, RiskSetPolicy, match_weights_from_pairs,
+    pair_weights_from_pairs,
+};
 use std::collections::{HashMap, HashSet};
 
 use chrono::{Days, NaiveDate};
 use epistat_matching::constraints::{MissingPolicy, ResidenceSpell, caliper_on_field};
+use epistat_matching::delegate_matching_record;
 use epistat_matching::prelude::*;
 use epistat_matching::{PairWeightTable, UnitRole, UnitWeightTable};
+use epistat_stats::weighted::effective_sample_size;
 use epistat_testkit::{Fingerprint, SplitMix64};
 
 struct CohortRow {
@@ -74,33 +80,7 @@ struct Person {
 type Member = RoleTransitionRecord<Person>;
 
 impl MatchingRecord for Person {
-    fn id(&self) -> &str {
-        self.base.id()
-    }
-
-    fn birth_date(&self) -> NaiveDate {
-        self.base.birth_date()
-    }
-
-    fn strata(&self) -> &HashMap<String, String> {
-        self.base.strata()
-    }
-
-    fn numeric(&self, name: &str) -> Option<f64> {
-        self.base.numeric(name)
-    }
-
-    fn unique_key(&self) -> Option<&str> {
-        self.base.unique_key()
-    }
-
-    fn death_date(&self) -> Option<NaiveDate> {
-        self.base.death_date()
-    }
-
-    fn emigration_date(&self) -> Option<NaiveDate> {
-        self.base.emigration_date()
-    }
+    delegate_matching_record!(base);
 }
 
 struct PassPolicy<'a> {
@@ -236,7 +216,8 @@ fn run_matching(
             matched_case_ids: &no_ids,
             used_control_ids: &no_ids,
         })
-        .run();
+        .run()
+        .expect("a valid job");
     let matched: HashSet<&str> = pass1.pairs.iter().map(|p| p.case_id.as_str()).collect();
     let used: HashSet<&str> = pass1.pairs.iter().map(|p| p.control_id.as_str()).collect();
     let mut pairs = matched_rows(&pass1, "municipality");
@@ -255,7 +236,8 @@ fn run_matching(
                 matched_case_ids: &matched,
                 used_control_ids: &used,
             })
-            .run();
+            .run()
+            .expect("a valid job");
         passes[1] = (pass2.matched_cases, pass2.unmatched_cases);
         pairs.extend(matched_rows(&pass2, "region"));
     }
@@ -264,7 +246,7 @@ fn run_matching(
         .iter()
         .map(|row| MatchedPair::new(row.exposed_id.clone(), row.control_id.clone()))
         .collect();
-    let method = MatchWeightMethod::AnchorUnitCandidateFractional;
+    let method = MatchWeightMethod::CaseUnitControlFractional;
     let unit_weights = match_weights_from_pairs(&matched_pairs, method).to_table();
     let pair_weights = pair_weights_from_pairs(&matched_pairs, method).to_table();
     let role = |role: UnitRole| {
@@ -275,10 +257,16 @@ fn run_matching(
             .map(|row| row.match_weight)
     };
     let effective_sample_sizes = [
-        effective_sample_size(role(UnitRole::Anchor)).expect("weights"),
-        effective_sample_size(role(UnitRole::Candidate)).expect("weights"),
-        effective_sample_size(unit_weights.rows.iter().map(|row| row.analysis_weight))
-            .expect("weights"),
+        effective_sample_size(&role(UnitRole::Case).collect::<Vec<_>>()).expect("weights"),
+        effective_sample_size(&role(UnitRole::Control).collect::<Vec<_>>()).expect("weights"),
+        effective_sample_size(
+            &unit_weights
+                .rows
+                .iter()
+                .map(|row| row.analysis_weight)
+                .collect::<Vec<_>>(),
+        )
+        .expect("weights"),
     ];
     let unit_weight_total = unit_weights.rows.iter().map(|row| row.match_weight).sum();
     MatchOutput {
@@ -410,14 +398,14 @@ fn digest(output: &MatchOutput) -> [u64; 3] {
     let mut units = Hash::new();
     for row in &output.unit_weights.rows {
         units.text(&row.unit_id);
-        units.word(u64::from(row.role == UnitRole::Anchor));
+        units.word(u64::from(row.role == UnitRole::Case));
         units.f(row.match_weight);
         units.o(row.sampling_weight);
         units.f(row.analysis_weight);
     }
     for row in &output.pair_weights.rows {
-        units.text(&row.anchor_id);
-        units.text(&row.candidate_id);
+        units.text(&row.case_id);
+        units.text(&row.control_id);
         units.f(row.pair_weight);
     }
     let mut diagnostics = Hash::new();

@@ -3,13 +3,14 @@
     reason = "the fixtures carry fields that only some tests read"
 )]
 
+use epistat_did::att_gt;
 use epistat_did::{
-    AttGtConfig, AttGtObservation, DidCcConfig, DrDidConfig, DrDidObservation,
-    DrDidRepeatedObservation, HonestAssessment, HonestEventStudyInput, HonestJointPathConfig,
-    HonestJointPathMethod, HonestOptimizationSurfaceAdaptiveConfig,
-    HonestOptimizationSurfaceAdaptiveRunConfig, HonestOptimizationSurfaceConfig,
-    HonestPostFunctional, HonestSensitivity, InferenceConfig, RelativeMagnitudeConfidenceSetConfig,
-    TripleDidObservation, assess_honest_event_study_directional_region_with_config,
+    DidCcConfig, DrDidConfig, DrDidObservation, DrDidRepeatedObservation, HonestAssessment,
+    HonestEventStudyInput, HonestJointPathConfig, HonestJointPathMethod,
+    HonestOptimizationSurfaceAdaptiveConfig, HonestOptimizationSurfaceAdaptiveRunConfig,
+    HonestOptimizationSurfaceConfig, HonestPostFunctional, HonestSensitivity, InferenceConfig,
+    RelativeMagnitudeConfidenceSetConfig, StaggeredPanel, TripleDidObservation,
+    assess_honest_event_study_directional_region_with_config,
     assess_honest_event_study_joint_path_region,
     assess_honest_event_study_joint_path_region_with_config,
     assess_honest_event_study_optimization_surface_region_adaptive_with_config,
@@ -23,8 +24,8 @@ use epistat_did::{
     compute_relative_magnitude_confidence_set_with_config, compute_relative_magnitude_flci,
     compute_relative_magnitude_flci_with_config, compute_relative_magnitude_identified_set,
     compute_relative_magnitude_multi_flci, compute_relative_magnitude_multi_flci_with_config,
-    estimate_att_gt, estimate_did_cc_robust, estimate_did_cc_stationary, estimate_dr_ddd,
-    estimate_drdid_panel, test_did_cc_stationarity,
+    estimate_did_cc_robust, estimate_did_cc_stationary, estimate_dr_ddd, estimate_drdid_panel,
+    test_did_cc_stationarity,
 };
 use epistat_linalg::Mat;
 use epistat_testkit::load_json;
@@ -101,38 +102,45 @@ struct DidRef {
 fn parity_did_attgt_mpdta() {
     let reference: DidRef = load_json("tests/data/did_attgt_ref.json");
 
-    let mut observations = Vec::new();
-    for row in reference.data_subset {
-        let g = if row.first_treat == 0 {
-            None
-        } else {
-            Some(row.first_treat)
-        };
-        observations.push(AttGtObservation::with_unit_id(
-            row.countyreal,
-            g,
-            row.year,
-            row.lemp,
-        ));
-    }
-
-    let config = AttGtConfig::default();
-    let results = estimate_att_gt(&observations, config).expect("estimate");
+    // `did::att_gt` without covariates: the doubly robust panel estimator on
+    // an intercept, the unconditional difference in differences.
+    let mut rows = reference.data_subset;
+    rows.sort_by_key(|row| (row.countyreal, row.year));
+    let unit: Vec<u32> = rows
+        .iter()
+        .map(|row| u32::try_from(row.countyreal).expect("a county number"))
+        .collect();
+    let period: Vec<i64> = rows.iter().map(|row| i64::from(row.year)).collect();
+    let cohort: Vec<Option<i64>> = rows
+        .iter()
+        .map(|row| (row.first_treat != 0).then_some(i64::from(row.first_treat)))
+        .collect();
+    let outcome: Vec<f64> = rows.iter().map(|row| row.lemp).collect();
+    let panel = StaggeredPanel::builder(&unit, &period, &cohort, &outcome)
+        .build()
+        .expect("panel");
+    let fit = att_gt::estimate(&panel, &att_gt::AttGtOptions::default()).expect("estimate");
+    let results: Vec<(i64, i64, f64, f64)> = fit
+        .cells()
+        .iter()
+        .filter_map(|cell| {
+            let estimate = cell.estimate?;
+            Some((cell.group, cell.time, estimate.estimate, estimate.se?))
+        })
+        .collect();
 
     // Every cell R reports must be among ours and agree; a cell of ours that
     // R does not report fails as well.
     let mut matched = 0;
-    for rust_res in &results {
+    for &(group, time, att, se) in &results {
         let idx = reference
             .group
             .iter()
             .zip(reference.t.iter())
-            .position(|(&g, &t)| g == rust_res.group && t == rust_res.time)
-            .unwrap_or_else(|| {
-                panic!("cell ({}, {}) is not in R's", rust_res.group, rust_res.time)
-            });
-        assert!((rust_res.att - reference.att[idx]).abs() < 1e-8);
-        assert!((rust_res.se - reference.se[idx]).abs() < 1e-8);
+            .position(|(&g, &t)| i64::from(g) == group && i64::from(t) == time)
+            .unwrap_or_else(|| panic!("cell ({group}, {time}) is not in R's"));
+        assert!((att - reference.att[idx]).abs() < 1e-8);
+        assert!((se - reference.se[idx]).abs() < 1e-8);
         matched += 1;
     }
     assert_eq!(matched, reference.group.len(), "R's cells without a match");

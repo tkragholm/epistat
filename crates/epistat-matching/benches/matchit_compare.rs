@@ -27,6 +27,8 @@
 //! selection, as one call of `run_spec`. Reading the file and building the
 //! records are not.
 
+#[path = "../tests/common/trial_panel.rs"]
+mod trial_panel;
 use chrono::{Days, NaiveDate};
 use epistat_matching::CbpsConfig;
 use epistat_matching::abadie_imbens::{AbadieImbensData, AbadieImbensSpec, abadie_imbens};
@@ -38,10 +40,22 @@ use epistat_matching::imputation::{
     CompleteDataDf, ImputationApproach, ImputedSet, estimate_pooled, match_imputed,
 };
 use epistat_matching::multigroup::{VectorMatchSpec, vector_match};
+use epistat_matching::output::{MatchDataOptions, Units, get_matches, match_data};
 use epistat_matching::prelude::*;
 use epistat_matching::sensitivity::{
     MScore, WilcoxonDistribution, hodges_lehmann_bounds, m_statistic_bounds, matched_sets,
     wilcoxon_bounds,
+};
+use epistat_matching::spec::{
+    BinningSpec, CardinalitySpec, CemSpec, CemVariableSpec, CovarianceSpec, CovariatesSpec,
+    DistanceSpec, EstimatorSpec, GeneticSpec, LinkSpec, MatchMethod, MatchMode, MissingSpec,
+    ScaleSpec, StdCaliperSpec, SubclassSpec, TransformSpec,
+};
+use epistat_matching::{
+    BalanceRecord, CovariateEncodingConfig, CovariateRecord, CovariateValue, ElasticNetCvConfig,
+    FineBalance, LogisticRegressionConfig, MatchingCriteria, NearestSelection, PropensityEstimator,
+    PropensityLink, PropensityScoreConfig, SpecOutput, balance_report,
+    prepare_propensity_distance_config,
 };
 use epistat_matching::{Cohort, CohortRow};
 use std::fmt::Write as _;
@@ -49,6 +63,7 @@ use std::fs;
 use std::io::{BufRead, Write as _};
 use std::path::PathBuf;
 use std::time::Instant;
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows};
 
 const SEED: u64 = 20_261_121;
 const COVARIATES: [&str; 5] = ["x1", "x2", "x3", "x4", "x5"];
@@ -675,8 +690,8 @@ fn run_standard<R: CovariateRecord>(
         run_spec(
             spec,
             SpecInput::Standard {
-                anchors: &input.anchors,
-                candidates: &input.candidates,
+                cases: &input.anchors,
+                controls: &input.candidates,
             },
         )
         .unwrap_or_else(|e| panic!("{method}: {e}"))
@@ -752,7 +767,7 @@ fn run_risk_set_on<R: CovariateRecord>(
 fn trial_panel<R>(
     rows: &[Row],
     mut record_of: impl FnMut(usize, &Row) -> R,
-) -> Vec<TrialPerson<R>> {
+) -> Vec<PanelPerson<R>> {
     rows.iter()
         .enumerate()
         .map(|(i, row)| {
@@ -762,7 +777,7 @@ fn trial_panel<R>(
                 .t_case
                 .map(|d| ((u64::from(d) - 1) / TRIAL_SPACING) as usize);
             let periods = (0..TRIAL_PERIODS)
-                .map(|k| TrialPeriod {
+                .map(|k| PanelPeriod {
                     period: i64::try_from(k).expect("small"),
                     date: origin() + Days::new(TRIAL_SPACING * (k as u64 + 1)),
                     eligible: !row.treat || k <= start,
@@ -770,7 +785,7 @@ fn trial_panel<R>(
                     event: event_period == Some(k),
                 })
                 .collect();
-            TrialPerson { record: r, periods }
+            PanelPerson { record: r, periods }
         })
         .collect()
 }
@@ -793,7 +808,9 @@ fn run_trials(rows: Vec<Row>, reps: usize) -> Timed {
 }
 
 /// The cohort's case dates are not read: the panel's periods set the trials.
-fn run_trials_on<R: CovariateRecord>(panel: &[TrialPerson<R>], reps: usize) -> Timed {
+fn run_trials_on<R: CovariateRecord + Clone>(panel: &[PanelPerson<R>], reps: usize) -> Timed {
+    let rows = PanelRows::of(panel);
+    let panel = &rows.panel();
     let spec = MatchSpec {
         mode: MatchMode::SequentialTrials,
         method: MatchMethod::Random,
@@ -851,8 +868,8 @@ fn nearest_pairs<R: CovariateRecord>(input: &Inputs<R>) -> MatchOutcome {
     match run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &input.anchors,
-            candidates: &input.candidates,
+            cases: &input.anchors,
+            controls: &input.candidates,
         },
     )
     .expect("match")
@@ -863,16 +880,19 @@ fn nearest_pairs<R: CovariateRecord>(input: &Inputs<R>) -> MatchOutcome {
 }
 
 fn fit_config(link: PropensityLink, estimator: PropensityEstimator) -> PropensityScoreConfig {
-    PropensityScoreConfig::builder()
-        .encoding(
-            CovariateEncodingConfig::builder()
-                .covariate_keys(COVARIATES.iter().map(|s| (*s).to_string()).collect())
-                .include_intercept(true)
-                .build(),
-        )
-        .estimator(estimator)
-        .logistic(LogisticRegressionConfig::builder().link(link).build())
-        .build()
+    PropensityScoreConfig {
+        encoding: CovariateEncodingConfig {
+            covariate_keys: COVARIATES.iter().map(|s| (*s).to_string()).collect(),
+            include_intercept: true,
+            ..CovariateEncodingConfig::default()
+        },
+        estimator,
+        logistic: LogisticRegressionConfig {
+            link,
+            ..LogisticRegressionConfig::default()
+        },
+        ..PropensityScoreConfig::default()
+    }
 }
 
 fn run_fit<R: CovariateRecord>(
@@ -881,7 +901,7 @@ fn run_fit<R: CovariateRecord>(
     config: &PropensityScoreConfig,
 ) -> Timed {
     let (times, prepared) = time_reps(reps, || {
-        prepare_propensity_distance_config(&input.anchors, &input.candidates, config)
+        prepare_propensity_distance_config(&input.anchors, &input.candidates, config, None)
             .unwrap_or_else(|e| panic!("fit: {e}"))
     });
     Timed {
@@ -896,7 +916,12 @@ fn run_balance<R: CovariateRecord>(input: &Inputs<R>, reps: usize) -> (Timed, St
     let outcome = nearest_pairs(input);
     let mut smd = String::new();
     let (times, report) = time_reps(reps, || {
-        balance_report(&input.anchors, &input.candidates, &outcome)
+        balance_report(
+            &input.anchors,
+            &input.candidates,
+            &outcome,
+            &epistat_matching::BalanceReportOptions::default(),
+        )
     });
     for row in &report.numeric {
         writeln!(
@@ -1061,12 +1086,15 @@ fn run_impute_on<R: CovariateRecord>(sets_data: &[Inputs<R>], y: &[f64], reps: u
     let sets: Vec<ImputedSet<'_, R>> = sets_data
         .iter()
         .map(|s| ImputedSet {
-            anchors: &s.anchors,
-            candidates: &s.candidates,
+            cases: &s.anchors,
+            controls: &s.candidates,
         })
         .collect();
     let data: Vec<UnitData> = sets_data.iter().map(|s| unit_data_of(s, y)).collect();
-    let criteria = MatchingCriteria::builder().match_ratio(1).build();
+    let criteria = MatchingCriteria {
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    };
     let config = PropensityScoreConfig::default();
     let effect = EffectSpec::new(OutcomeModel::Linear);
     let (times, pooled) = time_reps(reps, || {
@@ -1153,9 +1181,10 @@ fn run_on_groups<R: CovariateRecord>(
             reps,
             &fit_config(
                 PropensityLink::Logit,
-                PropensityEstimator::ElasticNetCv(
-                    ElasticNetCvConfig::builder().seed(3).alpha(1.0).build(),
-                ),
+                PropensityEstimator::ElasticNetCv(ElasticNetCvConfig {
+                    alpha: 1.0,
+                    ..ElasticNetCvConfig::new(3)
+                }),
             ),
         ),
         "fit_cbps" => run_fit(

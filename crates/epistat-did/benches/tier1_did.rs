@@ -35,10 +35,8 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
-use epistat_did::{
-    AttGtConfig, AttGtDrConfig, AttGtDrObservation, DcdhOptions, DrDidConfig, StaggeredPanel,
-    SwitchingPanel, TwfeOptions, TwfeSpec, dcdh, estimate_att_gt_dr_panel_with_influence, twfe,
-};
+use epistat_did::att_gt;
+use epistat_did::{DcdhOptions, StaggeredPanel, SwitchingPanel, TwfeOptions, TwfeSpec, dcdh, twfe};
 
 const SEED: u64 = 20_261_208;
 const PERIODS: usize = 6;
@@ -248,33 +246,42 @@ fn main() {
     }
     assert_eq!(method, "att_gt", "unknown method {method}");
     let t = Table::read(&common::data_path("did", n));
-    let rows: Vec<AttGtDrObservation> = (0..t.len())
-        .map(|i| {
+    let mut order: Vec<usize> = (0..t.len()).collect();
+    order.sort_by_key(|&i| (t.col("id")[i] as u32, t.col("time")[i] as i64));
+    let unit: Vec<u32> = order.iter().map(|&i| t.col("id")[i] as u32).collect();
+    let period: Vec<i64> = order.iter().map(|&i| t.col("time")[i] as i64).collect();
+    let cohort: Vec<Option<i64>> = order
+        .iter()
+        .map(|&i| {
             let g = t.col("g")[i];
-            AttGtDrObservation {
-                unit_id: Some(t.col("id")[i] as i64),
-                first_treated_time: (g > 0.0).then_some(g as i32),
-                time: t.col("time")[i] as i32,
-                outcome: t.col("y")[i],
-                weight: 1.0,
-                covariates: vec![t.col("x1")[i]],
-                comparison_cohort: None,
-            }
+            (g > 0.0).then_some(g as i64)
         })
         .collect();
-    let config = AttGtDrConfig {
-        att_gt: AttGtConfig::default(),
-        drdid: DrDidConfig::default(),
-    };
-    let (times, estimates) = common::timed(common::reps(), || {
-        estimate_att_gt_dr_panel_with_influence(&rows, config)
-            .map(|out| out.estimates)
-            .expect("att_gt")
+    let outcome: Vec<f64> = order.iter().map(|&i| t.col("y")[i]).collect();
+    let x1: Vec<f64> = order.iter().map(|&i| t.col("x1")[i]).collect();
+    let panel = StaggeredPanel::builder(&unit, &period, &cohort, &outcome)
+        .covariates(epistat_linalg::MatRef::from_column_major_slice(
+            &x1,
+            x1.len(),
+            1,
+        ))
+        .build()
+        .expect("panel");
+    let (times, fit) = common::timed(common::reps(), || {
+        att_gt::estimate(&panel, &att_gt::AttGtOptions::default()).expect("att_gt")
     });
+    let estimates: Vec<(i64, i64, f64, f64)> = fit
+        .cells()
+        .iter()
+        .filter_map(|cell| {
+            let e = cell.estimate?;
+            Some((cell.group, cell.time, e.estimate, e.se?))
+        })
+        .collect();
     let mut lines = Lines::default();
-    for e in &estimates {
-        lines.push(&format!("att_g{}_t{}", e.group, e.time), e.att);
-        lines.push(&format!("se_g{}_t{}", e.group, e.time), e.se);
+    for &(group, time, att, se) in &estimates {
+        lines.push(&format!("att_g{group}_t{time}"), att);
+        lines.push(&format!("se_g{group}_t{time}"), se);
     }
     common::finish(&method, n, &times, &lines);
 }

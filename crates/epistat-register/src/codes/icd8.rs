@@ -28,7 +28,7 @@
 use std::collections::BTreeSet;
 
 use super::CodeSet;
-use crate::{RegisterError, normalize_diagnosis_code};
+use crate::{Error, normalize_diagnosis_code};
 
 /// The revision of the International Classification of Diseases a code is in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -159,18 +159,18 @@ impl Crosswalk {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] for a code of the wrong revision or none, a
+    /// [`Error::Input`] for a code of the wrong revision or none, a
     /// pair given twice, or a kind that the table contradicts.
-    pub fn from_pairs(pairs: &[(&str, &str, MapKind)]) -> Result<Self, RegisterError> {
+    pub fn from_pairs(pairs: &[(&str, &str, MapKind)]) -> Result<Self, Error> {
         let mut entries = Vec::with_capacity(pairs.len());
         for &(from, to, kind) in pairs {
             let Some((Revision::Icd8, from_code)) = normalize_any(from) else {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "crosswalk source {from:?} is not an ICD-8 code"
                 )));
             };
             let Some((Revision::Icd10, to_code)) = normalize_any(to) else {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "crosswalk target {to:?} is not an ICD-10 code"
                 )));
             };
@@ -185,7 +185,7 @@ impl Crosswalk {
             .windows(2)
             .find(|w| w[0].from == w[1].from && w[0].to == w[1].to)
         {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "crosswalk pair {} to {} is given twice",
                 w[0].from, w[0].to
             )));
@@ -201,7 +201,7 @@ impl Crosswalk {
                 MapKind::Approximate => true,
             };
             if !consistent {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "crosswalk pair {} to {} is declared {:?}, but its source has {t} targets and its target {s} sources",
                     e.from, e.to, e.kind
                 )));

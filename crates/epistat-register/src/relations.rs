@@ -43,7 +43,9 @@
     reason = "row numbers are checked against the u32 limit before they are narrowed"
 )]
 
-use crate::RegisterError;
+use crate::Error;
+use crate::error::{length, row_count};
+use epistat_core::InputError;
 
 /// Disjoint-set forest over row indices whose root is the smallest index in
 /// the set.
@@ -95,26 +97,18 @@ impl DisjointSets {
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when there are no key columns, when the columns
+/// [`Error::Input`] when there are no key columns, when the columns
 /// differ in length, when there are more than `u32::MAX` rows, or when a code
 /// is not below the number of rows.
-pub fn connected_components(keys: &[&[Option<u32>]]) -> Result<Vec<u32>, RegisterError> {
+pub fn connected_components(keys: &[&[Option<u32>]]) -> Result<Vec<u32>, Error> {
     let Some(first_column) = keys.first() else {
-        return Err(RegisterError::input(
-            "connected_components needs a key column",
-        ));
+        return Err(InputError::Empty { what: "keys" }.into());
     };
     let n = first_column.len();
-    if keys.iter().any(|column| column.len() != n) {
-        return Err(RegisterError::input(
-            "every key column must have one entry per row",
-        ));
+    for column in keys {
+        length("key column", n, column.len())?;
     }
-    if u32::try_from(n).is_err() {
-        return Err(RegisterError::input(format!(
-            "{n} rows is more than connected_components takes"
-        )));
-    }
+    row_count("key column", n)?;
 
     let mut sets = DisjointSets::new(n);
     // The first row seen with each code, reused across columns.
@@ -124,7 +118,7 @@ pub fn connected_components(keys: &[&[Option<u32>]]) -> Result<Vec<u32>, Registe
         for (row, code) in column.iter().enumerate() {
             let Some(code) = *code else { continue };
             let Some(slot) = first_row.get_mut(code as usize) else {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "key code {code} is not below the number of rows, {n}"
                 )));
             };

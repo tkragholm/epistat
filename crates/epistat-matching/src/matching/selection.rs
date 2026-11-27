@@ -2,23 +2,23 @@ use super::nearest::NearestSelection;
 use super::records::MatchingRecord;
 use epistat_rng::{Stream, replicate_seed};
 
-/// How anchors share the candidates when each takes more than one.
+/// How cases share the controls when each takes more than one.
 ///
-/// Without replacement and with a ratio above 1, the order in which anchors
-/// receive their controls decides who is left short when candidates run out.
+/// Without replacement and with a ratio above 1, the order in which cases
+/// receive their controls decides who is left short when controls run out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Assignment {
-    /// Each anchor takes all its controls before the next anchor starts.
+    /// Each case takes all its controls before the next case starts.
     #[default]
     Sequential,
-    /// Every anchor takes a first control before any takes a second, and so on
+    /// Every case takes a first control before any takes a second, and so on
     /// up to the ratio, as `matchit()` does.
     Rounds,
 }
 
-/// Strategy for selecting one control from a candidate index set.
+/// Strategy for selecting one control from a control index set.
 pub trait SelectionStrategy<R: MatchingRecord> {
-    /// Returns selected candidate position index from `candidate_indices`.
+    /// Returns selected control position index from `candidate_indices`.
     fn select_position(
         &mut self,
         case: &R,
@@ -26,14 +26,14 @@ pub trait SelectionStrategy<R: MatchingRecord> {
         candidate_indices: &[usize],
     ) -> Option<usize>;
 
-    /// The order in which anchors receive their controls in standard matching
+    /// The order in which cases receive their controls in standard matching
     /// without replacement. Risk-set matching always assigns sequentially.
     fn assignment(&self) -> Assignment {
         Assignment::Sequential
     }
 
     /// The nearest-neighbour configuration, when this strategy ranks
-    /// candidates by a distance. Standard matching then hands the whole job to
+    /// controls by a distance. Standard matching then hands the whole job to
     /// the distance-ranked matcher instead of calling
     /// [`Self::select_position`].
     fn nearest(&self) -> Option<&NearestSelection> {
@@ -41,7 +41,7 @@ pub trait SelectionStrategy<R: MatchingRecord> {
     }
 
     /// A copy of this strategy for the work unit numbered `index` (a stratum
-    /// group or an anchor), so that units matched in parallel do not repeat
+    /// group or an case), so that units matched in parallel do not repeat
     /// each other's draws.
     ///
     /// A strategy with no random state returns a plain copy. A random one
@@ -58,8 +58,8 @@ pub trait SelectionStrategy<R: MatchingRecord> {
 
     /// The [`RandomSelection`] that makes this strategy's choices, when its
     /// choice is a uniform draw of a position that reads nothing but the
-    /// number of candidates. Risk-set matching then draws from it without
-    /// listing the candidates. Answer `Some` only when
+    /// number of controls. Risk-set matching then draws from it without
+    /// listing the controls. Answer `Some` only when
     /// [`Self::select_position`] is that selection's own.
     #[doc(hidden)]
     fn as_random(&mut self) -> Option<&mut RandomSelection> {
@@ -67,7 +67,7 @@ pub trait SelectionStrategy<R: MatchingRecord> {
     }
 }
 
-/// Wraps a strategy so that anchors take their controls in rounds.
+/// Wraps a strategy so that cases take their controls in rounds.
 ///
 /// The wrapped strategy still chooses each control. Only the order of
 /// assignment changes, and only in standard matching without replacement at a
@@ -149,7 +149,7 @@ impl<R: MatchingRecord> SelectionStrategy<R> for RandomSelection {
     }
 }
 
-/// Select the candidate with smallest birth-date distance to the case.
+/// Select the control with smallest birth-date distance to the case.
 #[derive(Clone)]
 pub struct NearestBirthDateSelection;
 
@@ -181,7 +181,7 @@ impl<R: MatchingRecord> SelectionStrategy<R> for NearestBirthDateSelection {
     }
 }
 
-/// Deterministic selection: lowest candidate index first.
+/// Deterministic selection: lowest control index first.
 #[derive(Clone)]
 pub struct DeterministicSelection;
 
