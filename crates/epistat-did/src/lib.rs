@@ -178,6 +178,7 @@ mod tests;
 pub(crate) mod types;
 pub(crate) mod util;
 
+pub use error::Error;
 pub use estimators::common::basis::{BSplineBasis, Basis, PolynomialBasis};
 pub use inference::did_clusters::{
     DidClusterError, did_cluster_sums, did_covariance, did_standard_error,
@@ -290,7 +291,7 @@ pub use methods::missing::{
     MissingModels, MissingNuisance, MissingPreData, MissingPredictions, NestedOutcome,
     att_missing_pre, att_missing_pre_from_predictions, missing_cross_fit_folds,
 };
-pub use methods::staggered::StaggeredPanel;
+pub use methods::staggered::{StaggeredPanel, StaggeredPanelBuilder};
 pub use methods::standard::estimate_att_two_by_two;
 pub use methods::sunab::{
     SUNAB_DEFAULT_REFERENCES, SunabBins, SunabCell, SunabConfig, SunabControl, SunabError,

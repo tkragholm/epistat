@@ -72,9 +72,9 @@ pub enum EtwfeGlmTerm {
     /// The intercept.
     Intercept,
     /// The dummy of a cohort other than the reference.
-    Cohort(i32),
+    Cohort(i64),
     /// The dummy of a period after the first.
-    Period(i32),
+    Period(i64),
     /// A column of the linear regression.
     Term(EtwfeTerm),
 }
@@ -193,10 +193,10 @@ impl Design<'_> {
         let panel = layout.panel;
         let c = &self.columns;
         let cohort_slot =
-            panel.first_treated[i].and_then(|g| layout.slope_cohorts.binary_search(&g).ok());
-        let period_slot = layout.slope_periods.binary_search(&panel.time[i]).ok();
+            panel.first_treated()[i].and_then(|g| layout.slope_cohorts.binary_search(&g).ok());
+        let period_slot = layout.slope_periods.binary_search(&panel.period()[i]).ok();
         base(0, 1.0);
-        if let Some(x) = panel.covariates {
+        if let Some(x) = panel.covariates() {
             for k in 0..c.p {
                 let v = x[(i, k)];
                 base(c.covariate + k, v);
@@ -227,7 +227,7 @@ impl Design<'_> {
     }
 
     fn weight(&self, i: usize) -> f64 {
-        self.layout.panel.weights.map_or(1.0, |w| w[i])
+        self.layout.panel.weights().map_or(1.0, |w| w[i])
     }
 }
 
@@ -246,7 +246,7 @@ impl Rows for Design<'_> {
             let i = self.rows[start + r];
             let x = &mut block.x;
             self.entries(i, self.layout.row_cell[i], |j, v, _| x[(r, j)] = v);
-            block.y[r] = panel.outcome[i];
+            block.y[r] = panel.outcome()[i];
             block.weight[r] = self.weight(i);
             block.cluster[r] = 0;
         }
@@ -337,11 +337,9 @@ const fn count(v: f64) -> usize {
 ///
 /// # Errors
 ///
-/// [`EtwfeError`] for inputs of the wrong length or not finite, cohorts that
-/// vary within a unit, never-treated controls without never-treated units,
+/// [`EtwfeError`] for never-treated controls without never-treated units,
 /// no treated cell and periods out of range; [`EtwfeError::Fit`] with
-/// [`GlmError::Input`] for a weight that is negative or not finite or
-/// cluster codes of the wrong length, [`GlmError::Invalid`] for more than
+/// [`GlmError::Input`] for cluster codes of the wrong length, [`GlmError::Invalid`] for more than
 /// one cluster variable, and the errors of the fit, among them
 /// [`GlmError::Response`] for a response outside the family's support (its
 /// row that of the input row).
@@ -355,23 +353,6 @@ pub fn estimate_etwfe_glm(
 ) -> Result<EtwfeGlmResult, EtwfeError> {
     let layout = Layout::new(panel, config.control)?;
     let n = layout.n();
-    if let Some(w) = panel.weights
-        && let Some(index) = w.iter().position(|v| !(v.is_finite() && *v >= 0.0))
-    {
-        let value = w[index];
-        return Err(EtwfeError::Fit(GlmError::Input(if value.is_finite() {
-            InputError::Domain {
-                what: "weights",
-                value,
-                domain: "[0, inf)",
-            }
-        } else {
-            InputError::NotFinite {
-                what: "weights",
-                row: index,
-            }
-        })));
-    }
     let ways: Option<&[u32]> = match config.vcov {
         Vcov::Cluster(ways) => {
             let [way] = ways else {
@@ -393,7 +374,7 @@ pub fn estimate_etwfe_glm(
     let columns = Columns::new(&layout);
     let k_all = columns.total;
     let rows: Vec<usize> = (0..n)
-        .filter(|&i| !layout.excluded[i] && panel.weights.is_none_or(|w| w[i] > 0.0))
+        .filter(|&i| !layout.excluded[i] && panel.weights().is_none_or(|w| w[i] > 0.0))
         .collect();
     let excluded_rows = n - rows.len();
     let design = Design {
@@ -443,7 +424,7 @@ pub fn estimate_etwfe_glm(
             let cell = layout.row_cell[i];
             design.entries(i, cell, |j, v, _| entries.push((j, v)));
             let mu = link.inverse(dot(entries, &beta));
-            design.weight(i) * (panel.outcome[i] - mu)
+            design.weight(i) * (panel.outcome()[i] - mu)
         })
         .collect();
     // Sums of the scores within groups numbered from 0, over the kept columns.
@@ -569,7 +550,7 @@ pub fn estimate_etwfe_glm(
         .collect();
 
     // Influence by unit.
-    let (units, codes) = unit_codes(panel.unit, &design.rows);
+    let (units, codes) = unit_codes(panel.unit(), &design.rows);
     let n_units = units.len();
     let unit_sums = group_sums(&codes, n_units);
     let mut influence = vec![None; k_all];

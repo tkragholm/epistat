@@ -113,35 +113,28 @@ fn main() {
     };
     let t = Table::read_sized(&common::data_path(kind, n));
     let unit: Vec<u32> = t.ints("id");
-    let time: Vec<i32> = t.ints("t");
+    let time: Vec<i64> = t.ints("t");
     let cl: Vec<u32> = t.ints("cl");
-    let g: Vec<Option<i32>> = t
+    let g: Vec<Option<i64>> = t
         .col("g")
         .iter()
-        .map(|&g| (g > 0.0).then_some(g as i32))
+        .map(|&g| (g > 0.0).then_some(g as i64))
         .collect();
     let x = Mat::from_fn(t.len(), 1, |i, _| t.col("x1")[i]);
-    let panel = StaggeredPanel {
-        unit: &unit,
-        time: &time,
-        first_treated: &g,
-        outcome: t.col(match method.as_str() {
-            "etwfe_poisson" => "yc",
-            "etwfe_logit" => "yb",
-            _ => "y",
-        }),
-        weights: None,
-        covariates: Some(x.as_ref()),
-    };
+    let outcome = t.col(match method.as_str() {
+        "etwfe_poisson" => "yc",
+        "etwfe_logit" => "yb",
+        _ => "y",
+    });
+    let columns = StaggeredPanel::builder(&unit, &time, &g, outcome).covariates(x.as_ref());
+    let panel = columns.build().expect("panel");
+    let clustered = columns.clusters(&cl).build().expect("panel");
     let mut lines = Lines::default();
     let times = match method.as_str() {
         "imputation_es" => {
-            let config = ImputationConfig {
-                clusters: Some(&cl),
-                ..ImputationConfig::event_study()
-            };
+            let config = ImputationConfig::event_study();
             let (times, out) = common::timed(common::reps(), || {
-                estimate_did_imputation(&panel, &config).expect("imputation")
+                estimate_did_imputation(&clustered, &config).expect("imputation")
             });
             for e in &out.estimates {
                 if let ImputationTerm::Horizon(h) = e.term {
@@ -152,12 +145,9 @@ fn main() {
             times
         }
         "did2s_es" => {
-            let config = TwoStageConfig {
-                clusters: Some(&cl),
-                ..TwoStageConfig::event_study()
-            };
+            let config = TwoStageConfig::event_study();
             let (times, out) = common::timed(common::reps(), || {
-                estimate_did2s(&panel, &config).expect("did2s")
+                estimate_did2s(&clustered, &config).expect("did2s")
             });
             for term in &out.terms {
                 let r = term.relative_period.expect("event study");
@@ -167,12 +157,9 @@ fn main() {
             times
         }
         "sunab_es" => {
-            let config = SunabConfig {
-                clusters: Some(&cl),
-                ..SunabConfig::new()
-            };
+            let config = SunabConfig::new();
             let (times, out) = common::timed(common::reps(), || {
-                estimate_sunab(&panel, &config).expect("sunab")
+                estimate_sunab(&clustered, &config).expect("sunab")
             });
             for e in &out.estimates {
                 let name = match e.term {

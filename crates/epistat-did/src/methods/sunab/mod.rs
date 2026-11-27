@@ -87,7 +87,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use epistat_glm::{Absorb, Error as AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
 use epistat_linalg::Mat;
 
-use crate::methods::imputation::check_constant_within_units;
 use crate::methods::staggered::StaggeredPanel;
 
 /// The cohorts that serve as controls besides the never treated.
@@ -97,7 +96,7 @@ pub enum SunabControl<'a> {
     /// treated period on, as `sunab` by default.
     NeverTreated,
     /// These cohorts as well, with all their rows (`ref.c`).
-    Cohorts(&'a [i32]),
+    Cohorts(&'a [i64]),
     /// The last treated cohort as well, with the rows from its first treated
     /// period on removed.
     LastTreated,
@@ -107,7 +106,7 @@ pub enum SunabControl<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SunabReference {
     /// This relative period.
-    Period(i32),
+    Period(i64),
     /// The smallest relative period (`.F` of `sunab`).
     First,
     /// The largest relative period (`.L` of `sunab`).
@@ -123,16 +122,16 @@ pub enum SunabBins {
     /// `bin.rel = list("lo" = min:lo, "hi" = hi:max)`.
     Clamp {
         /// The lowest label.
-        lo: i32,
+        lo: i64,
         /// The highest label.
-        hi: i32,
+        hi: i64,
     },
     /// Period `e` counts as `floor(e / width) * width`, `bin.rel = "bin::width"`.
-    Width(i32),
+    Width(i64),
 }
 
 impl SunabBins {
-    fn label(self, e: i32) -> i32 {
+    fn label(self, e: i64) -> i64 {
         match self {
             Self::None => e,
             Self::Clamp { lo, hi } => e.clamp(lo, hi),
@@ -153,8 +152,6 @@ pub struct SunabConfig<'a> {
     pub references: &'a [SunabReference],
     /// The binning of the relative periods.
     pub bins: SunabBins,
-    /// Cluster codes, one per row; the units when `None`.
-    pub clusters: Option<&'a [u32]>,
     /// The demeaning.
     pub absorb: Absorb,
     /// The small-sample correction of the covariance.
@@ -163,14 +160,13 @@ pub struct SunabConfig<'a> {
 
 impl SunabConfig<'_> {
     /// The defaults of `sunab`: never-treated controls, reference period -1,
-    /// no bins, unit clusters and `fixest`'s correction.
+    /// no bins and `fixest`'s correction.
     #[must_use]
     pub const fn new() -> Self {
         Self {
             control: SunabControl::NeverTreated,
             references: SUNAB_DEFAULT_REFERENCES,
             bins: SunabBins::None,
-            clusters: None,
             absorb: Absorb::new(),
             ssc: Ssc::new(),
         }
@@ -186,30 +182,15 @@ impl Default for SunabConfig<'_> {
 /// Why an interaction-weighted event study failed.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum SunabError {
-    /// An input has the wrong length.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// A unit has rows with different first treated periods.
-    #[error("unit {unit} has rows with different first treated periods")]
-    Cohort {
-        /// The unit.
-        unit: u32,
-    },
     /// No treated cohort has a row outside the reference periods.
     #[error("no row carries a cohort and relative period indicator")]
     NoTreatment,
     /// The bins are empty or their width is not positive.
     #[error("the bins need lo <= hi or a positive width")]
     Bins,
-    /// A period or a relative period does not fit in 32 bits.
-    #[error("the periods span more than 2^31 values")]
+    /// The periods span more than 2^32 values, or a relative period does not
+    /// fit in 64 bits.
+    #[error("the periods span more than 2^32 values")]
     Periods,
     /// The fit failed.
     #[error(transparent)]
@@ -220,9 +201,9 @@ pub enum SunabError {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SunabCell {
     /// The cohort, its first treated period.
-    pub cohort: i32,
+    pub cohort: i64,
     /// The relative period, after binning.
-    pub relative_period: i32,
+    pub relative_period: i64,
     /// The coefficient, `None` when the indicator is collinear.
     pub estimate: Option<f64>,
     /// Its clustered standard error.
@@ -236,9 +217,9 @@ pub struct SunabCell {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SunabTerm {
     /// The cells at this relative period.
-    Period(i32),
+    Period(i64),
     /// The cells of this cohort at relative periods from 0.
-    Cohort(i32),
+    Cohort(i64),
     /// Every cell at a relative period from 0.
     Att,
 }
@@ -295,25 +276,19 @@ pub struct SunabResult {
     pub excluded_rows: usize,
 }
 
-/// The fixed-effect codes of the periods, from 0.
-pub(crate) fn period_codes(time: &[i32]) -> Option<Vec<u32>> {
-    let t_min = time.iter().copied().min().unwrap_or(0);
-    time.iter()
-        .map(|&t| u32::try_from(i64::from(t) - i64::from(t_min)).ok())
-        .collect()
-}
-
 /// Whether each cohort has rows before and from its first treated period.
 fn cohort_rows(
     panel: &StaggeredPanel<'_>,
     excluded: &[bool],
-) -> Result<BTreeMap<i32, (bool, bool)>, SunabError> {
-    let mut seen: BTreeMap<i32, (bool, bool)> = BTreeMap::new();
-    for (i, g) in panel.first_treated.iter().enumerate() {
+) -> Result<BTreeMap<i64, (bool, bool)>, SunabError> {
+    let mut seen: BTreeMap<i64, (bool, bool)> = BTreeMap::new();
+    for (i, g) in panel.first_treated().iter().enumerate() {
         if let Some(g) = *g
             && !excluded[i]
         {
-            let e = panel.time[i].checked_sub(g).ok_or(SunabError::Periods)?;
+            let e = panel.period()[i]
+                .checked_sub(g)
+                .ok_or(SunabError::Periods)?;
             let entry = seen.entry(g).or_default();
             if e < 0 {
                 entry.0 = true;
@@ -325,48 +300,30 @@ fn cohort_rows(
     Ok(seen)
 }
 
-/// Fits the interaction-weighted event study of `config` to `panel`. See the
-/// module documentation.
+/// Fits the interaction-weighted event study of `config` to `panel`, with
+/// the covariance clustered by the panel's clusters, or by unit when it has
+/// none. See the module documentation.
 ///
 /// # Errors
 ///
-/// [`SunabError`] for inputs of the wrong length, cohorts that vary within a
-/// unit, unusable bins, no indicator, periods out of range, and the errors of
-/// the fit.
+/// [`SunabError`] for unusable bins, no indicator, periods out of range, and
+/// the errors of the fit.
 pub fn estimate_sunab(
     panel: &StaggeredPanel<'_>,
     config: &SunabConfig<'_>,
 ) -> Result<SunabResult, SunabError> {
-    let n = panel.unit.len();
-    for (what, found) in [
-        ("time", panel.time.len()),
-        ("first_treated", panel.first_treated.len()),
-        ("outcome", panel.outcome.len()),
-        ("weights", panel.weights.map_or(n, <[f64]>::len)),
-        ("covariates", panel.covariates.map_or(n, |x| x.nrows())),
-        ("clusters", config.clusters.map_or(n, <[u32]>::len)),
-    ] {
-        if found != n {
-            return Err(SunabError::Length {
-                what,
-                expected: n,
-                found,
-            });
-        }
-    }
+    let n = panel.len();
     match config.bins {
         SunabBins::Clamp { lo, hi } if lo > hi => return Err(SunabError::Bins),
         SunabBins::Width(w) if w <= 0 => return Err(SunabError::Bins),
         _ => {}
     }
-    check_constant_within_units(panel.unit, panel.first_treated)
-        .map_err(|unit| SunabError::Cohort { unit })?;
-    let time = period_codes(panel.time).ok_or(SunabError::Periods)?;
+    let time = panel.period_codes().ok_or(SunabError::Periods)?;
 
     // The rows removed for the last-treated control, then the cohorts.
     let mut excluded = vec![false; n];
     let mut rows = cohort_rows(panel, &excluded)?;
-    let named: &[i32] = match config.control {
+    let named: &[i64] = match config.control {
         SunabControl::Cohorts(c) => c,
         _ => &[],
     };
@@ -379,23 +336,23 @@ pub fn estimate_sunab(
             .next_back()
             .ok_or(SunabError::NoTreatment)?;
         for (i, x) in excluded.iter_mut().enumerate() {
-            *x = panel.time[i] >= last;
+            *x = panel.period()[i] >= last;
         }
         cutoff = Some(last);
         rows = cohort_rows(panel, &excluded)?;
     }
-    let treated: BTreeSet<i32> = rows
+    let treated: BTreeSet<i64> = rows
         .iter()
         .filter(|&(g, &(pre, post))| pre && post && !named.contains(g))
         .map(|(&g, _)| g)
         .collect();
-    let always: BTreeSet<i32> = rows
+    let always: BTreeSet<i64> = rows
         .iter()
         .filter(|&(g, &(pre, post))| post && !pre && !named.contains(g))
         .map(|(&g, _)| g)
         .collect();
     for (i, x) in excluded.iter_mut().enumerate() {
-        if panel.first_treated[i].is_some_and(|g| always.contains(&g)) {
+        if panel.first_treated()[i].is_some_and(|g| always.contains(&g)) {
             *x = true;
         }
     }
@@ -403,21 +360,21 @@ pub fn estimate_sunab(
     // The reference periods. `.F` and `.L` of `sunab` run over the relative
     // periods of every cohort whose first treated period is a period, with
     // -1 for the others, before the always treated are removed.
-    let periods: BTreeSet<i32> = panel.time.iter().copied().collect();
-    let mut first = i32::MAX;
-    let mut last = i32::MIN;
+    let periods: BTreeSet<i64> = panel.period().iter().copied().collect();
+    let mut first = i64::MAX;
+    let mut last = i64::MIN;
     for i in 0..n {
-        if cutoff.is_some_and(|c| panel.time[i] >= c) {
+        if cutoff.is_some_and(|c| panel.period()[i] >= c) {
             continue;
         }
-        let e = match panel.first_treated[i] {
-            Some(g) if periods.contains(&g) => panel.time[i] - g,
+        let e = match panel.first_treated()[i] {
+            Some(g) if periods.contains(&g) => panel.period()[i] - g,
             _ => -1,
         };
         first = first.min(e);
         last = last.max(e);
     }
-    let references: Vec<i32> = config
+    let references: Vec<i64> = config
         .references
         .iter()
         .map(|r| match *r {
@@ -428,28 +385,31 @@ pub fn estimate_sunab(
         .collect();
 
     // The cells and the cell of each row.
-    let relative = |i: usize| -> Option<i32> {
-        let g = panel.first_treated[i]?;
+    let relative = |i: usize| -> Option<i64> {
+        let g = panel.first_treated()[i]?;
         if excluded[i] || !treated.contains(&g) {
             return None;
         }
-        let e = panel.time[i] - g;
+        let e = panel.period()[i] - g;
         (!references.contains(&e)).then(|| config.bins.label(e))
     };
-    let cell_set: BTreeSet<(i32, i32)> = (0..n)
-        .filter_map(|i| relative(i).map(|e| (e, panel.first_treated[i].unwrap_or(0))))
+    let cell_set: BTreeSet<(i64, i64)> = (0..n)
+        .filter_map(|i| relative(i).map(|e| (e, panel.first_treated()[i].unwrap_or(0))))
         .collect();
     if cell_set.is_empty() {
         return Err(SunabError::NoTreatment);
     }
-    let cells: Vec<(i32, i32)> = cell_set.into_iter().collect();
-    let cohorts: Vec<i32> = treated.iter().copied().collect();
+    let cells: Vec<(i64, i64)> = cell_set.into_iter().collect();
+    let cohorts: Vec<i64> = treated.iter().copied().collect();
     let (e_min, e_max) = (cells[0].0, cells[cells.len() - 1].0);
-    let width = usize::try_from(i64::from(e_max) - i64::from(e_min) + 1)
-        .map_err(|_| SunabError::Periods)?;
+    let width = e_max
+        .checked_sub(e_min)
+        .and_then(|d| d.checked_add(1))
+        .and_then(|w| usize::try_from(w).ok())
+        .ok_or(SunabError::Periods)?;
     let mut column_of = vec![u32::MAX; width * cohorts.len()];
-    let slot = |e: i32, g: i32| -> usize {
-        let a = usize::try_from(i64::from(e) - i64::from(e_min)).unwrap_or(usize::MAX);
+    let slot = |e: i64, g: i64| -> usize {
+        let a = usize::try_from(e - e_min).unwrap_or(usize::MAX);
         let b = cohorts.binary_search(&g).unwrap_or(usize::MAX);
         a * cohorts.len() + b
     };
@@ -459,20 +419,20 @@ pub fn estimate_sunab(
     let row_cell: Vec<u32> = (0..n)
         .map(|i| {
             relative(i).map_or(u32::MAX, |e| {
-                column_of[slot(e, panel.first_treated[i].unwrap_or(0))]
+                column_of[slot(e, panel.first_treated()[i].unwrap_or(0))]
             })
         })
         .collect();
 
     let k_cells = cells.len();
-    let p_cov = panel.covariates.map_or(0, |x| x.ncols());
+    let p_cov = panel.covariates().map_or(0, |x| x.ncols());
     let mut x = Mat::<f64>::zeros(n, k_cells + p_cov);
     for (i, &c) in row_cell.iter().enumerate() {
         if c != u32::MAX {
             x[(i, c as usize)] = 1.0;
         }
     }
-    if let Some(cov) = panel.covariates {
+    if let Some(cov) = panel.covariates() {
         for j in 0..p_cov {
             let column = x.col_as_slice_mut(k_cells + j);
             for (i, v) in column.iter_mut().enumerate() {
@@ -481,28 +441,29 @@ pub fn estimate_sunab(
         }
     }
     let excluded_rows = excluded.iter().filter(|&&b| b).count();
-    let fit_weights: Option<Vec<f64>> = (panel.weights.is_some() || excluded_rows > 0).then(|| {
-        (0..n)
-            .map(|i| {
-                if excluded[i] {
-                    0.0
-                } else {
-                    panel.weights.map_or(1.0, |w| w[i])
-                }
-            })
-            .collect()
-    });
+    let fit_weights: Option<Vec<f64>> =
+        (panel.weights().is_some() || excluded_rows > 0).then(|| {
+            (0..n)
+                .map(|i| {
+                    if excluded[i] {
+                        0.0
+                    } else {
+                        panel.weights().map_or(1.0, |w| w[i])
+                    }
+                })
+                .collect()
+        });
 
     let fe = FixedEffects::new(
-        &[panel.unit, &time],
+        &[panel.unit(), &time],
         fit_weights.as_deref(),
         Singletons::Remove,
     )?;
     let fit = Feols {
         absorb: config.absorb,
     }
-    .fit_owned(x, panel.outcome, &fe)?;
-    let clusters = config.clusters.unwrap_or(panel.unit);
+    .fit_owned(x, panel.outcome(), &fe)?;
+    let clusters = panel.clusters().unwrap_or(panel.unit());
     let ways = [clusters];
     let cov = fit.vcov(&fe, Vcov::Cluster(&ways), config.ssc)?;
     let p = k_cells + p_cov;
@@ -546,7 +507,7 @@ pub fn estimate_sunab(
     // The summaries.
     let kept = |j: usize| fit.coefficients[j].is_some();
     let mut groups: Vec<(SunabTerm, Vec<usize>)> = Vec::new();
-    let labels: BTreeSet<i32> = cells.iter().map(|c| c.0).collect();
+    let labels: BTreeSet<i64> = cells.iter().map(|c| c.0).collect();
     for &e in &labels {
         groups.push((
             SunabTerm::Period(e),

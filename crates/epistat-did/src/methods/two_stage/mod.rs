@@ -81,7 +81,7 @@ pub enum TwoStageSpec<'a> {
     /// treated, but the reference periods.
     EventStudy {
         /// The relative periods left out, each negative.
-        references: &'a [i32],
+        references: &'a [i64],
     },
 }
 
@@ -90,9 +90,6 @@ pub enum TwoStageSpec<'a> {
 pub struct TwoStageConfig<'a> {
     /// The second stage.
     pub spec: TwoStageSpec<'a>,
-    /// Cluster codes, one per row and constant within units; the units when
-    /// `None`.
-    pub clusters: Option<&'a [u32]>,
     /// The demeaning of the first stage and of the variance's projections.
     pub absorb: Absorb,
     /// Whether to return the projections `z_i' Gamma` of each term.
@@ -100,18 +97,17 @@ pub struct TwoStageConfig<'a> {
 }
 
 impl TwoStageConfig<'_> {
-    /// The static effect, clustered by unit.
+    /// The static effect.
     #[must_use]
     pub const fn static_effect() -> Self {
         Self {
             spec: TwoStageSpec::Static,
-            clusters: None,
             absorb: Absorb::new(),
             keep_projections: false,
         }
     }
 
-    /// The event study with reference period -1, clustered by unit.
+    /// The event study with reference period -1.
     #[must_use]
     pub const fn event_study() -> Self {
         Self {
@@ -125,7 +121,7 @@ impl TwoStageConfig<'_> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TwoStageTerm {
     /// The relative period, `None` for the static indicator.
-    pub relative_period: Option<i32>,
+    pub relative_period: Option<i64>,
     /// The coefficient, `None` when the indicator has no rows of positive
     /// weight.
     pub estimate: Option<f64>,
@@ -164,35 +160,36 @@ pub struct TwoStageResult {
     pub projections: Option<Vec<Vec<f64>>>,
 }
 
-/// Estimates Gardner's two-stage estimator. See the module documentation.
+/// Estimates Gardner's two-stage estimator, with standard errors clustered by
+/// the panel's clusters, or by unit when it has none. See the module
+/// documentation.
 ///
 /// # Errors
 ///
-/// [`ImputationError`] for inputs of the wrong length or not finite, cohorts
-/// or clusters that vary within a unit, reference periods that are not
-/// negative, and the errors of the first stage.
+/// [`ImputationError`] for reference periods that are not negative, periods
+/// out of range, and the errors of the first stage.
 pub fn estimate_did2s(
     panel: &StaggeredPanel<'_>,
     config: &TwoStageConfig<'_>,
 ) -> Result<TwoStageResult, ImputationError> {
-    let n = panel.unit.len();
+    let n = panel.len();
     if let TwoStageSpec::EventStudy { references } = config.spec
         && let Some(&bad) = references.iter().find(|&&r| r >= 0)
     {
         return Err(ImputationError::Reference(bad));
     }
-    let prepared = Prepared::new(panel, config.clusters)?;
+    let prepared = Prepared::new(panel)?;
     let fe = first_stage_fixed_effects(panel, &prepared)?;
     let feols = Feols {
         absorb: config.absorb,
     };
     let x = prepared.covariates.as_ref();
-    let fit = feols.fit(x, panel.outcome, &fe)?;
+    let fit = feols.fit(x, panel.outcome(), &fe)?;
     let stage = FirstStage::new(
-        panel.unit,
+        panel.unit(),
         &prepared.time,
         prepared.treated.clone(),
-        panel.outcome,
+        panel.outcome(),
         prepared.weight.clone(),
         x,
         &fe,
@@ -201,14 +198,14 @@ pub fn estimate_did2s(
     let used: Vec<bool> = stage.adjusted.iter().map(Option::is_some).collect();
     let dropped_rows: Vec<usize> = (0..n).filter(|&i| !used[i]).collect();
     let treated_rows: Vec<usize> = (0..n).filter(|&i| used[i] && stage.treated[i]).collect();
-    let index = UnitIndex::new(panel.unit, &used, config.clusters);
+    let index = UnitIndex::new(panel.unit(), &used, panel.clusters());
     let n_units = index.units.len();
 
     // The indicator of each row: its term, or None.
-    let periods: Vec<Option<i32>> = match config.spec {
+    let periods: Vec<Option<i64>> = match config.spec {
         TwoStageSpec::Static => vec![None],
         TwoStageSpec::EventStudy { references } => {
-            let set: BTreeSet<i32> = (0..n)
+            let set: BTreeSet<i64> = (0..n)
                 .filter(|&i| used[i] && stage.weight[i] > 0.0)
                 .filter_map(|i| prepared.event[i])
                 .filter(|e| !references.contains(e))
@@ -243,7 +240,7 @@ pub fn estimate_did2s(
         .map(|k| (weight_sum[k] > 0.0).then(|| weighted_y[k] / weight_sum[k]))
         .collect();
 
-    let projector = Projector::new(&fe, &fit, x, &[panel.unit, &prepared.time]);
+    let projector = Projector::new(&fe, &fit, x, &[panel.unit(), &prepared.time]);
     let fit_rows = fe.rows();
     let fit_weights = fe.weights();
     let mut sums: Vec<Option<Vec<f64>>> = Vec::with_capacity(k_terms);
@@ -282,13 +279,13 @@ pub fn estimate_did2s(
         for i in 0..n {
             if row_term[i] == Some(k) {
                 let e2 = stage.adjusted[i].unwrap_or(0.0) - b;
-                let u = index.position[panel.unit[i] as usize] as usize;
+                let u = index.position[panel.unit()[i] as usize] as usize;
                 by_unit[u] += scale * stage.weight[i] * e2;
             }
         }
         for (j, &i) in fit_rows.iter().enumerate() {
             let w = fit_weights.map_or(1.0, |w| w[j]);
-            let u = index.position[panel.unit[i] as usize] as usize;
+            let u = index.position[panel.unit()[i] as usize] as usize;
             by_unit[u] -= scale * w * h[j] * stage.adjusted[i].unwrap_or(0.0);
         }
         sums.push(Some(index.cluster_sums(&by_unit)));

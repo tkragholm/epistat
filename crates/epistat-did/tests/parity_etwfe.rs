@@ -7,8 +7,8 @@
 mod feols_bound;
 
 use epistat_did::{
-    EtwfeConfig, EtwfeControl, EtwfeEffects, EtwfeTerm, EtwfeType, StaggeredPanel, did_covariance,
-    estimate_etwfe,
+    EtwfeConfig, EtwfeControl, EtwfeEffects, EtwfeTerm, EtwfeType, StaggeredPanel,
+    StaggeredPanelBuilder, did_covariance, estimate_etwfe,
 };
 use epistat_glm::{Absorb, Ssc, Vcov};
 use epistat_inference::Clusters;
@@ -37,7 +37,7 @@ struct Exact {
 
 #[derive(Deserialize)]
 struct Table {
-    key: Option<Vec<i32>>,
+    key: Option<Vec<i64>>,
     estimate: Vec<f64>,
     se: Vec<Option<f64>>,
     jacobian: Vec<f64>,
@@ -51,8 +51,8 @@ struct Case {
     name: String,
     spec: Spec,
     unit: Vec<u32>,
-    time: Vec<i32>,
-    first_treated: Vec<Option<i32>>,
+    time: Vec<i64>,
+    first_treated: Vec<Option<i64>>,
     outcome: Vec<f64>,
     weights: Option<Vec<f64>>,
     covariates: Option<Vec<f64>>,
@@ -92,14 +92,26 @@ fn covariates(case: &Case) -> Option<Mat<f64>> {
 }
 
 fn panel<'a>(case: &'a Case, x: Option<&'a Mat<f64>>) -> StaggeredPanel<'a> {
-    StaggeredPanel {
-        unit: &case.unit,
-        time: &case.time,
-        first_treated: &case.first_treated,
-        outcome: &case.outcome,
-        weights: case.weights.as_deref(),
-        covariates: x.map(Mat::as_ref),
+    columns(case, &case.outcome, case.weights.as_deref(), x)
+        .build()
+        .expect("a valid panel")
+}
+
+/// The panel of `case` with the given outcome and weights.
+fn columns<'a>(
+    case: &'a Case,
+    outcome: &'a [f64],
+    weights: Option<&'a [f64]>,
+    x: Option<&'a Mat<f64>>,
+) -> StaggeredPanelBuilder<'a> {
+    let mut panel = StaggeredPanel::builder(&case.unit, &case.time, &case.first_treated, outcome);
+    if let Some(w) = weights {
+        panel = panel.weights(w);
     }
+    if let Some(x) = x {
+        panel = panel.covariates(x.as_ref());
+    }
+    panel
 }
 
 fn config<'a>(case: &Case, ways: &'a [&'a [u32]]) -> EtwfeConfig<'a> {
@@ -174,7 +186,7 @@ fn etwfe_matches_the_package() {
             })
             .collect();
         let cohort_key = |i: usize| case.first_treated[i].unwrap_or(0);
-        let mean = |k: usize, g: i32| {
+        let mean = |k: usize, g: i64| {
             let rows: Vec<usize> = (0..n).filter(|&i| cohort_key(i) == g).collect();
             rows.iter()
                 .map(|&i| x.as_ref().unwrap()[(i, k)])
@@ -191,7 +203,7 @@ fn etwfe_matches_the_package() {
         }
         let xv = |i: usize, k: usize| x.as_ref().unwrap()[(i, k)];
         let design = Mat::from_fn(n, q, |i, j| {
-            let cell = |cohort: i32, period: i32| {
+            let cell = |cohort: i64, period: i64| {
                 case.first_treated[i] == Some(cohort) && case.time[i] == period
             };
             match result.coefficients[j].term {
@@ -236,9 +248,11 @@ fn etwfe_matches_the_package() {
         let time: Vec<u32> = case
             .time
             .iter()
-            .map(|&t| (t - t_first).cast_unsigned())
+            .map(|&t| u32::try_from(t - t_first).unwrap())
             .collect();
-        let cohort_codes: Vec<u32> = (0..n).map(|i| cohort_key(i).cast_unsigned()).collect();
+        let cohort_codes: Vec<u32> = (0..n)
+            .map(|i| u32::try_from(cohort_key(i)).unwrap())
+            .collect();
         let first: &[u32] = if case.spec.effects == "unit" {
             &case.unit
         } else {
@@ -326,7 +340,7 @@ fn etwfe_matches_the_package() {
                 .flat_map(|i| (0..p).map(move |k| x[(i, k)].abs()))
                 .fold(1.0, f64::max)
         });
-        let tables: [(&Table, &dyn Fn(i32) -> EtwfeType); 4] = [
+        let tables: [(&Table, &dyn Fn(i64) -> EtwfeType); 4] = [
             (&case.simple, &|_| EtwfeType::Simple),
             (&case.group, &EtwfeType::Group),
             (&case.calendar, &EtwfeType::Calendar),

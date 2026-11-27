@@ -165,9 +165,7 @@ pub use glm::{
 use epistat_glm::{Absorb, Error as AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
 use epistat_linalg::Mat;
 
-use crate::methods::imputation::check_constant_within_units;
 use crate::methods::staggered::StaggeredPanel;
-use crate::methods::sunab::period_codes;
 
 /// The controls of the regression.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -227,38 +225,14 @@ impl Default for EtwfeConfig<'_> {
 /// Why an extended two-way fixed-effects fit failed.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum EtwfeError {
-    /// An input has the wrong length.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// A covariate is not finite.
-    #[error("covariate {column} is not finite on row {row}")]
-    NotFinite {
-        /// The covariate.
-        column: usize,
-        /// The row.
-        row: usize,
-    },
-    /// A unit has rows with different first treated periods.
-    #[error("unit {unit} has rows with different first treated periods")]
-    Cohort {
-        /// The unit.
-        unit: u32,
-    },
     /// Never-treated controls were asked for and no cohort is never treated.
     #[error("no unit is never treated in the panel")]
     NoNeverTreated,
     /// No row carries a cell indicator.
     #[error("no row carries a cohort and period indicator")]
     NoTreatment,
-    /// A period does not fit in 32 bits.
-    #[error("the periods span more than 2^31 values")]
+    /// The periods span more than 2^32 values.
+    #[error("the periods span more than 2^32 values")]
     Periods,
     /// The fit failed.
     #[error(transparent)]
@@ -273,14 +247,14 @@ pub enum EtwfeTerm {
     /// Covariate `k` on the rows of a cohort.
     CohortSlope {
         /// The cohort.
-        cohort: i32,
+        cohort: i64,
         /// The covariate.
         covariate: usize,
     },
     /// Covariate `k` on the rows of a period.
     PeriodSlope {
         /// The period.
-        period: i32,
+        period: i64,
         /// The covariate.
         covariate: usize,
     },
@@ -288,16 +262,16 @@ pub enum EtwfeTerm {
     /// mean covariates.
     Cell {
         /// The cohort.
-        cohort: i32,
+        cohort: i64,
         /// The period.
-        period: i32,
+        period: i64,
     },
     /// The cell indicator times the cohort-demeaned covariate `k`.
     CellSlope {
         /// The cohort.
-        cohort: i32,
+        cohort: i64,
         /// The period.
-        period: i32,
+        period: i64,
         /// The covariate.
         covariate: usize,
     },
@@ -320,11 +294,11 @@ pub enum EtwfeType {
     /// Over every row (`type = "simple"`).
     Simple,
     /// By cohort (`"group"`).
-    Group(i32),
+    Group(i64),
     /// By period (`"calendar"`).
-    Calendar(i32),
+    Calendar(i64),
     /// By event time `t - g` (`"event"`).
-    Event(i32),
+    Event(i64),
 }
 
 /// One average effect.
@@ -376,7 +350,7 @@ pub struct EtwfeResult {
 }
 
 /// The cohort of a row as a key: `None` for never treated.
-type Key = Option<i32>;
+type Key = Option<i64>;
 
 /// The reference, the cells, the columns and the rows of the regression of
 /// one panel under one choice of controls, shared by the linear and the
@@ -389,9 +363,9 @@ struct Layout<'p> {
     /// The period codes of the fixed effects, from 0.
     time: Vec<u32>,
     /// Every cohort, never treated left out.
-    cohorts: BTreeSet<i32>,
+    cohorts: BTreeSet<i64>,
     /// The cohorts with cell indicators.
-    treated: Vec<i32>,
+    treated: Vec<i64>,
     excluded: Vec<bool>,
     excluded_rows: usize,
     /// The index of each row's cohort: 0 for never treated, then the
@@ -400,10 +374,10 @@ struct Layout<'p> {
     /// The cohort means of the covariates, `row_key` by covariate.
     means: Vec<f64>,
     /// The cohorts other than the reference with rows in the fit.
-    slope_cohorts: Vec<i32>,
+    slope_cohorts: Vec<i64>,
     /// The periods after the first with rows in the fit.
-    slope_periods: Vec<i32>,
-    cells: Vec<(i32, i32)>,
+    slope_periods: Vec<i64>,
+    cells: Vec<(i64, i64)>,
     /// The cell of each row whose indicator is one.
     row_cell: Vec<Option<usize>>,
     /// The columns of the linear regression.
@@ -414,48 +388,24 @@ struct Layout<'p> {
 
 impl<'p> Layout<'p> {
     fn new(panel: &'p StaggeredPanel<'p>, control: EtwfeControl) -> Result<Self, EtwfeError> {
-        let n = panel.unit.len();
-        for (what, found) in [
-            ("time", panel.time.len()),
-            ("first_treated", panel.first_treated.len()),
-            ("outcome", panel.outcome.len()),
-            ("weights", panel.weights.map_or(n, <[f64]>::len)),
-            ("covariates", panel.covariates.map_or(n, |x| x.nrows())),
-        ] {
-            if found != n {
-                return Err(EtwfeError::Length {
-                    what,
-                    expected: n,
-                    found,
-                });
-            }
-        }
-        check_constant_within_units(panel.unit, panel.first_treated)
-            .map_err(|unit| EtwfeError::Cohort { unit })?;
-        let time = period_codes(panel.time).ok_or(EtwfeError::Periods)?;
-        let p = panel.covariates.map_or(0, |x| x.ncols());
-        if let Some(x) = panel.covariates {
-            for column in 0..p {
-                if let Some(row) = (0..n).find(|&i| !x[(i, column)].is_finite()) {
-                    return Err(EtwfeError::NotFinite { column, row });
-                }
-            }
-        }
-        let Some(t_first) = panel.time.iter().copied().min() else {
+        let n = panel.len();
+        let time = panel.period_codes().ok_or(EtwfeError::Periods)?;
+        let p = panel.covariates().map_or(0, |x| x.ncols());
+        let Some(t_first) = panel.period().iter().copied().min() else {
             return Err(EtwfeError::NoTreatment);
         };
-        let t_last = panel.time.iter().copied().max().unwrap_or(t_first);
+        let t_last = panel.period().iter().copied().max().unwrap_or(t_first);
 
         // The reference, the treated cohorts and the rows removed.
-        let cohorts: BTreeSet<i32> = panel.first_treated.iter().flatten().copied().collect();
-        let has_never = panel.first_treated.iter().any(Option::is_none);
-        let after: Vec<i32> = cohorts.iter().copied().filter(|&g| g > t_last).collect();
-        let mut treated: Vec<i32> = cohorts
+        let cohorts: BTreeSet<i64> = panel.first_treated().iter().flatten().copied().collect();
+        let has_never = panel.first_treated().iter().any(Option::is_none);
+        let after: Vec<i64> = cohorts.iter().copied().filter(|&g| g > t_last).collect();
+        let mut treated: Vec<i64> = cohorts
             .iter()
             .copied()
             .filter(|&g| g > t_first && g <= t_last)
             .collect();
-        let (reference, cutoff): (Key, Option<i32>) = if has_never {
+        let (reference, cutoff): (Key, Option<i64>) = if has_never {
             (None, None)
         } else if let Some(&g) = after.first() {
             (Some(g), None)
@@ -467,8 +417,8 @@ impl<'p> Layout<'p> {
         };
         let excluded: Vec<bool> = (0..n)
             .map(|i| {
-                panel.first_treated[i].is_some_and(|g| g <= t_first)
-                    || cutoff.is_some_and(|c| panel.time[i] >= c)
+                panel.first_treated()[i].is_some_and(|g| g <= t_first)
+                    || cutoff.is_some_and(|c| panel.period()[i] >= c)
             })
             .collect();
         let excluded_rows = excluded.iter().filter(|&&b| b).count();
@@ -480,10 +430,14 @@ impl<'p> Layout<'p> {
         let groups = 1 + cohorts.len();
         let mut means = vec![0.0; groups * p];
         let mut counts = vec![0usize; groups];
-        let row_key: Vec<usize> = panel.first_treated.iter().map(|&g| key_index(g)).collect();
+        let row_key: Vec<usize> = panel
+            .first_treated()
+            .iter()
+            .map(|&g| key_index(g))
+            .collect();
         for (i, &k) in row_key.iter().enumerate() {
             counts[k] += 1;
-            if let Some(x) = panel.covariates {
+            if let Some(x) = panel.covariates() {
                 for j in 0..p {
                     means[k * p + j] += x[(i, j)];
                 }
@@ -524,19 +478,19 @@ impl<'p> Layout<'p> {
             .copied()
             .filter(|&g| {
                 Some(g) != reference
-                    && (0..n).any(|i| kept_rows(i) && panel.first_treated[i] == Some(g))
+                    && (0..n).any(|i| kept_rows(i) && panel.first_treated()[i] == Some(g))
             })
             .collect();
         layout.slope_periods = (0..n)
-            .filter(|&i| kept_rows(i) && panel.time[i] != t_first)
-            .map(|i| panel.time[i])
-            .collect::<BTreeSet<i32>>()
+            .filter(|&i| kept_rows(i) && panel.period()[i] != t_first)
+            .map(|i| panel.period()[i])
+            .collect::<BTreeSet<i64>>()
             .into_iter()
             .collect();
         layout.cells = (0..n)
             .filter(|&i| layout.indicator(i))
-            .map(|i| (panel.first_treated[i].unwrap_or(0), panel.time[i]))
-            .collect::<BTreeSet<(i32, i32)>>()
+            .map(|i| (panel.first_treated()[i].unwrap_or(0), panel.period()[i]))
+            .collect::<BTreeSet<(i64, i64)>>()
             .into_iter()
             .collect();
         if layout.cells.is_empty() {
@@ -598,7 +552,7 @@ impl<'p> Layout<'p> {
     }
 
     fn n(&self) -> usize {
-        self.panel.unit.len()
+        self.panel.len()
     }
 
     fn is_treated(&self, g: Key) -> bool {
@@ -608,40 +562,40 @@ impl<'p> Layout<'p> {
     /// Whether the cell indicator `D_it 1[g_i = g, t = s]` of row `i` is one
     /// for its own cohort and period.
     fn indicator(&self, i: usize) -> bool {
-        let g = self.panel.first_treated[i];
+        let g = self.panel.first_treated()[i];
         if self.excluded[i] || !self.is_treated(g) {
             return false;
         }
         let g = g.unwrap_or(0);
         match self.control {
-            EtwfeControl::NotYetTreated => self.panel.time[i] >= g,
-            EtwfeControl::NeverTreated => self.panel.time[i] != g - 1,
+            EtwfeControl::NotYetTreated => self.panel.period()[i] >= g,
+            EtwfeControl::NeverTreated => self.panel.period()[i] != g - 1,
         }
     }
 
     /// Covariate `j` of row `i` less its cohort mean.
     fn demeaned(&self, i: usize, j: usize) -> f64 {
-        self.panel.covariates.map_or(0.0, |x| {
+        self.panel.covariates().map_or(0.0, |x| {
             x[(i, j)] - self.means[self.row_key[i] * self.p + j]
         })
     }
 
     /// The cell of row `i`'s cohort and period, whatever its indicator.
     fn cell_of(&self, i: usize) -> Option<usize> {
-        let g = self.panel.first_treated[i]?;
-        self.cells.binary_search(&(g, self.panel.time[i])).ok()
+        let g = self.panel.first_treated()[i]?;
+        self.cells.binary_search(&(g, self.panel.period()[i])).ok()
     }
 
     /// The prior weights of the fit: zero for the rows removed, `None` when
     /// every row has weight one.
     fn fit_weights(&self) -> Option<Vec<f64>> {
-        (self.panel.weights.is_some() || self.excluded_rows > 0).then(|| {
+        (self.panel.weights().is_some() || self.excluded_rows > 0).then(|| {
             (0..self.n())
                 .map(|i| {
                     if self.excluded[i] {
                         0.0
                     } else {
-                        self.panel.weights.map_or(1.0, |w| w[i])
+                        self.panel.weights().map_or(1.0, |w| w[i])
                     }
                 })
                 .collect()
@@ -653,7 +607,8 @@ impl<'p> Layout<'p> {
         match self.control {
             EtwfeControl::NotYetTreated => self.indicator(i),
             EtwfeControl::NeverTreated => {
-                self.indicator(i) && self.panel.time[i] >= self.panel.first_treated[i].unwrap_or(0)
+                self.indicator(i)
+                    && self.panel.period()[i] >= self.panel.first_treated()[i].unwrap_or(0)
             }
         }
     }
@@ -663,7 +618,7 @@ impl<'p> Layout<'p> {
         match self.control {
             EtwfeControl::NotYetTreated => self.indicator(i),
             EtwfeControl::NeverTreated => {
-                !self.excluded[i] && self.is_treated(self.panel.first_treated[i])
+                !self.excluded[i] && self.is_treated(self.panel.first_treated()[i])
             }
         }
     }
@@ -671,21 +626,21 @@ impl<'p> Layout<'p> {
     /// The averages of `emfx`.
     fn averages(&self) -> Averages {
         let panel = self.panel;
-        let set = |f: &dyn Fn(usize) -> Option<i32>| -> Vec<i32> {
+        let set = |f: &dyn Fn(usize) -> Option<i64>| -> Vec<i64> {
             (0..self.n())
                 .filter_map(f)
-                .collect::<BTreeSet<i32>>()
+                .collect::<BTreeSet<i64>>()
                 .into_iter()
                 .collect()
         };
         let group = set(&|i| {
             self.effect_row(i)
-                .then(|| panel.first_treated[i].unwrap_or(0))
+                .then(|| panel.first_treated()[i].unwrap_or(0))
         });
-        let calendar = set(&|i| self.effect_row(i).then_some(panel.time[i]));
+        let calendar = set(&|i| self.effect_row(i).then_some(panel.period()[i]));
         let event = set(&|i| {
             self.event_row(i)
-                .then(|| panel.time[i] - panel.first_treated[i].unwrap_or(0))
+                .then(|| panel.period()[i] - panel.first_treated()[i].unwrap_or(0))
         });
         let mut keys: Vec<EtwfeType> = vec![EtwfeType::Simple];
         keys.extend(group.iter().map(|&g| EtwfeType::Group(g)));
@@ -704,9 +659,9 @@ impl<'p> Layout<'p> {
 /// each in increasing key.
 struct Averages {
     keys: Vec<EtwfeType>,
-    group: Vec<i32>,
-    calendar: Vec<i32>,
-    event: Vec<i32>,
+    group: Vec<i64>,
+    calendar: Vec<i64>,
+    event: Vec<i64>,
 }
 
 impl Averages {
@@ -720,7 +675,7 @@ impl Averages {
             return None;
         }
         let panel = layout.panel;
-        let g = panel.first_treated[i].unwrap_or(0);
+        let g = panel.first_treated()[i].unwrap_or(0);
         let g_offset = 1;
         let c_offset = g_offset + self.group.len();
         let e_offset = c_offset + self.calendar.len();
@@ -728,10 +683,14 @@ impl Averages {
         if in_effect {
             targets[0] = 0;
             targets[1] = g_offset + self.group.binary_search(&g).unwrap_or(0);
-            targets[2] = c_offset + self.calendar.binary_search(&panel.time[i]).unwrap_or(0);
+            targets[2] = c_offset + self.calendar.binary_search(&panel.period()[i]).unwrap_or(0);
         }
         if in_event {
-            targets[3] = e_offset + self.event.binary_search(&(panel.time[i] - g)).unwrap_or(0);
+            targets[3] = e_offset
+                + self
+                    .event
+                    .binary_search(&(panel.period()[i] - g))
+                    .unwrap_or(0);
         }
         Some(targets)
     }
@@ -756,9 +715,8 @@ fn unit_codes(unit: &[u32], rows: &[usize]) -> (Vec<u32>, Vec<u32>) {
 ///
 /// # Errors
 ///
-/// [`EtwfeError`] for inputs of the wrong length or not finite, cohorts that
-/// vary within a unit, never-treated controls without never-treated units,
-/// no treated cell, periods out of range, and the errors of the fit.
+/// [`EtwfeError`] for never-treated controls without never-treated units, no
+/// treated cell, periods out of range, and the errors of the fit.
 #[expect(
     clippy::too_many_lines,
     reason = "one pass from the layout to the design, the fit and the averages"
@@ -780,13 +738,13 @@ pub fn estimate_etwfe(
 
     let q = terms.len();
     let mut x = Mat::<f64>::zeros(n, q);
-    if let Some(cov) = panel.covariates {
+    if let Some(cov) = panel.covariates() {
         let gc = slope_cohorts.len();
         let tc = slope_periods.len();
         for i in 0..n {
             let cohort_slot =
-                panel.first_treated[i].and_then(|g| slope_cohorts.binary_search(&g).ok());
-            let period_slot = slope_periods.binary_search(&panel.time[i]).ok();
+                panel.first_treated()[i].and_then(|g| slope_cohorts.binary_search(&g).ok());
+            let period_slot = slope_periods.binary_search(&panel.period()[i]).ok();
             for k in 0..p {
                 let v = cov[(i, k)];
                 x[(i, k)] = v;
@@ -810,7 +768,7 @@ pub fn estimate_etwfe(
     let fit_weights = layout.fit_weights();
     let cohort_code: Vec<u32>;
     let first_factor: &[u32] = match config.effects {
-        EtwfeEffects::Unit => panel.unit,
+        EtwfeEffects::Unit => panel.unit(),
         EtwfeEffects::Cohort => {
             cohort_code = layout
                 .row_key
@@ -828,7 +786,7 @@ pub fn estimate_etwfe(
     let fit = Feols {
         absorb: config.absorb,
     }
-    .fit_owned(x, panel.outcome, &fe)?;
+    .fit_owned(x, panel.outcome(), &fe)?;
     let cov = fit.vcov(&fe, config.vcov, config.ssc)?;
     let coefficients: Vec<EtwfeCoefficient> = terms
         .iter()
@@ -841,7 +799,7 @@ pub fn estimate_etwfe(
         .collect();
 
     // Influence by unit: the units are the panel's units in either case.
-    let (units, unit_codes) = unit_codes(panel.unit, fe.rows());
+    let (units, unit_codes) = unit_codes(panel.unit(), fe.rows());
     let n_units = units.len();
     let sums = fit.influence_sums(&fe, &unit_codes, n_units)?;
     let mut influence = vec![None; q];

@@ -126,20 +126,15 @@ const PERIODS_TWFE: usize = 10;
 fn twfe(n: usize) {
     let t = Table::read_sized(&common::data_path("twfe", n));
     let unit: Vec<u32> = t.col("id").iter().map(|&v| v as u32).collect();
-    let time: Vec<i32> = t.col("t").iter().map(|&v| v as i32).collect();
-    let first: Vec<Option<i32>> = t
+    let time: Vec<i64> = t.col("t").iter().map(|&v| v as i64).collect();
+    let first: Vec<Option<i64>> = t
         .col("g")
         .iter()
-        .map(|&g| (g > 0.0).then_some(g as i32))
+        .map(|&g| (g > 0.0).then_some(g as i64))
         .collect();
-    let panel = StaggeredPanel {
-        unit: &unit,
-        time: &time,
-        first_treated: &first,
-        outcome: t.col("y"),
-        weights: None,
-        covariates: None,
-    };
+    let panel = StaggeredPanel::builder(&unit, &time, &first, t.col("y"))
+        .build()
+        .expect("panel");
     let config = TwfeConfig {
         spec: TwfeSpec::EventStudy {
             reference: -1,

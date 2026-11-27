@@ -2,9 +2,11 @@
 //! references do not cover: results that do not depend on the number of
 //! threads, rows that cannot be imputed, and the rejection of invalid input.
 
+use epistat_core::InputError;
 use epistat_did::{
-    ImputationConfig, ImputationError, ImputationTarget, ImputationTerm, Pretrends, StaggeredPanel,
-    TwoStageConfig, TwoStageSpec, estimate_did_imputation, estimate_did2s,
+    Error, ImputationConfig, ImputationError, ImputationTarget, ImputationTerm, Pretrends,
+    StaggeredPanel, StaggeredPanelBuilder, TwoStageConfig, TwoStageSpec, estimate_did_imputation,
+    estimate_did2s,
 };
 use epistat_linalg::Mat;
 use epistat_testkit::{SplitMix64, assert_same_on_threads};
@@ -13,15 +15,15 @@ use epistat_testkit::{SplitMix64, assert_same_on_threads};
 /// 7 and never, one covariate, row weights and a fifth of the rows dropped.
 struct Sim {
     unit: Vec<u32>,
-    time: Vec<i32>,
-    g: Vec<Option<i32>>,
+    time: Vec<i64>,
+    g: Vec<Option<i64>>,
     y: Vec<f64>,
     w: Vec<f64>,
     x: Mat<f64>,
     cl: Vec<u32>,
 }
 
-fn simulate(units: u32, periods: i32, seed: u64) -> Sim {
+fn simulate(units: u32, periods: i64, seed: u64) -> Sim {
     let mut rng = SplitMix64::new(seed);
     let (mut unit, mut time, mut g, mut y, mut w, mut x, mut cl) =
         (vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
@@ -35,14 +37,14 @@ fn simulate(units: u32, periods: i32, seed: u64) -> Sim {
             let treated = cohort.is_some_and(|c| t >= c);
             let xv = rng.uniform(-1.0, 1.0);
             let tau = if treated {
-                1.0 + 0.1 * f64::from(t - cohort.unwrap_or(0))
+                1.0 + 0.1 * (t - cohort.unwrap_or(0)) as f64
             } else {
                 0.0
             };
             unit.push(3 * u + 1);
             time.push(t);
             g.push(cohort);
-            y.push(alpha + 0.2 * f64::from(t) + 0.5 * xv + tau + rng.uniform(-1.0, 1.0));
+            y.push(alpha + 0.2 * t as f64 + 0.5 * xv + tau + rng.uniform(-1.0, 1.0));
             w.push(rng.uniform(0.5, 2.0));
             x.push(xv);
             cl.push(u % 7);
@@ -61,26 +63,24 @@ fn simulate(units: u32, periods: i32, seed: u64) -> Sim {
 }
 
 impl Sim {
+    fn columns(&self) -> StaggeredPanelBuilder<'_> {
+        StaggeredPanel::builder(&self.unit, &self.time, &self.g, &self.y)
+            .weights(&self.w)
+            .covariates(self.x.as_ref())
+    }
+
     fn panel(&self) -> StaggeredPanel<'_> {
-        StaggeredPanel {
-            unit: &self.unit,
-            time: &self.time,
-            first_treated: &self.g,
-            outcome: &self.y,
-            weights: Some(&self.w),
-            covariates: Some(self.x.as_ref()),
-        }
+        self.columns().build().unwrap()
     }
 }
 
 #[test]
 fn results_do_not_depend_on_the_number_of_threads() {
     let sim = simulate(3000, 9, 7);
-    let panel = sim.panel();
+    let panel = sim.columns().clusters(&sim.cl).build().unwrap();
     assert_same_on_threads(|| {
         let config = ImputationConfig {
             pretrends: Some(Pretrends::All),
-            clusters: Some(&sim.cl),
             ..ImputationConfig::event_study()
         };
         let imp = estimate_did_imputation(&panel, &config).unwrap();
@@ -127,14 +127,9 @@ fn a_row_whose_effects_lie_in_different_components_is_dropped() {
         None,
     ];
     let y = [1.0, 2.0, 5.0, 1.5, 2.5, 3.0, 4.0, 9.0, 3.5, 4.5];
-    let panel = StaggeredPanel {
-        unit: &unit,
-        time: &time,
-        first_treated: &g,
-        outcome: &y,
-        weights: None,
-        covariates: None,
-    };
+    let panel = StaggeredPanel::builder(&unit, &time, &g, &y)
+        .build()
+        .unwrap();
     let out = estimate_did_imputation(&panel, &ImputationConfig::static_effect()).unwrap();
     assert_eq!(out.dropped_rows, vec![2, 7]);
     assert_eq!(out.estimates[0].estimate, None);
@@ -152,26 +147,23 @@ fn invalid_input_is_an_error() {
     let last_of_first = (0..n).rev().find(|&i| sim.unit[i] == sim.unit[0]).unwrap();
     assert_ne!(other, last_of_first);
     g[last_of_first] = if first == Some(3) { Some(5) } else { Some(3) };
-    let bad = StaggeredPanel {
-        first_treated: &g,
-        ..panel
-    };
     assert_eq!(
-        estimate_did_imputation(&bad, &ImputationConfig::static_effect()).unwrap_err(),
-        ImputationError::Cohort { unit: sim.unit[0] }
+        StaggeredPanel::builder(&sim.unit, &sim.time, &g, &sim.y)
+            .build()
+            .unwrap_err(),
+        Error::Input(InputError::NotConstant {
+            what: "first_treated",
+            unit: sim.unit[0]
+        })
     );
     let mut cl = sim.cl.clone();
     cl[last_of_first] += 1;
     assert_eq!(
-        estimate_did_imputation(
-            &panel,
-            &ImputationConfig {
-                clusters: Some(&cl),
-                ..ImputationConfig::static_effect()
-            }
-        )
-        .unwrap_err(),
-        ImputationError::Clusters { unit: sim.unit[0] }
+        sim.columns().clusters(&cl).build().unwrap_err(),
+        Error::Input(InputError::NotConstant {
+            what: "clusters",
+            unit: sim.unit[0]
+        })
     );
     assert_eq!(
         estimate_did_imputation(
@@ -229,18 +221,13 @@ fn invalid_input_is_an_error() {
     let mut y = sim.y.clone();
     y[4] = f64::NAN;
     assert_eq!(
-        estimate_did_imputation(
-            &StaggeredPanel {
-                outcome: &y,
-                ..panel
-            },
-            &ImputationConfig::static_effect()
-        )
-        .unwrap_err(),
-        ImputationError::NotFinite {
+        StaggeredPanel::builder(&sim.unit, &sim.time, &sim.g, &y)
+            .build()
+            .unwrap_err(),
+        Error::Input(InputError::NotFinite {
             what: "outcome",
             row: 4
-        }
+        })
     );
 }
 
@@ -263,7 +250,7 @@ fn horizons_without_imputable_rows_have_no_estimate() {
         },
     )
     .unwrap();
-    let estimate = |h: i32| {
+    let estimate = |h: i64| {
         out.estimates
             .iter()
             .find(|e| e.term == ImputationTerm::Horizon(h))

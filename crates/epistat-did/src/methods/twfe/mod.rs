@@ -85,29 +85,27 @@ pub enum TwfeSpec {
     /// One indicator per relative period.
     EventStudy {
         /// The relative period left out.
-        reference: i32,
+        reference: i64,
         /// Relative periods below the first are counted as the first, above
         /// the second as the second.
-        bins: Option<(i32, i32)>,
+        bins: Option<(i64, i64)>,
     },
 }
 
 /// The controls of a two-way fixed-effects fit.
 #[derive(Clone, Copy, Debug)]
-pub struct TwfeConfig<'a> {
+pub struct TwfeConfig {
     /// The treatment terms.
     pub spec: TwfeSpec,
-    /// Cluster codes, one per row; the units when `None`.
-    pub clusters: Option<&'a [u32]>,
     /// The demeaning.
     pub absorb: Absorb,
     /// The small-sample correction of the covariance.
     pub ssc: Ssc,
 }
 
-impl TwfeConfig<'_> {
-    /// The event study with reference period -1, no bins, unit clusters and
-    /// the defaults of `fixest`.
+impl TwfeConfig {
+    /// The event study with reference period -1, no bins and the defaults of
+    /// `fixest`.
     #[must_use]
     pub const fn event_study() -> Self {
         Self {
@@ -115,14 +113,12 @@ impl TwfeConfig<'_> {
                 reference: -1,
                 bins: None,
             },
-            clusters: None,
             absorb: Absorb::new(),
             ssc: Ssc::new(),
         }
     }
 
-    /// The static regression with unit clusters and the defaults of
-    /// `fixest`.
+    /// The static regression with the defaults of `fixest`.
     #[must_use]
     pub const fn static_twfe() -> Self {
         Self {
@@ -135,22 +131,6 @@ impl TwfeConfig<'_> {
 /// Why a two-way fixed-effects fit failed.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum TwfeError {
-    /// An input has the wrong length.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// A unit has rows with different first treated periods.
-    #[error("unit {unit} has rows with different first treated periods")]
-    Cohort {
-        /// The unit.
-        unit: u32,
-    },
     /// No treated row, so there is no treatment term.
     #[error("no row carries a treatment indicator")]
     NoTreatment,
@@ -169,7 +149,7 @@ pub enum TwfeError {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TwfeTerm {
     /// The relative period, `None` for the static indicator.
-    pub relative_period: Option<i32>,
+    pub relative_period: Option<i64>,
     /// The coefficient, `None` when the indicator is collinear.
     pub estimate: Option<f64>,
     /// Its clustered standard error.
@@ -201,45 +181,27 @@ pub struct TwfeResult {
     pub removed_singletons: usize,
 }
 
-/// Fits the two-way fixed-effects regression of `config.spec` to `panel`.
+/// Fits the two-way fixed-effects regression of `config.spec` to `panel`,
+/// with the covariance clustered by the panel's clusters, or by unit when it
+/// has none.
 ///
 /// # Errors
 ///
-/// [`TwfeError`] for inputs of the wrong length, cohorts that vary within a
-/// unit, no treated row, unusable bins, and the errors of the fit.
+/// [`TwfeError`] for no treated row, unusable bins, periods that span more
+/// than 2^32 values, and the errors of the fit.
 pub fn estimate_twfe(
     panel: &StaggeredPanel<'_>,
-    config: &TwfeConfig<'_>,
+    config: &TwfeConfig,
 ) -> Result<TwfeResult, TwfeError> {
-    let n = panel.unit.len();
-    for (what, found) in [
-        ("time", panel.time.len()),
-        ("first_treated", panel.first_treated.len()),
-        ("outcome", panel.outcome.len()),
-        ("weights", panel.weights.map_or(n, <[f64]>::len)),
-        ("covariates", panel.covariates.map_or(n, |x| x.nrows())),
-        ("clusters", config.clusters.map_or(n, <[u32]>::len)),
-    ] {
-        if found != n {
-            return Err(TwfeError::Length {
-                what,
-                expected: n,
-                found,
-            });
-        }
-    }
-    check_cohorts(panel)?;
-    let t_min = panel.time.iter().copied().min().unwrap_or(0);
-    let time: Vec<u32> = panel
-        .time
-        .iter()
-        .map(|&t| u32::try_from(i64::from(t) - i64::from(t_min)).map_err(|_| TwfeError::Periods))
-        .collect::<Result<_, _>>()?;
+    let n = panel.len();
+    let period = panel.period();
+    let first_treated = panel.first_treated();
+    let time = panel.period_codes().ok_or(TwfeError::Periods)?;
 
     // The treatment indicators.
-    let relative = |i: usize| -> Option<i32> {
-        let g = panel.first_treated[i]?;
-        let r = panel.time[i].saturating_sub(g);
+    let relative = |i: usize| -> Option<i64> {
+        let g = first_treated[i]?;
+        let r = period[i].saturating_sub(g);
         Some(match config.spec {
             TwfeSpec::EventStudy {
                 bins: Some((lo, hi)),
@@ -248,7 +210,7 @@ pub fn estimate_twfe(
             _ => r,
         })
     };
-    let periods: Vec<Option<i32>> = match config.spec {
+    let periods: Vec<Option<i64>> = match config.spec {
         TwfeSpec::Static => vec![None],
         TwfeSpec::EventStudy { reference, bins } => {
             if let Some((lo, hi)) = bins
@@ -256,7 +218,7 @@ pub fn estimate_twfe(
             {
                 return Err(TwfeError::Bins);
             }
-            let set: BTreeSet<i32> = (0..n)
+            let set: BTreeSet<i64> = (0..n)
                 .filter_map(relative)
                 .filter(|&r| r != reference)
                 .collect();
@@ -267,13 +229,13 @@ pub fn estimate_twfe(
         return Err(TwfeError::NoTreatment);
     }
     let k_terms = periods.len();
-    let p_cov = panel.covariates.map_or(0, |x| x.ncols());
+    let p_cov = panel.covariates().map_or(0, |x| x.ncols());
     let mut x = Mat::<f64>::zeros(n, k_terms + p_cov);
     match config.spec {
         TwfeSpec::Static => {
             let column = x.col_as_slice_mut(0);
             for (i, v) in column.iter_mut().enumerate() {
-                if panel.first_treated[i].is_some_and(|g| panel.time[i] >= g) {
+                if first_treated[i].is_some_and(|g| period[i] >= g) {
                     *v = 1.0;
                 }
             }
@@ -282,7 +244,7 @@ pub fn estimate_twfe(
             }
         }
         TwfeSpec::EventStudy { .. } => {
-            let position: Vec<i32> = periods.iter().map(|p| p.unwrap_or(0)).collect();
+            let position: Vec<i64> = periods.iter().map(|p| p.unwrap_or(0)).collect();
             for i in 0..n {
                 if let Some(r) = relative(i)
                     && let Ok(j) = position.binary_search(&r)
@@ -292,7 +254,7 @@ pub fn estimate_twfe(
             }
         }
     }
-    if let Some(cov) = panel.covariates {
+    if let Some(cov) = panel.covariates() {
         for j in 0..p_cov {
             let column = x.col_as_slice_mut(k_terms + j);
             for (i, v) in column.iter_mut().enumerate() {
@@ -301,12 +263,12 @@ pub fn estimate_twfe(
         }
     }
 
-    let fe = FixedEffects::new(&[panel.unit, &time], panel.weights, Singletons::Remove)?;
+    let fe = FixedEffects::new(&[panel.unit(), &time], panel.weights(), Singletons::Remove)?;
     let fit = Feols {
         absorb: config.absorb,
     }
-    .fit(x.as_ref(), panel.outcome, &fe)?;
-    let clusters = config.clusters.unwrap_or(panel.unit);
+    .fit(x.as_ref(), panel.outcome(), &fe)?;
+    let clusters = panel.clusters().unwrap_or(panel.unit());
     let ways = [clusters];
     let cov = fit.vcov(&fe, Vcov::Cluster(&ways), config.ssc)?;
     let p = k_terms + p_cov;
@@ -345,23 +307,4 @@ pub fn estimate_twfe(
         n_rows: fe.n_rows(),
         removed_singletons: fe.removed_singletons(),
     })
-}
-
-/// Checks that each unit has one first treated period.
-fn check_cohorts(panel: &StaggeredPanel<'_>) -> Result<(), TwfeError> {
-    let levels = panel
-        .unit
-        .iter()
-        .copied()
-        .max()
-        .map_or(0, |m| m as usize + 1);
-    let mut seen: Vec<Option<Option<i32>>> = vec![None; levels];
-    for (&u, &g) in panel.unit.iter().zip(panel.first_treated) {
-        match seen[u as usize] {
-            None => seen[u as usize] = Some(g),
-            Some(h) if h != g => return Err(TwfeError::Cohort { unit: u }),
-            Some(_) => {}
-        }
-    }
-    Ok(())
 }

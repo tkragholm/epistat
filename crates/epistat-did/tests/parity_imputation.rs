@@ -96,8 +96,8 @@ struct Lambda {
 struct Case {
     name: String,
     unit: Vec<u32>,
-    time: Vec<i32>,
-    g: Vec<Option<i32>>,
+    time: Vec<i64>,
+    g: Vec<Option<i64>>,
     y: Vec<f64>,
     w: Vec<f64>,
     cl: Vec<u32>,
@@ -130,12 +130,12 @@ struct Exact {
 struct ImputationPackage {
     estimate: Vec<Option<f64>>,
     std_error: Vec<Option<f64>>,
-    pre_terms: Vec<i32>,
+    pre_terms: Vec<i64>,
 }
 
 #[derive(Deserialize)]
 struct PretrendExact {
-    periods: Vec<i32>,
+    periods: Vec<i64>,
     estimate: Vec<Option<f64>>,
     std_error: Vec<Option<f64>>,
     kappa: f64,
@@ -147,7 +147,7 @@ struct Imputation {
     name: String,
     weighted: bool,
     target: String,
-    horizons: Option<Vec<i32>>,
+    horizons: Option<Vec<i64>>,
     all_horizons: bool,
     custom: Option<Vec<f64>>,
     pretrends: Option<serde_json::Value>,
@@ -167,12 +167,12 @@ struct TwoStagePackage {
 struct TwoStage {
     name: String,
     spec: String,
-    references: Vec<i32>,
+    references: Vec<i64>,
     weighted: bool,
     package: TwoStagePackage,
     package_error: PackageError,
     exact: Exact,
-    terms: Option<Vec<i32>>,
+    terms: Option<Vec<i64>>,
 }
 
 fn reference() -> Reference {
@@ -241,7 +241,7 @@ impl Bounds {
             .collect();
         let fit: Vec<bool> = (0..n).map(|i| !treated[i] && weight[i] > 0.0).collect();
         let mut by_unit: HashMap<u32, f64> = HashMap::new();
-        let mut by_time: HashMap<i32, f64> = HashMap::new();
+        let mut by_time: HashMap<i64, f64> = HashMap::new();
         let mut total = 0.0;
         for i in 0..n {
             if fit[i] {
@@ -283,7 +283,7 @@ impl Bounds {
     /// dummy and the covariates.
     fn normal_residual(&self, case: &Case, v: &[f64]) -> f64 {
         let mut by_unit: HashMap<u32, f64> = HashMap::new();
-        let mut by_time: HashMap<i32, f64> = HashMap::new();
+        let mut by_time: HashMap<i64, f64> = HashMap::new();
         let mut by_x = vec![0.0; case.x.len()];
         for i in 0..v.len() {
             if self.used[i] {
@@ -312,25 +312,23 @@ fn close(got: f64, want: f64, tol: f64, what: &str) {
     );
 }
 
+/// The panel of `case`, clustered by its clusters.
 fn panel<'a>(case: &'a Case, weighted: bool, x: Option<&'a Mat<f64>>) -> StaggeredPanel<'a> {
-    StaggeredPanel {
-        unit: &case.unit,
-        time: &case.time,
-        first_treated: &case.g,
-        outcome: &case.y,
-        weights: weighted.then_some(case.w.as_slice()),
-        covariates: x.map(Mat::as_ref),
+    let mut panel =
+        StaggeredPanel::builder(&case.unit, &case.time, &case.g, &case.y).clusters(&case.cl);
+    if weighted {
+        panel = panel.weights(&case.w);
     }
+    if let Some(x) = x {
+        panel = panel.covariates(x.as_ref());
+    }
+    panel.build().expect("a valid panel")
 }
 
-fn pretrend_values(value: &serde_json::Value) -> Option<Vec<i32>> {
+fn pretrend_values(value: &serde_json::Value) -> Option<Vec<i64>> {
     match value {
         serde_json::Value::String(s) if s == "all" => None,
-        serde_json::Value::Array(a) => Some(
-            a.iter()
-                .map(|v| i32::try_from(v.as_i64().unwrap()).unwrap())
-                .collect(),
-        ),
+        serde_json::Value::Array(a) => Some(a.iter().map(|v| v.as_i64().unwrap()).collect()),
         other => panic!("pretrends {other}"),
     }
 }
@@ -343,7 +341,7 @@ fn imputation_matches_the_exact_values_and_did_imputation() {
         for spec in &case.imputation {
             let weighted = spec.weighted;
             let label = format!("{} {}", case.name, spec.name);
-            let horizons: Vec<i32>;
+            let horizons: Vec<i64>;
             let custom: Vec<&[f64]>;
             let target = match spec.target.as_str() {
                 "static" => ImputationTarget::Static,
@@ -368,7 +366,6 @@ fn imputation_matches_the_exact_values_and_did_imputation() {
             let config = ImputationConfig {
                 target,
                 pretrends,
-                clusters: Some(&case.cl),
                 absorb: TIGHT,
                 keep_weights: true,
             };
@@ -473,9 +470,9 @@ fn check_pretrends(
     b: &Bounds,
 ) {
     let result = out.pretrends.as_ref().unwrap();
-    let periods: Vec<i32> = result.terms.iter().map(|t| t.relative_period).collect();
+    let periods: Vec<i64> = result.terms.iter().map(|t| t.relative_period).collect();
     assert_eq!(periods, pre.periods, "{label} pre-trend periods");
-    let kept: Vec<i32> = result
+    let kept: Vec<i64> = result
         .terms
         .iter()
         .filter(|t| t.estimate.is_some())
@@ -528,7 +525,6 @@ fn did2s_matches_the_exact_values_and_the_package() {
                         references: &spec.references,
                     }
                 },
-                clusters: Some(&case.cl),
                 absorb: TIGHT,
                 keep_projections: true,
             };
@@ -539,7 +535,7 @@ fn did2s_matches_the_exact_values_and_the_package() {
                 &out.dropped_rows,
                 &out.covariate_coefficients,
             );
-            let periods: Vec<Option<i32>> = out.terms.iter().map(|t| t.relative_period).collect();
+            let periods: Vec<Option<i64>> = out.terms.iter().map(|t| t.relative_period).collect();
             match &spec.terms {
                 None => assert_eq!(periods, vec![None], "{label}"),
                 Some(t) => assert_eq!(

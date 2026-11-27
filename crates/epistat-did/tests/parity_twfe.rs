@@ -1,6 +1,7 @@
 //! Two-way fixed-effects DiD, static and event study, checked against
 //! `fixest::feols` 0.14.2 (`tests/data/generate_twfe_reference.R`).
 
+use epistat_core::InputError;
 use epistat_did::{
     StaggeredPanel, TwfeConfig, TwfeSpec, did_covariance, did_standard_error, estimate_twfe,
 };
@@ -18,9 +19,9 @@ struct Reference {
 #[derive(Deserialize)]
 struct Spec {
     kind: String,
-    reference: Option<i32>,
-    lo: Option<i32>,
-    hi: Option<i32>,
+    reference: Option<i64>,
+    lo: Option<i64>,
+    hi: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -28,8 +29,8 @@ struct Case {
     name: String,
     spec: Spec,
     unit: Vec<u32>,
-    time: Vec<i32>,
-    first_treated: Vec<Option<i32>>,
+    time: Vec<i64>,
+    first_treated: Vec<Option<i64>>,
     outcome: Vec<f64>,
     weights: Option<Vec<f64>>,
     covariate: Option<Vec<f64>>,
@@ -74,7 +75,7 @@ fn covariate(case: &Case) -> Option<Mat<f64>> {
         .map(|x| Mat::from_fn(x.len(), 1, |i, _| x[i]))
 }
 
-fn config(case: &Case) -> TwfeConfig<'_> {
+fn config(case: &Case) -> TwfeConfig {
     let spec = if case.spec.kind == "static" {
         TwfeSpec::Static
     } else {
@@ -85,25 +86,28 @@ fn config(case: &Case) -> TwfeConfig<'_> {
     };
     TwfeConfig {
         spec,
-        clusters: case.clusters.as_deref(),
         absorb: TIGHT,
         ssc: Ssc::new(),
     }
 }
 
 fn panel<'a>(case: &'a Case, x: Option<&'a Mat<f64>>) -> StaggeredPanel<'a> {
-    StaggeredPanel {
-        unit: &case.unit,
-        time: &case.time,
-        first_treated: &case.first_treated,
-        outcome: &case.outcome,
-        weights: case.weights.as_deref(),
-        covariates: x.map(Mat::as_ref),
+    let mut panel =
+        StaggeredPanel::builder(&case.unit, &case.time, &case.first_treated, &case.outcome);
+    if let Some(w) = &case.weights {
+        panel = panel.weights(w);
     }
+    if let Some(x) = x {
+        panel = panel.covariates(x.as_ref());
+    }
+    if let Some(c) = &case.clusters {
+        panel = panel.clusters(c);
+    }
+    panel.build().expect("a valid panel")
 }
 
 /// The name fixest gives a term.
-fn name(case: &Case, period: Option<i32>) -> String {
+fn name(case: &Case, period: Option<i64>) -> String {
     match period {
         None => "treat".to_string(),
         Some(r) => {
@@ -278,7 +282,7 @@ fn covariance_bound(case: &Case, x: Option<&Mat<f64>>) -> (Vec<f64>, f64, f64) {
     let time: Vec<u32> = case
         .time
         .iter()
-        .map(|&t| (t - t_min).cast_unsigned())
+        .map(|&t| u32::try_from(t - t_min).unwrap())
         .collect();
     let fe = FixedEffects::new(
         &[&case.unit, &time],
@@ -286,7 +290,7 @@ fn covariance_bound(case: &Case, x: Option<&Mat<f64>>) -> (Vec<f64>, f64, f64) {
         Singletons::Remove,
     )
     .unwrap();
-    let terms: Vec<Option<i32>> = result.terms.iter().map(|t| t.relative_period).collect();
+    let terms: Vec<Option<i64>> = result.terms.iter().map(|t| t.relative_period).collect();
     let p = terms.len() + usize::from(x.is_some());
     let n = case.unit.len();
     let design = Mat::from_fn(n, p, |i, j| {
@@ -455,11 +459,14 @@ fn a_cohort_that_varies_within_a_unit_is_an_error() {
     let mut first = case.first_treated.clone();
     let row = first.iter().position(Option::is_some).unwrap();
     first[row] = first[row].map(|g| g + 1);
-    let panel = StaggeredPanel {
-        first_treated: &first,
-        ..panel(case, None)
-    };
-    assert!(estimate_twfe(&panel, &config(case)).is_err());
+    let built = StaggeredPanel::builder(&case.unit, &case.time, &first, &case.outcome).build();
+    assert!(matches!(
+        built,
+        Err(epistat_did::Error::Input(InputError::NotConstant {
+            what: "first_treated",
+            ..
+        }))
+    ));
 }
 
 fn twfe_bits() -> Vec<f64> {

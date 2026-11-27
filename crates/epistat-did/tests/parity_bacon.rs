@@ -2,7 +2,7 @@
 //! 0.1.1 and the static TWFE coefficient of `fixest::feols` 0.14.2
 //! (`tests/data/generate_bacon_reference.R`).
 
-use epistat_did::{BaconKind, StaggeredPanel, bacon_decomposition};
+use epistat_did::{BaconError, BaconKind, StaggeredPanel, bacon_decomposition};
 use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
 use serde::Deserialize;
@@ -14,8 +14,8 @@ struct Reference {
 
 #[derive(Deserialize)]
 struct Table {
-    treated: Vec<i32>,
-    untreated: Vec<Option<i32>>,
+    treated: Vec<i64>,
+    untreated: Vec<Option<i64>>,
     estimate: Vec<f64>,
     weight: Vec<f64>,
     #[serde(rename = "type")]
@@ -26,7 +26,7 @@ struct Table {
 struct Case {
     name: String,
     unit: Vec<u32>,
-    time: Vec<i32>,
+    time: Vec<i64>,
     treated: Vec<u8>,
     outcome: Vec<f64>,
     x1: Vec<f64>,
@@ -60,7 +60,7 @@ fn label(kind: BaconKind) -> &'static str {
 
 /// The first treated period of each row's unit, the first period in which
 /// the reference data mark it treated.
-fn first_treated(case: &Case) -> Vec<Option<i32>> {
+fn first_treated(case: &Case) -> Vec<Option<i64>> {
     let mut first = std::collections::BTreeMap::new();
     for i in 0..case.unit.len() {
         if case.treated[i] == 1 {
@@ -98,14 +98,11 @@ fn the_decomposition_matches_bacondecomp() {
         let g = first_treated(case);
         let x = controls(case);
         for (with_controls, table) in [(false, &case.plain), (true, &case.controlled)] {
-            let panel = StaggeredPanel {
-                unit: &case.unit,
-                time: &case.time,
-                first_treated: &g,
-                outcome: &case.outcome,
-                weights: None,
-                covariates: with_controls.then(|| x.as_ref()),
-            };
+            let mut panel = StaggeredPanel::builder(&case.unit, &case.time, &g, &case.outcome);
+            if with_controls {
+                panel = panel.covariates(x.as_ref());
+            }
+            let panel = panel.build().unwrap();
             let out = bacon_decomposition(&panel).unwrap();
             assert_eq!(out.comparisons.len(), table.treated.len(), "{}", case.name);
             // Plain: one fit per estimate; with covariates, four chained fits
@@ -183,34 +180,35 @@ fn an_unbalanced_panel_a_varying_cohort_or_weights_are_errors() {
     let case = &reference.cases[0];
     let g = first_treated(case);
     let n = case.unit.len() - 1;
-    let short = StaggeredPanel {
-        unit: &case.unit[..n],
-        time: &case.time[..n],
-        first_treated: &g[..n],
-        outcome: &case.outcome[..n],
-        weights: None,
-        covariates: None,
-    };
-    assert!(bacon_decomposition(&short).is_err());
+    let short = StaggeredPanel::builder(
+        &case.unit[..n],
+        &case.time[..n],
+        &g[..n],
+        &case.outcome[..n],
+    )
+    .build()
+    .unwrap();
+    assert_eq!(
+        bacon_decomposition(&short).unwrap_err(),
+        BaconError::Unbalanced
+    );
     let mut varying = g.clone();
     let row = varying.iter().position(Option::is_some).unwrap();
     varying[row] = varying[row].map(|g| g + 1);
-    let full = StaggeredPanel {
-        unit: &case.unit,
-        time: &case.time,
-        first_treated: &varying,
-        outcome: &case.outcome,
-        weights: None,
-        covariates: None,
-    };
-    assert!(bacon_decomposition(&full).is_err());
+    assert!(
+        StaggeredPanel::builder(&case.unit, &case.time, &varying, &case.outcome)
+            .build()
+            .is_err()
+    );
     let w = vec![1.0; case.unit.len()];
-    let weighted = StaggeredPanel {
-        first_treated: &g,
-        weights: Some(&w),
-        ..full
-    };
-    assert!(bacon_decomposition(&weighted).is_err());
+    let weighted = StaggeredPanel::builder(&case.unit, &case.time, &g, &case.outcome)
+        .weights(&w)
+        .build()
+        .unwrap();
+    assert_eq!(
+        bacon_decomposition(&weighted).unwrap_err(),
+        BaconError::Weights
+    );
 }
 
 #[test]
@@ -220,14 +218,10 @@ fn the_decomposition_does_not_depend_on_the_number_of_threads() {
     let g = first_treated(case);
     let x = controls(case);
     assert_same_on_threads(|| {
-        let panel = StaggeredPanel {
-            unit: &case.unit,
-            time: &case.time,
-            first_treated: &g,
-            outcome: &case.outcome,
-            weights: None,
-            covariates: Some(x.as_ref()),
-        };
+        let panel = StaggeredPanel::builder(&case.unit, &case.time, &g, &case.outcome)
+            .covariates(x.as_ref())
+            .build()
+            .unwrap();
         let out = bacon_decomposition(&panel).unwrap();
         out.comparisons
             .iter()

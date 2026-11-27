@@ -53,7 +53,7 @@
 use epistat_core::InputError;
 use epistat_did::{
     EtwfeControl, EtwfeError, EtwfeFamily, EtwfeGlmConfig, EtwfeGlmTerm, EtwfeTerm, EtwfeType,
-    StaggeredPanel, did_covariance, estimate_etwfe_glm,
+    StaggeredPanel, StaggeredPanelBuilder, did_covariance, estimate_etwfe_glm,
 };
 use epistat_glm::{Error as GlmError, Family, Glm, Link, Ssc, Vcov};
 use epistat_inference::Clusters;
@@ -77,7 +77,7 @@ struct Spec {
 
 #[derive(Deserialize)]
 struct Table {
-    key: Option<Vec<i32>>,
+    key: Option<Vec<i64>>,
     estimate: Vec<f64>,
     se: Vec<Option<f64>>,
     jacobian: Vec<f64>,
@@ -98,8 +98,8 @@ struct Case {
     name: String,
     spec: Spec,
     unit: Vec<u32>,
-    time: Vec<i32>,
-    first_treated: Vec<Option<i32>>,
+    time: Vec<i64>,
+    first_treated: Vec<Option<i64>>,
     outcome: Vec<f64>,
     weights: Option<Vec<f64>>,
     covariates: Option<Vec<f64>>,
@@ -139,14 +139,26 @@ fn covariates(case: &Case) -> Option<Mat<f64>> {
 }
 
 fn panel<'a>(case: &'a Case, x: Option<&'a Mat<f64>>) -> StaggeredPanel<'a> {
-    StaggeredPanel {
-        unit: &case.unit,
-        time: &case.time,
-        first_treated: &case.first_treated,
-        outcome: &case.outcome,
-        weights: case.weights.as_deref(),
-        covariates: x.map(Mat::as_ref),
+    columns(case, &case.outcome, case.weights.as_deref(), x)
+        .build()
+        .expect("a valid panel")
+}
+
+/// The panel of `case` with the given outcome and weights.
+fn columns<'a>(
+    case: &'a Case,
+    outcome: &'a [f64],
+    weights: Option<&'a [f64]>,
+    x: Option<&'a Mat<f64>>,
+) -> StaggeredPanelBuilder<'a> {
+    let mut panel = StaggeredPanel::builder(&case.unit, &case.time, &case.first_treated, outcome);
+    if let Some(w) = weights {
+        panel = panel.weights(w);
     }
+    if let Some(x) = x {
+        panel = panel.covariates(x.as_ref());
+    }
+    panel
 }
 
 fn config<'a>(case: &Case, ways: &'a [&'a [u32]]) -> EtwfeGlmConfig<'a> {
@@ -218,7 +230,7 @@ struct Plain<'a> {
     case: &'a Case,
     x: Option<&'a Mat<f64>>,
     terms: Vec<EtwfeGlmTerm>,
-    means: std::collections::BTreeMap<(usize, i32), f64>,
+    means: std::collections::BTreeMap<(usize, i64), f64>,
     indicator: Vec<bool>,
 }
 
@@ -226,7 +238,7 @@ impl Plain<'_> {
     fn value(&self, i: usize, term: EtwfeGlmTerm, treated: bool) -> f64 {
         let case = self.case;
         let xv = |k: usize| self.x.unwrap()[(i, k)];
-        let in_cohort = |g: i32| case.first_treated[i] == Some(g);
+        let in_cohort = |g: i64| case.first_treated[i] == Some(g);
         let one = |b: bool| f64::from(u8::from(b));
         match term {
             EtwfeGlmTerm::Intercept => 1.0,
@@ -432,7 +444,7 @@ fn etwfe_glm_matches_the_package() {
         }
 
         // The average effects.
-        let tables: [(&Table, &dyn Fn(i32) -> EtwfeType); 4] = [
+        let tables: [(&Table, &dyn Fn(i64) -> EtwfeType); 4] = [
             (&case.simple, &|_| EtwfeType::Simple),
             (&case.group, &EtwfeType::Group),
             (&case.calendar, &EtwfeType::Calendar),
@@ -600,17 +612,15 @@ fn unusable_inputs_are_errors() {
     );
     let mut weights = case.weights.clone().unwrap();
     weights[7] = -1.0;
-    let weighted = StaggeredPanel {
-        weights: Some(&weights),
-        ..panel(case, x.as_ref())
-    };
     assert_eq!(
-        estimate_etwfe_glm(&weighted, &base).unwrap_err(),
-        EtwfeError::Fit(GlmError::Input(InputError::Domain {
+        columns(case, &case.outcome, Some(&weights), x.as_ref())
+            .build()
+            .unwrap_err(),
+        epistat_did::Error::Input(InputError::Domain {
             what: "weights",
             value: -1.0,
             domain: "[0, inf)"
-        }))
+        })
     );
     // A response outside the family's support names its input row; the row
     // must be one of the fit.
@@ -620,10 +630,9 @@ fn unusable_inputs_are_errors() {
         .find(|&i| case.time[i] == 1)
         .unwrap();
     outcome[row] = 2.0;
-    let bad = StaggeredPanel {
-        outcome: &outcome,
-        ..panel(case, x.as_ref())
-    };
+    let bad = columns(case, &outcome, case.weights.as_deref(), x.as_ref())
+        .build()
+        .unwrap();
     assert_eq!(
         estimate_etwfe_glm(&bad, &base).unwrap_err(),
         EtwfeError::Fit(GlmError::Response { row, value: 2.0 })

@@ -120,7 +120,7 @@ pub enum ImputationTarget<'a> {
     Static,
     /// One mean per horizon `t - g >= 0`: the given horizons, or with `None`
     /// every horizon of the panel.
-    Horizons(Option<&'a [i32]>),
+    Horizons(Option<&'a [i64]>),
     /// One mean per column of the caller's weights, one value per row, read on
     /// the treated rows and zero on the untreated ones.
     Weights(&'a [&'a [f64]]),
@@ -132,7 +132,7 @@ pub enum Pretrends<'a> {
     /// Every relative period before treatment but the reference.
     All,
     /// These relative periods, each negative.
-    Periods(&'a [i32]),
+    Periods(&'a [i64]),
 }
 
 /// The controls of the imputation estimator.
@@ -142,9 +142,6 @@ pub struct ImputationConfig<'a> {
     pub target: ImputationTarget<'a>,
     /// The pre-trend coefficients, or `None`.
     pub pretrends: Option<Pretrends<'a>>,
-    /// Cluster codes, one per row and constant within units; the units when
-    /// `None`.
-    pub clusters: Option<&'a [u32]>,
     /// The demeaning of the first stage and of the variance's projections.
     pub absorb: Absorb,
     /// Whether to return the weights `v_it` of every estimand.
@@ -152,19 +149,18 @@ pub struct ImputationConfig<'a> {
 }
 
 impl ImputationConfig<'_> {
-    /// The static effect, clustered by unit, without pre-trends.
+    /// The static effect, without pre-trends.
     #[must_use]
     pub const fn static_effect() -> Self {
         Self {
             target: ImputationTarget::Static,
             pretrends: None,
-            clusters: None,
             absorb: Absorb::new(),
             keep_weights: false,
         }
     }
 
-    /// The effect at every horizon, clustered by unit, without pre-trends.
+    /// The effect at every horizon, without pre-trends.
     #[must_use]
     pub const fn event_study() -> Self {
         Self {
@@ -195,27 +191,15 @@ pub enum ImputationError {
         /// The row.
         row: usize,
     },
-    /// A unit has rows with different first treated periods.
-    #[error("unit {unit} has rows with different first treated periods")]
-    Cohort {
-        /// The unit.
-        unit: u32,
-    },
-    /// A unit has rows in different clusters.
-    #[error("unit {unit} has rows in different clusters")]
-    Clusters {
-        /// The unit.
-        unit: u32,
-    },
     /// A requested horizon is negative.
     #[error("horizon {0} is negative")]
-    Horizon(i32),
+    Horizon(i64),
     /// A requested pre-trend period is not negative.
     #[error("pre-trend period {0} is not negative")]
-    Pretrend(i32),
+    Pretrend(i64),
     /// A requested reference period is not negative.
     #[error("reference period {0} is not negative")]
-    Reference(i32),
+    Reference(i64),
     /// A column of target weights is not zero on an untreated row.
     #[error("target weight column {column} is not zero on the untreated row {row}")]
     TargetOnUntreated {
@@ -224,8 +208,9 @@ pub enum ImputationError {
         /// The row.
         row: usize,
     },
-    /// A period or a period relative to treatment does not fit in 32 bits.
-    #[error("the periods span more than 2^31 values")]
+    /// The periods span more than 2^32 values, or a period relative to
+    /// treatment does not fit in 64 bits.
+    #[error("the periods span more than 2^32 values")]
     Periods,
     /// The first stage failed.
     #[error(transparent)]
@@ -238,7 +223,7 @@ pub enum ImputationTerm {
     /// Every treated row.
     Treated,
     /// The rows at this horizon.
-    Horizon(i32),
+    Horizon(i64),
     /// The caller's weight column with this index.
     Weights(usize),
 }
@@ -260,7 +245,7 @@ pub struct ImputationEstimate {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PretrendTerm {
     /// The period relative to treatment.
-    pub relative_period: i32,
+    pub relative_period: i64,
     /// The coefficient, `None` when the indicator is absent or collinear.
     pub estimate: Option<f64>,
     /// Its clustered standard error.
@@ -317,7 +302,7 @@ pub(crate) struct Prepared {
     /// Period codes from 0.
     pub(crate) time: Vec<u32>,
     /// `t - g` for rows of units that are ever treated.
-    pub(crate) event: Vec<Option<i32>>,
+    pub(crate) event: Vec<Option<i64>>,
     pub(crate) treated: Vec<bool>,
     pub(crate) weight: Vec<f64>,
     /// The weights of the first stage: the prior weight on untreated rows,
@@ -327,83 +312,25 @@ pub(crate) struct Prepared {
 }
 
 impl Prepared {
-    pub(crate) fn new(
-        panel: &StaggeredPanel<'_>,
-        clusters: Option<&[u32]>,
-    ) -> Result<Self, ImputationError> {
-        let n = panel.unit.len();
-        for (what, found) in [
-            ("time", panel.time.len()),
-            ("first_treated", panel.first_treated.len()),
-            ("outcome", panel.outcome.len()),
-            ("weights", panel.weights.map_or(n, <[f64]>::len)),
-            ("covariates", panel.covariates.map_or(n, |x| x.nrows())),
-            ("clusters", clusters.map_or(n, <[u32]>::len)),
-        ] {
-            if found != n {
-                return Err(ImputationError::Length {
-                    what,
-                    expected: n,
-                    found,
-                });
-            }
-        }
-        if let Some(row) = panel.outcome.iter().position(|v| !v.is_finite()) {
-            return Err(ImputationError::NotFinite {
-                what: "outcome",
-                row,
-            });
-        }
-        if let Some(w) = panel.weights
-            && let Some(row) = w.iter().position(|v| !(v.is_finite() && *v >= 0.0))
-        {
-            return Err(ImputationError::NotFinite {
-                what: "weights",
-                row,
-            });
-        }
-        let p = panel.covariates.map_or(0, |x| x.ncols());
-        let covariates = match panel.covariates {
-            Some(x) => {
-                for j in 0..p {
-                    for i in 0..n {
-                        if !x[(i, j)].is_finite() {
-                            return Err(ImputationError::NotFinite {
-                                what: "covariates",
-                                row: i,
-                            });
-                        }
-                    }
-                }
-                x.to_owned()
-            }
-            None => Mat::<f64>::zeros(n, 0),
-        };
-        check_constant_within_units(panel.unit, panel.first_treated)
-            .map_err(|unit| ImputationError::Cohort { unit })?;
-        if let Some(c) = clusters {
-            check_constant_within_units(panel.unit, c)
-                .map_err(|unit| ImputationError::Clusters { unit })?;
-        }
-        let t_min = panel.time.iter().copied().min().unwrap_or(0);
-        let time: Vec<u32> = panel
-            .time
+    pub(crate) fn new(panel: &StaggeredPanel<'_>) -> Result<Self, ImputationError> {
+        let n = panel.len();
+        let period = panel.period();
+        let covariates = panel
+            .covariates()
+            .map_or_else(|| Mat::<f64>::zeros(n, 0), |x| x.to_owned());
+        let time = panel.period_codes().ok_or(ImputationError::Periods)?;
+        let event: Vec<Option<i64>> = period
             .iter()
-            .map(|&t| {
-                u32::try_from(i64::from(t) - i64::from(t_min)).map_err(|_| ImputationError::Periods)
-            })
-            .collect::<Result<_, _>>()?;
-        let event: Vec<Option<i32>> = panel
-            .time
-            .iter()
-            .zip(panel.first_treated)
+            .zip(panel.first_treated())
             .map(|(&t, g)| match g {
                 None => Ok(None),
                 Some(g) => t.checked_sub(*g).map(Some).ok_or(ImputationError::Periods),
             })
             .collect::<Result<_, _>>()?;
         let treated: Vec<bool> = event.iter().map(|e| e.is_some_and(|e| e >= 0)).collect();
-        let weight: Vec<f64> = panel.weights.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
+        let weight: Vec<f64> = panel
+            .weights()
+            .map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
         let fit_weight: Vec<f64> = weight
             .iter()
             .zip(&treated)
@@ -418,23 +345,6 @@ impl Prepared {
             covariates,
         })
     }
-}
-
-/// `Err(unit)` for the first unit whose rows carry different values.
-pub(crate) fn check_constant_within_units<T: Copy + PartialEq>(
-    unit: &[u32],
-    value: &[T],
-) -> Result<(), u32> {
-    let levels = unit.iter().copied().max().map_or(0, |m| m as usize + 1);
-    let mut seen: Vec<Option<T>> = vec![None; levels];
-    for (&u, &v) in unit.iter().zip(value) {
-        match seen[u as usize] {
-            None => seen[u as usize] = Some(v),
-            Some(w) if w != v => return Err(u),
-            Some(_) => {}
-        }
-    }
-    Ok(())
 }
 
 /// The units of the estimation and the clusters over them.
@@ -511,38 +421,39 @@ pub(crate) fn first_stage_fixed_effects(
     prepared: &Prepared,
 ) -> Result<FixedEffects, ImputationError> {
     Ok(FixedEffects::new(
-        &[panel.unit, &prepared.time],
+        &[panel.unit(), &prepared.time],
         Some(&prepared.fit_weight),
         Singletons::Keep,
     )?)
 }
 
-/// Estimates the imputation estimator of Borusyak, Jaravel and Spiess. See
-/// the module documentation.
+/// Estimates the imputation estimator of Borusyak, Jaravel and Spiess, with
+/// standard errors clustered by the panel's clusters, or by unit when it has
+/// none. See the module documentation.
 ///
 /// # Errors
 ///
-/// [`ImputationError`] for inputs of the wrong length or not finite, cohorts
-/// or clusters that vary within a unit, negative horizons, pre-trend periods
-/// that are not negative, target weights on untreated rows, and the errors of
-/// the first stage.
+/// [`ImputationError`] for target weights of the wrong length or not finite,
+/// negative horizons, pre-trend periods that are not negative, target weights
+/// on untreated rows, periods out of range, and the errors of the first
+/// stage.
 pub fn estimate_did_imputation(
     panel: &StaggeredPanel<'_>,
     config: &ImputationConfig<'_>,
 ) -> Result<ImputationResult, ImputationError> {
-    let n = panel.unit.len();
-    let prepared = Prepared::new(panel, config.clusters)?;
+    let n = panel.len();
+    let prepared = Prepared::new(panel)?;
     let fe = first_stage_fixed_effects(panel, &prepared)?;
     let feols = Feols {
         absorb: config.absorb,
     };
     let x = prepared.covariates.as_ref();
-    let fit = feols.fit(x, panel.outcome, &fe)?;
+    let fit = feols.fit(x, panel.outcome(), &fe)?;
     let stage = FirstStage::new(
-        panel.unit,
+        panel.unit(),
         &prepared.time,
         prepared.treated.clone(),
-        panel.outcome,
+        panel.outcome(),
         prepared.weight.clone(),
         x,
         &fe,
@@ -551,14 +462,14 @@ pub fn estimate_did_imputation(
     let used: Vec<bool> = stage.adjusted.iter().map(Option::is_some).collect();
     let dropped_rows: Vec<usize> = (0..n).filter(|&i| !used[i]).collect();
     let treated_rows: Vec<usize> = (0..n).filter(|&i| used[i] && stage.treated[i]).collect();
-    let index = UnitIndex::new(panel.unit, &used, config.clusters);
+    let index = UnitIndex::new(panel.unit(), &used, panel.clusters());
     let n_units = index.units.len();
 
     // The estimands.
     let (terms, columns): (Vec<ImputationTerm>, Vec<Column<'_>>) = match config.target {
         ImputationTarget::Static => (vec![ImputationTerm::Treated], vec![Column::Treated]),
         ImputationTarget::Horizons(given) => {
-            let horizons: BTreeSet<i32> = if let Some(h) = given {
+            let horizons: BTreeSet<i64> = if let Some(h) = given {
                 if let Some(&bad) = h.iter().find(|&&h| h < 0) {
                     return Err(ImputationError::Horizon(bad));
                 }
@@ -607,18 +518,18 @@ pub fn estimate_did_imputation(
     };
 
     // Cohort-by-period cells of the treated rows, for tau_bar.
-    let mut cell_of: HashMap<(i32, i32), usize> = HashMap::new();
+    let mut cell_of: HashMap<(i64, i64), usize> = HashMap::new();
     let cells: Vec<usize> = treated_rows
         .iter()
         .map(|&i| {
-            let key = (panel.first_treated[i].unwrap_or(0), panel.time[i]);
+            let key = (panel.first_treated()[i].unwrap_or(0), panel.period()[i]);
             let next = cell_of.len();
             *cell_of.entry(key).or_insert(next)
         })
         .collect();
     let n_cells = cell_of.len();
 
-    let projector = Projector::new(&fe, &fit, x, &[panel.unit, &prepared.time]);
+    let projector = Projector::new(&fe, &fit, x, &[panel.unit(), &prepared.time]);
     let fit_rows = fe.rows();
     let fit_weights = fe.weights();
     let mut estimates = Vec::with_capacity(terms.len());
@@ -695,13 +606,13 @@ pub fn estimate_did_imputation(
             let Some(adjusted) = stage.adjusted[i] else {
                 continue;
             };
-            let u = index.position[panel.unit[i] as usize] as usize;
+            let u = index.position[panel.unit()[i] as usize] as usize;
             by_unit[u] += v[i] * adjusted;
         }
         // The cell means enter the treated rows only.
         for (&i, &c) in treated_rows.iter().zip(&cells) {
             if v[i] != 0.0 && den[c] > 0.0 {
-                let u = index.position[panel.unit[i] as usize] as usize;
+                let u = index.position[panel.unit()[i] as usize] as usize;
                 by_unit[u] -= v[i] * (num[c] / den[c]);
             }
         }
@@ -724,13 +635,7 @@ pub fn estimate_did_imputation(
     let pretrends = match config.pretrends {
         None => None,
         Some(spec) => Some(pretrend_regression(
-            panel,
-            &prepared,
-            &fe,
-            &feols,
-            &index,
-            spec,
-            config.clusters,
+            panel, &prepared, &fe, &feols, &index, spec,
         )?),
     };
 
@@ -753,7 +658,7 @@ pub fn estimate_did_imputation(
 /// The raw target of an estimand.
 enum Column<'a> {
     Treated,
-    Horizon(i32),
+    Horizon(i64),
     Weights(&'a [f64]),
 }
 
@@ -766,25 +671,24 @@ fn pretrend_regression(
     feols: &Feols,
     index: &UnitIndex,
     spec: Pretrends<'_>,
-    clusters: Option<&[u32]>,
 ) -> Result<PretrendResult, ImputationError> {
-    let n = panel.unit.len();
+    let n = panel.len();
     let fit_rows = fe.rows();
     // The relative periods of the untreated rows, the never treated first;
     // the first is the reference of fixest::i.
-    let levels: BTreeSet<Option<i32>> = fit_rows.iter().map(|&i| prepared.event[i]).collect();
-    let free: Vec<i32> = levels.iter().skip(1).filter_map(|&e| e).collect();
-    let periods: Vec<i32> = match spec {
+    let levels: BTreeSet<Option<i64>> = fit_rows.iter().map(|&i| prepared.event[i]).collect();
+    let free: Vec<i64> = levels.iter().skip(1).filter_map(|&e| e).collect();
+    let periods: Vec<i64> = match spec {
         Pretrends::All => free.clone(),
         Pretrends::Periods(p) => {
             if let Some(&bad) = p.iter().find(|&&k| k >= 0) {
                 return Err(ImputationError::Pretrend(bad));
             }
-            let set: BTreeSet<i32> = p.iter().copied().collect();
+            let set: BTreeSet<i64> = p.iter().copied().collect();
             set.into_iter().collect()
         }
     };
-    let fitted: Vec<i32> = periods
+    let fitted: Vec<i64> = periods
         .iter()
         .copied()
         .filter(|k| free.binary_search(k).is_ok())
@@ -804,8 +708,8 @@ fn pretrend_regression(
             x[(i, k_terms + j)] = prepared.covariates[(i, j)];
         }
     }
-    let fit = feols.fit(x.as_ref(), panel.outcome, fe)?;
-    let codes = clusters.unwrap_or(panel.unit);
+    let fit = feols.fit(x.as_ref(), panel.outcome(), fe)?;
+    let codes = panel.clusters().unwrap_or(panel.unit());
     let ways = [codes];
     let cov = fit.vcov(fe, Vcov::Cluster(&ways), Ssc::new())?;
     let p = k_terms + p_cov;
@@ -816,7 +720,7 @@ fn pretrend_regression(
         let column = rows_influence.col_as_slice(a);
         let mut sums = vec![0.0; n_units];
         for (k, &i) in fit_rows.iter().enumerate() {
-            sums[index.position[panel.unit[i] as usize] as usize] += column[k];
+            sums[index.position[panel.unit()[i] as usize] as usize] += column[k];
         }
         for s in &mut sums {
             *s *= n_units as f64;
