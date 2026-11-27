@@ -98,6 +98,34 @@ pub enum Error {
         /// The regression.
         what: &'static str,
     },
+    /// The default noise level of synthdid needs at least two first
+    /// differences of the controls before adoption; give the noise level
+    /// instead.
+    #[error("the noise level needs two first differences before adoption; give it explicitly")]
+    NoiseLevel,
+    /// The placebo standard error of synthdid needs more controls than
+    /// treated units.
+    #[error("the placebo method needs more controls than treated units")]
+    PlaceboControls,
+    /// A given draw of synthdid's placebo or bootstrap is not a permutation
+    /// of the controls (placebo), or holds an index outside the panel, no
+    /// control or no treated unit (bootstrap).
+    #[error("draw {replicate} is not a valid draw for this method")]
+    Draw {
+        /// The replicate, from 0.
+        replicate: usize,
+    },
+    /// A unit is first treated in the first period of the panel, or in a
+    /// period that is not one of the panel's, so synthdid has no pre-period
+    /// or no column for its adoption.
+    #[error("unit {unit} is not first treated in a period of the panel after the first")]
+    Adoption {
+        /// The unit, as its code.
+        unit: u32,
+    },
+    /// A solver refused its problem, as the Frank-Wolfe steps of synthdid.
+    #[error(transparent)]
+    Optim(#[from] epistat_optim::Error),
 }
 
 impl Classify for Error {
@@ -106,10 +134,15 @@ impl Classify for Error {
             Self::Input(error) => error.kind(),
             Self::Glm(error) => error.kind(),
             Self::Inference(error) => error.kind(),
+            Self::Optim(error) => error.kind(),
             Self::Collinear { .. } => ErrorKind::Numerical,
             Self::NoEffect
             | Self::EmptyPeriod
             | Self::Controls { .. }
+            | Self::NoiseLevel
+            | Self::PlaceboControls
+            | Self::Draw { .. }
+            | Self::Adoption { .. }
             | Self::NoTreatment
             | Self::NoNeverTreated
             | Self::Periods
@@ -129,10 +162,15 @@ impl Classify for Error {
             Self::Input(error) => error.code(),
             Self::Glm(error) => error.code(),
             Self::Inference(error) => error.code(),
+            Self::Optim(error) => error.code(),
             Self::NoEffect => "did.no_effect",
             Self::EmptyPeriod => "did.empty_period",
             Self::Controls { .. } => "did.controls",
             Self::Collinear { .. } => "did.collinear",
+            Self::NoiseLevel => "did.noise_level",
+            Self::PlaceboControls => "did.placebo_controls",
+            Self::Draw { .. } => "did.draw",
+            Self::Adoption { .. } => "did.adoption",
             Self::NoTreatment => "did.no_treatment",
             Self::NoNeverTreated => "did.no_never_treated",
             Self::Periods => "did.periods",
@@ -192,6 +230,10 @@ mod tests {
                 reason: "collinear",
             },
             Error::Collinear { what: "covariates" },
+            Error::NoiseLevel,
+            Error::PlaceboControls,
+            Error::Draw { replicate: 1 },
+            Error::Adoption { unit: 2 },
         ];
         epistat_testkit::assert_codes_unique("did", &errors);
         assert_eq!(Error::Bins.kind(), ErrorKind::Input);

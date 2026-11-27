@@ -48,10 +48,11 @@
 //!   treatments may be missing.
 //! - Synthetic difference-in-differences \[9\], synthetic control and the
 //!   plain difference-in-differences beside them, as R's `synthdid` computes
-//!   them: [`estimate_synthdid`] with [`SynthDidConfig`], standard errors by
-//!   placebo, bootstrap or jackknife in [`synthdid_variance`], and staggered
-//!   adoption cohort by cohort in [`estimate_synthdid_staggered`]. The
-//!   module [`synthdid`] gives the algorithm.
+//!   them: [`synthdid::estimate`] with [`SynthDidOptions`], standard errors
+//!   by placebo, bootstrap or jackknife through [`SynthDidOptions::variance`],
+//!   and staggered adoption cohort by cohort in
+//!   [`synthdid::estimate_staggered`]. The module [`synthdid`] gives the
+//!   algorithm.
 //! - The power of the pre-trends test and the distortion after passing it,
 //!   after Roth \[10\], in [`pretrends`].
 //! - The imputation estimator of Borusyak, Jaravel and Spiess \[12\]:
@@ -306,10 +307,8 @@ pub use methods::sunab::{
 };
 pub use methods::synthdid;
 pub use methods::synthdid::{
-    StaggeredSynthEstimate, StaggeredSynthPanel, SynthCohort, SynthDidConfig, SynthDidError,
-    SynthDidEstimate, SynthDidVariance, SynthDraws, SynthObservation, SynthPanel, SynthTrace,
-    SynthUndefined, SynthVariance, SynthWeights, estimate_synthdid, estimate_synthdid_staggered,
-    synthdid_staggered_variance, synthdid_variance,
+    StaggeredSynthDid, SynthCohort, SynthDid, SynthDidOptions, SynthDraws, SynthFit,
+    SynthReplicates, SynthTrace, SynthUndefined, SynthVariance, SynthWeights,
 };
 pub use methods::triple_did::aggregator::estimate_dr_ddd;
 pub use methods::twfe;

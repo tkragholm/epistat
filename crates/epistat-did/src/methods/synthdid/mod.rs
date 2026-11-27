@@ -5,11 +5,14 @@
 //!
 //! # Setting
 //!
-//! A balanced panel of `N` units over `T` periods. The first `N0` units are
-//! controls, never treated. The other `N1 = N - N0` units are treated from
-//! period `T0 + 1` on, so `T1 = T - T0` periods are post-treatment. `synthdid`
-//! handles this single adoption date only; [`estimate_synthdid_staggered`]
-//! handles several, one cohort at a time (below).
+//! A balanced panel of `N` units over `T` periods, a [`StaggeredPanel`] in
+//! which every unit is observed in every period. `N0` units are controls,
+//! never treated. The other `N1 = N - N0` units are treated from period
+//! `T0 + 1` on, so `T1 = T - T0` periods are post-treatment. `synthdid`
+//! handles this single adoption date only, which is [`estimate`];
+//! [`estimate_staggered`] handles several, one cohort at a time (below). The
+//! units are taken in increasing code and the periods in increasing order.
+//! The standard error is chosen by [`SynthDidOptions::variance`].
 //!
 //! # Algorithm
 //!
@@ -101,11 +104,12 @@
 //! as `synthdid` does.
 //!
 //! The jackknife also gives an influence value for each unit,
-//! `psi_i = sqrt(n (n - 1)) (mean u - u_i)`, scaled so that
-//! [`did_standard_error`](crate::did_standard_error) with one cluster per
-//! unit is the jackknife standard error. With other clusters it is the
-//! linearised cluster jackknife; [`SynthVariance::Jackknife`] with clusters
-//! leaves out whole clusters instead, with `n` the number of clusters.
+//! `psi_i = sqrt(n (n - 1)) (mean u - u_i)`, under
+//! [`ClusterRule::NoSmallSample`](epistat_inference::ClusterRule), so that
+//! [`Influence::variance`] without clusters is the jackknife variance. With
+//! clusters it is the linearised cluster jackknife; on a panel with
+//! clusters, [`SynthVariance::Jackknife`] leaves out whole clusters instead,
+//! with `n` the number of clusters, and gives no influence values.
 //!
 //! Random draws come from [`epistat_rng::Stream`], replicate `r` seeded with
 //! [`epistat_rng::replicate_seed`]`(seed, r)`: a placebo draw is a
@@ -115,6 +119,7 @@
 //! replicate order, so they do not depend on the number of threads. The draws
 //! are not R's; [`SynthDraws::Given`] takes the draws from outside, which is
 //! how the tests feed R's draws through and compare replicate by replicate.
+//! A bootstrap draw names units by their position in increasing code.
 //!
 //! # Staggered adoption
 //!
@@ -141,8 +146,13 @@
 //!
 //! # Differences from `synthdid`
 //!
-//! - [`SynthPanel::from_observations`] orders the units by treatment, then by
-//!   their integer identifier; `panel.matrices` sorts the names as text.
+//! - The units are in increasing code; `panel.matrices` puts the controls
+//!   first and sorts the names as text. The order decides which unit a
+//!   bootstrap draw names and the order of the jackknife's replicates, not
+//!   the estimate.
+//! - The estimate's interval is the normal one at
+//!   [`SynthDidOptions::level`]; `synthdid` reports the standard error
+//!   alone.
 //! - The refits of the variance methods use the estimate's sparsification
 //!   setting and first-run limit. `synthdid` passes neither to its refits,
 //!   which then use the defaults whatever the estimate used.
@@ -173,203 +183,18 @@ mod panel;
 mod staggered;
 mod variance;
 
-use epistat_inference::Clusters;
-use epistat_optim::Error as FrankWolfeError;
+use epistat_core::{Bootstrap, Estimate, InputError, Level, Scale};
+use epistat_inference::{ClusterRule, Influence};
+
+use crate::error::Error;
+use crate::methods::staggered::StaggeredPanel;
 
 use fit::{Data, Opts, Start};
-pub use panel::SynthObservation;
-pub use staggered::{
-    StaggeredSynthEstimate, StaggeredSynthPanel, SynthCohort, estimate_synthdid_staggered,
-    synthdid_staggered_variance,
-};
-
-/// Why an estimate or a standard error was refused.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum SynthDidError {
-    /// The values do not fill `units × periods` (or `count` such blocks of
-    /// covariates), or a weight vector or draw has the wrong length.
-    #[error("the sizes do not match: {0}")]
-    Dimension(&'static str),
-    /// An outcome or covariate is not finite.
-    #[error("outcomes and covariates must be finite")]
-    NotFinite,
-    /// No control unit, no treated unit, no pre-period or no post-period.
-    #[error("the panel needs controls, treated units, and periods before and after adoption")]
-    Design,
-    /// The default noise level needs at least two first differences of the
-    /// controls before adoption; give the noise level instead.
-    #[error("the noise level needs two first differences before adoption; give it explicitly")]
-    NoiseLevel,
-    /// A configured number is not finite or out of range.
-    #[error("invalid setting: {0}")]
-    Setting(&'static str),
-    /// Weights that are not finite, starting weights off the simplex, or
-    /// weights that a refit needs and that are missing.
-    #[error("weights must be finite, and starting weights non-negative and summing to one")]
-    Weights,
-    /// The placebo method needs more controls than treated units.
-    #[error("the placebo method needs more controls than treated units")]
-    PlaceboControls,
-    /// A given draw is not a permutation of the controls (placebo) or holds
-    /// an index outside the panel or no control or no treated unit
-    /// (bootstrap).
-    #[error("draw {0} is not a valid draw for this method")]
-    Draw(usize),
-    /// Fewer than two replicates.
-    #[error("at least two replicates are needed")]
-    Replications,
-    /// The estimate was not computed on this panel.
-    #[error("the estimate does not belong to this panel")]
-    Mismatch,
-    /// The observations do not form a balanced panel with the adoption
-    /// pattern the method needs.
-    #[error("invalid panel: {0}")]
-    Panel(String),
-    /// The Frank-Wolfe solver refused its problem.
-    #[error("Frank-Wolfe: {0}")]
-    Solver(#[from] FrankWolfeError),
-}
-
-/// A balanced panel with a single adoption date: `units × periods` outcomes
-/// by unit, the first `controls` units never treated and the rest treated
-/// after `pre_periods` periods, as `synthdid` takes `Y`, `N0` and `T0`.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SynthPanel {
-    outcome: Vec<f64>,
-    covariates: Vec<f64>,
-    covariate_count: usize,
-    units: usize,
-    periods: usize,
-    controls: usize,
-    pre_periods: usize,
-    unit_ids: Vec<i64>,
-    times: Vec<i32>,
-}
-
-impl SynthPanel {
-    /// The panel from its outcomes, unit by unit (`outcome[i * periods + t]`).
-    ///
-    /// # Errors
-    ///
-    /// [`SynthDidError::Dimension`], [`SynthDidError::NotFinite`] or
-    /// [`SynthDidError::Design`] when there are no controls, no treated
-    /// units, no pre-period or no post-period.
-    pub fn new(
-        outcome: Vec<f64>,
-        units: usize,
-        periods: usize,
-        controls: usize,
-        pre_periods: usize,
-    ) -> Result<Self, SynthDidError> {
-        if units.checked_mul(periods) != Some(outcome.len()) {
-            return Err(SynthDidError::Dimension("outcome is not units × periods"));
-        }
-        if outcome.iter().any(|v| !v.is_finite()) {
-            return Err(SynthDidError::NotFinite);
-        }
-        if controls == 0 || controls >= units || pre_periods == 0 || pre_periods >= periods {
-            return Err(SynthDidError::Design);
-        }
-        Ok(Self {
-            outcome,
-            covariates: Vec::new(),
-            covariate_count: 0,
-            units,
-            periods,
-            controls,
-            pre_periods,
-            unit_ids: (0..units).map(crate::util::usize_to_i64).collect(),
-            times: (0..periods).map(staggered::period_label).collect(),
-        })
-    }
-
-    /// Adds `count` time-varying covariates, each a `units × periods` block
-    /// laid out as the outcome (`covariates[(k * units + i) * periods + t]`),
-    /// the array `X` of `synthdid` with its third index first.
-    ///
-    /// # Errors
-    ///
-    /// [`SynthDidError::Dimension`] or [`SynthDidError::NotFinite`].
-    pub fn with_covariates(
-        mut self,
-        covariates: Vec<f64>,
-        count: usize,
-    ) -> Result<Self, SynthDidError> {
-        if self.outcome.len().checked_mul(count) != Some(covariates.len()) {
-            return Err(SynthDidError::Dimension(
-                "covariates are not count × units × periods",
-            ));
-        }
-        if covariates.iter().any(|v| !v.is_finite()) {
-            return Err(SynthDidError::NotFinite);
-        }
-        self.covariates = covariates;
-        self.covariate_count = count;
-        Ok(self)
-    }
-
-    /// Number of units.
-    #[must_use]
-    pub fn units(&self) -> usize {
-        self.units
-    }
-
-    /// Number of periods.
-    #[must_use]
-    pub fn periods(&self) -> usize {
-        self.periods
-    }
-
-    /// Number of controls, `N0`.
-    #[must_use]
-    pub fn controls(&self) -> usize {
-        self.controls
-    }
-
-    /// Number of pre-treatment periods, `T0`.
-    #[must_use]
-    pub fn pre_periods(&self) -> usize {
-        self.pre_periods
-    }
-
-    /// Number of covariates.
-    #[must_use]
-    pub fn covariate_count(&self) -> usize {
-        self.covariate_count
-    }
-
-    /// The outcomes, unit by unit.
-    #[must_use]
-    pub fn outcome(&self) -> &[f64] {
-        &self.outcome
-    }
-
-    /// The unit of each row: the identifiers of
-    /// [`SynthPanel::from_observations`], or `0..units`.
-    #[must_use]
-    pub fn unit_ids(&self) -> &[i64] {
-        &self.unit_ids
-    }
-
-    /// The period of each column: the times of
-    /// [`SynthPanel::from_observations`], or `0..periods`.
-    #[must_use]
-    pub fn times(&self) -> &[i32] {
-        &self.times
-    }
-
-    fn data(&self) -> Data<'_> {
-        Data {
-            outcome: &self.outcome,
-            covariates: &self.covariates,
-            count: self.covariate_count,
-            units: self.units,
-            periods: self.periods,
-        }
-    }
-}
+use panel::Grid;
+pub use staggered::{StaggeredSynthDid, SynthCohort, estimate_staggered};
 
 /// How a set of weights is found.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum SynthWeights {
     /// Estimated by Frank-Wolfe from uniform weights.
@@ -386,12 +211,45 @@ pub enum SynthWeights {
     FixedZero,
 }
 
-/// The arguments of `synthdid_estimate`, with `None` for the defaults that
-/// depend on the data. [`SynthDidConfig::synthdid`],
-/// [`SynthDidConfig::synthetic_control`] and [`SynthDidConfig::did`] are the
-/// three estimators of the package.
+/// The standard error, as `vcov(estimate, method)` of `synthdid`.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum SynthVariance {
+    /// No standard error, as `synthdid_estimate` alone.
+    #[default]
+    None,
+    /// Leave one unit out at a time with the weights fixed, or one cluster
+    /// when the panel has clusters (`method = "jackknife"`).
+    Jackknife,
+    /// Refits on the controls with some of them called treated (`method =
+    /// "placebo"`).
+    Placebo(SynthDraws),
+    /// Refits on units drawn with replacement (`method = "bootstrap"`).
+    Bootstrap(SynthDraws),
+}
+
+/// The random draws of the placebo and the bootstrap.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
-pub struct SynthDidConfig {
+pub enum SynthDraws {
+    /// Draws from the root seed, as described in the module documentation;
+    /// `synthdid` uses 200 replicates.
+    Seeded(Bootstrap),
+    /// The draws themselves, 0-based: for the placebo a permutation of the
+    /// controls' positions `0..N0` among the never-treated units, for the
+    /// bootstrap `N` positions among all units, with repeats, in the order
+    /// drawn. Positions count units in increasing code.
+    Given(Vec<Vec<usize>>),
+}
+
+/// The options of [`estimate`] and [`estimate_staggered`]: the arguments of
+/// `synthdid_estimate`, with `None` for the defaults that depend on the
+/// data, the standard error of `vcov` and the level of the intervals. The
+/// default is `synthdid_estimate`; [`SynthDidOptions::synthetic_control`]
+/// and [`SynthDidOptions::did`] are the package's `sc_estimate` and
+/// `did_estimate`, the same function with other defaults.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SynthDidOptions {
     /// `noise.level`; `None` for the standard deviation of the controls'
     /// first differences before adoption.
     pub noise_level: Option<f64>,
@@ -414,18 +272,21 @@ pub struct SynthDidConfig {
     /// `min.decrease`; `None` for `1e-5 * noise_level`.
     pub min_decrease: Option<f64>,
     /// `max.iter`, default 10000.
-    pub max_iter: usize,
+    pub max_iterations: usize,
     /// `max.iter.pre.sparsify`, default 100.
-    pub max_iter_pre_sparsify: usize,
+    pub max_iterations_pre_sparsify: usize,
     /// Whether to sparsify between the two runs (`sparsify =
     /// sparsify_function`, the default) or run once (`sparsify = NULL`).
     pub sparsify: bool,
+    /// The standard error; by default none.
+    pub variance: SynthVariance,
+    /// The level of the normal intervals; by default 95%.
+    pub level: Level,
 }
 
-impl SynthDidConfig {
+impl Default for SynthDidOptions {
     /// `synthdid_estimate` with its defaults.
-    #[must_use]
-    pub fn synthdid() -> Self {
+    fn default() -> Self {
         Self {
             noise_level: None,
             eta_omega: None,
@@ -437,12 +298,16 @@ impl SynthDidConfig {
             omega: SynthWeights::Estimate,
             lambda: SynthWeights::Estimate,
             min_decrease: None,
-            max_iter: 10_000,
-            max_iter_pre_sparsify: 100,
+            max_iterations: 10_000,
+            max_iterations_pre_sparsify: 100,
             sparsify: true,
+            variance: SynthVariance::None,
+            level: Level::default(),
         }
     }
+}
 
+impl SynthDidOptions {
     /// `sc_estimate`: time weights fixed at zero, no intercept in the unit
     /// weights, `eta_omega = 1e-6`.
     #[must_use]
@@ -451,7 +316,7 @@ impl SynthDidConfig {
             eta_omega: Some(1e-6),
             omega_intercept: false,
             lambda: SynthWeights::FixedZero,
-            ..Self::synthdid()
+            ..Self::default()
         }
     }
 
@@ -461,20 +326,15 @@ impl SynthDidConfig {
         Self {
             omega: SynthWeights::FixedUniform,
             lambda: SynthWeights::FixedUniform,
-            ..Self::synthdid()
+            ..Self::default()
         }
-    }
-}
-
-impl Default for SynthDidConfig {
-    fn default() -> Self {
-        Self::synthdid()
     }
 }
 
 /// The objective after each Frank-Wolfe step of the last run, as
 /// `synthdid` keeps them in `lambda.vals`, `omega.vals` and, with
 /// covariates, `vals`.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SynthTrace {
     /// The time-weight problem, empty when the time weights are held fixed
@@ -486,14 +346,12 @@ pub struct SynthTrace {
     pub joint: Vec<f64>,
 }
 
-/// An estimate with its weights.
+/// The weights of one adoption cohort and the settings they were found
+/// with.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
-pub struct SynthDidEstimate {
-    /// The average effect on the treated over the post periods.
-    pub estimate: f64,
-    /// The effect in each post period, whose mean is `estimate`.
-    pub effect_curve: Vec<f64>,
-    /// Unit weights, one per control.
+pub struct SynthFit {
+    /// Unit weights, one per control, in increasing unit code.
     pub omega: Vec<f64>,
     /// Time weights, one per pre-period.
     pub lambda: Vec<f64>,
@@ -509,36 +367,30 @@ pub struct SynthDidEstimate {
     pub min_decrease: f64,
     /// The objective after each step of the last runs.
     pub trace: SynthTrace,
-    /// `false` when a last run stopped at `max_iter` with the objective still
-    /// falling by more than `min_decrease^2`. `synthdid` reports nothing in
-    /// that case.
+    /// `false` when a last run stopped at `max_iterations` with the
+    /// objective still falling by more than `min_decrease^2`. `synthdid`
+    /// reports nothing in that case.
     pub converged: bool,
-    pub(crate) opts: Opts,
-    pub(crate) shape: (usize, usize, usize, usize, usize),
 }
 
-/// A standard error.
+/// The replicates of a standard error.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
-pub struct SynthDidVariance {
-    /// The standard error of the estimate, `None` where `synthdid` returns NA
-    /// (see [`SynthUndefined`]).
-    pub se: Option<f64>,
-    /// The standard error of the effect in each post period (or event time,
-    /// for staggered adoption), from the same replicates.
-    pub effect_curve_se: Vec<Option<f64>>,
+pub struct SynthReplicates {
     /// The replicate estimates: leave-one-out estimates for the jackknife, in
-    /// the order of the units (or clusters), refits for the placebo and the
-    /// bootstrap, in replicate order.
+    /// increasing code of the units (or clusters) left out, refits for the
+    /// placebo and the bootstrap, in replicate order.
     pub replicates: Vec<f64>,
-    /// The jackknife influence values of the units, scaled as described in
-    /// the module documentation; `None` for the other methods and the
-    /// cluster jackknife.
-    pub influence: Option<Vec<f64>>,
+    /// The jackknife influence values of the units, as described in the
+    /// module documentation; `None` for the other methods and the cluster
+    /// jackknife.
+    pub influence: Option<Influence>,
     /// Why the standard error is undefined, when it is.
     pub undefined: Option<SynthUndefined>,
 }
 
 /// Why a standard error is undefined.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SynthUndefined {
     /// A cohort has a single treated unit (jackknife and bootstrap), or a
@@ -549,203 +401,271 @@ pub enum SynthUndefined {
     OneWeightedControl,
 }
 
-/// The method of a standard error.
-#[derive(Debug, Clone, Copy)]
-pub enum SynthVariance<'a> {
-    /// Leave one unit, or with `clusters` one cluster, out at a time with
-    /// the weights fixed.
-    Jackknife {
-        /// One label per unit, in panel order; `None` for one per unit.
-        clusters: Option<&'a Clusters>,
-    },
-    /// Refits on the controls with some of them called treated.
-    Placebo(SynthDraws<'a>),
-    /// Refits on units drawn with replacement.
-    Bootstrap(SynthDraws<'a>),
+/// A single-adoption estimate: `synthdid_estimate`, `sc_estimate` or
+/// `did_estimate`, with the standard error of `vcov` when asked for.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct SynthDid {
+    /// The average effect on the treated over the post periods, with the
+    /// standard error of [`SynthDidOptions::variance`] and its normal
+    /// interval and p-value; the standard error `None` without a variance or
+    /// where `synthdid` returns NA (see [`SynthReplicates::undefined`]).
+    pub estimate: Estimate,
+    /// The effect in each post period, whose mean is the estimate, with a
+    /// standard error from the same replicates.
+    pub effect_curve: Vec<Estimate>,
+    /// The period the treated units are first treated in.
+    pub adoption: i64,
+    /// The codes of the never-treated units, the order of
+    /// [`SynthFit::omega`].
+    pub controls: Vec<u32>,
+    /// The codes of the treated units.
+    pub treated: Vec<u32>,
+    /// The weights.
+    pub fit: SynthFit,
+    /// The replicates of the standard error, `None` without a variance.
+    pub variance: Option<SynthReplicates>,
 }
 
-/// The random draws of the placebo and the bootstrap.
+/// The method of a standard error as the variance routines take it.
 #[derive(Debug, Clone, Copy)]
-pub enum SynthDraws<'a> {
-    /// `replications` draws from `seed`, as described in the module
-    /// documentation; `synthdid` uses 200.
-    Seeded {
-        /// Number of replicates, at least 2.
-        replications: usize,
-        /// Base seed.
-        seed: u64,
-    },
-    /// The draws themselves, 0-based: for the placebo a permutation of the
-    /// controls' positions `0..N0`, for the bootstrap `N` unit indices with
-    /// repeats, in the order drawn.
+pub(crate) enum Method<'a> {
+    Jackknife(Option<&'a epistat_inference::Clusters>),
+    Placebo(Draws<'a>),
+    Bootstrap(Draws<'a>),
+}
+
+/// The draws of a placebo or a bootstrap as the variance routines take them.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Draws<'a> {
+    Seeded { replications: usize, seed: u64 },
     Given(&'a [Vec<usize>]),
 }
 
-/// Resolves the configuration for one cohort: the noise level, the
-/// penalties and the weight rules.
+impl SynthVariance {
+    /// The method of the options on the panel `grid`, `None` for no
+    /// variance.
+    fn method<'a>(&'a self, grid: &'a Grid) -> Option<Method<'a>> {
+        let draws = |d: &'a SynthDraws| match d {
+            SynthDraws::Seeded(b) => Draws::Seeded {
+                replications: b.replicates,
+                seed: b.seed,
+            },
+            SynthDraws::Given(given) => Draws::Given(given),
+        };
+        match self {
+            Self::None => None,
+            Self::Jackknife => Some(Method::Jackknife(grid.clusters.as_ref())),
+            Self::Placebo(d) => Some(Method::Placebo(draws(d))),
+            Self::Bootstrap(d) => Some(Method::Bootstrap(draws(d))),
+        }
+    }
+}
+
+/// A standard error with its replicates, as the variance routines return it.
+pub(crate) struct Variance {
+    pub se: Option<f64>,
+    pub curve_se: Vec<Option<f64>>,
+    pub replicates: Vec<f64>,
+    pub influence: Option<Vec<f64>>,
+    pub undefined: Option<SynthUndefined>,
+}
+
+impl Variance {
+    /// The replicates of the result, with the influence values of the units
+    /// `units`.
+    fn replicates(self, units: &[u32]) -> Result<SynthReplicates, Error> {
+        let influence = self
+            .influence
+            .map(|values| Influence::new(values, units.to_vec(), 1, ClusterRule::NoSmallSample))
+            .transpose()?;
+        Ok(SynthReplicates {
+            replicates: self.replicates,
+            influence,
+            undefined: self.undefined,
+        })
+    }
+}
+
+/// `value` with the standard error `se` and its normal interval at `level`.
+fn with_se(value: f64, se: Option<f64>, level: Level) -> Estimate {
+    epistat_stats::wald(value, se, level, Scale::Identity)
+}
+
+fn domain(what: &'static str, value: f64, domain: &'static str) -> Error {
+    InputError::Domain {
+        what,
+        value,
+        domain,
+    }
+    .into()
+}
+
+/// Resolves the options for one cohort: the noise level, the penalties and
+/// the weight rules.
 pub(crate) fn resolve(
-    config: &SynthDidConfig,
+    options: &SynthDidOptions,
     data: &Data<'_>,
     controls: &[usize],
     treated: usize,
     pre: usize,
-) -> Result<(Opts, Start, f64), SynthDidError> {
+) -> Result<(Opts, Start, f64), Error> {
     let n0 = controls.len();
     let post = data.periods - pre;
-    let noise = match config.noise_level {
-        Some(v) if v.is_finite() && v >= 0.0 => v,
-        Some(_) => return Err(SynthDidError::Setting("noise_level")),
-        None => fit::noise_level(data, controls, pre).ok_or(SynthDidError::NoiseLevel)?,
-    };
     let positive = |v: f64, name| {
         if v.is_finite() && v >= 0.0 {
             Ok(v)
         } else {
-            Err(SynthDidError::Setting(name))
+            Err(domain(name, v, "[0, inf)"))
         }
     };
-    let eta_omega = match config.eta_omega {
+    let noise = match options.noise_level {
+        Some(v) => positive(v, "noise_level")?,
+        None => fit::noise_level(data, controls, pre).ok_or(Error::NoiseLevel)?,
+    };
+    let eta_omega = match options.eta_omega {
         Some(v) => positive(v, "eta_omega")?,
         None => ((treated * post) as f64).powf(0.25),
     };
-    let eta_lambda = positive(config.eta_lambda, "eta_lambda")?;
-    let zeta_omega = match config.zeta_omega {
+    let eta_lambda = positive(options.eta_lambda, "eta_lambda")?;
+    let zeta_omega = match options.zeta_omega {
         Some(v) => positive(v, "zeta_omega")?,
         None => eta_omega * noise,
     };
-    let zeta_lambda = match config.zeta_lambda {
+    let zeta_lambda = match options.zeta_lambda {
         Some(v) => positive(v, "zeta_lambda")?,
         None => eta_lambda * noise,
     };
-    let min_decrease = match config.min_decrease {
+    let min_decrease = match options.min_decrease {
         Some(v) => positive(v, "min_decrease")?,
         None => 1e-5 * noise,
     };
-    if config.max_iter == 0 || config.max_iter_pre_sparsify == 0 {
-        return Err(SynthDidError::Setting("max_iter"));
+    if options.max_iterations == 0 {
+        return Err(domain("max_iterations", 0.0, "1 or more"));
     }
-    let rule =
-        |weights: &SynthWeights, len: usize| -> Result<(bool, Option<Vec<f64>>), SynthDidError> {
-            let check = |v: &Vec<f64>, simplex: bool| -> Result<(), SynthDidError> {
-                if v.len() != len {
-                    return Err(SynthDidError::Dimension("weights"));
-                }
-                if v.iter().any(|x| !x.is_finite()) {
-                    return Err(SynthDidError::Weights);
-                }
-                let total: f64 = v.iter().sum();
-                if simplex && (v.iter().any(|&x| x < 0.0) || (total - 1.0).abs() > 1e-8) {
-                    return Err(SynthDidError::Weights);
-                }
-                Ok(())
-            };
-            Ok(match weights {
-                SynthWeights::Estimate => (true, None),
-                SynthWeights::Start(v) => {
-                    check(v, true)?;
-                    (true, Some(v.clone()))
-                }
-                SynthWeights::Fixed(v) => {
-                    check(v, false)?;
-                    (false, Some(v.clone()))
-                }
-                SynthWeights::FixedUniform => (false, Some(vec![1.0 / len as f64; len])),
-                SynthWeights::FixedZero => (false, Some(vec![0.0; len])),
-            })
+    if options.max_iterations_pre_sparsify == 0 {
+        return Err(domain("max_iterations_pre_sparsify", 0.0, "1 or more"));
+    }
+    let rule = |what: &'static str,
+                weights: &SynthWeights,
+                len: usize|
+     -> Result<(bool, Option<Vec<f64>>), Error> {
+        let check = |v: &Vec<f64>, simplex: bool| -> Result<(), Error> {
+            epistat_core::check::same_length(what, len, v.len())?;
+            epistat_core::check::finite(what, v)?;
+            let total: f64 = v.iter().sum();
+            if let Some(&w) = v.iter().find(|&&x| x < 0.0).filter(|_| simplex) {
+                return Err(domain(what, w, "the simplex"));
+            }
+            if simplex && (total - 1.0).abs() > 1e-8 {
+                return Err(domain(what, total, "the simplex"));
+            }
+            Ok(())
         };
-    let (update_omega, omega) = rule(&config.omega, n0)?;
-    let (update_lambda, lambda) = rule(&config.lambda, pre)?;
+        Ok(match weights {
+            SynthWeights::Estimate => (true, None),
+            SynthWeights::Start(v) => {
+                check(v, true)?;
+                (true, Some(v.clone()))
+            }
+            SynthWeights::Fixed(v) => {
+                check(v, false)?;
+                (false, Some(v.clone()))
+            }
+            SynthWeights::FixedUniform => (false, Some(vec![1.0 / len as f64; len])),
+            SynthWeights::FixedZero => (false, Some(vec![0.0; len])),
+        })
+    };
+    let (update_omega, omega) = rule("omega", &options.omega, n0)?;
+    let (update_lambda, lambda) = rule("lambda", &options.lambda, pre)?;
     Ok((
         Opts {
             zeta_omega,
             zeta_lambda,
-            omega_intercept: config.omega_intercept,
-            lambda_intercept: config.lambda_intercept,
+            omega_intercept: options.omega_intercept,
+            lambda_intercept: options.lambda_intercept,
             update_omega,
             update_lambda,
             min_decrease,
-            max_iter: config.max_iter,
-            max_iter_pre_sparsify: config.max_iter_pre_sparsify,
-            sparsify: config.sparsify,
+            max_iter: options.max_iterations,
+            max_iter_pre_sparsify: options.max_iterations_pre_sparsify,
+            sparsify: options.sparsify,
         },
         Start { lambda, omega },
         noise,
     ))
 }
 
-/// The estimate of `synthdid_estimate`, `sc_estimate` or `did_estimate`,
-/// according to `config`.
+/// The estimate of `synthdid_estimate`, `sc_estimate` or `did_estimate` on a
+/// panel with a single adoption period, according to `options`, with the
+/// standard error of [`SynthDidOptions::variance`].
 ///
 /// # Errors
 ///
-/// [`SynthDidError::NoiseLevel`] when the default noise level is undefined,
-/// [`SynthDidError::Setting`], [`SynthDidError::Dimension`] or
-/// [`SynthDidError::Weights`] for a configuration that does not fit the
-/// panel.
-pub fn estimate_synthdid(
-    panel: &SynthPanel,
-    config: &SynthDidConfig,
-) -> Result<SynthDidEstimate, SynthDidError> {
-    let data = panel.data();
-    let controls: Vec<usize> = (0..panel.controls).collect();
-    let treated: Vec<usize> = (panel.controls..panel.units).collect();
-    let pre = panel.pre_periods;
-    let (opts, start, noise) = resolve(config, &data, &controls, treated.len(), pre)?;
-    let fitted = fit::fit(&data, &controls, &treated, pre, &opts, start)?;
-    Ok(SynthDidEstimate {
-        estimate: fitted.estimate,
-        effect_curve: fitted.curve,
-        omega: fitted.omega,
-        lambda: fitted.lambda,
-        beta: fitted.beta,
-        noise_level: noise,
-        zeta_omega: opts.zeta_omega,
-        zeta_lambda: opts.zeta_lambda,
-        min_decrease: opts.min_decrease,
-        trace: fitted.trace,
-        converged: fitted.converged,
-        opts,
-        shape: shape(panel),
-    })
-}
-
-fn shape(panel: &SynthPanel) -> (usize, usize, usize, usize, usize) {
-    (
-        panel.units,
-        panel.periods,
-        panel.controls,
-        panel.pre_periods,
-        panel.covariate_count,
-    )
-}
-
-/// The standard error of `synthdid`'s `vcov(estimate, method)`, with a
-/// standard error for each post period beside it.
-///
-/// # Errors
-///
-/// [`SynthDidError::Mismatch`] when `estimate` was not computed on `panel`,
-/// [`SynthDidError::PlaceboControls`], [`SynthDidError::Replications`],
-/// [`SynthDidError::Draw`] or [`SynthDidError::Dimension`] for clusters or
-/// draws that do not fit, and the errors of a refit.
-pub fn synthdid_variance(
-    panel: &SynthPanel,
-    estimate: &SynthDidEstimate,
-    method: SynthVariance<'_>,
-) -> Result<SynthDidVariance, SynthDidError> {
-    if estimate.shape != shape(panel) {
-        return Err(SynthDidError::Mismatch);
-    }
-    let plan = variance::Plan {
-        data: panel.data(),
-        controls: (0..panel.controls).collect(),
-        cohorts: vec![variance::PlanCohort {
-            pre: panel.pre_periods,
-            treated: (panel.controls..panel.units).collect(),
-            opts: estimate.opts,
-            omega: estimate.omega.clone(),
-            lambda: estimate.lambda.clone(),
-        }],
+/// The errors of the panel's matrices: [`Error::Unsupported`] for prior
+/// weights or comparison cohorts, [`Error::Unbalanced`],
+/// [`Error::Adoption`], [`Error::NoNeverTreated`] and
+/// [`Error::NoTreatment`]; [`Error::Unsupported`] for more than one
+/// adoption period, which [`estimate_staggered`] takes;
+/// [`Error::NoiseLevel`] when the default noise level is undefined;
+/// [`Error::Input`] for options that do not fit the panel; and for the
+/// variance, [`Error::PlaceboControls`], [`Error::Draw`] and
+/// [`Error::Input`] for fewer than two replicates.
+pub fn estimate(panel: &StaggeredPanel<'_>, options: &SynthDidOptions) -> Result<SynthDid, Error> {
+    let grid = Grid::new(panel)?;
+    let cohorts = grid.cohorts();
+    let [(pre, treated)] = cohorts.as_slice() else {
+        return Err(Error::Unsupported {
+            what: "synthdid::estimate with several adoption periods; estimate_staggered takes them",
+        });
     };
-    variance::variance(&plan, method)
+    let (pre, treated) = (*pre, treated.clone());
+    let data = grid.data();
+    let controls = grid.controls();
+    let (opts, start, noise) = resolve(options, &data, &controls, treated.len(), pre)?;
+    let fitted = fit::fit(&data, &controls, &treated, pre, &opts, start)?;
+    let variance = match options.variance.method(&grid) {
+        None => None,
+        Some(method) => {
+            let plan = variance::Plan {
+                data,
+                controls: controls.clone(),
+                cohorts: vec![variance::PlanCohort {
+                    pre,
+                    treated: treated.clone(),
+                    opts,
+                    omega: fitted.omega.clone(),
+                    lambda: fitted.lambda.clone(),
+                }],
+            };
+            Some(variance::variance(&plan, method)?)
+        }
+    };
+    let level = options.level;
+    let se = variance.as_ref().and_then(|v| v.se);
+    let curve_se = |s: usize| variance.as_ref().and_then(|v| v.curve_se[s]);
+    Ok(SynthDid {
+        estimate: with_se(fitted.estimate, se, level),
+        effect_curve: fitted
+            .curve
+            .iter()
+            .enumerate()
+            .map(|(s, &v)| with_se(v, curve_se(s), level))
+            .collect(),
+        adoption: grid.periods[pre],
+        controls: grid.codes(&controls),
+        treated: grid.codes(&treated),
+        fit: SynthFit {
+            omega: fitted.omega,
+            lambda: fitted.lambda,
+            beta: fitted.beta,
+            noise_level: noise,
+            zeta_omega: opts.zeta_omega,
+            zeta_lambda: opts.zeta_lambda,
+            min_decrease: opts.min_decrease,
+            trace: fitted.trace,
+            converged: fitted.converged,
+        },
+        variance: variance.map(|v| v.replicates(&grid.units)).transpose()?,
+    })
 }

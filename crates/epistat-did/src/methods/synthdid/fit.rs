@@ -3,7 +3,9 @@
 
 use epistat_optim::frank_wolfe::{FrankWolfeOptions, SimplexLeastSquares};
 
-use super::{SynthDidError, SynthTrace};
+use crate::error::Error;
+
+use super::SynthTrace;
 
 /// The panel in the layout the fits read: outcomes by unit (`units × periods`,
 /// unit-major) and the covariates as `count` such blocks.
@@ -242,7 +244,7 @@ fn solve_weights(
     zeta: f64,
     start: Option<Vec<f64>>,
     opts: &Opts,
-) -> Result<(Vec<f64>, Vec<f64>, bool), SynthDidError> {
+) -> Result<(Vec<f64>, Vec<f64>, bool), Error> {
     let eta = rows as f64 * (zeta * zeta);
     let problem = SimplexLeastSquares::new(a, rows, cols, b, eta)?;
     let tolerance = opts.min_decrease * opts.min_decrease;
@@ -282,82 +284,87 @@ pub(crate) fn fit(
     pre: usize,
     opts: &Opts,
     start: Start,
-) -> Result<Fit, SynthDidError> {
+) -> Result<Fit, Error> {
     let n0 = controls.len();
     let periods = data.periods;
     let yc = collapse(|u| data.outcome_row(u), controls, treated, pre, periods);
-    let (lambda, omega, beta, trace, converged) = if data.count == 0 {
-        let lambda_job = || -> Result<(Vec<f64>, Vec<f64>, bool), SynthDidError> {
-            if opts.update_lambda {
-                let (a, b) = lambda_problem(&yc, n0, pre, opts.lambda_intercept);
-                solve_weights(
-                    &a,
-                    &b,
-                    n0,
-                    pre,
-                    opts.zeta_lambda,
-                    start.lambda.clone(),
-                    opts,
-                )
-            } else {
-                Ok((
-                    start.lambda.clone().ok_or(SynthDidError::Weights)?,
-                    Vec::new(),
-                    true,
-                ))
-            }
+    let (lambda, omega, beta, trace, converged) =
+        if data.count == 0 {
+            let lambda_job = || -> Result<(Vec<f64>, Vec<f64>, bool), Error> {
+                if opts.update_lambda {
+                    let (a, b) = lambda_problem(&yc, n0, pre, opts.lambda_intercept);
+                    solve_weights(
+                        &a,
+                        &b,
+                        n0,
+                        pre,
+                        opts.zeta_lambda,
+                        start.lambda.clone(),
+                        opts,
+                    )
+                } else {
+                    Ok((
+                        start.lambda.clone().ok_or(Error::Input(
+                            epistat_core::InputError::Empty { what: "weights" },
+                        ))?,
+                        Vec::new(),
+                        true,
+                    ))
+                }
+            };
+            let omega_job = || -> Result<(Vec<f64>, Vec<f64>, bool), Error> {
+                if opts.update_omega {
+                    let (a, b) = omega_problem(&yc, n0, pre, opts.omega_intercept);
+                    solve_weights(&a, &b, pre, n0, opts.zeta_omega, start.omega.clone(), opts)
+                } else {
+                    Ok((
+                        start.omega.clone().ok_or(Error::Input(
+                            epistat_core::InputError::Empty { what: "weights" },
+                        ))?,
+                        Vec::new(),
+                        true,
+                    ))
+                }
+            };
+            let (l, o) = rayon::join(lambda_job, omega_job);
+            let (lambda, lambda_trace, lambda_ok) = l?;
+            let (omega, omega_trace, omega_ok) = o?;
+            (
+                lambda,
+                omega,
+                Vec::new(),
+                SynthTrace {
+                    lambda: lambda_trace,
+                    omega: omega_trace,
+                    joint: Vec::new(),
+                },
+                lambda_ok && omega_ok,
+            )
+        } else {
+            let xc: Vec<Vec<f64>> = (0..data.count)
+                .map(|k| {
+                    collapse(
+                        |u| data.covariate_row(k, u),
+                        controls,
+                        treated,
+                        pre,
+                        periods,
+                    )
+                })
+                .collect();
+            let fitted = fit_covariates(&yc, &xc, n0, pre, opts, start)?;
+            (
+                fitted.lambda,
+                fitted.omega,
+                fitted.beta,
+                SynthTrace {
+                    lambda: Vec::new(),
+                    omega: Vec::new(),
+                    joint: fitted.values,
+                },
+                fitted.converged,
+            )
         };
-        let omega_job = || -> Result<(Vec<f64>, Vec<f64>, bool), SynthDidError> {
-            if opts.update_omega {
-                let (a, b) = omega_problem(&yc, n0, pre, opts.omega_intercept);
-                solve_weights(&a, &b, pre, n0, opts.zeta_omega, start.omega.clone(), opts)
-            } else {
-                Ok((
-                    start.omega.clone().ok_or(SynthDidError::Weights)?,
-                    Vec::new(),
-                    true,
-                ))
-            }
-        };
-        let (l, o) = rayon::join(lambda_job, omega_job);
-        let (lambda, lambda_trace, lambda_ok) = l?;
-        let (omega, omega_trace, omega_ok) = o?;
-        (
-            lambda,
-            omega,
-            Vec::new(),
-            SynthTrace {
-                lambda: lambda_trace,
-                omega: omega_trace,
-                joint: Vec::new(),
-            },
-            lambda_ok && omega_ok,
-        )
-    } else {
-        let xc: Vec<Vec<f64>> = (0..data.count)
-            .map(|k| {
-                collapse(
-                    |u| data.covariate_row(k, u),
-                    controls,
-                    treated,
-                    pre,
-                    periods,
-                )
-            })
-            .collect();
-        let fitted = fit_covariates(&yc, &xc, n0, pre, opts, start)?;
-        (
-            fitted.lambda,
-            fitted.omega,
-            fitted.beta,
-            SynthTrace {
-                lambda: Vec::new(),
-                omega: Vec::new(),
-                joint: fitted.values,
-            },
-            fitted.converged,
-        )
-    };
     let (estimate, curve) =
         estimate_and_curve(data, controls, treated, pre, &omega, &lambda, &beta);
     Ok(Fit {
@@ -441,7 +448,7 @@ fn fit_covariates(
     pre: usize,
     opts: &Opts,
     start: Start,
-) -> Result<CovariateFit, SynthDidError> {
+) -> Result<CovariateFit, Error> {
     let width = pre + 1;
     let k = xc.len();
     let mut lambda = start.lambda.unwrap_or_else(|| vec![1.0 / pre as f64; pre]);
@@ -449,7 +456,7 @@ fn fit_covariates(
     let mut beta = vec![0.0; k];
     let tolerance = opts.min_decrease * opts.min_decrease;
     let update =
-        |y: &[f64], lambda: &mut Vec<f64>, omega: &mut Vec<f64>| -> Result<Update, SynthDidError> {
+        |y: &[f64], lambda: &mut Vec<f64>, omega: &mut Vec<f64>| -> Result<Update, Error> {
             let (a, b) = lambda_problem(y, n0, pre, opts.lambda_intercept);
             let eta = n0 as f64 * (opts.zeta_lambda * opts.zeta_lambda);
             let problem = SimplexLeastSquares::new(&a, n0, pre, &b, eta)?;

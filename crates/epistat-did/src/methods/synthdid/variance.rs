@@ -5,7 +5,9 @@ use epistat_rng::{Stream, replicate_seed};
 use rayon::prelude::*;
 
 use super::fit::{self, Data, Opts, Start, sum_normalize};
-use super::{SynthDidError, SynthDidVariance, SynthDraws, SynthUndefined, SynthVariance};
+use crate::error::Error;
+
+use super::{Draws, Method, SynthUndefined, Variance};
 
 /// A fitted cohort as the variance methods replay it.
 #[derive(Debug, Clone)]
@@ -85,7 +87,7 @@ impl Plan<'_> {
         controls: &[usize],
         control_positions: &[usize],
         treated: &[Vec<usize>],
-    ) -> Result<(f64, Vec<f64>), SynthDidError> {
+    ) -> Result<(f64, Vec<f64>), Error> {
         let mut values = Vec::with_capacity(self.cohorts.len());
         for (cohort, treated) in self.cohorts.iter().zip(treated) {
             if treated.is_empty() {
@@ -126,7 +128,7 @@ impl Plan<'_> {
     }
 
     /// The placebo replicate of a permutation of the controls' positions.
-    fn placebo(&self, permutation: &[usize]) -> Result<(f64, Vec<f64>), SynthDidError> {
+    fn placebo(&self, permutation: &[usize]) -> Result<(f64, Vec<f64>), Error> {
         let n_treated = self.treated_total();
         let kept = self.controls.len() - n_treated;
         let positions = &permutation[..kept];
@@ -154,7 +156,7 @@ impl Plan<'_> {
         draw: &[usize],
         cohort_of: &[Option<usize>],
         control_position: &[Option<usize>],
-    ) -> Option<Result<(f64, Vec<f64>), SynthDidError>> {
+    ) -> Option<Result<(f64, Vec<f64>), Error>> {
         let mut sorted = draw.to_vec();
         sorted.sort_unstable();
         let mut controls = Vec::new();
@@ -216,7 +218,7 @@ fn collect(
     replicates: &[(f64, Vec<f64>)],
     se: impl Fn(&[f64]) -> Option<f64>,
     influence: Option<Vec<f64>>,
-) -> SynthDidVariance {
+) -> Variance {
     let estimates: Vec<f64> = replicates.iter().map(|r| r.0).collect();
     let effect_curve_se = (0..plan.curve_length())
         .map(|e| {
@@ -224,54 +226,56 @@ fn collect(
             se(&column)
         })
         .collect();
-    SynthDidVariance {
+    Variance {
         se: se(&estimates),
-        effect_curve_se,
+        curve_se: effect_curve_se,
         replicates: estimates,
         influence,
         undefined: None,
     }
 }
 
-fn undefined(plan: &Plan<'_>, reason: SynthUndefined) -> SynthDidVariance {
-    SynthDidVariance {
+fn undefined(plan: &Plan<'_>, reason: SynthUndefined) -> Variance {
+    Variance {
         se: None,
-        effect_curve_se: vec![None; plan.curve_length()],
+        curve_se: vec![None; plan.curve_length()],
         replicates: Vec::new(),
         influence: None,
         undefined: Some(reason),
     }
 }
 
-pub(crate) fn variance(
-    plan: &Plan<'_>,
-    method: SynthVariance<'_>,
-) -> Result<SynthDidVariance, SynthDidError> {
+pub(crate) fn variance(plan: &Plan<'_>, method: Method<'_>) -> Result<Variance, Error> {
     match method {
-        SynthVariance::Placebo(draws) => placebo(plan, draws),
-        SynthVariance::Bootstrap(draws) => bootstrap(plan, draws),
-        SynthVariance::Jackknife { clusters } => jackknife(plan, clusters),
+        Method::Placebo(draws) => placebo(plan, draws),
+        Method::Bootstrap(draws) => bootstrap(plan, draws),
+        Method::Jackknife(clusters) => jackknife(plan, clusters),
     }
 }
 
-fn replications(draws: SynthDraws<'_>) -> Result<usize, SynthDidError> {
+fn replications(draws: Draws<'_>) -> Result<usize, Error> {
     let b = match draws {
-        SynthDraws::Seeded { replications, .. } => replications,
-        SynthDraws::Given(d) => d.len(),
+        Draws::Seeded { replications, .. } => replications,
+        Draws::Given(d) => d.len(),
     };
     if b < 2 {
-        return Err(SynthDidError::Replications);
+        return Err(epistat_core::InputError::Domain {
+            what: "replicates",
+            value: b as f64,
+            domain: "2 or more",
+        }
+        .into());
     }
     Ok(b)
 }
 
-fn placebo(plan: &Plan<'_>, draws: SynthDraws<'_>) -> Result<SynthDidVariance, SynthDidError> {
+fn placebo(plan: &Plan<'_>, draws: Draws<'_>) -> Result<Variance, Error> {
     let n0 = plan.controls.len();
     if n0 <= plan.treated_total() {
-        return Err(SynthDidError::PlaceboControls);
+        return Err(Error::PlaceboControls);
     }
     let b = replications(draws)?;
-    if let SynthDraws::Given(given) = draws {
+    if let Draws::Given(given) = draws {
         for (r, draw) in given.iter().enumerate() {
             let mut seen = vec![false; n0];
             let ok = draw.len() == n0
@@ -279,15 +283,15 @@ fn placebo(plan: &Plan<'_>, draws: SynthDraws<'_>) -> Result<SynthDidVariance, S
                     .iter()
                     .all(|&p| p < n0 && !std::mem::replace(&mut seen[p], true));
             if !ok {
-                return Err(SynthDidError::Draw(r));
+                return Err(Error::Draw { replicate: r });
             }
         }
     }
     let replicates = (0..b)
         .into_par_iter()
         .map(|r| match draws {
-            SynthDraws::Given(given) => plan.placebo(&given[r]),
-            SynthDraws::Seeded { seed, .. } => {
+            Draws::Given(given) => plan.placebo(&given[r]),
+            Draws::Seeded { seed, .. } => {
                 let mut stream = Stream::seeded(replicate_seed(seed, r as u64));
                 let mut permutation: Vec<usize> = (0..n0).collect();
                 stream.shuffle(&mut permutation);
@@ -307,7 +311,7 @@ fn placebo(plan: &Plan<'_>, draws: SynthDraws<'_>) -> Result<SynthDidVariance, S
     ))
 }
 
-fn bootstrap(plan: &Plan<'_>, draws: SynthDraws<'_>) -> Result<SynthDidVariance, SynthDidError> {
+fn bootstrap(plan: &Plan<'_>, draws: Draws<'_>) -> Result<Variance, Error> {
     if plan.treated_total() == 1 {
         return Ok(undefined(plan, SynthUndefined::OneTreatedUnit));
     }
@@ -318,15 +322,15 @@ fn bootstrap(plan: &Plan<'_>, draws: SynthDraws<'_>) -> Result<SynthDidVariance,
     let replicates = (0..b)
         .into_par_iter()
         .map(|r| match draws {
-            SynthDraws::Given(given) => {
+            Draws::Given(given) => {
                 let draw = &given[r];
                 if draw.len() != n || draw.iter().any(|&u| u >= n) {
-                    return Err(SynthDidError::Draw(r));
+                    return Err(Error::Draw { replicate: r });
                 }
                 plan.bootstrap(draw, &cohort_of, &positions)
-                    .unwrap_or(Err(SynthDidError::Draw(r)))
+                    .unwrap_or(Err(Error::Draw { replicate: r }))
             }
-            SynthDraws::Seeded { seed, .. } => {
+            Draws::Seeded { seed, .. } => {
                 let mut stream = Stream::seeded(replicate_seed(seed, r as u64));
                 let mut draw = vec![0; n];
                 loop {
@@ -386,13 +390,18 @@ fn contrasts(plan: &Plan<'_>, cohort: &PlanCohort) -> Contrasts {
 fn jackknife(
     plan: &Plan<'_>,
     clusters: Option<&epistat_inference::Clusters>,
-) -> Result<SynthDidVariance, SynthDidError> {
+) -> Result<Variance, Error> {
     let n = plan.data.units;
     let groups: Vec<Vec<usize>> = match clusters {
         None => (0..n).map(|u| vec![u]).collect(),
         Some(c) => {
             if c.len() != n {
-                return Err(SynthDidError::Dimension("clusters"));
+                return Err(epistat_core::InputError::Length {
+                    what: "clusters",
+                    expected: n,
+                    found: c.len(),
+                }
+                .into());
             }
             let mut groups = vec![Vec::new(); c.count()];
             for (unit, &g) in c.of().iter().enumerate() {
@@ -494,7 +503,7 @@ fn jackknife(
             })
             .collect::<Vec<_>>()
             .into_iter()
-            .collect::<Result<Vec<_>, SynthDidError>>()?
+            .collect::<Result<Vec<_>, Error>>()?
     };
     let influence = clusters.is_none().then(|| {
         let estimates: Vec<f64> = replicates.iter().map(|r| r.0).collect();
