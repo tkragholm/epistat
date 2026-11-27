@@ -159,7 +159,6 @@ ncc_probabilities:epistat-survival:tier3_designs:ncc:1000000:tier3/designs.R:600
 ncc_fit:epistat-survival:tier3_designs:ncc:1000000:tier3/designs.R:600
 frailty_fixed:epistat-survival:tier3_frailty:frailty:1000000:tier3/frailty.R:600
 frailty_dense:epistat-survival:tier3_frailty:frailty:1000000:tier3/frailty.R:600
-frailty_search:epistat-survival:tier3_frailty:frailty:1000000:tier3/frailty.R:600
 frailty_profile:epistat-survival:tier3_frailty:frailty:1000000:tier3/frailty.R:600
 frailty_entry:epistat-survival:tier3_frailty:frailty:1000000:tier3/frailty.R:600
 flexpar_hazard:epistat-survival:tier3_survival:flex:1000000:tier3/survival.R:600

@@ -134,20 +134,58 @@
 //! than 1 there is no marginal likelihood: `marginal_log_likelihood` is `None`,
 //! and theta can only be fixed.
 //!
-//! [`Theta::Profile`] maximises `c` over `ln theta`: it fits theta = 0, 1 and
-//! 1/4, steps by factors of 4 until the maximum is bracketed, and then runs
-//! Brent's method ([`epistat_optim::brent`]) on the bracket. A fit that fails
-//! at a trial theta ends the search with [`Error::Frailty`], which names that
-//! theta and holds the failure. When `c` still rises
-//! towards 0 at the last power of 4 above `1e-6`, about `4e-6`, the estimate is
-//! 0 (`ThetaStatus::Boundary`), so a maximum below that is reported as 0; when it
-//! still rises at `1e4` the fit is at `1e4` and not an estimate
-//! (`ThetaStatus::Unbounded`). [`Theta::Coxph`] repeats `coxph`'s search, whose
-//! estimate is the last theta tried and need not be the maximum: on `kidney` with
-//! Efron ties it stops at 0.4122 where the maximum is at 0.4078. The likelihood
-//! ratio test of theta = 0 compares `c` with the Cox model on the boundary of the
-//! parameter space, with the 50:50 mixture of 0 and chi-square on one degree of
-//! freedom of Self and Liang \[8\].
+//! [`Theta::Profile`] maximises `c` over `ln theta`, bracketing the maximum
+//! from theta = 0 and 1 by steps of factors of 4, down to the last power of 4
+//! above `1e-6`, about `4e-6`, and up to `1e4`. A fit that fails at a trial
+//! theta ends the search with [`Error::Frailty`], which names that theta and
+//! holds the failure. When `c` still rises at `1e4` the fit is at the last
+//! theta tried and is not an estimate (`ThetaStatus::Unbounded`).
+//!
+//! With Breslow ties `c` is a profile likelihood, and its derivative in theta
+//! is, by the envelope theorem, the partial derivative of the marginal log
+//! likelihood above at the fit's coefficients and baseline hazard \[2\] \[5\],
+//!
+//! ```text
+//! dc/dtheta = sum_i [ -nu^2 (psi(nu + D_i) - psi(nu)) + D_i / theta
+//!                     + nu^2 ln(1 + theta Lambda_i) - (nu + D_i) Lambda_i / (1 + theta Lambda_i) ],
+//! ```
+//!
+//! with `Lambda_i` from the fit at theta, computed in a form without
+//! cancellation as theta goes to 0, where it is the score of Commenges and
+//! Andersen, `(1/2) sum_i [(D_i - Lambda_i)^2 - D_i]` from the Cox fit \[10\]
+//! (`score_at_zero`). The bracketing follows the sign of this score from
+//! theta = 1, and the estimate is its root on `ln theta` by the ITP method
+//! ([`epistat_optim::root::itp`]). The estimate is 0 (`ThetaStatus::Boundary`)
+//! when the score at 0 is at most 0 and `c` is not higher at the smallest
+//! theta of the bracketing than at 0; when the score at 0 is positive and the
+//! score is negative down to that theta, the root lies between 0 and it and is
+//! found on theta itself. A score at 0 that is not positive with `c` higher at
+//! the smallest theta is an error. The profile-likelihood interval
+//! (`theta_interval`) is the two roots of `c(theta) - c(theta_hat) + q / 2`,
+//! `q` the chi-square quantile on one degree of freedom at
+//! `FrailtyOptions::level`, found by the same root finder after the same
+//! steps, with the lower limit 0 when `c(0)` is above the cut. The standard
+//! error of `ln theta` (`ln_theta_se`) is from the second derivative of `c`
+//! in `ln theta` by a central difference of its score with steps of `1e-3`,
+//! whose truncation error is of the order of `1e-6` relative.
+//!
+//! With Efron ties `c` is not a likelihood and the score above does not
+//! apply. The search fits theta = 0, 1 and 1/4, steps by factors of 4 until
+//! `c` is bracketed and runs Brent's minimiser ([`epistat_optim::brent`]) on
+//! the bracket; when `c` still rises towards 0 at about `4e-6`, the estimate
+//! is 0, so a maximum below that is reported as 0. Neither interval nor
+//! standard error is given.
+//!
+//! When every cluster has one row the data do not identify theta, and an
+//! estimate other than the boundary is an error.
+//!
+//! `coxph`'s default search stops before the maximum: its estimate is the last
+//! theta it tried, on `kidney` with Efron ties 0.4122 where the maximum is at
+//! 0.4078. To reproduce a `coxph` fit, pass its reported theta as
+//! [`Theta::Fixed`]; every other output then agrees with `coxph`. The
+//! likelihood ratio test of theta = 0 compares `c` with the Cox model on the
+//! boundary of the parameter space, with the 50:50 mixture of 0 and chi-square
+//! on one degree of freedom of Self and Liang \[8\].
 //!
 //! # EM
 //!
@@ -195,8 +233,8 @@
 //!
 //! The tests compare with `coxph` from `survival` 3.8.12 at fixed theta with
 //! both variance forms, Breslow and Efron ties, strata, entry times, offsets and
-//! case weights, up to 5,000 clusters, with `coxph`'s search step by step, and
-//! with `optimize` on its corrected likelihood. Coefficients and frailties agree
+//! case weights, up to 5,000 clusters, and with `optimize` on its corrected
+//! likelihood. Coefficients and frailties agree
 //! to well within bounds derived from R's stopping rule, about `1e-12` standard
 //! errors against the dense fits. Two defects of `coxph`'s C code are avoided
 //! there: with case weights the diagonal form of `coxph(sparse = TRUE)` leaves
@@ -209,7 +247,8 @@
 //! # Not built
 //!
 //! The log-normal frailty of `coxme`, the standard error and the profile
-//! interval of theta, the exact variances of the frailties, and the correction
+//! interval of theta for Efron ties, the observed information of theta of
+//! Andersen et al. \[9\], the exact variances of the frailties, and the correction
 //! for late entry.
 //!
 //! # References
@@ -232,16 +271,21 @@
 //! 8. Self SG, Liang KY. Asymptotic properties of maximum likelihood estimators
 //!    and likelihood ratio tests under nonstandard conditions. J Am Stat Assoc.
 //!    1987;82(398):605-10.
+//! 9. Andersen PK, Klein JP, Knudsen KM, Palacios RT. Estimation of variance
+//!    in Cox's regression model with shared gamma frailties. Biometrics.
+//!    1997;53(4):1475-84.
+//! 10. Commenges D, Andersen PK. Score test of homogeneity for survival data.
+//!     Lifetime Data Anal. 1995;1(2):145-56.
 
 mod em;
 mod engine;
 
 use std::borrow::Cow;
 
-use epistat_core::Covariance;
+use epistat_core::{Covariance, Interval, Level};
 use epistat_linalg::{Mat, MatRef};
-use epistat_optim::brent;
-use epistat_stats::dist::chi_square::sf as chi_square_sf;
+use epistat_optim::{brent, root};
+use epistat_stats::dist::chi_square::{quantile as chi_square_quantile, sf as chi_square_sf};
 
 use self::em::{EmInput, fit_em};
 use self::engine::{Eval, Failure, Layout, Penalty, Rows, State};
@@ -262,35 +306,15 @@ const THETA_MAX: f64 = 1e4;
 const ALIAS_TOLERANCE: f64 = 1e-10;
 
 /// How the variance of the frailty is chosen.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Theta {
     /// A given variance, finite and not negative. Zero is the Cox model.
     Fixed(f64),
-    /// The maximum of the profile marginal log likelihood, found by Brent's
-    /// method on `ln theta` to within `FrailtyOptions::theta_tolerance`.
+    /// The maximum of the profile marginal log likelihood on `ln theta`, to
+    /// within `FrailtyOptions::theta_tolerance`: the root of its score for
+    /// Breslow ties, Brent's minimiser for Efron ties.
     Profile,
-    /// The search of `coxph`'s default `method = "em"`, step by step: theta
-    /// 0, then 1, then a half or 2, then parabolic steps on the square root of
-    /// theta, stopping when the corrected likelihood changes by less than
-    /// `eps` relative, or after `outer_max` fits. Its estimate is the last
-    /// theta fitted, which need not be the maximum.
-    Coxph {
-        /// `eps` of `frailty()`, `1e-5` in R.
-        eps: f64,
-        /// `outer.max` of `coxph.control`, 10 in R.
-        outer_max: u32,
-    },
-}
-
-impl Theta {
-    /// `coxph`'s search with R's defaults.
-    #[must_use]
-    pub fn coxph() -> Self {
-        Self::Coxph {
-            eps: 1e-5,
-            outer_max: 10,
-        }
-    }
 }
 
 /// How the model is fitted at a given theta.
@@ -329,9 +353,14 @@ pub struct FrailtyOptions {
     pub tolerance: f64,
     /// Most Newton trial points at one theta, 50 by default.
     pub max_iterations: usize,
-    /// The tolerance of Brent's method on `ln theta` for
-    /// [`Theta::Profile`], `1e-6` by default.
+    /// The tolerance on `ln theta` of the root finder (Breslow ties) or
+    /// of Brent's method (Efron ties) for [`Theta::Profile`], `1e-6` by
+    /// default.
     pub theta_tolerance: f64,
+    /// The level of the profile-likelihood interval of theta, which
+    /// [`Theta::Profile`] gives with Breslow ties; `None` leaves the interval
+    /// out and saves its fits, about ten. A 95% level by default.
+    pub level: Option<Level>,
 }
 
 impl Default for FrailtyOptions {
@@ -345,26 +374,28 @@ impl Default for FrailtyOptions {
             tolerance: 1e-10,
             max_iterations: 50,
             theta_tolerance: 1e-6,
+            level: Some(Level::default()),
         }
     }
 }
 
 /// How the reported theta was reached.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThetaStatus {
     /// Given by the caller.
     Fixed,
     /// A maximum of the profile inside the range searched.
     Interior,
-    /// The profile rises towards theta = 0 down to about `4e-6`, and theta is
-    /// reported as 0: the model is the Cox model and every log frailty is 0.
+    /// Theta is reported as 0: the model is the Cox model and every log
+    /// frailty is 0. With Breslow ties the score of theta at 0 is at most 0
+    /// and the profile is not higher at the smallest theta of the bracketing,
+    /// about `4e-6`; with Efron ties the profile rises towards 0 down to that
+    /// theta.
     Boundary,
     /// The profile was still rising at the largest theta tried, `1e4`; the
     /// fit is at that theta and is not an estimate.
     Unbounded,
-    /// `coxph`'s search stopped after `outer_max` fits without meeting its
-    /// rule; the fit is at the last theta.
-    SearchLimit,
 }
 
 /// One theta of a search.
@@ -392,6 +423,7 @@ pub struct BoundaryTest {
 }
 
 /// A shared gamma frailty Cox model. See the module documentation.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrailtyFit {
     /// One coefficient per column of the design, `None` for an aliased column.
@@ -440,6 +472,29 @@ pub struct FrailtyFit {
     pub cox_log_likelihood: Option<f64>,
     /// The test of theta = 0, given when theta is estimated.
     pub likelihood_ratio: Option<BoundaryTest>,
+    /// The score of the profile marginal log likelihood in theta at theta =
+    /// 0, `(1/2) sum_i [(D_i - Lambda_i)^2 - D_i]` from the Cox fit. Given
+    /// for Breslow ties and case weights of 1 when the Cox model is fitted,
+    /// which it is unless theta is fixed at a positive value with other
+    /// weights.
+    pub score_at_zero: Option<f64>,
+    /// The score of the profile in theta at the reported theta, for Breslow
+    /// ties and case weights of 1; near 0 at an interior estimate.
+    pub theta_score: Option<f64>,
+    /// The profile-likelihood interval of theta at `FrailtyOptions::level`:
+    /// the thetas where the profile is `q / 2` below its maximum, `q` the
+    /// chi-square quantile on one degree of freedom. The lower limit is 0
+    /// when the profile at 0 is above that cut, and the upper limit `None`
+    /// when the profile is still above it at `1e4`. Given by
+    /// [`Theta::Profile`] with Breslow ties for an interior or boundary
+    /// estimate.
+    pub theta_interval: Option<Interval>,
+    /// The standard error of `ln theta`, `(-c''(ln theta))^(-1/2)` with the
+    /// second derivative of the profile from a central difference of its
+    /// score, steps of `1e-3` on `ln theta`. Given by [`Theta::Profile`]
+    /// with Breslow ties for an interior estimate where the second
+    /// derivative is negative.
+    pub ln_theta_se: Option<f64>,
     /// Every theta fitted, in order.
     pub history: Vec<ThetaStep>,
     /// Trial points (Newton) or EM steps of the final fit.
@@ -497,6 +552,18 @@ fn kept_columns(x: MatRef<'_, f64>, used: &[usize], weight: &[f64]) -> Vec<usize
         .filter(|&(a, _)| corr[a * q + a] != 0.0)
         .map(|(_, &c)| c)
         .collect()
+}
+
+/// Whether every cluster has exactly one row of positive weight; `cluster`
+/// holds the dense index of each row, `u32::MAX` for a row left out.
+fn singletons(cluster: &[u32], g: usize) -> bool {
+    let mut size = vec![0_u32; g];
+    for &c in cluster {
+        if c != u32::MAX {
+            size[c as usize] += 1;
+        }
+    }
+    size.iter().all(|&n| n == 1)
 }
 
 /// `x - ln(1 + x)` for `x >= 0` without cancellation near 0.
@@ -663,6 +730,38 @@ impl Search<'_, '_> {
         Ok(m)
     }
 
+    /// The index of the fit at `theta`, which is fitted unless it is there.
+    /// A failure is [`Error::Frailty`] at `theta`.
+    fn index(&mut self, theta: f64) -> Result<usize> {
+        if let Some(i) = self
+            .fits
+            .iter()
+            .position(|f| f.theta.to_bits() == theta.to_bits())
+        {
+            return Ok(i);
+        }
+        self.run(theta).map_err(at_theta(theta))?;
+        Ok(self.fits.len() - 1)
+    }
+
+    /// The profile marginal log likelihood `c` at `theta`.
+    fn marginal(&mut self, theta: f64) -> Result<f64> {
+        let i = self.index(theta)?;
+        Ok(self.fits[i]
+            .marginal
+            .expect("searches require case weights of 1"))
+    }
+
+    /// The derivative in theta of `c` at `theta`, for Breslow ties.
+    fn score(&mut self, theta: f64) -> Result<f64> {
+        let i = self.index(theta)?;
+        let layout = &self.problem.layout;
+        let (lambda, _) = layout
+            .breslow_cluster_hazards(&self.fits[i].state)
+            .ok_or_else(|| at_theta(theta)(failure(Failure::NotFinite)))?;
+        Ok(profile_score(&layout.events, &lambda, theta))
+    }
+
     fn history(&self) -> Vec<ThetaStep> {
         self.fits
             .iter()
@@ -676,15 +775,280 @@ impl Search<'_, '_> {
     }
 }
 
-/// The maximum of the profile marginal log likelihood on `ln theta`. Returns
-/// the index of the chosen fit and its status.
-fn profile(search: &mut Search<'_, '_>, tolerance: f64) -> Result<(usize, ThetaStatus)> {
-    let at = |theta: f64| {
-        move |source| Error::Frailty {
+/// A closure that wraps the failure of the fit at `theta`.
+fn at_theta(theta: f64) -> impl FnOnce(Error) -> Error {
+    move |source| match source {
+        Error::Frailty { .. } => source,
+        source => Error::Frailty {
             theta,
             source: Box::new(source),
+        },
+    }
+}
+
+/// `(ln(1 + x) - x / (1 + x)) / x^2` for `x >= 0`, without cancellation near
+/// 0, where it is 1/2.
+fn log_excess_ratio(x: f64) -> f64 {
+    if x < 0.1 {
+        // sum_{k >= 2} (-1)^k (k - 1) / k x^(k - 2); the terms after k = 21
+        // are below 0.1^20 of the first.
+        let mut sum = 0.0;
+        let mut power = 1.0;
+        for k in 2..=21_u32 {
+            let t = power * f64::from(k - 1) / f64::from(k);
+            sum += if k % 2 == 0 { t } else { -t };
+            power *= x;
+        }
+        sum
+    } else {
+        (x.ln_1p() - x / (1.0 + x)) / (x * x)
+    }
+}
+
+/// The derivative in theta of the profile marginal log likelihood for
+/// Breslow ties, from the events `D_i` and the cumulative hazards `Lambda_i`
+/// of the clusters without the frailty at the fit at `theta`, which may be 0.
+/// By the envelope theorem it is the partial derivative of the marginal log
+/// likelihood at fixed coefficients and baseline hazard,
+///
+/// ```text
+/// -nu^2 (psi(nu + D) - psi(nu)) + D / theta + nu^2 ln(1 + theta Lambda) - (nu + D) Lambda / (1 + theta Lambda),
+/// ```
+///
+/// summed over the clusters, written as
+/// `sum_{m < D} m / (1 + m theta) + Lambda^2 (ln(1 + x) - x / (1 + x)) / x^2 - D Lambda / (1 + x)`
+/// with `x = theta Lambda`, which has no cancellation as theta goes to 0 and
+/// is `(1/2) [(D - Lambda)^2 - D]` there.
+fn profile_score(events: &[u32], lambda: &[f64], theta: f64) -> f64 {
+    let mut total = 0.0;
+    for (&d, &l) in events.iter().zip(lambda) {
+        let mut term = 0.0;
+        for m in 1..d {
+            let m = f64::from(m);
+            term += m / (1.0 + m * theta);
+        }
+        let x = theta * l;
+        term += l * l * log_excess_ratio(x);
+        term -= f64::from(d) * l / (1.0 + x);
+        total += term;
+    }
+    total
+}
+
+/// A root of `f` in `[lower, upper]` by the ITP method, where `f` may fail; the
+/// first failure is returned.
+fn find_root<'p, 'a>(
+    search: &mut Search<'p, 'a>,
+    mut f: impl FnMut(&mut Search<'p, 'a>, f64) -> Result<f64>,
+    lower: f64,
+    upper: f64,
+    tolerance: f64,
+) -> Result<f64> {
+    let mut failed = None;
+    let options = root::Itp {
+        tolerance,
+        ..root::Itp::default()
+    };
+    let found = root::itp(
+        |x| match f(search, x) {
+            Ok(v) => v,
+            Err(e) => {
+                failed.get_or_insert(e);
+                f64::NAN
+            }
+        },
+        lower,
+        upper,
+        &options,
+    );
+    if let Some(e) = failed {
+        return Err(e);
+    }
+    Ok(found?.x)
+}
+
+/// What the profile by the score found.
+struct ScoreProfile {
+    chosen: usize,
+    status: ThetaStatus,
+    interval: Option<Interval>,
+    ln_theta_se: Option<f64>,
+}
+
+/// Step on `ln theta` of the central difference of the score.
+const SE_STEP: f64 = 1e-3;
+
+/// The maximum of the profile on `ln theta` for Breslow ties, as the root of
+/// its score, with the boundary rule, the profile-likelihood interval and the
+/// standard error of `ln theta`.
+fn profile_by_score(
+    search: &mut Search<'_, '_>,
+    tolerance: f64,
+    level: Option<Level>,
+) -> Result<ScoreProfile> {
+    let c0 = search.marginal(0.0)?;
+    let u0 = search.score(0.0)?;
+    let step = 4.0_f64.ln();
+    let (t_min, t_max) = (THETA_MIN.ln(), THETA_MAX.ln());
+    // The score in ln theta, which has the sign of the score in theta.
+    let slope = |s: &mut Search<'_, '_>, t: f64| -> Result<f64> {
+        let theta = t.exp();
+        Ok(theta * s.score(theta)?)
+    };
+    let mut t = 0.0;
+    let first = slope(search, t)?;
+    // A bracket on ln theta, or None when the score is negative down to the
+    // smallest theta of the bracketing, e^t.
+    let bracket = if first < 0.0 {
+        loop {
+            let next = t - step;
+            if next < t_min {
+                break None;
+            }
+            if slope(search, next)? >= 0.0 {
+                break Some((next, t));
+            }
+            t = next;
+        }
+    } else if first > 0.0 {
+        loop {
+            let next = t + step;
+            if next > t_max {
+                let last = search.index(t.exp())?;
+                return Ok(ScoreProfile {
+                    chosen: last,
+                    status: ThetaStatus::Unbounded,
+                    interval: None,
+                    ln_theta_se: None,
+                });
+            }
+            if slope(search, next)? <= 0.0 {
+                break Some((t, next));
+            }
+            t = next;
+        }
+    } else {
+        // The score is 0 at theta = 1: a bracket of the two points about it.
+        Some((-step, step))
+    };
+    let smallest = t.exp();
+    let theta_hat = match bracket {
+        Some((a, b)) => Some(find_root(search, slope, a, b, tolerance)?.exp()),
+        None if u0 > 0.0 => Some(find_root(
+            search,
+            Search::score,
+            0.0,
+            smallest,
+            tolerance * smallest,
+        )?),
+        None if search.marginal(smallest)? <= c0 => None,
+        None => {
+            return Err(Error::undefined(format!(
+                "theta: the score of the profile at theta = 0 is not positive, but the profile \
+                 is higher at theta = {smallest:e} than at 0, so its maximum near 0 is not \
+                 resolved"
+            )));
         }
     };
+    let (chosen, status) = match theta_hat {
+        Some(theta) => (search.index(theta)?, ThetaStatus::Interior),
+        None => (search.index(0.0)?, ThetaStatus::Boundary),
+    };
+    let ln_theta_se = match theta_hat {
+        Some(theta) => {
+            let t_hat = theta.ln();
+            let up = slope(search, t_hat + SE_STEP)?;
+            let down = slope(search, t_hat - SE_STEP)?;
+            let curvature = (up - down) / (2.0 * SE_STEP);
+            (curvature < 0.0).then(|| (-1.0 / curvature).sqrt())
+        }
+        None => None,
+    };
+    let interval = match level {
+        Some(level) => Some(profile_interval(
+            search, theta_hat, smallest, c0, level, tolerance,
+        )?),
+        None => None,
+    };
+    Ok(ScoreProfile {
+        chosen,
+        status,
+        interval,
+        ln_theta_se,
+    })
+}
+
+/// The profile-likelihood interval of theta around the estimate `theta_hat`
+/// (`None` on the boundary, where `smallest` is the smallest theta of the
+/// bracketing).
+fn profile_interval(
+    search: &mut Search<'_, '_>,
+    theta_hat: Option<f64>,
+    smallest: f64,
+    c0: f64,
+    level: Level,
+    tolerance: f64,
+) -> Result<Interval> {
+    let step = 4.0_f64.ln();
+    let (t_min, t_max) = (THETA_MIN.ln(), THETA_MAX.ln());
+    let top = match theta_hat {
+        Some(theta) => search.marginal(theta)?,
+        None => c0,
+    };
+    let cut = top - 0.5 * chi_square_quantile(level.confidence_value(), 1.0);
+    let gap = |s: &mut Search<'_, '_>, t: f64| -> Result<f64> { Ok(s.marginal(t.exp())? - cut) };
+    let linear_gap =
+        |s: &mut Search<'_, '_>, theta: f64| -> Result<f64> { Ok(s.marginal(theta)? - cut) };
+    let base = theta_hat.unwrap_or(smallest).ln();
+    // The upper limit, walking up from the estimate.
+    let upper = if gap(search, base)? < 0.0 {
+        Some(find_root(
+            search,
+            linear_gap,
+            0.0,
+            smallest,
+            tolerance * smallest,
+        )?)
+    } else {
+        let mut t = base;
+        loop {
+            let next = t + step;
+            if next > t_max {
+                break None;
+            }
+            if gap(search, next)? < 0.0 {
+                break Some(find_root(search, gap, t, next, tolerance)?.exp());
+            }
+            t = next;
+        }
+    };
+    // The lower limit, walking down from the estimate.
+    let lower = match theta_hat {
+        None => 0.0,
+        Some(_) if c0 >= cut => 0.0,
+        Some(theta) => {
+            let mut t = theta.ln();
+            loop {
+                let next = t - step;
+                if next < t_min {
+                    let last = t.exp();
+                    break find_root(search, linear_gap, 0.0, last, tolerance * last)?;
+                }
+                if gap(search, next)? < 0.0 {
+                    break find_root(search, gap, next, t, tolerance)?.exp();
+                }
+                t = next;
+            }
+        }
+    };
+    Ok(Interval::new(Some(lower), upper, level))
+}
+
+/// The maximum of the profile marginal log likelihood on `ln theta` by Brent's
+/// minimiser, for Efron ties. Returns the index of the chosen fit and its
+/// status.
+fn profile(search: &mut Search<'_, '_>, tolerance: f64) -> Result<(usize, ThetaStatus)> {
+    let at = at_theta;
     search.run(0.0).map_err(at(0.0))?;
     let step = 4.0_f64.ln();
     let (t_min, t_max) = (THETA_MIN.ln(), THETA_MAX.ln());
@@ -741,102 +1105,6 @@ fn profile(search: &mut Search<'_, '_>, tolerance: f64) -> Result<(usize, ThetaS
     Ok((best, ThetaStatus::Interior))
 }
 
-/// `frailty.brent` of `survival`: the next abscissa from the points `(x, y)`,
-/// with `lower` the smallest allowed. A tie for the largest `y`, where R stops
-/// with an error, takes the first of the tied points.
-#[expect(clippy::float_cmp, reason = "R compares the largest value exactly")]
-fn frailty_brent(x: &[f64], y: &[f64], lower: f64) -> f64 {
-    let n = x.len();
-    if n < 3 {
-        return x.iter().sum::<f64>() / n as f64;
-    }
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by(|&a, &b| x[a].total_cmp(&x[b]));
-    let xx: Vec<f64> = order.iter().map(|&i| x[i]).collect();
-    let yy: Vec<f64> = order.iter().map(|&i| y[i]).collect();
-    let max = y.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let best = yy.iter().position(|&v| v == max).expect("a largest value");
-    if best == 0 {
-        let mut new = xx[0] - 3.0 * (xx[1] - xx[0]);
-        if new < lower {
-            let above = xx
-                .iter()
-                .copied()
-                .filter(|&v| v > lower)
-                .fold(f64::INFINITY, f64::min);
-            new = lower + (above - lower) / 10.0;
-        }
-        return new;
-    }
-    if best == n - 1 {
-        return xx[n - 1] + 3.0 * (xx[n - 1] - xx[n - 2]);
-    }
-    let (x1, x2, x3) = (xx[best - 1], xx[best], xx[best + 1]);
-    let (y1, y2, y3) = (yy[best - 1], yy[best], yy[best + 1]);
-    let temp1 = (x2 - x1) * (x2 - x1) * (y2 - y3) - (x2 - x3) * (x2 - x3) * (y2 - y1);
-    let temp2 = (x2 - x1) * (y2 - y3) - (x2 - x3) * (y2 - y1);
-    let new = x2 - 0.5 * temp1 / temp2;
-    if new < x1 || new > x3 || (n > 4 && (new - x[n - 1]) > 0.5 * (x[n - 2] - x[n - 3]).abs()) {
-        if (x2 - x1) > (x3 - x2) {
-            x2 - 0.38 * (x2 - x1)
-        } else {
-            x2 + 0.32 * (x3 - x2)
-        }
-    } else {
-        new
-    }
-}
-
-/// `coxph`'s search of `frailty.controlgam`.
-fn coxph_search(
-    search: &mut Search<'_, '_>,
-    eps: f64,
-    outer_max: u32,
-) -> Result<(usize, ThetaStatus)> {
-    let mut theta = 0.0;
-    let mut thetas: Vec<f64> = Vec::new();
-    let mut values: Vec<f64> = Vec::new();
-    for iter in 1..=outer_max {
-        let c = search.run(theta)?;
-        thetas.push(theta);
-        values.push(c);
-        let (next, done) = match iter {
-            1 => (1.0, false),
-            2 => {
-                if values[1] < values[0] + 1.0 {
-                    (f64::midpoint(thetas[0], thetas[1]), false)
-                } else {
-                    (2.0 * thetas[1], false)
-                }
-            }
-            _ => {
-                let k = values.len() - 1;
-                let done = (1.0 - values[k] / values[k - 1]).abs() < eps;
-                let max_y = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                let max_x = thetas.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-                #[expect(
-                    clippy::float_cmp,
-                    reason = "R's test of the last point being the largest"
-                )]
-                let last_is_largest = values[k] == max_y && thetas[k] == max_x;
-                let next = if last_is_largest {
-                    2.0 * max_x
-                } else {
-                    let roots: Vec<f64> = thetas.iter().map(|t| t.sqrt()).collect();
-                    let r = frailty_brent(&roots, &values, 0.0);
-                    r * r
-                };
-                (next, done)
-            }
-        };
-        if done {
-            return Ok((search.fits.len() - 1, ThetaStatus::Interior));
-        }
-        theta = next;
-    }
-    Ok((search.fits.len() - 1, ThetaStatus::SearchLimit))
-}
-
 fn check_options(opts: &FrailtyOptions, data: &SurvData<'_>) -> Result<()> {
     if opts.ties == Ties::Exact {
         return Err(Error::unsupported(
@@ -858,11 +1126,6 @@ fn check_options(opts: &FrailtyOptions, data: &SurvData<'_>) -> Result<()> {
         Theta::Fixed(t) if !(t.is_finite() && t >= 0.0) => {
             return Err(Error::invalid(
                 "theta: a fixed theta must be finite and not negative",
-            ));
-        }
-        Theta::Coxph { eps, outer_max } if !(eps.is_finite() && eps > 0.0) || outer_max < 3 => {
-            return Err(Error::invalid(
-                "theta: the coxph search needs a positive eps and at least 3 fits",
             ));
         }
         _ => {}
@@ -1041,6 +1304,8 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Re
         problem: &problem,
         fits: Vec::new(),
     };
+    let mut theta_interval = None;
+    let mut ln_theta_se = None;
     let (chosen, status) = match opts.theta {
         Theta::Fixed(theta) => {
             if problem.layout.unit_weights && theta > 0.0 {
@@ -1055,8 +1320,33 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Re
             }
             (search.fits.len() - 1, ThetaStatus::Fixed)
         }
+        Theta::Profile if opts.ties == Ties::Breslow => {
+            let found = profile_by_score(&mut search, opts.theta_tolerance, opts.level)?;
+            theta_interval = found.interval;
+            ln_theta_se = found.ln_theta_se;
+            (found.chosen, found.status)
+        }
         Theta::Profile => profile(&mut search, opts.theta_tolerance)?,
-        Theta::Coxph { eps, outer_max } => coxph_search(&mut search, eps, outer_max)?,
+    };
+    if estimated && status != ThetaStatus::Boundary && singletons(&cluster, g as usize) {
+        return Err(Error::undefined(
+            "theta: every cluster has one row, so the data do not identify theta, and the \
+             profile is not on the boundary",
+        ));
+    }
+    let score_at_zero = if opts.ties == Ties::Breslow && problem.layout.unit_weights {
+        if search.fits.iter().any(|f| f.theta == 0.0) {
+            Some(search.score(0.0)?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let theta_score = if opts.ties == Ties::Breslow && problem.layout.unit_weights {
+        Some(search.score(search.fits[chosen].theta)?)
+    } else {
+        None
     };
     let history = if estimated {
         search.history()
@@ -1158,6 +1448,10 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Re
         marginal_log_likelihood: chosen.marginal,
         cox_log_likelihood,
         likelihood_ratio,
+        score_at_zero,
+        theta_score,
+        theta_interval,
+        ln_theta_se,
         history,
         iterations: chosen.iterations,
         converged: chosen.converged,
@@ -1191,6 +1485,35 @@ mod tests {
                 "{nu}: {got} {direct}"
             );
         }
+    }
+
+    /// The series and the direct form meet at `x = 0.1`: the direct form loses
+    /// a factor of about `ln(1.1) / 0.0044`, 22, to cancellation there, and the
+    /// series' truncation is below `0.1^20`, so they agree to `64 eps`.
+    #[test]
+    fn the_two_forms_of_the_log_excess_ratio_meet() {
+        let below = log_excess_ratio(0.1_f64.next_down());
+        let x = 0.1_f64;
+        let direct = (x.ln_1p() - x / (1.0 + x)) / (x * x);
+        assert!(
+            (below - direct).abs() <= 64.0 * f64::EPSILON * direct,
+            "{below} {direct}"
+        );
+        assert_eq!(log_excess_ratio(0.0).to_bits(), 0.5_f64.to_bits());
+    }
+
+    /// At theta = 0 the score is `(1/2) [(D - Lambda)^2 - D]`, in which every
+    /// term is exact for these small integers and halves.
+    #[test]
+    fn the_score_at_zero_is_the_homogeneity_score() {
+        let events = [0_u32, 1, 2, 5];
+        let lambda = [0.5, 1.5, 2.0, 3.0];
+        let want: f64 = events
+            .iter()
+            .zip(&lambda)
+            .map(|(&d, &l)| 0.5 * ((f64::from(d) - l).powi(2) - f64::from(d)))
+            .sum();
+        assert_eq!(profile_score(&events, &lambda, 0.0), want);
     }
 
     #[test]

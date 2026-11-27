@@ -70,7 +70,6 @@ struct RFit {
     dataset: String,
     ties: String,
     sparse: bool,
-    fixed: bool,
     #[serde(default)]
     transcribed: bool,
     theta: f64,
@@ -82,7 +81,6 @@ struct RFit {
     #[serde(deserialize_with = "epistat_testkit::na_f64_vec")]
     loglik: Vec<f64>,
     c_loglik: Option<f64>,
-    history: Option<Vec<Vec<f64>>>,
 }
 
 #[derive(Deserialize)]
@@ -247,23 +245,6 @@ fn compare_fit(f: &RFit, got: &FrailtyFit) -> Worst {
             0.5 * b * b * (p + g) as f64 + rounding + 1e-12,
         );
     }
-    if let Some(h) = &f.history {
-        assert_eq!(h.len(), got.history.len(), "{}: search length", f.name);
-        for (row, step) in h.iter().zip(&got.history) {
-            let nu = if row[0] > 0.0 { 1.0 / row[0] } else { 0.0 };
-            let rounding = 2.0 * f64::EPSILON * nu * g as f64 + 4e-16 * l;
-            worst.check(
-                "search c.loglik",
-                (step.marginal_log_likelihood - row[2]).abs(),
-                0.5 * b * b * (p + g) as f64 + rounding + 1e-12,
-            );
-            worst.check(
-                "search theta",
-                (step.theta - row[0]).abs(),
-                1e-6 * row[0] + 1e-15,
-            );
-        }
-    }
     worst
 }
 
@@ -274,22 +255,20 @@ fn fits_equal_coxph() {
     println!("{}, survival {}", r.versions.r, r.versions.survival);
     for f in &r.fits {
         let d = &r.datasets[&f.dataset];
-        let theta = if f.fixed {
-            Theta::Fixed(f.theta)
-        } else {
-            Theta::Coxph {
-                eps: 1e-5,
-                outer_max: 30,
-            }
-        };
-        let got = run(d, ties(&f.ties), theta, FrailtyMethod::Penalised);
+        // A fit of coxph's own search is compared at the theta it reported.
+        let got = run(
+            d,
+            ties(&f.ties),
+            Theta::Fixed(f.theta),
+            FrailtyMethod::Penalised,
+        );
         assert!(got.converged, "{}", f.name);
         let worst = compare_fit(f, &got);
         println!("{:36} worst {:.3} ({})", f.name, worst.ratio, worst.what);
     }
 }
 
-/// The search of `coxph` stops early; the profile maximum agrees with
+/// The profile maximum agrees with
 /// `optimize` run on `c.loglik` to `1e-9` on `log theta`. Near the maximum `c`
 /// is quadratic in `t = log theta` and flat, so the two maxima agree in `c` to
 /// the c.loglik bound of the sparse fits, and in `t` only to about the square
