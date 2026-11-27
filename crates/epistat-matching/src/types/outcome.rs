@@ -96,7 +96,7 @@ pub enum EstimandDriftReason {
     /// Anchors were dropped as outside common support.
     CommonSupportTrimming,
     /// Some anchors found no control.
-    UnmatchedAnchors,
+    UnmatchedCases,
     /// Some anchors found fewer controls than the ratio.
     RatioShortfall,
     /// A distance caliper removed pairs.
@@ -109,7 +109,7 @@ impl Display for EstimandDriftReason {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let key = match self {
             Self::CommonSupportTrimming => "common_support_trimming",
-            Self::UnmatchedAnchors => "unmatched_anchors",
+            Self::UnmatchedCases => "unmatched_cases",
             Self::RatioShortfall => "ratio_shortfall",
             Self::DistanceCaliperExclusion => "distance_caliper_exclusion",
             Self::CommonSupportCaliperInteraction => "common_support_caliper_interaction",
@@ -311,48 +311,36 @@ impl Display for ExclusionReason {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrimmedUnits {
     /// Ids of the trimmed anchors.
-    pub anchors: Vec<String>,
+    pub cases: Vec<String>,
     /// Ids of the trimmed candidates.
-    pub candidates: Vec<String>,
+    pub controls: Vec<String>,
 }
 
 impl TrimmedUnits {
     /// Whether no unit was trimmed.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.anchors.is_empty() && self.candidates.is_empty()
+        self.cases.is_empty() && self.controls.is_empty()
     }
 }
 
-/// Matched anchor/candidate pair.
+/// A case and one of its controls.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MatchedPair {
-    /// Anchor identifier.
+    /// The id of the case.
     pub case_id: String,
-    /// Candidate identifier.
+    /// The id of the control.
     pub control_id: String,
 }
 
 impl MatchedPair {
-    /// Construct a pair using neutral anchor/comparator naming.
+    /// The pair of the case `case_id` and the control `control_id`.
     #[must_use]
-    pub fn new(anchor_id: impl Into<String>, comparator_id: impl Into<String>) -> Self {
+    pub fn new(case_id: impl Into<String>, control_id: impl Into<String>) -> Self {
         Self {
-            case_id: anchor_id.into(),
-            control_id: comparator_id.into(),
+            case_id: case_id.into(),
+            control_id: control_id.into(),
         }
-    }
-
-    /// Neutral accessor for the index/anchor identifier.
-    #[must_use]
-    pub fn anchor_id(&self) -> &str {
-        self.case_id.as_str()
-    }
-
-    /// Neutral accessor for the comparator identifier.
-    #[must_use]
-    pub fn comparator_id(&self) -> &str {
-        self.control_id.as_str()
     }
 }
 
@@ -383,20 +371,20 @@ impl MatchDiagnostics {
 
     /// Merge another diagnostics object into this one.
     pub fn merge(&mut self, other: Self) {
-        self.total_anchors_evaluated += other.total_anchors_evaluated;
-        self.anchors_with_no_candidates += other.anchors_with_no_candidates;
-        self.anchors_below_required_ratio += other.anchors_below_required_ratio;
-        self.anchors_on_lower_tier += other.anchors_on_lower_tier;
-        self.matched_anchors += other.matched_anchors;
+        self.total_cases_evaluated += other.total_cases_evaluated;
+        self.cases_with_no_controls += other.cases_with_no_controls;
+        self.cases_below_required_ratio += other.cases_below_required_ratio;
+        self.cases_on_lower_tier += other.cases_on_lower_tier;
+        self.matched_cases += other.matched_cases;
         self.pairs_selected += other.pairs_selected;
-        self.common_support_trimmed_anchors += other.common_support_trimmed_anchors;
-        self.common_support_trimmed_candidates += other.common_support_trimmed_candidates;
+        self.common_support_trimmed_cases += other.common_support_trimmed_cases;
+        self.common_support_trimmed_controls += other.common_support_trimmed_controls;
         self.common_support_trimmed_ids
-            .anchors
-            .extend(other.common_support_trimmed_ids.anchors);
+            .cases
+            .extend(other.common_support_trimmed_ids.cases);
         self.common_support_trimmed_ids
-            .candidates
-            .extend(other.common_support_trimmed_ids.candidates);
+            .controls
+            .extend(other.common_support_trimmed_ids.controls);
 
         for (reason, count) in other.exclusion_counts {
             self.add_exclusion(reason, count);
@@ -413,22 +401,22 @@ impl MatchDiagnostics {
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct MatchDiagnostics {
     /// Total anchors evaluated by the engine.
-    pub total_anchors_evaluated: usize,
+    pub total_cases_evaluated: usize,
     /// Anchors with no eligible candidates after filtering.
-    pub anchors_with_no_candidates: usize,
+    pub cases_with_no_controls: usize,
     /// Anchors that did not get the ratio asked for and have no declared
     /// fallback tier to account for it: without fallback tiers, the anchors
     /// with some candidates but fewer than the ratio, and with them, the
     /// anchors with fewer candidates than the lowest tier, which get none. An
     /// anchor matched on a declared lower tier is not counted here; see
-    /// [`Self::anchors_on_lower_tier`].
-    pub anchors_below_required_ratio: usize,
+    /// [`Self::cases_on_lower_tier`].
+    pub cases_below_required_ratio: usize,
     /// With declared fallback tiers, the anchors matched on a tier below the
     /// primary ratio.
     #[serde(default)]
-    pub anchors_on_lower_tier: usize,
+    pub cases_on_lower_tier: usize,
     /// Matched anchor count.
-    pub matched_anchors: usize,
+    pub matched_cases: usize,
     /// Number of selected pairs.
     pub pairs_selected: usize,
     /// Count of exclusions by reason.
@@ -441,10 +429,10 @@ pub struct MatchDiagnostics {
     pub realized_estimand: Estimand,
     /// Number of anchors discarded by common-support trimming.
     #[serde(default)]
-    pub common_support_trimmed_anchors: usize,
+    pub common_support_trimmed_cases: usize,
     /// Number of candidates discarded by common-support trimming.
     #[serde(default)]
-    pub common_support_trimmed_candidates: usize,
+    pub common_support_trimmed_controls: usize,
     /// Ids of the units that common-support trimming discarded. The debug
     /// rendering leaves them out, since the counts above say how many there
     /// are.
@@ -458,86 +446,57 @@ pub struct MatchDiagnostics {
     pub common_support_policy: Option<CommonSupport>,
     /// Anchor score bounds used to compute common-support overlap when available.
     #[serde(default)]
-    pub common_support_anchor_score_bounds: Option<(f64, f64)>,
+    pub common_support_case_score_bounds: Option<(f64, f64)>,
     /// Candidate score bounds used to compute common-support overlap when available.
     #[serde(default)]
-    pub common_support_candidate_score_bounds: Option<(f64, f64)>,
+    pub common_support_control_score_bounds: Option<(f64, f64)>,
     /// Structured machine-readable drift reasons.
     #[serde(default)]
     pub estimand_drift_reasons: Vec<EstimandDriftReason>,
 }
 
 /// The debug rendering lists every field but the ids of the trimmed units, which
-/// the trimmed counts summarise. `anchors_on_lower_tier` is left out
+/// the trimmed counts summarise. `cases_on_lower_tier` is left out
 /// when it is 0, so that the rendering of a job that matches on no lower tier
 /// does not mention it.
 #[expect(clippy::missing_fields_in_debug)]
 impl std::fmt::Debug for MatchDiagnostics {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mut out = f.debug_struct("MatchDiagnostics");
-        out.field("total_anchors_evaluated", &self.total_anchors_evaluated)
+        out.field("total_cases_evaluated", &self.total_cases_evaluated)
+            .field("cases_with_no_controls", &self.cases_with_no_controls)
             .field(
-                "anchors_with_no_candidates",
-                &self.anchors_with_no_candidates,
-            )
-            .field(
-                "anchors_below_required_ratio",
-                &self.anchors_below_required_ratio,
+                "cases_below_required_ratio",
+                &self.cases_below_required_ratio,
             );
-        if self.anchors_on_lower_tier != 0 {
-            out.field("anchors_on_lower_tier", &self.anchors_on_lower_tier);
+        if self.cases_on_lower_tier != 0 {
+            out.field("cases_on_lower_tier", &self.cases_on_lower_tier);
         }
-        out.field("matched_anchors", &self.matched_anchors)
+        out.field("matched_cases", &self.matched_cases)
             .field("pairs_selected", &self.pairs_selected)
             .field("exclusion_counts", &self.exclusion_counts)
             .field("requested_estimand", &self.requested_estimand)
             .field("realized_estimand", &self.realized_estimand)
             .field(
-                "common_support_trimmed_anchors",
-                &self.common_support_trimmed_anchors,
+                "common_support_trimmed_cases",
+                &self.common_support_trimmed_cases,
             )
             .field(
-                "common_support_trimmed_candidates",
-                &self.common_support_trimmed_candidates,
+                "common_support_trimmed_controls",
+                &self.common_support_trimmed_controls,
             )
             .field("common_support_overlap", &self.common_support_overlap)
             .field("common_support_policy", &self.common_support_policy)
             .field(
-                "common_support_anchor_score_bounds",
-                &self.common_support_anchor_score_bounds,
+                "common_support_case_score_bounds",
+                &self.common_support_case_score_bounds,
             )
             .field(
-                "common_support_candidate_score_bounds",
-                &self.common_support_candidate_score_bounds,
+                "common_support_control_score_bounds",
+                &self.common_support_control_score_bounds,
             )
             .field("estimand_drift_reasons", &self.estimand_drift_reasons)
             .finish()
-    }
-}
-
-impl MatchOutcome {
-    /// Neutral accessor for matched anchor count.
-    #[must_use]
-    pub const fn matched_anchors(&self) -> usize {
-        self.matched_cases
-    }
-
-    /// Neutral accessor for unmatched anchor count.
-    #[must_use]
-    pub const fn unmatched_anchors(&self) -> usize {
-        self.unmatched_cases
-    }
-
-    /// Neutral accessor for average comparators per matched anchor.
-    #[must_use]
-    pub const fn avg_comparators_per_anchor(&self) -> Option<f64> {
-        self.avg_controls_per_case
-    }
-
-    /// Neutral accessor for unique comparator usage count.
-    #[must_use]
-    pub const fn used_comparators(&self) -> usize {
-        self.used_controls
     }
 }
 
@@ -548,8 +507,8 @@ mod tests {
     #[test]
     fn matched_pair_and_outcome_accessors_are_consistent() {
         let pair = MatchedPair::new("anchor", "candidate");
-        assert_eq!(pair.anchor_id(), "anchor");
-        assert_eq!(pair.comparator_id(), "candidate");
+        assert_eq!(pair.case_id.as_str(), "anchor");
+        assert_eq!(pair.control_id.as_str(), "candidate");
 
         let outcome = MatchOutcome {
             pairs: vec![pair],
@@ -559,9 +518,9 @@ mod tests {
             avg_controls_per_case: Some(1.0),
             diagnostics: MatchDiagnostics::default(),
         };
-        assert_eq!(outcome.matched_anchors(), 1);
-        assert_eq!(outcome.unmatched_anchors(), 1);
-        assert_eq!(outcome.used_comparators(), 1);
-        assert_eq!(outcome.avg_comparators_per_anchor(), Some(1.0));
+        assert_eq!(outcome.matched_cases, 1);
+        assert_eq!(outcome.unmatched_cases, 1);
+        assert_eq!(outcome.used_controls, 1);
+        assert_eq!(outcome.avg_controls_per_case, Some(1.0));
     }
 }

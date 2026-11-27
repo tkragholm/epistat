@@ -188,8 +188,8 @@ fn trimmed_cases_agree_with_ranges_over_the_ccwc_risk_sets() {
     let expected = kept(&reference.outside);
     assert_eq!(matched, expected);
     let trimmed = reference.outside.iter().filter(|&&o| o).count();
-    assert_eq!(outcome.diagnostics.common_support_trimmed_anchors, trimmed);
-    assert_eq!(outcome.diagnostics.common_support_trimmed_candidates, 0);
+    assert_eq!(outcome.diagnostics.common_support_trimmed_cases, trimmed);
+    assert_eq!(outcome.diagnostics.common_support_trimmed_controls, 0);
     // The ids are the cases that ccwc's ranges leave out, in cohort order.
     let outside_ids: BTreeSet<String> = reference
         .cases
@@ -200,11 +200,11 @@ fn trimmed_cases_agree_with_ranges_over_the_ccwc_risk_sets() {
         .collect();
     let reported = &outcome.diagnostics.common_support_trimmed_ids;
     assert_eq!(
-        reported.anchors.iter().cloned().collect::<BTreeSet<_>>(),
+        reported.cases.iter().cloned().collect::<BTreeSet<_>>(),
         outside_ids
     );
-    assert!(reported.anchors.windows(2).all(|w| w[0] < w[1]));
-    assert_eq!(reported.candidates, Vec::<String>::new());
+    assert!(reported.cases.windows(2).all(|w| w[0] < w[1]));
+    assert_eq!(reported.controls, Vec::<String>::new());
 
     // Without it the dead stay in the range.
     let (matched, _) = run_checked(&cohort, &scores, Some(CommonSupport::Treated), false, false);
@@ -267,14 +267,14 @@ fn a_case_outside_its_own_risk_set_but_inside_the_cohort_is_trimmed() {
     let (cohort, scores) = outside_own_risk_set();
     let (matched, outcome) = run(&cohort, &scores, None, DefaultRiskSetPolicy);
     assert_eq!(matched, ["c1", "c2"].map(String::from).into());
-    assert_eq!(outcome.diagnostics.common_support_trimmed_anchors, 0);
+    assert_eq!(outcome.diagnostics.common_support_trimmed_cases, 0);
 
     for policy in [CommonSupport::Treated, CommonSupport::Both] {
         let (matched, outcome) = run(&cohort, &scores, Some(policy), DefaultRiskSetPolicy);
         // c1: 5 is above the range 1 to 2 of those at risk on day 10.
         // c2: 9 is above the range 1 to 8 of those at risk on day 100.
         assert!(matched.is_empty(), "{policy:?}: {matched:?}");
-        assert_eq!(outcome.diagnostics.common_support_trimmed_anchors, 2);
+        assert_eq!(outcome.diagnostics.common_support_trimmed_cases, 2);
     }
 }
 
@@ -297,7 +297,7 @@ fn a_case_inside_its_own_risk_set_range_is_kept_whatever_the_cohort_holds() {
         DefaultRiskSetPolicy,
     );
     assert_eq!(matched, ["c1"].map(String::from).into());
-    assert_eq!(outcome.diagnostics.common_support_trimmed_anchors, 1);
+    assert_eq!(outcome.diagnostics.common_support_trimmed_cases, 1);
 }
 
 #[test]
@@ -317,7 +317,7 @@ fn a_score_equal_to_an_end_of_the_range_is_kept() {
         DefaultRiskSetPolicy,
     );
     assert_eq!(matched, ["lo", "hi"].map(String::from).into());
-    assert_eq!(outcome.diagnostics.common_support_trimmed_anchors, 0);
+    assert_eq!(outcome.diagnostics.common_support_trimmed_cases, 0);
 }
 
 #[test]
@@ -353,8 +353,8 @@ fn a_case_with_nobody_at_risk_is_not_trimmed() {
         DefaultRiskSetPolicy,
     );
     assert!(matched.is_empty());
-    assert_eq!(outcome.diagnostics.common_support_trimmed_anchors, 0);
-    assert_eq!(outcome.diagnostics.anchors_with_no_candidates, 1);
+    assert_eq!(outcome.diagnostics.common_support_trimmed_cases, 0);
+    assert_eq!(outcome.diagnostics.cases_with_no_controls, 1);
 }
 
 #[test]
@@ -370,9 +370,9 @@ fn candidates_outside_the_range_of_the_cases_are_trimmed_under_control() {
     let scores = scores_of(&["c1", "c2", "y", "z"], &[2.0, 3.0, 2.0, 10.0]);
     for policy in [CommonSupport::Control, CommonSupport::Both] {
         let (matched, outcome) = run(&cohort, &scores, Some(policy), DefaultRiskSetPolicy);
-        assert_eq!(outcome.diagnostics.common_support_trimmed_candidates, 1);
+        assert_eq!(outcome.diagnostics.common_support_trimmed_controls, 1);
         assert_eq!(
-            outcome.diagnostics.common_support_trimmed_ids.candidates,
+            outcome.diagnostics.common_support_trimmed_ids.controls,
             ["z".to_string()]
         );
         assert!(outcome.pairs.iter().all(|p| p.control_id != "z"));
@@ -399,8 +399,8 @@ fn trimming_does_not_depend_on_the_number_of_threads() {
             DefaultRiskSetPolicy,
         );
         let mut digest: Vec<f64> = vec![
-            outcome.diagnostics.common_support_trimmed_anchors as f64,
-            outcome.diagnostics.common_support_trimmed_candidates as f64,
+            outcome.diagnostics.common_support_trimmed_cases as f64,
+            outcome.diagnostics.common_support_trimmed_controls as f64,
         ];
         for pair in &outcome.pairs {
             digest.push(pair.case_id.len() as f64);
@@ -429,7 +429,7 @@ fn the_dead_do_not_widen_the_range_of_a_risk_set() {
     let (matched, outcome) =
         run_checked(&cohort, &scores, Some(CommonSupport::Treated), true, false);
     assert!(matched.is_empty(), "{matched:?}");
-    assert_eq!(outcome.diagnostics.common_support_trimmed_anchors, 1);
+    assert_eq!(outcome.diagnostics.common_support_trimmed_cases, 1);
 
     let cohort = vec![
         person("a", Some(0), None),

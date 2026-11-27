@@ -280,12 +280,12 @@ fn fallback_tier_below_primary_is_counted_apart_from_shortfall() {
         .expect("a valid job");
     assert_eq!(out.pairs.len(), 2);
     assert_eq!(
-        out.diagnostics.anchors_below_required_ratio, 0,
+        out.diagnostics.cases_below_required_ratio, 0,
         "{:?}",
         out.diagnostics
     );
     assert_eq!(
-        out.diagnostics.anchors_on_lower_tier, 1,
+        out.diagnostics.cases_on_lower_tier, 1,
         "{:?}",
         out.diagnostics
     );

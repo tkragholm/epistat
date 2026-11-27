@@ -64,8 +64,10 @@ struct Dataset {
 
 #[derive(Deserialize)]
 struct QmRun {
-    min_anchors: usize,
-    min_candidates: usize,
+    #[serde(rename = "min_anchors")]
+    min_cases: usize,
+    #[serde(rename = "min_candidates")]
+    min_controls: usize,
     size: Option<usize>,
     caliper: Option<f64>,
     seed_method: String,
@@ -129,8 +131,8 @@ fn same_partition(a: &[Option<usize>], b: &[Option<usize>]) -> bool {
 
 fn options_of(run: &QmRun) -> QuickMatchOptions {
     QuickMatchOptions {
-        min_anchors: run.min_anchors,
-        min_candidates: run.min_candidates,
+        min_cases: run.min_cases,
+        min_controls: run.min_controls,
         size: run.size,
         caliper: run.caliper,
         seed_method: seed_method(&run.seed_method),
@@ -167,9 +169,9 @@ fn assert_constraints(labels: &[Option<usize>], anchor: &[bool], options: &Quick
     let count = labels.iter().flatten().max().map_or(0, |m| m + 1);
     let mut anchors = vec![0; count];
     let mut candidates = vec![0; count];
-    for (label, is_anchor) in labels.iter().zip(anchor) {
+    for (label, is_case) in labels.iter().zip(anchor) {
         if let Some(label) = label {
-            if *is_anchor {
+            if *is_case {
                 anchors[*label] += 1;
             } else {
                 candidates[*label] += 1;
@@ -178,10 +180,10 @@ fn assert_constraints(labels: &[Option<usize>], anchor: &[bool], options: &Quick
     }
     let size = options
         .size
-        .unwrap_or(options.min_anchors + options.min_candidates);
+        .unwrap_or(options.min_cases + options.min_controls);
     for subclass in 0..count {
-        assert!(anchors[subclass] >= options.min_anchors, "anchors");
-        assert!(candidates[subclass] >= options.min_candidates, "candidates");
+        assert!(anchors[subclass] >= options.min_cases, "anchors");
+        assert!(candidates[subclass] >= options.min_controls, "candidates");
         assert!(anchors[subclass] + candidates[subclass] >= size, "size");
     }
 }
@@ -212,8 +214,8 @@ fn partitions_equal_quickmatchs() {
                 "{} {} constraints {}/{}/{:?} caliper {:?}",
                 data.name,
                 run.seed_method,
-                run.min_anchors,
-                run.min_candidates,
+                run.min_cases,
+                run.min_controls,
                 run.size,
                 run.caliper
             );
@@ -530,8 +532,8 @@ fn mahalanobis_spec_equals_matchit() {
             match run_spec(
                 &spec,
                 SpecInput::Standard {
-                    anchors: &anchors,
-                    candidates: &candidates,
+                    cases: &anchors,
+                    controls: &candidates,
                 },
             )
             .expect("runs")
@@ -584,11 +586,11 @@ fn time_on_a_line_and_in_the_plane() {
             let anchor: Vec<bool> = (0..n)
                 .map(|row| next() < 0.2 + 0.3 * points[row * dim])
                 .collect();
-            for (min_anchors, min_candidates, size) in [(1, 1, None), (2, 3, Some(7))] {
+            for (min_cases, min_controls, size) in [(1, 1, None), (2, 3, Some(7))] {
                 for method in [SeedMethod::InwardsUpdating, SeedMethod::Lexical] {
                     let options = QuickMatchOptions {
-                        min_anchors,
-                        min_candidates,
+                        min_cases,
+                        min_controls,
                         size,
                         caliper: None,
                         seed_method: method,
@@ -597,7 +599,7 @@ fn time_on_a_line_and_in_the_plane() {
                     let labels = quick_clusters(&points, dim, &anchor, &options).expect("runs");
                     let subclasses = labels.iter().flatten().max().map_or(0, |m| m + 1);
                     println!(
-                        "dim {dim} n = {n} constraints {min_anchors}/{min_candidates}/{size:?} \
+                        "dim {dim} n = {n} constraints {min_cases}/{min_controls}/{size:?} \
                          {method:?}: {:.2} s, {subclasses} subclasses",
                         start.elapsed().as_secs_f64()
                     );

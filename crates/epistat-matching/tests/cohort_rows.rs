@@ -509,15 +509,15 @@ fn standard_matching_is_the_same_on_rows() {
             let on_owned = run_spec(
                 &spec,
                 SpecInput::Standard {
-                    anchors: &g.anchors,
-                    candidates: &g.candidates,
+                    cases: &g.anchors,
+                    controls: &g.candidates,
                 },
             );
             let on_rows = run_spec(
                 &spec,
                 SpecInput::Standard {
-                    anchors: &g.anchor_rows,
-                    candidates: &g.candidate_rows,
+                    cases: &g.anchor_rows,
+                    controls: &g.candidate_rows,
                 },
             );
             assert!(on_owned.is_ok(), "{name}, seed {seed}: {on_owned:?}");
@@ -764,8 +764,8 @@ fn balance_and_effects_are_the_same_on_rows() {
         let Ok(SpecOutput::Pairs { outcome, .. }) = run_spec(
             &spec,
             SpecInput::Standard {
-                anchors: &g.anchors,
-                candidates: &g.candidates,
+                cases: &g.anchors,
+                controls: &g.candidates,
             },
         ) else {
             panic!("pairs")

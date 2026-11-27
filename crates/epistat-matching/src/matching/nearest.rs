@@ -1942,12 +1942,12 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
     };
 
     let mut pairs = Vec::new();
-    let mut matched_anchors = 0_usize;
+    let mut matched_cases = 0_usize;
     let mut distinct = 0_usize;
     for result in results {
         distinct += result.distinct_candidates;
-        diagnostics.anchors_with_no_candidates += result.unmatched;
-        diagnostics.anchors_below_required_ratio += result.below_ratio;
+        diagnostics.cases_with_no_controls += result.unmatched;
+        diagnostics.cases_below_required_ratio += result.below_ratio;
         for (reason, count) in result.refused.0 {
             diagnostics.add_exclusion(
                 ExclusionReason::Constraint(ConstraintReason::from_reason_str(reason)),
@@ -1955,7 +1955,7 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
             );
         }
         for (anchor_idx, controls) in result.matched {
-            matched_anchors += 1;
+            matched_cases += 1;
             let anchor_id = request.anchors[anchor_idx].id();
             for candidate_idx in controls {
                 pairs.push(MatchedPair::new(
@@ -1965,12 +1965,12 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
             }
         }
     }
-    diagnostics.matched_anchors = matched_anchors;
+    diagnostics.matched_cases = matched_cases;
     diagnostics.pairs_selected = pairs.len();
     finalize_estimand_diagnostics(&mut diagnostics, criteria.estimand, eligible_anchors, None);
     build_outcome(
         pairs,
-        matched_anchors,
+        matched_cases,
         eligible_anchors,
         distinct,
         diagnostics,
@@ -2147,8 +2147,8 @@ mod tests {
                             run_spec(
                                 &spec,
                                 SpecInput::Standard {
-                                    anchors,
-                                    candidates,
+                                    cases: anchors,
+                                    controls: candidates,
                                 },
                             )
                         });

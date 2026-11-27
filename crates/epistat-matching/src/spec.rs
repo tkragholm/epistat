@@ -406,9 +406,9 @@ pub enum DistanceSpec {
     /// entry of `None` forbids the pair, as an infinite entry does in R.
     Matrix {
         /// Ids of the rows.
-        anchor_ids: Vec<String>,
+        case_ids: Vec<String>,
         /// Ids of the columns.
-        candidate_ids: Vec<String>,
+        control_ids: Vec<String>,
         /// The distances, one row per anchor.
         values: Vec<Vec<Option<f64>>>,
         /// Widest distance.
@@ -711,9 +711,9 @@ impl Default for SubclassSpec {
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceSpec {
     /// The anchors.
-    Anchors,
+    Cases,
     /// The candidates.
-    Candidates,
+    Controls,
     /// Both groups together.
     Pooled,
 }
@@ -721,8 +721,8 @@ pub enum ReferenceSpec {
 impl From<ReferenceSpec> for SubclassReferenceGroup {
     fn from(spec: ReferenceSpec) -> Self {
         match spec {
-            ReferenceSpec::Anchors => Self::Anchors,
-            ReferenceSpec::Candidates => Self::Candidates,
+            ReferenceSpec::Cases => Self::Cases,
+            ReferenceSpec::Controls => Self::Controls,
             ReferenceSpec::Pooled => Self::Pooled,
         }
     }
@@ -735,10 +735,12 @@ impl From<ReferenceSpec> for SubclassReferenceGroup {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct QuickSpec {
-    /// Fewest anchors in a subclass.
-    pub min_anchors: usize,
-    /// Fewest candidates in a subclass.
-    pub min_candidates: usize,
+    /// Fewest cases in a subclass. `min_anchors` in 0.2.
+    #[serde(alias = "min_anchors")]
+    pub min_cases: usize,
+    /// Fewest controls in a subclass. `min_candidates` in 0.2.
+    #[serde(alias = "min_candidates")]
+    pub min_controls: usize,
     /// Fewest units in a subclass. The default is the two minimums together.
     pub size: Option<usize>,
     /// The order in which units are tried as seeds.
@@ -749,8 +751,8 @@ impl Default for QuickSpec {
     fn default() -> Self {
         let options = QuickMatchOptions::default();
         Self {
-            min_anchors: options.min_anchors,
-            min_candidates: options.min_candidates,
+            min_cases: options.min_cases,
+            min_controls: options.min_controls,
             size: options.size,
             seed_method: options.seed_method,
         }
@@ -924,10 +926,10 @@ impl Default for FullSpec {
 pub enum SpecInput<'a, R> {
     /// Anchors and candidates, for [`MatchMode::Standard`].
     Standard {
-        /// The anchors.
-        anchors: &'a [R],
-        /// The candidates.
-        candidates: &'a [R],
+        /// The cases.
+        cases: &'a [R],
+        /// The controls.
+        controls: &'a [R],
     },
     /// One cohort, for [`MatchMode::RiskSet`] and [`MatchMode::ExposureDensity`].
     RiskSet {
@@ -1769,8 +1771,8 @@ fn build_distance<R: CovariateRecord>(
             }
         }
         DistanceSpec::Matrix {
-            anchor_ids,
-            candidate_ids,
+            case_ids,
+            control_ids,
             values,
             ..
         } => {
@@ -1778,13 +1780,13 @@ fn build_distance<R: CovariateRecord>(
                 .iter()
                 .flat_map(|row| row.iter().map(|value| value.unwrap_or(f64::INFINITY)))
                 .collect::<Vec<_>>();
-            if values.iter().any(|row| row.len() != candidate_ids.len()) {
+            if values.iter().any(|row| row.len() != control_ids.len()) {
                 return Err(Error::option(
                     "distance",
                     "every row of the distance matrix needs one value for each candidate id",
                 ));
             }
-            let matrix = PairDistanceMatrix::new(anchor_ids.clone(), candidate_ids.clone(), flat)
+            let matrix = PairDistanceMatrix::new(case_ids.clone(), control_ids.clone(), flat)
                 .map_err(|error| Error::option("distance", error.to_string()))?;
             BuiltDistance {
                 config: Some(DistanceConfig::matrix(matrix, caliper)),
@@ -2102,8 +2104,8 @@ where
         (
             MatchMode::Standard,
             SpecInput::Standard {
-                anchors,
-                candidates,
+                cases: anchors,
+                controls: candidates,
             },
         ) => run_standard(spec, anchors, candidates),
         (MatchMode::RiskSet, SpecInput::RiskSet { cohort }) => run_risk_set(spec, cohort, None),
@@ -2217,8 +2219,8 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
                 .as_ref()
                 .ok_or_else(|| Error::option("distance", "no distance was built"))?;
             let options = QuickMatchOptions {
-                min_anchors: spec.quick.min_anchors,
-                min_candidates: spec.quick.min_candidates,
+                min_cases: spec.quick.min_cases,
+                min_controls: spec.quick.min_controls,
                 size: spec.quick.size,
                 caliper: spec.distance.caliper(),
                 seed_method: spec.quick.seed_method,
@@ -2482,7 +2484,7 @@ fn run_trimmed<R: MatchingRecord + CovariateRecord>(
     let first_fit = first.propensity.map(Box::new);
     let refit_estimate = first_fit.clone();
     let with_discarded = |refit: Box<PropensityScoreEstimate>| match refit_estimate {
-        Some(first) => Box::new(first.with_refit(*refit, &trimmed.anchors, &trimmed.candidates)),
+        Some(first) => Box::new(first.with_refit(*refit, &trimmed.cases, &trimmed.controls)),
         None => refit,
     };
     let mut output = match output {

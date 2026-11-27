@@ -33,8 +33,8 @@
 use crate::Error;
 use crate::types::{Estimand, MatchOutcome, MatchedPair};
 use itertools::Itertools;
-use rapidhash::RapidHashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 
 /// Match-weight extraction method for matched pairs.
 ///
@@ -43,33 +43,56 @@ use serde::{Deserialize, Serialize};
 /// Raw weights equal `matchit(normalize = FALSE)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MatchWeightMethod {
-    /// Every pair contributes +1 to both anchor and candidate units.
+    /// Every pair contributes +1 to both its case and its control.
     ///
     /// `matchit()` has no such weighting. Its weights for `estimand = "ATE"`
     /// are stratum weights, which equal these only when every anchor has the
     /// same number of controls and both are normalized.
     PairCount,
-    /// Every matched anchor has weight 1, candidate pairs are divided by anchor match count.
+    /// Every matched case has weight 1, and a control has `1 / m` from each
+    /// case with `m` controls it was drawn for.
     ///
     /// This is `matchit()`'s weighting for the estimand whose focal group is
     /// the anchors, with or without replacement.
-    AnchorUnitCandidateFractional,
-    /// Every matched candidate has weight 1, anchor pairs are divided by candidate reuse count.
+    CaseUnitControlFractional,
+    /// Every matched control has weight 1, and a case has `1 / m` from each
+    /// control drawn `m` times.
     ///
     /// This is `matchit()`'s weighting for the estimand whose focal group is
     /// the candidates, applied to pairs that were formed from the anchors'
     /// side. `matchit()` itself would form the pairs from the candidates'
     /// side.
-    CandidateUnitAnchorFractional,
+    ControlUnitCaseFractional,
 }
 
 impl MatchWeightMethod {
+    /// [`Self::CaseUnitControlFractional`] under its name in 0.2.
+    #[deprecated(
+        since = "0.3.0",
+        note = "use MatchWeightMethod::CaseUnitControlFractional"
+    )]
+    #[expect(
+        non_upper_case_globals,
+        reason = "the variant name of 0.2, kept for one release"
+    )]
+    pub const AnchorUnitCandidateFractional: Self = Self::CaseUnitControlFractional;
+    /// [`Self::ControlUnitCaseFractional`] under its name in 0.2.
+    #[deprecated(
+        since = "0.3.0",
+        note = "use MatchWeightMethod::ControlUnitCaseFractional"
+    )]
+    #[expect(
+        non_upper_case_globals,
+        reason = "the variant name of 0.2, kept for one release"
+    )]
+    pub const CandidateUnitAnchorFractional: Self = Self::ControlUnitCaseFractional;
+
     /// Resolve a default weighting method from an estimand.
     #[must_use]
     pub const fn for_estimand(estimand: Estimand) -> Self {
         match estimand {
-            Estimand::Att => Self::AnchorUnitCandidateFractional,
-            Estimand::Atc => Self::CandidateUnitAnchorFractional,
+            Estimand::Att => Self::CaseUnitControlFractional,
+            Estimand::Atc => Self::ControlUnitCaseFractional,
             Estimand::Ate | Estimand::Atm => Self::PairCount,
         }
     }
@@ -106,8 +129,8 @@ impl PairWeightSet {
                 .pairs
                 .iter()
                 .map(|entry| PairWeightRow {
-                    anchor_id: entry.pair.anchor_id().to_string(),
-                    candidate_id: entry.pair.comparator_id().to_string(),
+                    case_id: entry.pair.case_id.as_str().to_string(),
+                    control_id: entry.pair.control_id.as_str().to_string(),
                     pair_weight: entry.weight,
                 })
                 .collect(),
@@ -119,9 +142,9 @@ impl PairWeightSet {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PairWeightRow {
     /// Anchor-side unit identifier.
-    pub anchor_id: String,
+    pub case_id: String,
     /// Candidate-side unit identifier.
-    pub candidate_id: String,
+    pub control_id: String,
     /// Pair-level weight.
     pub pair_weight: f64,
 }
@@ -143,11 +166,29 @@ impl PairWeightTable {
 
 /// Unit role used by flat unit-weight tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum UnitRole {
-    /// Anchor-side unit.
-    Anchor,
-    /// Candidate-side unit.
-    Candidate,
+    /// A case.
+    Case,
+    /// A control.
+    Control,
+}
+
+impl UnitRole {
+    /// The case role under its name in 0.2.
+    #[deprecated(since = "0.3.0", note = "use UnitRole::Case")]
+    #[expect(
+        non_upper_case_globals,
+        reason = "the variant name of 0.2, kept for one release"
+    )]
+    pub const Anchor: Self = Self::Case;
+    /// The control role under its name in 0.2.
+    #[deprecated(since = "0.3.0", note = "use UnitRole::Control")]
+    #[expect(
+        non_upper_case_globals,
+        reason = "the variant name of 0.2, kept for one release"
+    )]
+    pub const Candidate: Self = Self::Control;
 }
 
 /// Flat row for unit-weight table outputs.
@@ -180,24 +221,64 @@ impl UnitWeightTable {
     }
 }
 
-/// Unit-level weights split by anchor and candidate groups.
+/// The weight of each unit, the cases and the controls apart, each kept in
+/// the order of the unit ids.
+///
+/// Every sum, mean and table formed from the set runs over the ids in sorted
+/// order, so the results do not depend on how the set was built.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct UnitWeightSet {
-    /// Weights keyed by anchor identifier.
-    pub anchor: RapidHashMap<String, f64>,
-    /// Weights keyed by candidate identifier.
-    pub candidate: RapidHashMap<String, f64>,
+    pub(crate) case: BTreeMap<String, f64>,
+    pub(crate) control: BTreeMap<String, f64>,
 }
 
 impl UnitWeightSet {
+    /// The set of the weights of `cases` and of `controls`, each by unit id.
+    /// A later weight of an id replaces an earlier one.
+    #[must_use]
+    pub fn new(
+        cases: impl IntoIterator<Item = (String, f64)>,
+        controls: impl IntoIterator<Item = (String, f64)>,
+    ) -> Self {
+        Self {
+            case: cases.into_iter().collect(),
+            control: controls.into_iter().collect(),
+        }
+    }
+
+    /// The cases and their weights, in the order of their ids.
+    pub fn cases(&self) -> impl Iterator<Item = (&str, f64)> {
+        self.case.iter().map(|(id, weight)| (id.as_str(), *weight))
+    }
+
+    /// The controls and their weights, in the order of their ids.
+    pub fn controls(&self) -> impl Iterator<Item = (&str, f64)> {
+        self.control
+            .iter()
+            .map(|(id, weight)| (id.as_str(), *weight))
+    }
+
+    /// The weight of the case `id`, `None` for a unit that is not a case.
+    #[must_use]
+    pub fn case_weight(&self, id: &str) -> Option<f64> {
+        self.case.get(id).copied()
+    }
+
+    /// The weight of the control `id`, `None` for a unit that is not a
+    /// control.
+    #[must_use]
+    pub fn control_weight(&self, id: &str) -> Option<f64> {
+        self.control.get(id).copied()
+    }
+
     /// Compose match weights with external sampling weights (`analysis = match * sampling`).
     ///
     /// Missing sampling weights default to `1.0`.
     #[must_use]
-    pub fn composed_with_sampling(&self, sampling_weights: &RapidHashMap<String, f64>) -> Self {
+    pub fn composed_with_sampling(&self, sampling_weights: &HashMap<String, f64>) -> Self {
         Self {
-            anchor: compose_with_sampling(&self.anchor, sampling_weights),
-            candidate: compose_with_sampling(&self.candidate, sampling_weights),
+            case: compose_with_sampling(&self.case, sampling_weights),
+            control: compose_with_sampling(&self.control, sampling_weights),
         }
     }
 
@@ -216,8 +297,8 @@ impl UnitWeightSet {
     #[must_use]
     pub fn normalized(&self) -> Self {
         Self {
-            anchor: normalize_group(&self.anchor),
-            candidate: normalize_group(&self.candidate),
+            case: normalize_group(&self.case),
+            control: normalize_group(&self.control),
         }
     }
 
@@ -227,8 +308,8 @@ impl UnitWeightSet {
     /// # Errors
     ///
     /// [`Error`] for a weight that is negative or not finite.
-    pub fn anchor_effective_sample_size(&self) -> Result<Option<f64>, Error> {
-        kish(in_id_order(&self.anchor))
+    pub fn case_effective_sample_size(&self) -> Result<Option<f64>, Error> {
+        kish(in_id_order(&self.case))
     }
 
     /// Effective sample size for candidate weights, summed in the order of the
@@ -237,28 +318,28 @@ impl UnitWeightSet {
     /// # Errors
     ///
     /// [`Error`] for a weight that is negative or not finite.
-    pub fn candidate_effective_sample_size(&self) -> Result<Option<f64>, Error> {
-        kish(in_id_order(&self.candidate))
+    pub fn control_effective_sample_size(&self) -> Result<Option<f64>, Error> {
+        kish(in_id_order(&self.control))
     }
 
     /// Sum of all anchor-side unit weights, in the order of the unit
     /// identifiers.
     #[must_use]
-    pub fn anchor_total_weight(&self) -> f64 {
-        in_id_order(&self.anchor).into_iter().sum()
+    pub fn case_total_weight(&self) -> f64 {
+        in_id_order(&self.case).into_iter().sum()
     }
 
     /// Sum of all candidate-side unit weights, in the order of the unit
     /// identifiers.
     #[must_use]
-    pub fn candidate_total_weight(&self) -> f64 {
-        in_id_order(&self.candidate).into_iter().sum()
+    pub fn control_total_weight(&self) -> f64 {
+        in_id_order(&self.control).into_iter().sum()
     }
 
     /// Combined anchor + candidate total weight.
     #[must_use]
     pub fn total_weight(&self) -> f64 {
-        self.anchor_total_weight() + self.candidate_total_weight()
+        self.case_total_weight() + self.control_total_weight()
     }
 
     /// Convert to a flat table with match weights only.
@@ -271,113 +352,23 @@ impl UnitWeightSet {
     #[must_use]
     pub fn to_table_with_sampling(
         &self,
-        sampling_weights: &RapidHashMap<String, f64>,
+        sampling_weights: &HashMap<String, f64>,
     ) -> UnitWeightTable {
         unit_weight_table_from_set(self, Some(sampling_weights))
     }
 }
 
 impl MatchOutcome {
-    /// Extract unit-level match weights from this outcome using the supplied method.
+    /// The unit weights of the pairs by `method`.
     #[must_use]
     pub fn match_weights(&self, method: MatchWeightMethod) -> UnitWeightSet {
         match_weights_from_pairs(&self.pairs, method)
     }
 
-    /// Extract unit-level match weights for an explicit estimand preset.
-    #[must_use]
-    pub fn match_weights_for_estimand(&self, estimand: Estimand) -> UnitWeightSet {
-        self.match_weights(MatchWeightMethod::for_estimand(estimand))
-    }
-
-    /// Extract unit-level match weights using the realized estimand in diagnostics.
-    #[must_use]
-    pub fn match_weights_for_realized_estimand(&self) -> UnitWeightSet {
-        self.match_weights_for_estimand(self.diagnostics.realized_estimand)
-    }
-
-    /// Extract composed analysis weights (`match_weight * sampling_weight`).
-    #[must_use]
-    pub fn analysis_weights(
-        &self,
-        method: MatchWeightMethod,
-        sampling_weights: &RapidHashMap<String, f64>,
-    ) -> UnitWeightSet {
-        self.match_weights(method)
-            .composed_with_sampling(sampling_weights)
-    }
-
-    /// Extract composed analysis weights using realized-estimand defaults.
-    #[must_use]
-    pub fn analysis_weights_for_realized_estimand(
-        &self,
-        sampling_weights: &RapidHashMap<String, f64>,
-    ) -> UnitWeightSet {
-        self.match_weights_for_realized_estimand()
-            .composed_with_sampling(sampling_weights)
-    }
-
-    /// Extract unit-weight table rows using the supplied method.
-    #[must_use]
-    pub fn unit_weight_table(&self, method: MatchWeightMethod) -> UnitWeightTable {
-        self.match_weights(method).to_table()
-    }
-
-    /// Extract unit-weight table rows with composed analysis weights.
-    #[must_use]
-    pub fn unit_weight_table_with_sampling(
-        &self,
-        method: MatchWeightMethod,
-        sampling_weights: &RapidHashMap<String, f64>,
-    ) -> UnitWeightTable {
-        self.match_weights(method)
-            .to_table_with_sampling(sampling_weights)
-    }
-
-    /// Extract unit-weight table rows using realized-estimand defaults.
-    #[must_use]
-    pub fn unit_weight_table_for_realized_estimand(&self) -> UnitWeightTable {
-        self.match_weights_for_realized_estimand().to_table()
-    }
-
-    /// Extract realized-estimand unit-weight table with composed analysis weights.
-    #[must_use]
-    pub fn unit_weight_table_for_realized_estimand_with_sampling(
-        &self,
-        sampling_weights: &RapidHashMap<String, f64>,
-    ) -> UnitWeightTable {
-        self.match_weights_for_realized_estimand()
-            .to_table_with_sampling(sampling_weights)
-    }
-
-    /// Extract pair-level match weights from this outcome using the supplied method.
+    /// The pair weights of the pairs by `method`.
     #[must_use]
     pub fn pair_weights(&self, method: MatchWeightMethod) -> PairWeightSet {
         pair_weights_from_pairs(&self.pairs, method)
-    }
-
-    /// Extract pair-level match weights for an explicit estimand preset.
-    #[must_use]
-    pub fn pair_weights_for_estimand(&self, estimand: Estimand) -> PairWeightSet {
-        self.pair_weights(MatchWeightMethod::for_estimand(estimand))
-    }
-
-    /// Extract pair-level match weights using the realized estimand in diagnostics.
-    #[must_use]
-    pub fn pair_weights_for_realized_estimand(&self) -> PairWeightSet {
-        self.pair_weights_for_estimand(self.diagnostics.realized_estimand)
-    }
-
-    /// Extract pair-weight table rows using the supplied method.
-    #[must_use]
-    pub fn pair_weight_table(&self, method: MatchWeightMethod) -> PairWeightTable {
-        self.pair_weights(method).to_table()
-    }
-
-    /// Extract pair-weight table rows using realized-estimand defaults.
-    #[must_use]
-    pub fn pair_weight_table_for_realized_estimand(&self) -> PairWeightTable {
-        self.pair_weights_for_realized_estimand().to_table()
     }
 }
 
@@ -386,10 +377,10 @@ impl MatchOutcome {
 pub fn match_weights_from_pairs(pairs: &[MatchedPair], method: MatchWeightMethod) -> UnitWeightSet {
     match method {
         MatchWeightMethod::PairCount => pair_count_weights(pairs),
-        MatchWeightMethod::AnchorUnitCandidateFractional => {
+        MatchWeightMethod::CaseUnitControlFractional => {
             anchor_unit_candidate_fractional_weights(pairs)
         }
-        MatchWeightMethod::CandidateUnitAnchorFractional => {
+        MatchWeightMethod::ControlUnitCaseFractional => {
             candidate_unit_anchor_fractional_weights(pairs)
         }
     }
@@ -406,22 +397,33 @@ pub fn pair_weights_from_pairs(pairs: &[MatchedPair], method: MatchWeightMethod)
                 .map(|pair| PairWeight { pair, weight: 1.0 })
                 .collect(),
         },
-        MatchWeightMethod::AnchorUnitCandidateFractional => {
-            let anchor_counts = pairs.iter().map(MatchedPair::anchor_id).counts();
+        MatchWeightMethod::CaseUnitControlFractional => {
+            let anchor_counts = pairs
+                .iter()
+                .map(|pair: &MatchedPair| pair.case_id.as_str())
+                .counts();
             PairWeightSet {
                 pairs: pairs
                     .iter()
                     .cloned()
                     .map(|pair| PairWeight {
                         weight: 1.0
-                            / to_f64(anchor_counts.get(pair.anchor_id()).copied().unwrap_or(1)),
+                            / to_f64(
+                                anchor_counts
+                                    .get(pair.case_id.as_str())
+                                    .copied()
+                                    .unwrap_or(1),
+                            ),
                         pair,
                     })
                     .collect(),
             }
         }
-        MatchWeightMethod::CandidateUnitAnchorFractional => {
-            let candidate_counts = pairs.iter().map(MatchedPair::comparator_id).counts();
+        MatchWeightMethod::ControlUnitCaseFractional => {
+            let candidate_counts = pairs
+                .iter()
+                .map(|pair: &MatchedPair| pair.control_id.as_str())
+                .counts();
             PairWeightSet {
                 pairs: pairs
                     .iter()
@@ -430,7 +432,7 @@ pub fn pair_weights_from_pairs(pairs: &[MatchedPair], method: MatchWeightMethod)
                         weight: 1.0
                             / to_f64(
                                 candidate_counts
-                                    .get(pair.comparator_id())
+                                    .get(pair.control_id.as_str())
                                     .copied()
                                     .unwrap_or(1),
                             ),
@@ -471,72 +473,86 @@ fn pair_count_weights(pairs: &[MatchedPair]) -> UnitWeightSet {
     let mut weights = UnitWeightSet::default();
     for pair in pairs {
         *weights
-            .anchor
-            .entry(pair.anchor_id().to_string())
+            .case
+            .entry(pair.case_id.as_str().to_string())
             .or_insert(0.0) += 1.0;
         *weights
-            .candidate
-            .entry(pair.comparator_id().to_string())
+            .control
+            .entry(pair.control_id.as_str().to_string())
             .or_insert(0.0) += 1.0;
     }
     weights
 }
 
 fn anchor_unit_candidate_fractional_weights(pairs: &[MatchedPair]) -> UnitWeightSet {
-    let anchor_counts = pairs.iter().map(MatchedPair::anchor_id).counts();
+    let anchor_counts = pairs
+        .iter()
+        .map(|pair: &MatchedPair| pair.case_id.as_str())
+        .counts();
 
     let anchor = anchor_counts
         .keys()
         .map(|id| ((*id).to_string(), 1.0_f64))
-        .collect::<RapidHashMap<_, _>>();
-    let mut candidate = RapidHashMap::default();
+        .collect::<BTreeMap<_, _>>();
+    let mut candidate = BTreeMap::new();
 
     for pair in pairs {
-        let count = anchor_counts.get(pair.anchor_id()).copied().unwrap_or(1);
+        let count = anchor_counts
+            .get(pair.case_id.as_str())
+            .copied()
+            .unwrap_or(1);
         *candidate
-            .entry(pair.comparator_id().to_string())
+            .entry(pair.control_id.as_str().to_string())
             .or_insert(0.0) += 1.0 / to_f64(count);
     }
 
-    UnitWeightSet { anchor, candidate }
+    UnitWeightSet {
+        case: anchor,
+        control: candidate,
+    }
 }
 
 fn candidate_unit_anchor_fractional_weights(pairs: &[MatchedPair]) -> UnitWeightSet {
-    let candidate_counts = pairs.iter().map(MatchedPair::comparator_id).counts();
+    let candidate_counts = pairs
+        .iter()
+        .map(|pair: &MatchedPair| pair.control_id.as_str())
+        .counts();
 
     let candidate = candidate_counts
         .keys()
         .map(|id| ((*id).to_string(), 1.0_f64))
-        .collect::<RapidHashMap<_, _>>();
-    let mut anchor = RapidHashMap::default();
+        .collect::<BTreeMap<_, _>>();
+    let mut anchor = BTreeMap::new();
 
     for pair in pairs {
         let count = candidate_counts
-            .get(pair.comparator_id())
+            .get(pair.control_id.as_str())
             .copied()
             .unwrap_or(1);
-        *anchor.entry(pair.anchor_id().to_string()).or_insert(0.0) += 1.0 / to_f64(count);
+        *anchor
+            .entry(pair.case_id.as_str().to_string())
+            .or_insert(0.0) += 1.0 / to_f64(count);
     }
 
-    UnitWeightSet { anchor, candidate }
+    UnitWeightSet {
+        case: anchor,
+        control: candidate,
+    }
 }
 
 /// The weights of a group in the order of their unit identifiers. Each
 /// `RapidHashMap` is seeded at random, so a sum over its iteration order
 /// would differ from run to run in the last bits.
-fn in_id_order(group: &RapidHashMap<String, f64>) -> Vec<f64> {
-    let mut entries: Vec<(&String, f64)> = group.iter().map(|(id, w)| (id, *w)).collect();
-    entries.sort_unstable_by(|left, right| left.0.cmp(right.0));
-    entries.into_iter().map(|(_, weight)| weight).collect()
+fn in_id_order(group: &BTreeMap<String, f64>) -> Vec<f64> {
+    group.values().copied().collect()
 }
 
-fn normalize_group(group: &RapidHashMap<String, f64>) -> RapidHashMap<String, f64> {
-    let mut positive: Vec<(&String, f64)> = group
+fn normalize_group(group: &BTreeMap<String, f64>) -> BTreeMap<String, f64> {
+    let positive: Vec<(&String, f64)> = group
         .iter()
         .filter(|(_, weight)| **weight > 0.0)
         .map(|(id, weight)| (id, *weight))
         .collect();
-    positive.sort_unstable_by(|left, right| left.0.cmp(right.0));
     let sum = positive
         .iter()
         .fold(0.0_f64, |acc, (_, weight)| acc + weight);
@@ -558,9 +574,9 @@ fn normalize_group(group: &RapidHashMap<String, f64>) -> RapidHashMap<String, f6
 }
 
 fn compose_with_sampling(
-    match_weights: &RapidHashMap<String, f64>,
-    sampling_weights: &RapidHashMap<String, f64>,
-) -> RapidHashMap<String, f64> {
+    match_weights: &BTreeMap<String, f64>,
+    sampling_weights: &HashMap<String, f64>,
+) -> BTreeMap<String, f64> {
     match_weights
         .iter()
         .map(|(id, weight)| {
@@ -571,9 +587,9 @@ fn compose_with_sampling(
 }
 
 fn unit_weight_rows_for_group(
-    group: &RapidHashMap<String, f64>,
+    group: &BTreeMap<String, f64>,
     role: UnitRole,
-    sampling_weights: Option<&RapidHashMap<String, f64>>,
+    sampling_weights: Option<&HashMap<String, f64>>,
 ) -> Vec<UnitWeightRow> {
     group
         .iter()
@@ -594,12 +610,12 @@ fn unit_weight_rows_for_group(
 
 fn unit_weight_table_from_set(
     weights: &UnitWeightSet,
-    sampling_weights: Option<&RapidHashMap<String, f64>>,
+    sampling_weights: Option<&HashMap<String, f64>>,
 ) -> UnitWeightTable {
-    let mut rows = unit_weight_rows_for_group(&weights.anchor, UnitRole::Anchor, sampling_weights);
+    let mut rows = unit_weight_rows_for_group(&weights.case, UnitRole::Case, sampling_weights);
     rows.extend(unit_weight_rows_for_group(
-        &weights.candidate,
-        UnitRole::Candidate,
+        &weights.control,
+        UnitRole::Control,
         sampling_weights,
     ));
     rows.sort_unstable_by(|left, right| {
@@ -615,6 +631,7 @@ use super::to_f64;
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use crate::types::MatchDiagnostics;
 
@@ -644,10 +661,10 @@ mod tests {
         );
 
         let weights = outcome.match_weights(MatchWeightMethod::PairCount);
-        assert_eq!(weights.anchor.get("a1").copied(), Some(2.0));
-        assert_eq!(weights.anchor.get("a2").copied(), Some(1.0));
-        assert_eq!(weights.candidate.get("c1").copied(), Some(1.0));
-        assert_eq!(weights.candidate.get("c2").copied(), Some(2.0));
+        assert_eq!(weights.case.get("a1").copied(), Some(2.0));
+        assert_eq!(weights.case.get("a2").copied(), Some(1.0));
+        assert_eq!(weights.control.get("c1").copied(), Some(1.0));
+        assert_eq!(weights.control.get("c2").copied(), Some(2.0));
     }
 
     #[test]
@@ -661,69 +678,71 @@ mod tests {
             Estimand::Att,
         );
 
-        let weights = outcome.match_weights(MatchWeightMethod::AnchorUnitCandidateFractional);
-        assert_eq!(weights.anchor.get("a1").copied(), Some(1.0));
-        assert_eq!(weights.anchor.get("a2").copied(), Some(1.0));
-        assert_eq!(weights.candidate.get("c1").copied(), Some(0.5));
-        assert_eq!(weights.candidate.get("c2").copied(), Some(1.5));
+        let weights = outcome.match_weights(MatchWeightMethod::CaseUnitControlFractional);
+        assert_eq!(weights.case.get("a1").copied(), Some(1.0));
+        assert_eq!(weights.case.get("a2").copied(), Some(1.0));
+        assert_eq!(weights.control.get("c1").copied(), Some(0.5));
+        assert_eq!(weights.control.get("c2").copied(), Some(1.5));
 
-        let total_anchor: f64 = weights.anchor.values().sum();
-        let total_candidate: f64 = weights.candidate.values().sum();
+        let total_anchor: f64 = weights.case.values().sum();
+        let total_candidate: f64 = weights.control.values().sum();
         assert!((total_anchor - total_candidate).abs() < 1e-12);
     }
 
     #[test]
     fn normalized_weights_have_mean_one_in_each_group_and_keep_zeros() {
         let mut weights = UnitWeightSet::default();
-        weights.anchor.insert("a1".into(), 1.0);
-        weights.anchor.insert("a2".into(), 1.0);
-        weights.candidate.insert("c1".into(), 0.5);
-        weights.candidate.insert("c2".into(), 1.5);
-        weights.candidate.insert("c3".into(), 0.0);
-        weights.candidate.insert("c4".into(), 1.0);
+        weights.case.insert("a1".into(), 1.0);
+        weights.case.insert("a2".into(), 1.0);
+        weights.control.insert("c1".into(), 0.5);
+        weights.control.insert("c2".into(), 1.5);
+        weights.control.insert("c3".into(), 0.0);
+        weights.control.insert("c4".into(), 1.0);
 
         let normalized = weights.normalized();
-        assert_eq!(normalized.anchor.get("a1").copied(), Some(1.0));
+        assert_eq!(normalized.case.get("a1").copied(), Some(1.0));
         // The positive candidate weights have mean 1, so they are unchanged.
-        assert_eq!(normalized.candidate.get("c1").copied(), Some(0.5));
-        assert_eq!(normalized.candidate.get("c2").copied(), Some(1.5));
-        assert_eq!(normalized.candidate.get("c3").copied(), Some(0.0));
+        assert_eq!(normalized.control.get("c1").copied(), Some(0.5));
+        assert_eq!(normalized.control.get("c2").copied(), Some(1.5));
+        assert_eq!(normalized.control.get("c3").copied(), Some(0.0));
 
         let mut scaled = UnitWeightSet::default();
-        scaled.candidate.insert("c1".into(), 1.0 / 3.0);
-        scaled.candidate.insert("c2".into(), 1.0 / 3.0);
+        scaled.control.insert("c1".into(), 1.0 / 3.0);
+        scaled.control.insert("c2".into(), 1.0 / 3.0);
         let scaled = scaled.normalized();
-        assert!((scaled.candidate["c1"] - 1.0).abs() < 1e-15);
-        assert!((scaled.candidate_total_weight() - 2.0).abs() < 1e-15);
-        assert!(UnitWeightSet::default().normalized().anchor.is_empty());
+        assert!((scaled.control["c1"] - 1.0).abs() < 1e-15);
+        assert!((scaled.control_total_weight() - 2.0).abs() < 1e-15);
+        assert!(UnitWeightSet::default().normalized().case.is_empty());
     }
 
     #[test]
     fn realized_estimand_method_resolves_expected_scheme() {
         let outcome = outcome_with_pairs(vec![MatchedPair::new("a1", "c1")], Estimand::Atc);
-        let weights = outcome.match_weights_for_realized_estimand();
+        let weights = outcome.match_weights(MatchWeightMethod::for_estimand(
+            outcome.diagnostics.realized_estimand,
+        ));
 
-        assert_eq!(weights.candidate.get("c1").copied(), Some(1.0));
-        assert_eq!(weights.anchor.get("a1").copied(), Some(1.0));
+        assert_eq!(weights.control.get("c1").copied(), Some(1.0));
+        assert_eq!(weights.case.get("a1").copied(), Some(1.0));
     }
 
     #[test]
     fn sampling_composition_and_ess_work() {
         let weights = UnitWeightSet {
-            anchor: [("a1".to_string(), 1.0_f64), ("a2".to_string(), 2.0)]
+            case: [("a1".to_string(), 1.0_f64), ("a2".to_string(), 2.0)]
                 .into_iter()
                 .collect(),
-            candidate: std::iter::once(("c1".to_string(), 0.5_f64)).collect(),
+            control: std::iter::once(("c1".to_string(), 0.5_f64)).collect(),
         };
-        let sampling: RapidHashMap<String, f64> =
+        let sampling: std::collections::HashMap<String, f64> =
             [("a2".to_string(), 3.0), ("c1".to_string(), 4.0)]
                 .into_iter()
                 .collect();
 
         let composed = weights.composed_with_sampling(&sampling);
-        assert_eq!(composed.anchor.get("a1").copied(), Some(1.0));
-        assert_eq!(composed.anchor.get("a2").copied(), Some(6.0));
-        assert_eq!(composed.candidate.get("c1").copied(), Some(2.0));
+        assert_eq!(composed.case.get("a1").copied(), Some(1.0));
+        assert_eq!(composed.case.get("a2").copied(), Some(6.0));
+        assert_eq!(composed.control.get("c1").copied(), Some(2.0));
 
         let ess = kish([1.0, 2.0, 3.0]).unwrap().unwrap();
         assert!((ess - (36.0 / 14.0)).abs() < 1e-12);
@@ -744,7 +763,9 @@ mod tests {
         assert_eq!(pair_count.pairs.len(), 3);
         assert!((pair_count.total_weight() - 3.0).abs() < 1e-12);
 
-        let realized = outcome.pair_weights_for_realized_estimand();
+        let realized = outcome.pair_weights(MatchWeightMethod::for_estimand(
+            outcome.diagnostics.realized_estimand,
+        ));
         assert_eq!(realized.pairs.len(), 3);
         assert!((realized.total_weight() - 2.0).abs() < 1e-12);
     }
@@ -752,16 +773,16 @@ mod tests {
     #[test]
     fn unit_weight_total_helpers_return_expected_sums() {
         let weights = UnitWeightSet {
-            anchor: [("a1".to_string(), 1.0_f64), ("a2".to_string(), 2.0)]
+            case: [("a1".to_string(), 1.0_f64), ("a2".to_string(), 2.0)]
                 .into_iter()
                 .collect(),
-            candidate: [("c1".to_string(), 0.5_f64), ("c2".to_string(), 1.5)]
+            control: [("c1".to_string(), 0.5_f64), ("c2".to_string(), 1.5)]
                 .into_iter()
                 .collect(),
         };
 
-        assert!((weights.anchor_total_weight() - 3.0).abs() < 1e-12);
-        assert!((weights.candidate_total_weight() - 2.0).abs() < 1e-12);
+        assert!((weights.case_total_weight() - 3.0).abs() < 1e-12);
+        assert!((weights.control_total_weight() - 2.0).abs() < 1e-12);
         assert!((weights.total_weight() - 5.0).abs() < 1e-12);
     }
 
@@ -776,12 +797,12 @@ mod tests {
             Estimand::Att,
         );
 
-        let ate = outcome.match_weights_for_estimand(Estimand::Ate);
-        let atm = outcome.match_weights_for_estimand(Estimand::Atm);
+        let ate = outcome.match_weights(MatchWeightMethod::for_estimand(Estimand::Ate));
+        let atm = outcome.match_weights(MatchWeightMethod::for_estimand(Estimand::Atm));
 
         assert_eq!(ate, atm);
-        assert_eq!(ate.anchor.get("a1").copied(), Some(2.0));
-        assert_eq!(ate.candidate.get("c2").copied(), Some(1.0));
+        assert_eq!(ate.case.get("a1").copied(), Some(2.0));
+        assert_eq!(ate.control.get("c2").copied(), Some(1.0));
     }
 
     #[test]
@@ -794,7 +815,7 @@ mod tests {
             ],
             Estimand::Att,
         );
-        let sampling: RapidHashMap<String, f64> = [
+        let sampling: std::collections::HashMap<String, f64> = [
             ("a1".to_string(), 2.0),
             ("a2".to_string(), 1.0),
             ("c1".to_string(), 4.0),
@@ -803,17 +824,16 @@ mod tests {
         .into_iter()
         .collect();
 
-        let table = outcome.unit_weight_table_with_sampling(
-            MatchWeightMethod::AnchorUnitCandidateFractional,
-            &sampling,
-        );
+        let table = outcome
+            .match_weights(MatchWeightMethod::CaseUnitControlFractional)
+            .to_table_with_sampling(&sampling);
 
         assert_eq!(table.rows.len(), 4);
         assert!(table.rows.iter().any(|row| row.unit_id == "a1"
-            && row.role == UnitRole::Anchor
+            && row.role == UnitRole::Case
             && (row.analysis_weight - 2.0).abs() < 1e-12));
         assert!(table.rows.iter().any(|row| row.unit_id == "c2"
-            && row.role == UnitRole::Candidate
+            && row.role == UnitRole::Control
             && (row.analysis_weight - 0.75).abs() < 1e-12));
     }
 
@@ -821,10 +841,14 @@ mod tests {
     fn pair_weight_table_flattens_pairs() {
         let outcome = outcome_with_pairs(vec![MatchedPair::new("a1", "c1")], Estimand::Ate);
 
-        let table = outcome.pair_weight_table_for_realized_estimand();
+        let table = outcome
+            .pair_weights(MatchWeightMethod::for_estimand(
+                outcome.diagnostics.realized_estimand,
+            ))
+            .to_table();
         assert_eq!(table.rows.len(), 1);
-        assert_eq!(table.rows[0].anchor_id, "a1");
-        assert_eq!(table.rows[0].candidate_id, "c1");
+        assert_eq!(table.rows[0].case_id, "a1");
+        assert_eq!(table.rows[0].control_id, "c1");
         assert!((table.rows[0].pair_weight - 1.0).abs() < 1e-12);
     }
 }

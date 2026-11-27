@@ -260,15 +260,13 @@ fn check_total(label: &str, ours: f64, r_total: f64, pairs: usize, r_epsilon: f6
 
 fn check_weights(label: &str, outcome: &MatchOutcome, scenario: &Scenario, expected: &[f64]) {
     let weights = outcome
-        .match_weights(MatchWeightMethod::AnchorUnitCandidateFractional)
+        .match_weights(MatchWeightMethod::CaseUnitControlFractional)
         .normalized();
     for (index, want) in expected.iter().enumerate() {
         let id = (index + 1).to_string();
         let got = weights
-            .anchor
-            .get(&id)
-            .or_else(|| weights.candidate.get(&id))
-            .copied()
+            .case_weight(&id)
+            .or_else(|| weights.control_weight(&id))
             .unwrap_or(0.0);
         assert!(
             (got - want).abs() <= 1e-12 * want.abs().max(1.0),
@@ -436,12 +434,12 @@ fn a_distance_matrix_gives_the_pairs_and_subclasses_of_its_distance() {
             continue;
         }
         let on_vectors = setup(name, scenario, 1, None);
-        let anchor_ids: Vec<String> = on_vectors
+        let case_ids: Vec<String> = on_vectors
             .anchors
             .iter()
             .map(|r| r.id().to_string())
             .collect();
-        let candidate_ids: Vec<String> = on_vectors
+        let control_ids: Vec<String> = on_vectors
             .candidates
             .iter()
             .map(|r| r.id().to_string())
@@ -450,10 +448,10 @@ fn a_distance_matrix_gives_the_pairs_and_subclasses_of_its_distance() {
             let row = row(id) - 1;
             (scenario.x[row], scenario.x2[row])
         };
-        let mut values = Vec::with_capacity(anchor_ids.len() * candidate_ids.len());
-        for anchor in &anchor_ids {
+        let mut values = Vec::with_capacity(case_ids.len() * control_ids.len());
+        for anchor in &case_ids {
             let (ax, ay) = point(anchor);
-            for candidate in &candidate_ids {
+            for candidate in &control_ids {
                 let (cx, cy) = point(candidate);
                 let (dx, dy) = (ax - cx, ay - cy);
                 let mut sum = 0.0_f64;
@@ -462,8 +460,7 @@ fn a_distance_matrix_gives_the_pairs_and_subclasses_of_its_distance() {
                 values.push(sum.sqrt());
             }
         }
-        let matrix =
-            PairDistanceMatrix::new(anchor_ids, candidate_ids, values).expect("a full table");
+        let matrix = PairDistanceMatrix::new(case_ids, control_ids, values).expect("a full table");
         let on_matrix = Setup {
             anchors: on_vectors.anchors.clone(),
             candidates: on_vectors.candidates.clone(),

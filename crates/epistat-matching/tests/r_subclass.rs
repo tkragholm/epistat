@@ -193,12 +193,12 @@ fn subclasses_and_weights_match_matchit() {
             let min_group = |treated: bool| {
                 got.subclasses
                     .iter()
-                    .filter(|s| s.anchor_count > 0 && s.candidate_count > 0)
+                    .filter(|s| s.case_count > 0 && s.control_count > 0)
                     .map(|s| {
                         if treated {
-                            s.anchor_count
+                            s.case_count
                         } else {
-                            s.candidate_count
+                            s.control_count
                         }
                     })
                     .min()

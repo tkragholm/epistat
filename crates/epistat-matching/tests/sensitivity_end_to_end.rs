@@ -20,17 +20,17 @@ fn pairs_from_the_engine_give_the_bounds_of_their_differences() {
     let (mut ids, mut treated, mut outcome) = (Vec::new(), Vec::new(), Vec::new());
     for i in 0..120_u32 {
         let id = format!("u{i:03}");
-        let is_anchor = i < 40;
+        let is_case = i < 40;
         let record = BaseRecord::new(id.clone(), birth);
-        if is_anchor {
+        if is_case {
             anchors.push(record);
         } else {
             candidates.push(record);
         }
         ids.push(id);
-        treated.push(is_anchor);
+        treated.push(is_case);
         // Treated units gain about 1 over the controls, with a spread.
-        outcome.push(f64::from((i * 37) % 11) / 5.0 + f64::from(u8::from(is_anchor)));
+        outcome.push(f64::from((i * 37) % 11) / 5.0 + f64::from(u8::from(is_case)));
     }
     let matched = MatchJob::new_standard(&anchors, &candidates, 5)
         .run()
@@ -68,10 +68,10 @@ fn a_control_in_two_sets_is_refused() {
     let long = LongMatches {
         id: ["t1", "c1", "t2", "c1"].map(String::from).to_vec(),
         role: vec![
-            UnitRole::Anchor,
-            UnitRole::Candidate,
-            UnitRole::Anchor,
-            UnitRole::Candidate,
+            UnitRole::Case,
+            UnitRole::Control,
+            UnitRole::Case,
+            UnitRole::Control,
         ],
         pair_id: vec![Some(1), Some(1), Some(2), Some(2)],
         weight: vec![1.0; 4],

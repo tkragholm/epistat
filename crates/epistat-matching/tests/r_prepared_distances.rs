@@ -226,9 +226,9 @@ fn prepared_distances_give_matchits_pairs() {
         let mut by_anchor: HashMap<usize, Vec<usize>> = HashMap::new();
         for pair in &outcome.pairs {
             by_anchor
-                .entry(pair.anchor_id().parse().expect("row"))
+                .entry(pair.case_id.as_str().parse().expect("row"))
                 .or_default()
-                .push(pair.comparator_id().parse().expect("row"));
+                .push(pair.control_id.as_str().parse().expect("row"));
         }
         let ours: Vec<Vec<usize>> = run
             .focal_rows

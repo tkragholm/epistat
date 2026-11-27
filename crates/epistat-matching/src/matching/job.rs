@@ -741,12 +741,12 @@ mod tests {
             // a3 is outside the birth window of every candidate. Without
             // replacement a2 finds c1 used already.
             assert_eq!(result.unmatched_cases, if replacement { 1 } else { 2 });
-            assert_eq!(result.diagnostics.total_anchors_evaluated, 3);
+            assert_eq!(result.diagnostics.total_cases_evaluated, 3);
             assert!(
                 result
                     .diagnostics
                     .estimand_drift_reasons
-                    .contains(&EstimandDriftReason::UnmatchedAnchors)
+                    .contains(&EstimandDriftReason::UnmatchedCases)
             );
         }
     }

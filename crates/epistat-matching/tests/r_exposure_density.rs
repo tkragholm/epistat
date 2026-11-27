@@ -191,7 +191,7 @@ fn risk_sets_equal_heaven_and_ccwc() {
         assert_eq!(&controls, expected, "risk set of {case}");
     }
     assert_eq!(
-        sets.outcome.diagnostics.total_anchors_evaluated,
+        sets.outcome.diagnostics.total_cases_evaluated,
         reference.cases.len(),
         "the exposed people the age limit leaves"
     );
@@ -476,8 +476,8 @@ fn spec_mode_needs_a_cohort_and_risk_set_options() {
         run_spec::<BalanceRecord>(
             &spec,
             SpecInput::Standard {
-                anchors: &[],
-                candidates: &[]
+                cases: &[],
+                controls: &[]
             }
         ),
         Err(Error::InputMode {

@@ -141,10 +141,10 @@ fn compute_summary<R: CovariateRecord>(
     let sample = BalanceSample {
         cases,
         controls,
-        case_weights: unit_weights(cases, &weights.matching.anchor, weights.sampling.as_ref()),
+        case_weights: unit_weights(cases, &weights.matching.case, weights.sampling.as_ref()),
         control_weights: unit_weights(
             controls,
-            &weights.matching.candidate,
+            &weights.matching.control,
             weights.sampling.as_ref(),
         ),
         sampled: weights.sampling.is_some(),
@@ -579,7 +579,7 @@ struct UnitWeights {
 
 fn unit_weights<R: CovariateRecord>(
     records: &[R],
-    matching: &rapidhash::RapidHashMap<String, f64>,
+    matching: &std::collections::BTreeMap<String, f64>,
     sampling: Option<&HashMap<String, f64>>,
 ) -> Vec<UnitWeights> {
     records
@@ -2000,7 +2000,7 @@ mod tests {
     fn invalid_weights_are_an_error() {
         let (cases, controls) = small_groups();
         let mut weights = BalanceWeights::unmatched(&cases, &controls, Estimand::Att);
-        weights.matching.anchor.insert("t1".to_string(), -1.0);
+        weights.matching.case.insert("t1".to_string(), -1.0);
         let result = balance_summary(
             &cases,
             &controls,
@@ -2461,9 +2461,9 @@ mod tests {
             for record in cases.iter().chain(&controls) {
                 let weight = [0.0, 0.1, 0.3, 0.7, 1.1][rng.below(5)];
                 let target = if MatchingRecord::id(record).starts_with("case") {
-                    &mut weights.matching.anchor
+                    &mut weights.matching.case
                 } else {
-                    &mut weights.matching.candidate
+                    &mut weights.matching.control
                 };
                 target.insert(MatchingRecord::id(record).to_string(), weight);
             }
@@ -2498,12 +2498,12 @@ mod tests {
                 controls: &controls,
                 case_weights: unit_weights(
                     &cases,
-                    &weights.matching.anchor,
+                    &weights.matching.case,
                     weights.sampling.as_ref(),
                 ),
                 control_weights: unit_weights(
                     &controls,
-                    &weights.matching.candidate,
+                    &weights.matching.control,
                     weights.sampling.as_ref(),
                 ),
                 sampled,
@@ -2554,7 +2554,7 @@ mod tests {
         let cases = make("case", &mut rng);
         let controls = make("control", &mut rng);
         let mut weights = BalanceWeights::unmatched(&cases, &controls, Estimand::Att);
-        for (idx, weight) in weights.matching.candidate.values_mut().enumerate() {
+        for (idx, weight) in weights.matching.control.values_mut().enumerate() {
             *weight = 0.1 * f64::from(u8::try_from(idx % 7).unwrap());
         }
         weights.pairs = (0..20_000)

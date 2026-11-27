@@ -45,7 +45,7 @@ pub struct SubclassedUnits {
     /// The id of each unit.
     pub ids: Vec<String>,
     /// Number of anchors. The units before this position are anchors.
-    pub anchor_count: usize,
+    pub case_count: usize,
     /// Subclass of each unit, `None` for a unit that is dropped.
     pub subclass: Vec<Option<usize>>,
     /// Counts and anchor share of each subclass.
@@ -81,8 +81,8 @@ impl SubclassedUnits {
 
     /// Whether the unit at `position` is an anchor.
     #[must_use]
-    pub const fn is_anchor(&self, position: usize) -> bool {
-        position < self.anchor_count
+    pub const fn is_case(&self, position: usize) -> bool {
+        position < self.case_count
     }
 
     /// Number of kept units.
@@ -127,7 +127,7 @@ impl SubclassedUnits {
         Some(subclass_weight_for_estimand(
             estimand,
             share,
-            self.is_anchor(position),
+            self.is_case(position),
         ))
     }
 
@@ -301,7 +301,7 @@ pub(crate) fn subclasses_of_strata<R: MatchingRecord>(
     }
     Ok(SubclassedUnits {
         ids: unit_ids(anchors, candidates),
-        anchor_count: anchors.len(),
+        case_count: anchors.len(),
         subclass: numbers
             .par_iter()
             .map(|stratum| subclass_of[*stratum as usize])
@@ -407,7 +407,7 @@ pub(super) mod reference {
             subclasses,
             ..Maps::default()
         };
-        for (rows, strata, is_anchor) in [
+        for (rows, strata, is_case) in [
             (anchors, anchor_strata, true),
             (candidates, candidate_strata, false),
         ] {
@@ -427,7 +427,7 @@ pub(super) mod reference {
                 ] {
                     weights.insert(
                         id.clone(),
-                        subclass_weight_for_estimand(estimand, share, is_anchor),
+                        subclass_weight_for_estimand(estimand, share, is_case),
                     );
                 }
                 outcome.assignments.insert(id, subclass);

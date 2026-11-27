@@ -530,7 +530,7 @@ pub fn vector_match<R: CovariateRecord>(
             .outcome
             .pairs
             .iter()
-            .map(MatchedPair::anchor_id)
+            .map(|pair: &MatchedPair| pair.case_id.as_str())
             .collect();
         for id in matched {
             *counts.entry(id).or_default() += 1;
@@ -548,7 +548,7 @@ pub fn vector_match<R: CovariateRecord>(
             .outcome
             .pairs
             .iter()
-            .filter(|p| final_set.contains(p.anchor_id()))
+            .filter(|p| final_set.contains(p.case_id.as_str()))
             .cloned()
             .collect();
         comparison.outcome = outcome_of(pairs, focal_total);
@@ -564,7 +564,10 @@ pub fn vector_match<R: CovariateRecord>(
 
 /// An outcome of with-replacement pairs of `focal_total` anchors, 1:1.
 fn outcome_of(pairs: Vec<MatchedPair>, focal_total: usize) -> MatchOutcome {
-    let matched: HashSet<&str> = pairs.iter().map(MatchedPair::anchor_id).collect();
+    let matched: HashSet<&str> = pairs
+        .iter()
+        .map(|pair: &MatchedPair| pair.case_id.as_str())
+        .collect();
     let matched_cases = matched.len();
     let diagnostics = MatchDiagnostics {
         realized_estimand: Estimand::Att,

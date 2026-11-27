@@ -265,9 +265,9 @@ fn rows_of(outcome: &MatchOutcome, focal_rows: &[usize]) -> Vec<Vec<usize>> {
     let mut by_anchor: HashMap<usize, Vec<usize>> = HashMap::new();
     for pair in &outcome.pairs {
         by_anchor
-            .entry(pair.anchor_id().parse().expect("row number"))
+            .entry(pair.case_id.as_str().parse().expect("row number"))
             .or_default()
-            .push(pair.comparator_id().parse().expect("row number"));
+            .push(pair.control_id.as_str().parse().expect("row number"));
     }
     focal_rows
         .iter()
@@ -383,7 +383,10 @@ fn ties_are_broken_by_row_order_where_matchit_is_not() {
             .run()
             .expect("a valid job");
         assert_eq!(outcome.pairs.len(), 1);
-        assert_eq!(outcome.pairs[0].comparator_id(), ours_expected.to_string());
+        assert_eq!(
+            outcome.pairs[0].control_id.as_str(),
+            ours_expected.to_string()
+        );
     }
 }
 
@@ -431,8 +434,8 @@ fn random_order_keeps_the_rules_and_is_reproducible() {
             let mut used = HashSet::new();
             let mut matched_rows = HashSet::new();
             for pair in &outcome.pairs {
-                let a: usize = pair.anchor_id().parse().expect("row");
-                let c: usize = pair.comparator_id().parse().expect("row");
+                let a: usize = pair.case_id.as_str().parse().expect("row");
+                let c: usize = pair.control_id.as_str().parse().expect("row");
                 matched_rows.insert(a);
                 if !replace {
                     assert!(used.insert(c), "{name}: control {c} used twice");

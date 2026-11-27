@@ -233,7 +233,7 @@ fn subclass_counts_match_matchit() {
         assert_eq!(got.subclasses.len(), table.len(), "{}", data.name);
         for summary in &got.subclasses {
             assert_eq!(
-                [summary.anchor_count, summary.candidate_count],
+                [summary.case_count, summary.control_count],
                 table[&summary.subclass],
                 "{} subclass {}",
                 data.name,

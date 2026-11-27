@@ -254,18 +254,18 @@ const WEIGHT_TOLERANCE: f64 = 1e-12;
 const DISTANCE_TOLERANCE: f64 = 1e-9;
 
 fn check_trimmed(label: &str, run: &Run, data: &Data, trimmed: &TrimmedUnits) {
-    let mut ours = sorted_rows(&trimmed.anchors);
-    ours.extend(sorted_rows(&trimmed.candidates));
+    let mut ours = sorted_rows(&trimmed.cases);
+    ours.extend(sorted_rows(&trimmed.controls));
     ours.sort_unstable();
     assert_eq!(ours, run.discarded, "{label}: discarded units");
-    for anchor in &trimmed.anchors {
+    for anchor in &trimmed.cases {
         assert_eq!(
             data.treat[row_of(anchor) - 1],
             1,
             "{label}: anchor {anchor}"
         );
     }
-    for candidate in &trimmed.candidates {
+    for candidate in &trimmed.controls {
         assert_eq!(
             data.treat[row_of(candidate) - 1],
             0,
@@ -495,7 +495,12 @@ fn check_optimal(label: &str, run: &Run, data: &Data, outcome: &MatchOutcome, ke
     let our_pairs: Vec<(usize, usize)> = outcome
         .pairs
         .iter()
-        .map(|pair| (row_of(pair.anchor_id()), row_of(pair.comparator_id())))
+        .map(|pair| {
+            (
+                row_of(pair.case_id.as_str()),
+                row_of(pair.control_id.as_str()),
+            )
+        })
         .collect();
     let mut per_anchor: HashMap<usize, usize> = HashMap::new();
     for (anchor, _) in &our_pairs {
@@ -526,9 +531,9 @@ fn check_genetic(label: &str, run: &Run, outcome: &MatchOutcome) {
     let reference = run.pairs.as_ref().expect("pairs");
     let mut ours: HashMap<usize, BTreeSet<usize>> = HashMap::new();
     for pair in &outcome.pairs {
-        ours.entry(row_of(pair.anchor_id()))
+        ours.entry(row_of(pair.case_id.as_str()))
             .or_default()
-            .insert(row_of(pair.comparator_id()));
+            .insert(row_of(pair.control_id.as_str()));
     }
     for (treated, controls) in reference.treated.iter().zip(&reference.controls) {
         let expected: BTreeSet<usize> = controls.to_vec().into_iter().collect();
@@ -560,8 +565,8 @@ fn trimmed_units_and_results_equal_matchit_for_each_method() {
         let output = run_spec(
             &spec_of(run),
             SpecInput::Standard {
-                anchors: &anchors,
-                candidates: &candidates,
+                cases: &anchors,
+                controls: &candidates,
             },
         )
         .unwrap_or_else(|error| panic!("{label}: {error}"));
@@ -654,7 +659,12 @@ fn trimmed_units_and_results_equal_matchit_for_each_method() {
             SpecOutput::Pairs { outcome, .. } | SpecOutput::Genetic { outcome, .. } => outcome
                 .pairs
                 .iter()
-                .flat_map(|pair| [row_of(pair.anchor_id()), row_of(pair.comparator_id())])
+                .flat_map(|pair| {
+                    [
+                        row_of(pair.case_id.as_str()),
+                        row_of(pair.control_id.as_str()),
+                    ]
+                })
                 .collect(),
             _ => Vec::new(),
         };
@@ -682,8 +692,8 @@ fn trimming_counts_match_the_listed_units() {
         let SpecOutput::Pairs { outcome, .. } = run_spec(
             &spec_of(run),
             SpecInput::Standard {
-                anchors: &anchors,
-                candidates: &candidates,
+                cases: &anchors,
+                controls: &candidates,
             },
         )
         .expect("valid spec") else {
@@ -691,12 +701,12 @@ fn trimming_counts_match_the_listed_units() {
         };
         let diagnostics = &outcome.diagnostics;
         assert_eq!(
-            diagnostics.common_support_trimmed_anchors,
-            diagnostics.common_support_trimmed_ids.anchors.len()
+            diagnostics.common_support_trimmed_cases,
+            diagnostics.common_support_trimmed_ids.cases.len()
         );
         assert_eq!(
-            diagnostics.common_support_trimmed_candidates,
-            diagnostics.common_support_trimmed_ids.candidates.len()
+            diagnostics.common_support_trimmed_controls,
+            diagnostics.common_support_trimmed_ids.controls.len()
         );
     }
 }

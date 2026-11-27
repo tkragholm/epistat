@@ -61,7 +61,7 @@ fn weights(n: usize, id: impl Fn(usize) -> String) -> BalanceWeights {
             _ => {}
         }
     }
-    BalanceWeights::new(Estimand::Ate, UnitWeightSet { anchor, candidate })
+    BalanceWeights::new(Estimand::Ate, UnitWeightSet::new(anchor, candidate))
         .with_pairs(pairs)
         .with_discarded((0..n).filter(|i| i % 89 == 5).map(&id))
 }

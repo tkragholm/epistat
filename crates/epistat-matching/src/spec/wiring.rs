@@ -656,9 +656,9 @@ pub(super) fn run_genetic<R: MatchingRecord + CovariateRecord>(
         avg_controls_per_case: (!matched.is_empty())
             .then(|| rows.len() as f64 / matched.len() as f64),
         diagnostics: MatchDiagnostics {
-            total_anchors_evaluated: anchors.len(),
-            anchors_below_required_ratio: unmatched,
-            matched_anchors: matched.len(),
+            total_cases_evaluated: anchors.len(),
+            cases_below_required_ratio: unmatched,
+            matched_cases: matched.len(),
             pairs_selected: rows.len(),
             requested_estimand: spec.estimand,
             realized_estimand: spec.estimand,

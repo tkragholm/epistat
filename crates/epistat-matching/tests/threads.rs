@@ -83,13 +83,14 @@ impl Digest {
         }
     }
 
-    fn floats(&mut self, values: &HashMap<String, f64, impl std::hash::BuildHasher>) {
-        let mut entries: Vec<_> = values.iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(b.0));
+    /// The weights of one group, in the order of the ids, as the set gives
+    /// them.
+    fn weight_group<'a>(&mut self, values: impl Iterator<Item = (&'a str, f64)>) {
+        let entries: Vec<_> = values.collect();
         self.int(entries.len());
         for (key, value) in entries {
             self.text(key);
-            self.float(*value);
+            self.float(value);
         }
     }
 
@@ -120,12 +121,12 @@ impl Digest {
     fn weights(&mut self, outcome: &MatchOutcome) {
         for method in [
             MatchWeightMethod::PairCount,
-            MatchWeightMethod::AnchorUnitCandidateFractional,
-            MatchWeightMethod::CandidateUnitAnchorFractional,
+            MatchWeightMethod::CaseUnitControlFractional,
+            MatchWeightMethod::ControlUnitCaseFractional,
         ] {
             let unit = match_weights_from_pairs(&outcome.pairs, method);
-            self.floats(&unit.anchor);
-            self.floats(&unit.candidate);
+            self.weight_group(unit.cases());
+            self.weight_group(unit.controls());
             self.debug(&unit.to_table());
             self.debug(&pair_weights_from_pairs(&outcome.pairs, method).to_table());
         }
@@ -1321,14 +1322,14 @@ fn generalised_full_matching() {
             SeedMethod::InwardsOrder,
             SeedMethod::Lexical,
         ] {
-            for (min_anchors, min_candidates, size, caliper) in [
+            for (min_cases, min_controls, size, caliper) in [
                 (1, 1, None, None),
                 (2, 3, Some(7), None),
                 (1, 1, None, Some(0.002)),
             ] {
                 let options = QuickMatchOptions {
-                    min_anchors,
-                    min_candidates,
+                    min_cases,
+                    min_controls,
                     size,
                     caliper,
                     seed_method: method,

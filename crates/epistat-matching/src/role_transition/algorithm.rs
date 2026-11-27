@@ -570,19 +570,19 @@ fn transition_initial_diagnostics<R: RoleIndexedRecord>(
     filters: &TransitionCommonSupportFilters,
 ) -> MatchDiagnostics {
     MatchDiagnostics {
-        total_anchors_evaluated: case_count,
+        total_cases_evaluated: case_count,
         requested_estimand: criteria.estimand,
         realized_estimand: criteria.estimand,
-        common_support_trimmed_anchors: filters.trimmed_case_indices.len(),
-        common_support_trimmed_candidates: filters.trimmed_candidate_indices.len(),
+        common_support_trimmed_cases: filters.trimmed_case_indices.len(),
+        common_support_trimmed_controls: filters.trimmed_candidate_indices.len(),
         common_support_trimmed_ids: crate::TrimmedUnits {
-            anchors: trimmed_row_ids(cohort, &filters.trimmed_case_indices),
-            candidates: trimmed_row_ids(cohort, &filters.trimmed_candidate_indices),
+            cases: trimmed_row_ids(cohort, &filters.trimmed_case_indices),
+            controls: trimmed_row_ids(cohort, &filters.trimmed_candidate_indices),
         },
         common_support_overlap: filters.overlap,
         common_support_policy: filters.policy.or(criteria.common_support),
-        common_support_anchor_score_bounds: filters.case_score_bounds,
-        common_support_candidate_score_bounds: filters.candidate_score_bounds,
+        common_support_case_score_bounds: filters.case_score_bounds,
+        common_support_control_score_bounds: filters.candidate_score_bounds,
         ..MatchDiagnostics::default()
     }
 }
@@ -673,7 +673,7 @@ fn match_with_role_indexing_with_channel_internal<
         &mut run_state,
     );
 
-    run_state.diagnostics.matched_anchors = run_state.matched_cases;
+    run_state.diagnostics.matched_cases = run_state.matched_cases;
     run_state.diagnostics.pairs_selected = run_state.pairs.len();
     finalize_estimand_diagnostics(
         &mut run_state.diagnostics,
@@ -790,19 +790,19 @@ fn run_transition_case_loop<
         );
 
         if candidates.is_empty() {
-            state.diagnostics.anchors_with_no_candidates += 1;
+            state.diagnostics.cases_with_no_controls += 1;
             continue;
         }
 
         let Some(target_ratio) = loop_config.ratio_policy.target_ratio(candidates.len()) else {
-            state.diagnostics.anchors_below_required_ratio += 1;
+            state.diagnostics.cases_below_required_ratio += 1;
             continue;
         };
         if loop_config.ratio_policy.is_shortfall(candidates.len()) {
-            state.diagnostics.anchors_below_required_ratio += 1;
+            state.diagnostics.cases_below_required_ratio += 1;
         }
         if loop_config.ratio_policy.is_lower_tier(candidates.len()) {
-            state.diagnostics.anchors_on_lower_tier += 1;
+            state.diagnostics.cases_on_lower_tier += 1;
         }
 
         let mut local_matches = 0usize;
@@ -968,7 +968,7 @@ fn run_swept_case_loop<
         sweep.advance(case_event_date);
 
         let Some((stratum, window)) = place else {
-            state.diagnostics.anchors_with_no_candidates += 1;
+            state.diagnostics.cases_with_no_controls += 1;
             continue;
         };
         let (counts, mut pool) = sweep.pool(stratum, window, *case_idx);
@@ -988,19 +988,19 @@ fn run_swept_case_loop<
 
         let eligible = counts.eligible;
         if eligible == 0 {
-            state.diagnostics.anchors_with_no_candidates += 1;
+            state.diagnostics.cases_with_no_controls += 1;
             continue;
         }
 
         let Some(target_ratio) = loop_config.ratio_policy.target_ratio(eligible) else {
-            state.diagnostics.anchors_below_required_ratio += 1;
+            state.diagnostics.cases_below_required_ratio += 1;
             continue;
         };
         if loop_config.ratio_policy.is_shortfall(eligible) {
-            state.diagnostics.anchors_below_required_ratio += 1;
+            state.diagnostics.cases_below_required_ratio += 1;
         }
         if loop_config.ratio_policy.is_lower_tier(eligible) {
-            state.diagnostics.anchors_on_lower_tier += 1;
+            state.diagnostics.cases_on_lower_tier += 1;
         }
 
         let mut local_matches = 0usize;
@@ -1433,7 +1433,7 @@ mod tests {
         );
         assert_eq!(outcome.matched_cases, 1);
         assert_eq!(outcome.pairs.len(), 1);
-        assert_eq!(outcome.pairs[0].comparator_id(), "candidate_resident");
+        assert_eq!(outcome.pairs[0].control_id.as_str(), "candidate_resident");
     }
 
     #[test]
@@ -1473,7 +1473,7 @@ mod tests {
         );
         assert_eq!(outcome.matched_cases, 1);
         assert_eq!(outcome.pairs.len(), 1);
-        assert_eq!(outcome.pairs[0].anchor_id(), "eligible_case");
+        assert_eq!(outcome.pairs[0].case_id.as_str(), "eligible_case");
     }
 
     #[test]
@@ -1547,7 +1547,7 @@ mod tests {
         );
         assert_eq!(outcome.matched_cases, 1);
         assert_eq!(outcome.pairs.len(), 1);
-        assert_eq!(outcome.diagnostics.anchors_below_required_ratio, 1);
+        assert_eq!(outcome.diagnostics.cases_below_required_ratio, 1);
     }
 
     #[test]
@@ -1580,7 +1580,7 @@ mod tests {
         );
         assert_eq!(outcome.matched_cases, 0);
         assert!(outcome.pairs.is_empty(), "{:?}", outcome.pairs);
-        assert_eq!(outcome.diagnostics.anchors_below_required_ratio, 1);
+        assert_eq!(outcome.diagnostics.cases_below_required_ratio, 1);
     }
 
     #[test]
@@ -1668,17 +1668,17 @@ mod tests {
             &DefaultRiskSetPolicy,
         );
         assert_eq!(outcome.matched_cases, 1);
-        assert_eq!(outcome.diagnostics.common_support_trimmed_candidates, 1);
+        assert_eq!(outcome.diagnostics.common_support_trimmed_controls, 1);
         assert_eq!(
             outcome.diagnostics.common_support_policy,
             Some(CommonSupport::Control)
         );
         assert_eq!(
-            outcome.diagnostics.common_support_anchor_score_bounds,
+            outcome.diagnostics.common_support_case_score_bounds,
             Some((0.35, 0.35))
         );
         assert_eq!(
-            outcome.diagnostics.common_support_candidate_score_bounds,
+            outcome.diagnostics.common_support_control_score_bounds,
             Some((0.35, 0.90))
         );
         assert_eq!(outcome.diagnostics.requested_estimand, Estimand::Att);

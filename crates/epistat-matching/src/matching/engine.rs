@@ -62,7 +62,7 @@ fn initial_diagnostics(
     common_support_policy: Option<CommonSupport>,
 ) -> MatchDiagnostics {
     MatchDiagnostics {
-        total_anchors_evaluated: total_anchors,
+        total_cases_evaluated: total_anchors,
         requested_estimand,
         realized_estimand: requested_estimand,
         common_support_policy,
@@ -85,15 +85,15 @@ pub fn finalize_estimand_diagnostics(
 ) {
     diagnostics.requested_estimand = requested_estimand;
 
-    if diagnostics.common_support_trimmed_anchors > 0
-        || diagnostics.common_support_trimmed_candidates > 0
+    if diagnostics.common_support_trimmed_cases > 0
+        || diagnostics.common_support_trimmed_controls > 0
     {
         push_drift_reason(diagnostics, EstimandDriftReason::CommonSupportTrimming);
     }
-    if eligible_anchors > diagnostics.matched_anchors {
-        push_drift_reason(diagnostics, EstimandDriftReason::UnmatchedAnchors);
+    if eligible_anchors > diagnostics.matched_cases {
+        push_drift_reason(diagnostics, EstimandDriftReason::UnmatchedCases);
     }
-    if diagnostics.anchors_below_required_ratio > 0 {
+    if diagnostics.cases_below_required_ratio > 0 {
         push_drift_reason(diagnostics, EstimandDriftReason::RatioShortfall);
     }
     if let Some(reason) = distance_caliper_reason {
@@ -106,8 +106,8 @@ pub fn finalize_estimand_diagnostics(
             .unwrap_or(0);
         if caliper_exclusions > 0 {
             push_drift_reason(diagnostics, EstimandDriftReason::DistanceCaliperExclusion);
-            if diagnostics.common_support_trimmed_anchors > 0
-                || diagnostics.common_support_trimmed_candidates > 0
+            if diagnostics.common_support_trimmed_cases > 0
+                || diagnostics.common_support_trimmed_controls > 0
             {
                 push_drift_reason(
                     diagnostics,
@@ -695,11 +695,11 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
                 for (slot, controls) in taken.into_iter().enumerate() {
                     let case = &anchors[anchor_indices[slot]];
                     if controls.is_empty() {
-                        local_diagnostics.anchors_with_no_candidates += 1;
+                        local_diagnostics.cases_with_no_controls += 1;
                         continue;
                     }
                     if controls.len() < ratio {
-                        local_diagnostics.anchors_below_required_ratio += 1;
+                        local_diagnostics.cases_below_required_ratio += 1;
                     }
                     matched_cases += 1;
                     for raw_idx in controls {
@@ -739,19 +739,19 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
                     &mut local_diagnostics,
                 );
                 if candidates.is_empty() {
-                    local_diagnostics.anchors_with_no_candidates += 1;
+                    local_diagnostics.cases_with_no_controls += 1;
                     continue;
                 }
 
                 let Some(target_ratio) = ratio_policy.target_ratio(candidates.len()) else {
-                    local_diagnostics.anchors_below_required_ratio += 1;
+                    local_diagnostics.cases_below_required_ratio += 1;
                     continue;
                 };
                 if ratio_policy.is_shortfall(candidates.len()) {
-                    local_diagnostics.anchors_below_required_ratio += 1;
+                    local_diagnostics.cases_below_required_ratio += 1;
                 }
                 if ratio_policy.is_lower_tier(candidates.len()) {
-                    local_diagnostics.anchors_on_lower_tier += 1;
+                    local_diagnostics.cases_on_lower_tier += 1;
                 }
 
                 let mut local_matches = 0usize;
@@ -838,7 +838,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             diagnostics.merge(gr.diagnostics);
         }
 
-        diagnostics.matched_anchors = matched_cases;
+        diagnostics.matched_cases = matched_cases;
         diagnostics.pairs_selected = pairs.len();
         finalize_estimand_diagnostics(
             &mut diagnostics,
@@ -910,19 +910,19 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
                 );
 
                 if candidates.is_empty() {
-                    local_diagnostics.anchors_with_no_candidates += 1;
+                    local_diagnostics.cases_with_no_controls += 1;
                     return Some((Vec::new(), Vec::new(), local_diagnostics));
                 }
 
                 let Some(target_ratio) = ratio_policy.target_ratio(candidates.len()) else {
-                    local_diagnostics.anchors_below_required_ratio += 1;
+                    local_diagnostics.cases_below_required_ratio += 1;
                     return Some((Vec::new(), Vec::new(), local_diagnostics));
                 };
                 if ratio_policy.is_shortfall(candidates.len()) {
-                    local_diagnostics.anchors_below_required_ratio += 1;
+                    local_diagnostics.cases_below_required_ratio += 1;
                 }
                 if ratio_policy.is_lower_tier(candidates.len()) {
-                    local_diagnostics.anchors_on_lower_tier += 1;
+                    local_diagnostics.cases_on_lower_tier += 1;
                 }
 
                 let mut local_pairs = Vec::new();
@@ -941,7 +941,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
                 }
 
                 if !local_pairs.is_empty() {
-                    local_diagnostics.matched_anchors = 1;
+                    local_diagnostics.matched_cases = 1;
                 }
                 local_diagnostics.pairs_selected = local_pairs.len();
 
@@ -971,7 +971,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
 
         build_outcome(
             all_pairs,
-            diagnostics.matched_anchors,
+            diagnostics.matched_cases,
             eligible_anchors,
             distinct_controls.len(),
             diagnostics,
@@ -988,9 +988,9 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
 #[derive(Debug, Clone, Default)]
 pub struct DiscardedUnits {
     /// Ids of the anchors to leave out.
-    pub anchors: HashSet<String>,
+    pub cases: HashSet<String>,
     /// Ids of the candidates to leave out.
-    pub candidates: HashSet<String>,
+    pub controls: HashSet<String>,
 }
 
 /// Run anchor/candidate matching with an explicit control selection strategy.
@@ -1049,13 +1049,13 @@ pub(crate) fn match_standard_with_discard<
                 .collect()
         };
         (
-            indices(anchors, &units.anchors),
-            indices(candidates, &units.candidates),
+            indices(anchors, &units.cases),
+            indices(candidates, &units.controls),
         )
     });
     if let Some((trimmed_anchors, trimmed_candidates)) = &listed {
-        diagnostics.common_support_trimmed_anchors = trimmed_anchors.len();
-        diagnostics.common_support_trimmed_candidates = trimmed_candidates.len();
+        diagnostics.common_support_trimmed_cases = trimmed_anchors.len();
+        diagnostics.common_support_trimmed_controls = trimmed_candidates.len();
         diagnostics.common_support_trimmed_ids =
             trimmed_ids(anchors, candidates, trimmed_anchors, trimmed_candidates);
     }
@@ -1162,8 +1162,8 @@ pub(crate) fn trimmed_ids<R: MatchingRecord>(
             .collect()
     };
     crate::TrimmedUnits {
-        anchors: ids(anchors, trimmed_anchors),
-        candidates: ids(candidates, trimmed_candidates),
+        cases: ids(anchors, trimmed_anchors),
+        controls: ids(candidates, trimmed_candidates),
     }
 }
 
@@ -1200,13 +1200,13 @@ impl StandardCommonSupport {
         anchors: &[R],
         candidates: &[R],
     ) {
-        diagnostics.common_support_trimmed_anchors = self.anchors.len();
-        diagnostics.common_support_trimmed_candidates = self.candidates.len();
+        diagnostics.common_support_trimmed_cases = self.anchors.len();
+        diagnostics.common_support_trimmed_controls = self.candidates.len();
         diagnostics.common_support_trimmed_ids =
             trimmed_ids(anchors, candidates, &self.anchors, &self.candidates);
         diagnostics.common_support_overlap = Some(self.overlap);
-        diagnostics.common_support_anchor_score_bounds = Some(self.anchor_bounds);
-        diagnostics.common_support_candidate_score_bounds = Some(self.candidate_bounds);
+        diagnostics.common_support_case_score_bounds = Some(self.anchor_bounds);
+        diagnostics.common_support_control_score_bounds = Some(self.candidate_bounds);
     }
 }
 
@@ -1514,7 +1514,7 @@ pub struct MatchingPrecomputed<'a> {
 pub fn build_outcome(
     pairs: Vec<MatchedPair>,
     matched_cases: usize,
-    anchor_count: usize,
+    case_count: usize,
     used_controls: usize,
     diagnostics: MatchDiagnostics,
 ) -> MatchOutcome {
@@ -1523,7 +1523,7 @@ pub fn build_outcome(
 
     MatchOutcome {
         pairs,
-        unmatched_cases: anchor_count.saturating_sub(matched_cases),
+        unmatched_cases: case_count.saturating_sub(matched_cases),
         used_controls,
         matched_cases,
         avg_controls_per_case,
@@ -1542,18 +1542,18 @@ fn usize_to_f64(n: usize) -> f64 {
 
 /// The outcome of a job refused for `reason`, with no pairs and every anchor
 /// unmatched.
-pub fn refused_outcome(anchor_count: usize, reason: impl Into<ExclusionReason>) -> MatchOutcome {
+pub fn refused_outcome(case_count: usize, reason: impl Into<ExclusionReason>) -> MatchOutcome {
     let reason = reason.into();
     debug_assert!(reason.refuses_job());
     let mut diagnostics = MatchDiagnostics {
-        total_anchors_evaluated: anchor_count,
+        total_cases_evaluated: case_count,
         ..MatchDiagnostics::default()
     };
     diagnostics.add_exclusion(reason, 1);
 
     MatchOutcome {
         pairs: Vec::new(),
-        unmatched_cases: anchor_count,
+        unmatched_cases: case_count,
         used_controls: 0,
         matched_cases: 0,
         avg_controls_per_case: None,

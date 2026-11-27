@@ -521,10 +521,13 @@ fn run(records: &[Rec]) -> MatchOutcome {
 }
 
 fn weights_hash(outcome: &MatchOutcome) -> u64 {
-    let method = MatchWeightMethod::AnchorUnitCandidateFractional;
+    let method = MatchWeightMethod::CaseUnitControlFractional;
     let unit = match_weights_from_pairs(&outcome.pairs, method).to_table();
     let pair = pair_weights_from_pairs(&outcome.pairs, method).to_table();
-    fnv(&format!("{unit:?}{pair:?}"))
+    fnv(&common::golden_weights_debug(
+        &format!("{unit:?}"),
+        &format!("{pair:?}"),
+    ))
 }
 
 #[test]

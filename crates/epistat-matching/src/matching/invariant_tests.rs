@@ -45,16 +45,16 @@ fn property_no_self_match_and_no_reuse_without_replacement() {
         );
 
         for pair in &outcome.pairs {
-            assert_ne!(pair.anchor_id(), pair.comparator_id());
+            assert_ne!(pair.case_id.as_str(), pair.control_id.as_str());
         }
 
         let unique_controls = outcome
             .pairs
             .iter()
-            .map(crate::MatchedPair::comparator_id)
+            .map(|pair: &crate::MatchedPair| pair.control_id.as_str())
             .collect::<HashSet<_>>();
         assert_eq!(unique_controls.len(), outcome.pairs.len());
-        assert_eq!(outcome.used_comparators(), outcome.pairs.len());
+        assert_eq!(outcome.used_controls, outcome.pairs.len());
     }
 }
 
@@ -119,8 +119,8 @@ fn property_role_transition_respects_age_threshold() {
         );
 
         for pair in &outcome.pairs {
-            assert!(eligible_ids.contains(pair.anchor_id()));
-            assert_ne!(pair.anchor_id(), pair.comparator_id());
+            assert!(eligible_ids.contains(pair.case_id.as_str()));
+            assert_ne!(pair.case_id.as_str(), pair.control_id.as_str());
         }
     }
 }

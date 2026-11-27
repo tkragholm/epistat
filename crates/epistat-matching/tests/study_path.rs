@@ -271,7 +271,7 @@ fn run_matching(
         .iter()
         .map(|row| MatchedPair::new(row.exposed_id.clone(), row.control_id.clone()))
         .collect();
-    let method = MatchWeightMethod::AnchorUnitCandidateFractional;
+    let method = MatchWeightMethod::CaseUnitControlFractional;
     let unit_weights = match_weights_from_pairs(&matched_pairs, method).to_table();
     let pair_weights = pair_weights_from_pairs(&matched_pairs, method).to_table();
     let role = |role: UnitRole| {
@@ -282,8 +282,8 @@ fn run_matching(
             .map(|row| row.match_weight)
     };
     let effective_sample_sizes = [
-        effective_sample_size(&role(UnitRole::Anchor).collect::<Vec<_>>()).expect("weights"),
-        effective_sample_size(&role(UnitRole::Candidate).collect::<Vec<_>>()).expect("weights"),
+        effective_sample_size(&role(UnitRole::Case).collect::<Vec<_>>()).expect("weights"),
+        effective_sample_size(&role(UnitRole::Control).collect::<Vec<_>>()).expect("weights"),
         effective_sample_size(
             &unit_weights
                 .rows
@@ -423,14 +423,14 @@ fn digest(output: &MatchOutput) -> [u64; 3] {
     let mut units = Hash::new();
     for row in &output.unit_weights.rows {
         units.text(&row.unit_id);
-        units.word(u64::from(row.role == UnitRole::Anchor));
+        units.word(u64::from(row.role == UnitRole::Case));
         units.f(row.match_weight);
         units.o(row.sampling_weight);
         units.f(row.analysis_weight);
     }
     for row in &output.pair_weights.rows {
-        units.text(&row.anchor_id);
-        units.text(&row.candidate_id);
+        units.text(&row.case_id);
+        units.text(&row.control_id);
         units.f(row.pair_weight);
     }
     let mut diagnostics = Hash::new();

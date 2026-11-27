@@ -792,11 +792,11 @@ impl<R: MatchingRecord> DistanceMetric<R> for ConfiguredMetric<'_> {
 /// candidate is not in the table has no distance and is never matched.
 #[derive(Debug, Clone)]
 pub struct PairDistanceMatrix {
-    anchor_ids: Vec<String>,
-    candidate_ids: Vec<String>,
+    case_ids: Vec<String>,
+    control_ids: Vec<String>,
     values: Vec<f64>,
-    anchor_position: RapidHashMap<String, usize>,
-    candidate_position: RapidHashMap<String, usize>,
+    case_position: RapidHashMap<String, usize>,
+    control_position: RapidHashMap<String, usize>,
 }
 
 impl PairDistanceMatrix {
@@ -807,14 +807,14 @@ impl PairDistanceMatrix {
     /// [`Error`] when a group is empty, the values do not
     /// fill the table, an id repeats, a value is not a number, or a value is negative.
     pub fn new(
-        anchor_ids: Vec<String>,
-        candidate_ids: Vec<String>,
+        case_ids: Vec<String>,
+        control_ids: Vec<String>,
         values: Vec<f64>,
     ) -> Result<Self, Error> {
-        if anchor_ids.is_empty() || candidate_ids.is_empty() {
+        if case_ids.is_empty() || control_ids.is_empty() {
             return Err(Error::empty("distance matrix ids"));
         }
-        let expected = anchor_ids.len().saturating_mul(candidate_ids.len());
+        let expected = case_ids.len().saturating_mul(control_ids.len());
         if values.len() != expected {
             return Err(Error::length(
                 "distance matrix values",
@@ -824,14 +824,14 @@ impl PairDistanceMatrix {
         }
         if let Some(at) = values.iter().position(|value| value.is_nan()) {
             return Err(Error::DistanceNotANumber {
-                case: at / candidate_ids.len(),
-                control: at % candidate_ids.len(),
+                case: at / control_ids.len(),
+                control: at % control_ids.len(),
             });
         }
         if let Some(at) = values.iter().position(|value| *value < 0.0) {
             return Err(Error::NegativeDistance {
-                case: at / candidate_ids.len(),
-                control: at % candidate_ids.len(),
+                case: at / control_ids.len(),
+                control: at % control_ids.len(),
             });
         }
         let positions = |ids: &[String]| -> Result<RapidHashMap<String, usize>, _> {
@@ -844,46 +844,46 @@ impl PairDistanceMatrix {
             Ok(map)
         };
         Ok(Self {
-            anchor_position: positions(&anchor_ids)?,
-            candidate_position: positions(&candidate_ids)?,
-            anchor_ids,
-            candidate_ids,
+            case_position: positions(&case_ids)?,
+            control_position: positions(&control_ids)?,
+            case_ids,
+            control_ids,
             values,
         })
     }
 
     /// Ids of the rows.
     #[must_use]
-    pub fn anchor_ids(&self) -> &[String] {
-        &self.anchor_ids
+    pub fn case_ids(&self) -> &[String] {
+        &self.case_ids
     }
 
     /// Ids of the columns.
     #[must_use]
-    pub fn candidate_ids(&self) -> &[String] {
-        &self.candidate_ids
+    pub fn control_ids(&self) -> &[String] {
+        &self.control_ids
     }
 
     /// Row of an anchor.
     #[must_use]
-    pub fn anchor_position(&self, id: &str) -> Option<usize> {
-        self.anchor_position.get(id).copied()
+    pub fn case_position(&self, id: &str) -> Option<usize> {
+        self.case_position.get(id).copied()
     }
 
     /// Column of a candidate.
     #[must_use]
-    pub fn candidate_position(&self, id: &str) -> Option<usize> {
-        self.candidate_position.get(id).copied()
+    pub fn control_position(&self, id: &str) -> Option<usize> {
+        self.control_position.get(id).copied()
     }
 
     /// The value at a row and column, or `None` outside the table or where the
     /// pair is forbidden by an infinite value.
     #[must_use]
     pub fn at(&self, anchor: usize, candidate: usize) -> Option<f64> {
-        if anchor >= self.anchor_ids.len() || candidate >= self.candidate_ids.len() {
+        if anchor >= self.case_ids.len() || candidate >= self.control_ids.len() {
             return None;
         }
-        let value = self.values[anchor * self.candidate_ids.len() + candidate];
+        let value = self.values[anchor * self.control_ids.len() + candidate];
         value.is_finite().then_some(value)
     }
 
@@ -898,11 +898,11 @@ impl PairDistanceMatrix {
         (
             anchors
                 .iter()
-                .map(|record| self.anchor_position(record.id()))
+                .map(|record| self.case_position(record.id()))
                 .collect(),
             candidates
                 .iter()
-                .map(|record| self.candidate_position(record.id()))
+                .map(|record| self.control_position(record.id()))
                 .collect(),
         )
     }
@@ -930,8 +930,8 @@ impl<R: MatchingRecord> DistanceMetric<R> for MatrixDistance<'_> {
 
     fn distance(&self, anchor: &R, candidate: &R) -> Option<f64> {
         self.matrix.at(
-            self.matrix.anchor_position(anchor.id())?,
-            self.matrix.candidate_position(candidate.id())?,
+            self.matrix.case_position(anchor.id())?,
+            self.matrix.control_position(candidate.id())?,
         )
     }
 }

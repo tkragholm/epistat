@@ -125,7 +125,7 @@ fn units(r: &Reference, binary: bool, covariates: &[String]) -> UnitData {
 
 fn sample(case: &Case, units: &UnitData) -> MatchedSample {
     let id: Vec<String> = case.rows.iter().map(|r| format!("u{r}")).collect();
-    let role = vec![UnitRole::Anchor; id.len()];
+    let role = vec![UnitRole::Case; id.len()];
     if case.name.starts_with("replace") {
         let long = LongMatches {
             id,

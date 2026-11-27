@@ -41,8 +41,8 @@ fn run(spec: &MatchSpec) -> Result<SpecOutput, Error> {
     run_spec(
         spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
 }

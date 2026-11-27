@@ -79,9 +79,9 @@ pub enum ImputationApproach {
 #[derive(Debug)]
 pub struct ImputedSet<'a, R> {
     /// The anchors, the treated units for the effect in the treated.
-    pub anchors: &'a [R],
+    pub cases: &'a [R],
     /// The candidates.
-    pub candidates: &'a [R],
+    pub controls: &'a [R],
 }
 
 impl<R> Clone for ImputedSet<'_, R> {
@@ -134,8 +134,8 @@ where
                 sets.par_iter()
                     .map(|set| {
                         estimate_propensity_and_match(
-                            set.anchors,
-                            set.candidates,
+                            set.cases,
+                            set.controls,
                             criteria,
                             strategy.clone(),
                             ratio_fallback,
@@ -158,14 +158,9 @@ where
             let estimates = in_set_order(
                 sets.par_iter()
                     .map(|set| {
-                        prepare_propensity_distance_config(
-                            set.anchors,
-                            set.candidates,
-                            config,
-                            None,
-                        )
-                        .map(|prepared| prepared.estimate)
-                        .map_err(Error::from)
+                        prepare_propensity_distance_config(set.cases, set.controls, config, None)
+                            .map(|prepared| prepared.estimate)
+                            .map_err(Error::from)
                     })
                     .collect(),
             )?;
@@ -183,7 +178,7 @@ where
                         ratio_fallback,
                         distance_config: Some(&distance_config),
                     };
-                    let outcome = match_standard(set.anchors, set.candidates, request);
+                    let outcome = match_standard(set.cases, set.controls, request);
                     estimate.set_distance_scores(&averaged);
                     PropensityMatchedOutcome {
                         outcome,
@@ -211,9 +206,9 @@ fn average_scores<R: MatchingRecord>(
         let same_order = estimate.ids == first.ids;
         if estimate.distance_scores.len() != first.distance_scores.len() {
             let id = sets[index]
-                .anchors
+                .cases
                 .iter()
-                .chain(sets[index].candidates)
+                .chain(sets[index].controls)
                 .map(MatchingRecord::id)
                 .find(|id| first.position(id).is_none())
                 .unwrap_or("")
@@ -400,13 +395,13 @@ fn estimate_set<R: MatchingRecord>(
     spec: &EffectSpec,
 ) -> Result<EffectEstimates, Error> {
     let ids = set
-        .anchors
+        .cases
         .iter()
-        .chain(set.candidates)
+        .chain(set.controls)
         .map(|r| r.id().to_string())
         .collect();
-    let anchor = (0..set.anchors.len() + set.candidates.len())
-        .map(|i| i < set.anchors.len())
+    let anchor = (0..set.cases.len() + set.controls.len())
+        .map(|i| i < set.cases.len())
         .collect();
     let units = Units::new(ids, anchor)?;
     let md = match_data(&matched.outcome, &units, options)?;

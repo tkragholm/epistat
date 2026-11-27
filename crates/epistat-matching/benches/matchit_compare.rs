@@ -687,8 +687,8 @@ fn run_standard<R: CovariateRecord>(
         run_spec(
             spec,
             SpecInput::Standard {
-                anchors: &input.anchors,
-                candidates: &input.candidates,
+                cases: &input.anchors,
+                controls: &input.candidates,
             },
         )
         .unwrap_or_else(|e| panic!("{method}: {e}"))
@@ -863,8 +863,8 @@ fn nearest_pairs<R: CovariateRecord>(input: &Inputs<R>) -> MatchOutcome {
     match run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &input.anchors,
-            candidates: &input.candidates,
+            cases: &input.anchors,
+            controls: &input.candidates,
         },
     )
     .expect("match")
@@ -1078,8 +1078,8 @@ fn run_impute_on<R: CovariateRecord>(sets_data: &[Inputs<R>], y: &[f64], reps: u
     let sets: Vec<ImputedSet<'_, R>> = sets_data
         .iter()
         .map(|s| ImputedSet {
-            anchors: &s.anchors,
-            candidates: &s.candidates,
+            cases: &s.anchors,
+            controls: &s.candidates,
         })
         .collect();
     let data: Vec<UnitData> = sets_data.iter().map(|s| unit_data_of(s, y)).collect();

@@ -2,7 +2,6 @@
 //! and a weight that is negative or not finite is an error.
 
 use epistat_core::{Classify, ErrorKind};
-use epistat_matching::prelude::*;
 use epistat_matching::{
     BalanceRecord, BalanceReportOptions, BalanceWeights, CovariateValue, Estimand, balance_summary,
 };

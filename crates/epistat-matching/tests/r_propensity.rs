@@ -425,9 +425,9 @@ fn reestimated_scores_match_matchit() {
                 );
                 let mut ours_discarded: Vec<String> = ours
                     .estimate
-                    .discarded_anchors
+                    .discarded_cases
                     .iter()
-                    .chain(&ours.estimate.discarded_candidates)
+                    .chain(&ours.estimate.discarded_controls)
                     .cloned()
                     .collect();
                 ours_discarded.sort();

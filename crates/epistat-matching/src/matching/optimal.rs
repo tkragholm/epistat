@@ -964,7 +964,7 @@ pub(super) fn pair_outcome<R: MatchingRecord>(
 ) -> MatchOutcome {
     let mut positions: Vec<(usize, usize)> = sets.into_iter().flatten().collect();
     positions.sort_unstable();
-    let mut matched_anchors = 0_usize;
+    let mut matched_cases = 0_usize;
     let mut below_ratio = 0_usize;
     let mut previous: Option<usize> = None;
     let mut run = 0_usize;
@@ -980,7 +980,7 @@ pub(super) fn pair_outcome<R: MatchingRecord>(
             if previous.is_some() && run < ratio {
                 below_ratio += 1;
             }
-            matched_anchors += 1;
+            matched_cases += 1;
             previous = Some(*anchor);
             run = 1;
         }
@@ -989,18 +989,18 @@ pub(super) fn pair_outcome<R: MatchingRecord>(
         below_ratio += 1;
     }
     let mut diagnostics = MatchDiagnostics {
-        total_anchors_evaluated: anchors.len(),
+        total_cases_evaluated: anchors.len(),
         requested_estimand: estimand,
         realized_estimand: estimand,
-        matched_anchors,
+        matched_cases,
         pairs_selected: pairs.len(),
-        anchors_with_no_candidates: anchors.len() - matched_anchors,
-        anchors_below_required_ratio: below_ratio,
+        cases_with_no_controls: anchors.len() - matched_cases,
+        cases_below_required_ratio: below_ratio,
         ..MatchDiagnostics::default()
     };
     finalize_estimand_diagnostics(&mut diagnostics, estimand, anchors.len(), None);
     let used = pairs.len();
-    build_outcome(pairs, matched_anchors, anchors.len(), used, diagnostics)
+    build_outcome(pairs, matched_cases, anchors.len(), used, diagnostics)
 }
 
 /// Optimal full matching: subclasses of one anchor with several candidates or
@@ -1073,7 +1073,7 @@ fn subclassed_by_sets<R: MatchingRecord>(
     }
     SubclassedUnits {
         ids: unit_ids(anchors, candidates),
-        anchor_count: anchors.len(),
+        case_count: anchors.len(),
         subclass,
         subclasses: build_subclass_summaries(&anchor_counts, &candidate_counts),
         trimmed: crate::TrimmedUnits::default(),
@@ -1308,7 +1308,7 @@ mod tests {
             let mut assignments: HashMap<String, usize> = HashMap::new();
             let mut anchor_counts = Vec::with_capacity(sets.len());
             let mut candidate_counts = Vec::with_capacity(sets.len());
-            let mut anchor_flags: Vec<(String, bool, usize)> = Vec::new();
+            let mut case_flags: Vec<(String, bool, usize)> = Vec::new();
             for (subclass, set) in sets.iter().enumerate() {
                 let mut anchor_positions: Vec<usize> = set.iter().map(|pair| pair.0).collect();
                 anchor_positions.sort_unstable();
@@ -1319,31 +1319,31 @@ mod tests {
                 anchor_counts.push(anchor_positions.len());
                 candidate_counts.push(candidate_positions.len());
                 for position in anchor_positions {
-                    anchor_flags.push((anchors[position].id().to_string(), true, subclass));
+                    case_flags.push((anchors[position].id().to_string(), true, subclass));
                 }
                 for position in candidate_positions {
-                    anchor_flags.push((candidates[position].id().to_string(), false, subclass));
+                    case_flags.push((candidates[position].id().to_string(), false, subclass));
                 }
             }
             let subclasses = build_subclass_summaries(&anchor_counts, &candidate_counts);
             let mut anchor_effect = HashMap::new();
             let mut candidate_effect = HashMap::new();
             let mut population_effect = HashMap::new();
-            for (id, is_anchor, subclass) in anchor_flags {
+            for (id, is_case, subclass) in case_flags {
                 let Some(share) = subclasses[subclass].subclass_propensity else {
                     continue;
                 };
                 anchor_effect.insert(
                     id.clone(),
-                    subclass_weight_for_estimand(Estimand::Att, share, is_anchor),
+                    subclass_weight_for_estimand(Estimand::Att, share, is_case),
                 );
                 candidate_effect.insert(
                     id.clone(),
-                    subclass_weight_for_estimand(Estimand::Atc, share, is_anchor),
+                    subclass_weight_for_estimand(Estimand::Atc, share, is_case),
                 );
                 population_effect.insert(
                     id.clone(),
-                    subclass_weight_for_estimand(Estimand::Ate, share, is_anchor),
+                    subclass_weight_for_estimand(Estimand::Ate, share, is_case),
                 );
                 assignments.insert(id, subclass);
             }
@@ -1372,14 +1372,14 @@ mod tests {
             drop_unmatched: bool,
         ) -> MatchData {
             let mut set = UnitWeightSet::default();
-            for (id, is_anchor) in units.ids().iter().zip(units.anchor_flags()) {
+            for (id, is_case) in units.ids().iter().zip(units.case_flags()) {
                 let Some(weight) = weights.get(id) else {
                     continue;
                 };
-                if *is_anchor {
-                    set.anchor.insert(id.clone(), *weight);
+                if *is_case {
+                    set.case.insert(id.clone(), *weight);
                 } else {
-                    set.candidate.insert(id.clone(), *weight);
+                    set.control.insert(id.clone(), *weight);
                 }
             }
             let set = if normalize { set.normalized() } else { set };
@@ -1389,21 +1389,17 @@ mod tests {
                 weight: Vec::new(),
                 subclass: Vec::new(),
             };
-            for (id, is_anchor) in units.ids().iter().zip(units.anchor_flags()) {
-                let group = if *is_anchor {
-                    &set.anchor
-                } else {
-                    &set.candidate
-                };
+            for (id, is_case) in units.ids().iter().zip(units.case_flags()) {
+                let group = if *is_case { &set.case } else { &set.control };
                 let weight = group.get(id).copied();
                 if weight.is_none() && drop_unmatched {
                     continue;
                 }
                 out.id.push(id.clone());
-                out.role.push(if *is_anchor {
-                    UnitRole::Anchor
+                out.role.push(if *is_case {
+                    UnitRole::Case
                 } else {
-                    UnitRole::Candidate
+                    UnitRole::Control
                 });
                 out.weight.push(weight.unwrap_or(0.0));
                 out.subclass.push(
@@ -1482,7 +1478,7 @@ mod tests {
                 }
                 let units = Units::new(
                     order.iter().map(|p| new.id(*p).to_string()).collect(),
-                    order.iter().map(|p| new.is_anchor(*p)).collect(),
+                    order.iter().map(|p| new.is_case(*p)).collect(),
                 )
                 .unwrap();
                 for (normalize, drop_unmatched) in [(true, true), (false, false), (true, false)] {

@@ -120,9 +120,9 @@ fn sets(
     let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for trial in &outcome.trials {
         for pair in &trial.outcome.pairs {
-            map.entry(format!("{}:{}", trial.period, pair.anchor_id()))
+            map.entry(format!("{}:{}", trial.period, pair.case_id.as_str()))
                 .or_default()
-                .push(pair.comparator_id().to_string());
+                .push(pair.control_id.as_str().to_string());
         }
         // Each member starts follow-up on the date of its own period.
         for m in &trial.members {

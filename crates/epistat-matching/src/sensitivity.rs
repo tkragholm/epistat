@@ -469,11 +469,11 @@ mod tests {
         let long = LongMatches {
             id: ["a", "b", "c", "d", "e"].map(String::from).to_vec(),
             role: vec![
-                UnitRole::Anchor,
-                UnitRole::Candidate,
-                UnitRole::Anchor,
-                UnitRole::Candidate,
-                UnitRole::Candidate,
+                UnitRole::Case,
+                UnitRole::Control,
+                UnitRole::Case,
+                UnitRole::Control,
+                UnitRole::Control,
             ],
             pair_id: vec![Some(1), Some(1), Some(2), Some(2), Some(2)],
             weight: vec![1.0, 1.0, 1.0, 0.5, 0.5],
@@ -495,7 +495,7 @@ mod tests {
     fn a_set_without_one_treated_unit_is_an_error() {
         let long = LongMatches {
             id: ["b", "d"].map(String::from).to_vec(),
-            role: vec![UnitRole::Anchor, UnitRole::Candidate],
+            role: vec![UnitRole::Case, UnitRole::Control],
             pair_id: vec![Some(1), Some(1)],
             weight: vec![1.0, 1.0],
         };
@@ -509,7 +509,7 @@ mod tests {
     fn a_unit_twice_in_one_set_is_an_error() {
         let long = LongMatches {
             id: ["a", "b", "b"].map(String::from).to_vec(),
-            role: vec![UnitRole::Anchor, UnitRole::Candidate, UnitRole::Candidate],
+            role: vec![UnitRole::Case, UnitRole::Control, UnitRole::Control],
             pair_id: vec![Some(1), Some(1), Some(1)],
             weight: vec![1.0, 0.5, 0.5],
         };
@@ -599,7 +599,7 @@ mod tests {
         for rows in cases {
             let long = LongMatches {
                 id: rows.iter().map(|r| r.0.clone()).collect(),
-                role: rows.iter().map(|_| UnitRole::Anchor).collect(),
+                role: rows.iter().map(|_| UnitRole::Case).collect(),
                 pair_id: rows.iter().map(|r| r.1).collect(),
                 weight: rows.iter().map(|_| 1.0).collect(),
             };

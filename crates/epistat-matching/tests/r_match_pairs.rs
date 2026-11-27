@@ -23,10 +23,10 @@
 //!   The crate lets each anchor take all its controls before the next anchor
 //!   starts. The reference holds the pairs of that second order, made by a
 //!   short loop in the script, and the crate must reproduce them.
-//! * The unit weights of `AnchorUnitCandidateFractional` are MatchIt's weights
+//! * The unit weights of `CaseUnitControlFractional` are MatchIt's weights
 //!   with `normalize = FALSE`, and `UnitWeightSet::normalized` gives the
 //!   default `normalize = TRUE` weights.
-//! * `CandidateUnitAnchorFractional` is MatchIt's rule for the opposite
+//! * `ControlUnitCaseFractional` is MatchIt's rule for the opposite
 //!   estimand applied to the same pairs with the roles of the groups swapped.
 //! * `PairCount` is not a weighting `matchit()` offers. It is compared with
 //!   the stratum weights of `estimand = "ATE"`, which nearest neighbour
@@ -48,6 +48,7 @@ mod r_reference;
 
 use chrono::NaiveDate;
 use epistat_matching::DeterministicSelection;
+use epistat_matching::MatchWeightMethod;
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::output::{MatchDataOptions, Units, get_matches, match_data, match_matrix};
 use epistat_matching::prelude::*;
@@ -205,12 +206,12 @@ fn rows_of(outcome: &MatchOutcome, units: &Units, ratio: usize) -> Vec<Vec<usize
 
 fn weight_of(set: &UnitWeightSet, treat: &[u8], focal_value: u8, unit: usize) -> f64 {
     let id = unit.to_string();
-    let group = if treat[unit - 1] == focal_value {
-        &set.anchor
+    if treat[unit - 1] == focal_value {
+        set.case_weight(&id)
     } else {
-        &set.candidate
-    };
-    group.get(&id).copied().unwrap_or(0.0)
+        set.control_weight(&id)
+    }
+    .unwrap_or(0.0)
 }
 
 fn expected_of(idx: &[usize], values: &[f64]) -> HashMap<usize, f64> {
@@ -291,7 +292,7 @@ struct Tally {
     ate_differs: usize,
     ate_equal: usize,
     shortfall_anchors: usize,
-    unmatched_anchors: usize,
+    unmatched_cases: usize,
 }
 
 #[test]
@@ -350,7 +351,7 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
             focal_idx.len() - matched,
             "{label}"
         );
-        tally.unmatched_anchors += outcome.unmatched_cases;
+        tally.unmatched_cases += outcome.unmatched_cases;
         tally.shortfall_anchors += rows
             .iter()
             .filter(|row| !row.is_empty() && row.len() < run.ratio)
@@ -363,7 +364,8 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
         );
 
         // Weights of the matched side by estimand.
-        let weights_anchor_side = outcome.match_weights_for_estimand(Estimand::Att);
+        let weights_anchor_side =
+            outcome.match_weights(MatchWeightMethod::for_estimand(Estimand::Att));
         let raw = expected_of(&expected.idx, &expected.raw);
         assert_weights(
             &format!("{label} raw"),
@@ -380,7 +382,8 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
             focal_value,
             &norm,
         );
-        let weights_candidate_side = outcome.match_weights_for_estimand(Estimand::Atc);
+        let weights_candidate_side =
+            outcome.match_weights(MatchWeightMethod::for_estimand(Estimand::Atc));
         let other = expected_of(&expected.idx, &expected.other_raw);
         assert_weights(
             &format!("{label} other"),
@@ -391,7 +394,7 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
         );
 
         // PairCount is the number of pairs a unit is in.
-        let weights_count = outcome.match_weights_for_estimand(Estimand::Ate);
+        let weights_count = outcome.match_weights(MatchWeightMethod::for_estimand(Estimand::Ate));
         let mut counts: HashMap<usize, f64> = HashMap::new();
         for (anchor, controls) in focal_idx.iter().zip(&rows) {
             for control in controls {
@@ -443,7 +446,7 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
         assert_eq!(matrix.ncol(), run.ratio, "{label}: columns");
         assert_eq!(
             matrix
-                .anchor_id
+                .case_id
                 .iter()
                 .map(|id| id.parse::<usize>().expect("row"))
                 .collect::<Vec<_>>(),
@@ -492,9 +495,9 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
                     "{label}: match_data weight of unit {unit}"
                 );
                 let expected_role = if scenario.treat[*unit - 1] == focal_value {
-                    UnitRole::Anchor
+                    UnitRole::Case
                 } else {
-                    UnitRole::Candidate
+                    UnitRole::Control
                 };
                 assert_eq!(data.role[row], expected_role, "{label}: role");
             }
@@ -581,7 +584,7 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
         tally.ate_equal,
         tally.ate_differs,
         tally.shortfall_anchors,
-        tally.unmatched_anchors
+        tally.unmatched_cases
     );
     // The reference must contain the cases the comparison is about.
     assert!(tally.pairs_equal_to_matchit > 0);
@@ -593,7 +596,7 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
         tally.shortfall_anchors > 0,
         "no anchor got fewer than the ratio"
     );
-    assert!(tally.unmatched_anchors > 0, "no unmatched anchor");
+    assert!(tally.unmatched_cases > 0, "no unmatched anchor");
     assert!(
         tally.ate_differs > 0,
         "ATE never differs from the pair count"

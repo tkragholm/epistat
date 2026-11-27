@@ -33,17 +33,16 @@ fn outcome_hash(outcome: &MatchOutcome) -> u64 {
 }
 
 fn weights_hash(outcome: &MatchOutcome) -> u64 {
-    let unit = match_weights_from_pairs(
-        &outcome.pairs,
-        MatchWeightMethod::AnchorUnitCandidateFractional,
-    )
-    .to_table();
-    let pair = pair_weights_from_pairs(
-        &outcome.pairs,
-        MatchWeightMethod::AnchorUnitCandidateFractional,
-    )
-    .to_table();
-    fnv(&format!("{unit:?}{pair:?}"))
+    let unit =
+        match_weights_from_pairs(&outcome.pairs, MatchWeightMethod::CaseUnitControlFractional)
+            .to_table();
+    let pair =
+        pair_weights_from_pairs(&outcome.pairs, MatchWeightMethod::CaseUnitControlFractional)
+            .to_table();
+    fnv(&common::golden_weights_debug(
+        &format!("{unit:?}"),
+        &format!("{pair:?}"),
+    ))
 }
 
 fn check(name: &str, outcome: &MatchOutcome, expected: (u64, u64), nonempty: bool) {

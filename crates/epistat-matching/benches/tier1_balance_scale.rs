@@ -90,7 +90,7 @@ fn main() {
             _ => controls.push(*row),
         }
     }
-    let weights = BalanceWeights::new(Estimand::Att, UnitWeightSet { anchor, candidate })
+    let weights = BalanceWeights::new(Estimand::Att, UnitWeightSet::new(anchor, candidate))
         .with_pairs(pairs)
         .with_discarded((0..n).filter(|i| i % 97 == 5).map(id));
     let options = BalanceReportOptions::default();

@@ -556,8 +556,8 @@ impl<'a> Estimator<'a> {
         let mut v_sample = 0.0;
         let mut v_pop = 0.0;
         for i in 0..n {
-            let is_anchor = all || self.role[i];
-            let a_i = f64::from(u8::from(is_anchor));
+            let is_case = all || self.role[i];
+            let a_i = f64::from(u8::from(is_case));
             let c_i = if all {
                 1.0
             } else {

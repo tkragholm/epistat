@@ -26,15 +26,15 @@ fn cohort() -> Cohort {
     let (mut ids, mut treated, mut x) = (Vec::new(), Vec::new(), Vec::new());
     for i in 0..160_u32 {
         let id = format!("u{i:03}");
-        let is_anchor = i < 40;
+        let is_case = i < 40;
         let record = BaseRecord::new(id.clone(), birth);
-        if is_anchor {
+        if is_case {
             anchors.push(record);
         } else {
             candidates.push(record);
         }
         ids.push(id);
-        treated.push(is_anchor);
+        treated.push(is_case);
         x.push(f64::from((i * 37) % 101) / 10.0);
     }
     Cohort {

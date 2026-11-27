@@ -1166,8 +1166,8 @@ impl<'a, R: MatchingRecord> TrialContext<'a, R> {
             Some(at)
         };
         for pair in &outcome.pairs {
-            add(pair.anchor_id(), &mut members);
-            if let Some(at) = add(pair.comparator_id(), &mut members) {
+            add(pair.case_id.as_str(), &mut members);
+            if let Some(at) = add(pair.control_id.as_str(), &mut members) {
                 controls.push(pool[at].person);
             }
         }

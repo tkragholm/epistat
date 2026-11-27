@@ -77,8 +77,8 @@ fn matching_within_clusters_agrees_with_matching_match() {
             .iter()
             .map(|p| {
                 (
-                    p.anchor_id().parse().unwrap(),
-                    p.comparator_id().parse().unwrap(),
+                    p.case_id.as_str().parse().unwrap(),
+                    p.control_id.as_str().parse().unwrap(),
                 )
             })
             .collect();
@@ -184,7 +184,7 @@ fn the_final_cohort_has_a_match_in_every_comparison() {
             .outcome
             .pairs
             .iter()
-            .map(MatchedPair::anchor_id)
+            .map(|pair: &MatchedPair| pair.case_id.as_str())
             .collect();
         assert_eq!(anchors, cohort, "group {}", comparison.group);
         // Standard deviation of the focal logit score within each cluster of
@@ -200,9 +200,12 @@ fn the_final_cohort_has_a_match_in_every_comparison() {
             }
         }
         for pair in &comparison.outcome.pairs {
-            assert_eq!(group_of[pair.anchor_id()], 0);
-            assert_eq!(group_of[pair.comparator_id()], comparison.group);
-            let (a, c) = (position[pair.anchor_id()], position[pair.comparator_id()]);
+            assert_eq!(group_of[pair.case_id.as_str()], 0);
+            assert_eq!(group_of[pair.control_id.as_str()], comparison.group);
+            let (a, c) = (
+                position[pair.case_id.as_str()],
+                position[pair.control_id.as_str()],
+            );
             assert_eq!(comparison.cluster[a], comparison.cluster[c], "same cluster");
             let values = &scores[&comparison.cluster[a]];
             let mean = values.iter().sum::<f64>() / values.len() as f64;
@@ -218,7 +221,7 @@ fn the_final_cohort_has_a_match_in_every_comparison() {
         c.outcome
             .pairs
             .iter()
-            .any(|p| !seen.insert(p.comparator_id()))
+            .any(|p| !seen.insert(p.control_id.as_str()))
     });
     assert!(reused);
 }
@@ -282,7 +285,12 @@ fn two_groups_need_no_clusters_and_the_match_is_reproducible() {
             .outcome
             .pairs
             .iter()
-            .map(|p| (p.anchor_id().to_string(), p.comparator_id().to_string()))
+            .map(|p| {
+                (
+                    p.case_id.as_str().to_string(),
+                    p.control_id.as_str().to_string(),
+                )
+            })
             .collect()
     };
     assert_eq!(pairs(&first), pairs(&again));

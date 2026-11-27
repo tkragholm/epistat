@@ -271,7 +271,7 @@ fn days(n: u64) -> TimeDelta {
 /// the plain number the golden hashes were taken with: `Some(x)` as `x`, and
 /// `None` as `0.0`.
 pub fn golden_debug(outcome: &MatchOutcome) -> String {
-    let text = format!("{outcome:?}");
+    let text = recorded_names(&format!("{outcome:?}"));
     let marker = "avg_controls_per_case: ";
     let Some(start) = text.find(marker).map(|at| at + marker.len()) else {
         return text;
@@ -285,4 +285,54 @@ pub fn golden_debug(outcome: &MatchOutcome) -> String {
         None => ("0.0".to_string(), "None".len()),
     };
     format!("{}{value}{}", &text[..start], &rest[length..])
+}
+
+/// The debug rendering in the field and variant names of 0.2, which the
+/// golden hashes were recorded with: the diagnostics of 0.3 say case and
+/// control where 0.2 said anchor and candidate. The values are untouched.
+fn recorded_names(text: &str) -> String {
+    let Some(at) = text.find("diagnostics: MatchDiagnostics {") else {
+        return text.to_string();
+    };
+    let (outcome, diagnostics) = text.split_at(at);
+    let mut diagnostics = diagnostics.to_string();
+    for (new, old) in [
+        ("total_cases_evaluated", "total_anchors_evaluated"),
+        ("cases_with_no_controls", "anchors_with_no_candidates"),
+        ("cases_below_required_ratio", "anchors_below_required_ratio"),
+        ("cases_on_lower_tier", "anchors_on_lower_tier"),
+        ("matched_cases", "matched_anchors"),
+        (
+            "common_support_trimmed_cases",
+            "common_support_trimmed_anchors",
+        ),
+        (
+            "common_support_trimmed_controls",
+            "common_support_trimmed_candidates",
+        ),
+        (
+            "common_support_case_score_bounds",
+            "common_support_anchor_score_bounds",
+        ),
+        (
+            "common_support_control_score_bounds",
+            "common_support_candidate_score_bounds",
+        ),
+        ("UnmatchedCases", "UnmatchedAnchors"),
+    ] {
+        diagnostics = diagnostics.replace(new, old);
+    }
+    format!("{outcome}{diagnostics}")
+}
+
+/// The debug rendering of the unit and pair weight tables in the names of
+/// 0.2, as [`golden_debug`] does for the outcome.
+pub fn golden_weights_debug(unit: &str, pair: &str) -> String {
+    let unit = unit
+        .replace("role: Case", "role: Anchor")
+        .replace("role: Control", "role: Candidate");
+    let pair = pair
+        .replace("case_id: ", "anchor_id: ")
+        .replace("control_id: ", "candidate_id: ");
+    format!("{unit}{pair}")
 }

@@ -135,23 +135,23 @@ pub struct PropensityScoreEstimate {
     pub cbps: Option<CbpsFit>,
     /// Anchor ids discarded by common-support trimming before the refit, when
     /// the model was re-estimated. Their scores are those of the first fit.
-    pub discarded_anchors: Vec<String>,
+    pub discarded_cases: Vec<String>,
     /// Candidate ids discarded by common-support trimming before the refit.
-    pub discarded_candidates: Vec<String>,
+    pub discarded_controls: Vec<String>,
 }
 
 impl PropensityScoreEstimate {
     /// This first fit with the scores of `refit` for the units it covers, the
     /// fit's other results (coefficients, convergence, penalty) taken from
-    /// `refit`, and `discarded_anchors` and `discarded_candidates` set. It is
+    /// `refit`, and `discarded_cases` and `discarded_controls` set. It is
     /// what `matchit(reestimate = TRUE)` reports: the kept units carry the
     /// refitted scores and the discarded ones keep those of the first fit.
     #[must_use]
     pub(crate) fn with_refit(
         mut self,
         refit: Self,
-        discarded_anchors: &[String],
-        discarded_candidates: &[String],
+        discarded_cases: &[String],
+        discarded_controls: &[String],
     ) -> Self {
         let mut distance = self.distance_scores.to_vec();
         for (from, id) in refit.ids.iter().enumerate() {
@@ -167,8 +167,8 @@ impl PropensityScoreEstimate {
             linear_predictor: self.linear_predictor,
             distance_scores: distance.into(),
             index: self.index,
-            discarded_anchors: discarded_anchors.to_vec(),
-            discarded_candidates: discarded_candidates.to_vec(),
+            discarded_cases: discarded_cases.to_vec(),
+            discarded_controls: discarded_controls.to_vec(),
             ..refit
         }
     }
@@ -428,8 +428,8 @@ pub fn prepare_propensity_distance_config<R: CovariateRecord>(
     let mut probabilities = fit.probabilities.clone();
     let mut linear_predictor = fit.linear_predictor.clone();
     let mut distance = score_of(&fit);
-    let mut discarded_anchors = Vec::new();
-    let mut discarded_candidates = Vec::new();
+    let mut discarded_cases = Vec::new();
+    let mut discarded_controls = Vec::new();
 
     if let (true, Some(policy)) = (config.reestimate, discard) {
         let outside = rows_outside_common_support(&distance, anchors.len(), policy)
@@ -457,9 +457,9 @@ pub fn prepare_propensity_distance_config<R: CovariateRecord>(
         for &row in &outside {
             let id = matrix.row_ids[row].clone();
             if row < anchors.len() {
-                discarded_anchors.push(id);
+                discarded_cases.push(id);
             } else {
-                discarded_candidates.push(id);
+                discarded_controls.push(id);
             }
         }
         fit = refit;
@@ -484,8 +484,8 @@ pub fn prepare_propensity_distance_config<R: CovariateRecord>(
         lambda: fit.lambda,
         cross_validation: fit.cross_validation,
         cbps: fit.cbps,
-        discarded_anchors,
-        discarded_candidates,
+        discarded_cases,
+        discarded_controls,
     };
     let distance_config =
         DistanceConfig::propensity_score_table(estimate.score_table(), config.caliper);
@@ -704,15 +704,10 @@ pub fn estimate_propensity_and_match<
     };
     let outcome = if propensity_config.reestimate {
         let discarded = DiscardedUnits {
-            anchors: prepared
+            cases: prepared.estimate.discarded_cases.iter().cloned().collect(),
+            controls: prepared
                 .estimate
-                .discarded_anchors
-                .iter()
-                .cloned()
-                .collect(),
-            candidates: prepared
-                .estimate
-                .discarded_candidates
+                .discarded_controls
                 .iter()
                 .cloned()
                 .collect(),
@@ -1356,8 +1351,8 @@ mod tests {
                 lambda: None,
                 cross_validation: None,
                 cbps: None,
-                discarded_anchors: Vec::new(),
-                discarded_candidates: Vec::new(),
+                discarded_cases: Vec::new(),
+                discarded_controls: Vec::new(),
             },
         };
     }

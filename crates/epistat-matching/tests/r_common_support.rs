@@ -24,9 +24,7 @@ mod r_reference;
 use chrono::NaiveDate;
 use epistat_matching::DeterministicSelection;
 use epistat_matching::prelude::*;
-use epistat_matching::{
-    CommonSupport, CommonSupportFailureReason, DistanceConfig, ExclusionReason,
-};
+use epistat_matching::{CommonSupport, CommonSupportFailureReason, DistanceConfig};
 use rapidhash::RapidHashMap;
 
 use r_reference::{Versions, reference as load_reference, unit_id as id};
@@ -96,12 +94,12 @@ fn run(case: &Case, policy: Option<CommonSupport>) -> Run {
     let kept_anchors = outcome
         .pairs
         .iter()
-        .map(|p| index_of(p.anchor_id()))
+        .map(|p| index_of(p.case_id.as_str()))
         .collect();
     let kept_candidates = outcome
         .pairs
         .iter()
-        .map(|p| index_of(p.comparator_id()))
+        .map(|p| index_of(p.control_id.as_str()))
         .collect();
     Run {
         outcome,
@@ -172,12 +170,12 @@ fn trimmed_units_match_matchit() {
             );
             let diagnostics = &got.outcome.diagnostics;
             assert_eq!(
-                diagnostics.common_support_trimmed_anchors,
+                diagnostics.common_support_trimmed_cases,
                 count_discarded(case, discarded, 1.0),
                 "trimmed treated count, {label}"
             );
             assert_eq!(
-                diagnostics.common_support_trimmed_candidates,
+                diagnostics.common_support_trimmed_controls,
                 count_discarded(case, discarded, 0.0),
                 "trimmed control count, {label}"
             );
@@ -189,12 +187,12 @@ fn trimmed_units_match_matchit() {
                     .collect()
             };
             assert_eq!(
-                diagnostics.common_support_trimmed_ids.anchors,
+                diagnostics.common_support_trimmed_ids.cases,
                 discarded_ids(1.0),
                 "trimmed treated ids, {label}"
             );
             assert_eq!(
-                diagnostics.common_support_trimmed_ids.candidates,
+                diagnostics.common_support_trimmed_ids.controls,
                 discarded_ids(0.0),
                 "trimmed control ids, {label}"
             );
@@ -205,12 +203,12 @@ fn trimmed_units_match_matchit() {
                     "{label}"
                 );
                 assert_eq!(
-                    diagnostics.common_support_anchor_score_bounds,
+                    diagnostics.common_support_case_score_bounds,
                     Some(treated_range),
                     "{label}"
                 );
                 assert_eq!(
-                    diagnostics.common_support_candidate_score_bounds,
+                    diagnostics.common_support_control_score_bounds,
                     Some(control_range),
                     "{label}"
                 );

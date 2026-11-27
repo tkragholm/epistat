@@ -132,9 +132,9 @@ fn rows_of(outcome: &MatchOutcome, focal_rows: &[usize]) -> Vec<Vec<usize>> {
     let mut by_anchor: HashMap<usize, Vec<usize>> = HashMap::new();
     for pair in &outcome.pairs {
         by_anchor
-            .entry(pair.anchor_id().parse().expect("row number"))
+            .entry(pair.case_id.as_str().parse().expect("row number"))
             .or_default()
-            .push(pair.comparator_id().parse().expect("row number"));
+            .push(pair.control_id.as_str().parse().expect("row number"));
     }
     focal_rows
         .iter()
@@ -248,8 +248,8 @@ fn matrix_is_a_caliper_for_the_other_strategies() {
     assert!(!outcome.pairs.is_empty(), "no output, test is vacuous");
     for pair in &outcome.pairs {
         let distance = matrix
-            .anchor_position(pair.anchor_id())
-            .zip(matrix.candidate_position(pair.comparator_id()))
+            .case_position(pair.case_id.as_str())
+            .zip(matrix.control_position(pair.control_id.as_str()))
             .and_then(|(i, j)| matrix.at(i, j))
             .expect("a finite entry");
         assert!(distance <= width, "{distance} against {width}");
@@ -279,8 +279,8 @@ fn units_outside_the_matrix_are_not_matched() {
         .run()
         .expect("a valid job");
     assert_eq!(outcome.pairs.len(), 1);
-    assert_eq!(outcome.pairs[0].anchor_id(), "a");
-    assert_eq!(outcome.pairs[0].comparator_id(), "x");
+    assert_eq!(outcome.pairs[0].case_id.as_str(), "a");
+    assert_eq!(outcome.pairs[0].control_id.as_str(), "x");
     let (rows, columns) = matrix.positions_of(&anchors, &candidates);
     assert_eq!(rows, vec![Some(0), None]);
     assert_eq!(columns, vec![Some(0), None]);

@@ -58,19 +58,18 @@ fn fnv(text: &str) -> u64 {
 }
 
 fn hashes(outcome: &MatchOutcome) -> (u64, u64) {
-    let unit = match_weights_from_pairs(
-        &outcome.pairs,
-        MatchWeightMethod::AnchorUnitCandidateFractional,
-    )
-    .to_table();
-    let pair = pair_weights_from_pairs(
-        &outcome.pairs,
-        MatchWeightMethod::AnchorUnitCandidateFractional,
-    )
-    .to_table();
+    let unit =
+        match_weights_from_pairs(&outcome.pairs, MatchWeightMethod::CaseUnitControlFractional)
+            .to_table();
+    let pair =
+        pair_weights_from_pairs(&outcome.pairs, MatchWeightMethod::CaseUnitControlFractional)
+            .to_table();
     (
         fnv(&common::golden_debug(outcome)),
-        fnv(&format!("{unit:?}{pair:?}")),
+        fnv(&common::golden_weights_debug(
+            &format!("{unit:?}"),
+            &format!("{pair:?}"),
+        )),
     )
 }
 
@@ -124,8 +123,8 @@ fn run_pairs(
     match run_spec(
         spec,
         SpecInput::Standard {
-            anchors,
-            candidates,
+            cases: anchors,
+            controls: candidates,
         },
     )
     .expect("valid spec")
@@ -435,8 +434,8 @@ fn spec_nearest_on_a_propensity_score_matches_the_typed_job() {
     } = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec")
@@ -631,8 +630,8 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
     let SpecOutput::Exact(outcome) = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec") else {
@@ -671,8 +670,8 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
     let SpecOutput::Subclass { outcome, .. } = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec") else {
@@ -735,8 +734,8 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
     let SpecOutput::Quick(outcome) = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec") else {
@@ -795,8 +794,8 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
         run_spec(
             &spec,
             SpecInput::Standard {
-                anchors: &anchors,
-                candidates: &candidates,
+                cases: &anchors,
+                controls: &candidates,
             },
         )
         .unwrap_err()
@@ -866,8 +865,8 @@ fn message(spec: &MatchSpec) -> String {
     match run_spec(
         spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     ) {
         Ok(_) => panic!("the spec should be refused"),
@@ -992,8 +991,8 @@ fn a_covariate_that_is_missing_from_the_units_is_a_distance_error() {
     let error = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect_err("weight is not a covariate of the units");
@@ -1025,8 +1024,8 @@ fn the_typed_jobs_invalid_outcome_is_an_error_from_the_spec() {
     let error = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect_err("refused");
@@ -1099,8 +1098,8 @@ fn a_configuration_the_matcher_refuses_is_an_error_not_an_empty_match() {
     let error = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect_err("refused by the matcher");
@@ -1184,8 +1183,8 @@ fn cem_variables() -> Vec<CemVariableSpec> {
 fn spec_cem_matches_the_functions_it_wraps() {
     let (anchors, candidates) = cem_inputs();
     let input = SpecInput::Standard {
-        anchors: &anchors,
-        candidates: &candidates,
+        cases: &anchors,
+        controls: &candidates,
     };
     let by_hand_variables = [
         CemVariable::numeric("age", CemBinning::Bins(4)),
@@ -1283,8 +1282,8 @@ fn spec_nearest_on_a_distance_matrix_matches_the_typed_job() {
     let spec = MatchSpec {
         method: MatchMethod::Nearest,
         distance: DistanceSpec::Matrix {
-            anchor_ids: ids(&anchors),
-            candidate_ids: ids(&candidates),
+            case_ids: ids(&anchors),
+            control_ids: ids(&candidates),
             values: rows.clone(),
             caliper: Some(4.0),
         },
@@ -1300,8 +1299,8 @@ fn spec_nearest_on_a_distance_matrix_matches_the_typed_job() {
     let SpecOutput::Pairs { outcome, .. } = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec") else {
@@ -1380,8 +1379,8 @@ fn invalid_cem_and_matrix_specs_are_errors_that_name_the_option() {
     let ragged = MatchSpec {
         method: MatchMethod::Nearest,
         distance: DistanceSpec::Matrix {
-            anchor_ids: vec!["a".into()],
-            candidate_ids: vec!["x".into(), "y".into()],
+            case_ids: vec!["a".into()],
+            control_ids: vec!["x".into(), "y".into()],
             values: vec![vec![Some(1.0)]],
             caliper: None,
         },
@@ -1391,8 +1390,8 @@ fn invalid_cem_and_matrix_specs_are_errors_that_name_the_option() {
     let scored = MatchSpec {
         method: MatchMethod::Nearest,
         distance: DistanceSpec::Matrix {
-            anchor_ids: vec!["a".into()],
-            candidate_ids: vec!["x".into()],
+            case_ids: vec!["a".into()],
+            control_ids: vec!["x".into()],
             values: vec![vec![Some(1.0)]],
             caliper: None,
         },
@@ -1412,8 +1411,8 @@ fn cem_and_matrix_specs_round_trip_through_json() {
         r#"{"method": "cem", "cem": {"variables": [
               {"kind": "numeric", "name": "age", "binning": {"kind": "quantiles", "n": 4}},
               {"kind": "categorical", "name": "region", "groups": [["r0", "r1"]]}],
-            "k2k": {"distance": {"kind": "matrix", "anchor_ids": ["a"],
-                                 "candidate_ids": ["x"], "values": [[null]]},
+            "k2k": {"distance": {"kind": "matrix", "case_ids": ["a"],
+                                 "control_ids": ["x"], "values": [[null]]},
                     "m_order": "farthest"}}}"#,
     )
     .unwrap();
@@ -1453,8 +1452,8 @@ fn optimal_and_full_specs_equal_the_typed_calls() {
     )
     .unwrap();
     let input = SpecInput::Standard {
-        anchors: &anchors,
-        candidates: &candidates,
+        cases: &anchors,
+        controls: &candidates,
     };
     let base = MatchSpec {
         distance,
@@ -1589,7 +1588,7 @@ fn spec_nearest_with_a_variable_ratio_matches_the_typed_job() {
         .pairs
         .iter()
         .fold(BTreeMap::<&str, usize>::new(), |mut counts, pair| {
-            *counts.entry(pair.anchor_id()).or_default() += 1;
+            *counts.entry(pair.case_id.as_str()).or_default() += 1;
             counts
         })
         .into_values()
@@ -1635,8 +1634,8 @@ fn spec_discard_matches_the_typed_job_with_common_support() {
                     .expect("a valid job")
             };
             same(&by_spec, &by_hand);
-            trimmed_somewhere |= by_spec.diagnostics.common_support_trimmed_anchors
-                + by_spec.diagnostics.common_support_trimmed_candidates
+            trimmed_somewhere |= by_spec.diagnostics.common_support_trimmed_cases
+                + by_spec.diagnostics.common_support_trimmed_controls
                 > 0;
         }
     }
@@ -1668,8 +1667,8 @@ fn spec_reestimate_matches_estimate_propensity_and_match() {
             } = run_spec(
                 &spec,
                 SpecInput::Standard {
-                    anchors: &anchors,
-                    candidates: &candidates,
+                    cases: &anchors,
+                    controls: &candidates,
                 },
             )
             .expect("valid spec")
@@ -1724,16 +1723,15 @@ fn spec_reestimate_matches_estimate_propensity_and_match() {
             };
             assert_eq!(by_id(&propensity), by_id(&by_hand.propensity));
             assert_eq!(
-                propensity.discarded_anchors,
-                by_hand.propensity.discarded_anchors
+                propensity.discarded_cases,
+                by_hand.propensity.discarded_cases
             );
             assert_eq!(
-                propensity.discarded_candidates,
-                by_hand.propensity.discarded_candidates
+                propensity.discarded_controls,
+                by_hand.propensity.discarded_controls
             );
             assert!(
-                !propensity.discarded_anchors.is_empty()
-                    || !propensity.discarded_candidates.is_empty(),
+                !propensity.discarded_cases.is_empty() || !propensity.discarded_controls.is_empty(),
                 "the policy trims units"
             );
         }
@@ -1773,8 +1771,8 @@ fn spec_elastic_net_with_a_penalty_ratio_matches_the_typed_job() {
         } = run_spec(
             &spec,
             SpecInput::Standard {
-                anchors: &anchors,
-                candidates: &candidates,
+                cases: &anchors,
+                controls: &candidates,
             },
         )
         .expect("valid spec")
@@ -1841,8 +1839,8 @@ fn spec_cbps_matches_the_typed_job() {
         } = run_spec(
             &spec,
             SpecInput::Standard {
-                anchors: &anchors,
-                candidates: &candidates,
+                cases: &anchors,
+                controls: &candidates,
             },
         )
         .expect("valid spec")
@@ -1906,8 +1904,8 @@ fn spec_cbps_refuses_an_estimand_it_does_not_define() {
     let result = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     );
     assert!(result.is_err());
@@ -1995,8 +1993,8 @@ fn invalid_support_and_ratio_options_are_errors_that_name_the_option() {
         run_spec(
             &spec,
             SpecInput::Standard {
-                anchors: &anchors,
-                candidates: &candidates,
+                cases: &anchors,
+                controls: &candidates,
             },
         )
         .expect_err("invalid spec")
@@ -2127,9 +2125,12 @@ fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
     let units = Units::without_fixed_roles(ids).expect("unique ids");
     let long = get_matches(&outcome, &units, false).expect("long form of a risk-set match");
 
-    let cases: std::collections::BTreeSet<&str> =
-        outcome.pairs.iter().map(MatchedPair::anchor_id).collect();
-    let anchor_rows = long.role.iter().filter(|r| **r == UnitRole::Anchor).count();
+    let cases: std::collections::BTreeSet<&str> = outcome
+        .pairs
+        .iter()
+        .map(|pair: &MatchedPair| pair.case_id.as_str())
+        .collect();
+    let anchor_rows = long.role.iter().filter(|r| **r == UnitRole::Case).count();
     assert_eq!(anchor_rows, cases.len(), "one pair per case");
     assert_eq!(long.len(), cases.len() + outcome.pairs.len());
     assert_eq!(long.pair_id.last().copied().flatten(), Some(cases.len()));
@@ -2138,7 +2139,7 @@ fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
     let controls: std::collections::BTreeSet<&str> = outcome
         .pairs
         .iter()
-        .map(MatchedPair::comparator_id)
+        .map(|pair: &MatchedPair| pair.control_id.as_str())
         .collect();
     let both: Vec<&str> = cases.intersection(&controls).copied().collect();
     assert!(!both.is_empty(), "some case is also a control");
@@ -2159,11 +2160,11 @@ fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
         let end = (start..long.len())
             .find(|row| long.pair_id[*row] != pair)
             .unwrap_or(long.len());
-        assert_eq!(long.role[start], UnitRole::Anchor);
+        assert_eq!(long.role[start], UnitRole::Case);
         assert!(
             long.role[start + 1..end]
                 .iter()
-                .all(|r| *r == UnitRole::Candidate)
+                .all(|r| *r == UnitRole::Control)
         );
         let controls: f64 = long.weight[start + 1..end].iter().sum();
         assert!((controls - 1.0).abs() < 1e-12);
@@ -2173,7 +2174,7 @@ fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
     let mut from_long: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     let mut current = "";
     for (id, role) in long.id.iter().zip(&long.role) {
-        if *role == UnitRole::Anchor {
+        if *role == UnitRole::Case {
             current = id;
         } else {
             from_long.entry(current).or_default().push(id);
@@ -2182,9 +2183,9 @@ fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
     let mut from_outcome: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for pair in &outcome.pairs {
         from_outcome
-            .entry(pair.anchor_id())
+            .entry(pair.case_id.as_str())
             .or_default()
-            .push(pair.comparator_id());
+            .push(pair.control_id.as_str());
     }
     for controls in from_long.values_mut().chain(from_outcome.values_mut()) {
         controls.sort_unstable();
@@ -2202,8 +2203,8 @@ fn fine_balance_spec_equals_the_typed_call() {
     let anchors: Vec<_> = anchors.into_iter().take(40).collect();
     let candidates: Vec<_> = candidates.into_iter().take(300).collect();
     let input = SpecInput::Standard {
-        anchors: &anchors,
-        candidates: &candidates,
+        cases: &anchors,
+        controls: &candidates,
     };
     let balance = FineBalance::on_keys(["sex", "municipality"]);
     let spec = MatchSpec {
@@ -2282,8 +2283,8 @@ fn spec_discard_in_risk_set_mode_matches_the_typed_job_with_common_support() {
         .expect("a valid job");
     same(&outcome, &by_hand);
     assert!(
-        outcome.diagnostics.common_support_trimmed_anchors
-            + outcome.diagnostics.common_support_trimmed_candidates
+        outcome.diagnostics.common_support_trimmed_cases
+            + outcome.diagnostics.common_support_trimmed_controls
             > 0,
         "nothing was trimmed, test is vacuous"
     );
@@ -2366,8 +2367,8 @@ fn spec_genetic_equals_the_direct_search() {
     let SpecOutput::Genetic { outcome, search } = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec") else {
@@ -2455,8 +2456,8 @@ fn spec_genetic_equals_the_direct_search() {
     let again = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .unwrap();
@@ -2486,8 +2487,8 @@ fn spec_genetic_constraints_hold_in_the_pairs() {
     let SpecOutput::Genetic { outcome, .. } = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("valid spec") else {
@@ -2513,8 +2514,8 @@ fn spec_genetic_constraints_hold_in_the_pairs() {
 fn spec_genetic_rejects_invalid_options() {
     let (anchors, candidates) = covariate_inputs();
     let input = SpecInput::Standard {
-        anchors: &anchors,
-        candidates: &candidates,
+        cases: &anchors,
+        controls: &candidates,
     };
     let base = MatchSpec {
         method: MatchMethod::Genetic,
@@ -2605,8 +2606,8 @@ fn spec_genetic_feeds_effects_and_balance() {
     let SpecOutput::Genetic { outcome, .. } = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .unwrap() else {
@@ -2681,8 +2682,8 @@ fn spec_cardinality_equals_the_direct_call() {
     let income = numeric_column(&anchors, &candidates, "income");
     let columns = vec![age, income];
     let input = SpecInput::Standard {
-        anchors: &anchors,
-        candidates: &candidates,
+        cases: &anchors,
+        controls: &candidates,
     };
     let limits = CardinalityLimits {
         time: None,
@@ -2736,8 +2737,8 @@ fn spec_cardinality_equals_the_direct_call() {
 fn spec_cardinality_profile_and_errors() {
     let (anchors, candidates) = covariate_inputs();
     let input = SpecInput::Standard {
-        anchors: &anchors,
-        candidates: &candidates,
+        cases: &anchors,
+        controls: &candidates,
     };
     let mut profile = cardinality_spec();
     profile.cardinality.ratio = None;
@@ -2871,8 +2872,8 @@ fn spec_cardinality_profile_and_errors() {
     let error = run_spec(
         &infeasible,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect_err("no subset meets the tolerance");
@@ -2893,8 +2894,8 @@ fn spec_cardinality_feeds_effects_and_balance() {
     let SpecOutput::Cardinality(found) = run_spec(
         &cardinality_spec(),
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .unwrap() else {

@@ -63,8 +63,8 @@ fn vector_matching_does_not_depend_on_the_number_of_threads() {
         let mut values = out.gps.probabilities.clone();
         for comparison in &out.comparisons {
             for pair in &comparison.outcome.pairs {
-                values.push(pair.anchor_id()[1..].parse().unwrap());
-                values.push(pair.comparator_id()[1..].parse().unwrap());
+                values.push(pair.case_id.as_str()[1..].parse().unwrap());
+                values.push(pair.control_id.as_str()[1..].parse().unwrap());
             }
         }
         values
@@ -129,8 +129,8 @@ fn imputation_matching_does_not_depend_on_the_number_of_threads() {
     let sets: Vec<ImputedSet<'_, BalanceRecord>> = prepared
         .iter()
         .map(|(a, c)| ImputedSet {
-            anchors: a,
-            candidates: c,
+            cases: a,
+            controls: c,
         })
         .collect();
     let criteria = MatchingCriteria::builder().match_ratio(1).build();
@@ -159,8 +159,8 @@ fn imputation_matching_does_not_depend_on_the_number_of_threads() {
             let mut values = vec![p.estimate, p.within, p.between, p.total, p.df.unwrap()];
             for set in &matches.sets {
                 for pair in &set.outcome.pairs {
-                    values.push(pair.anchor_id().parse().unwrap());
-                    values.push(pair.comparator_id().parse().unwrap());
+                    values.push(pair.case_id.as_str().parse().unwrap());
+                    values.push(pair.control_id.as_str().parse().unwrap());
                 }
             }
             values
@@ -176,8 +176,8 @@ fn within_imputation_matches_each_set_as_a_single_set() {
     let sets: Vec<ImputedSet<'_, BalanceRecord>> = prepared
         .iter()
         .map(|(a, c)| ImputedSet {
-            anchors: a,
-            candidates: c,
+            cases: a,
+            controls: c,
         })
         .collect();
     let criteria = MatchingCriteria::builder().match_ratio(1).build();
@@ -194,8 +194,8 @@ fn within_imputation_matches_each_set_as_a_single_set() {
     .unwrap();
     for (set, together) in sets.iter().zip(&matches.sets) {
         let alone = estimate_propensity_and_match(
-            set.anchors,
-            set.candidates,
+            set.cases,
+            set.controls,
             &criteria,
             NearestSelection::new(0),
             &[],

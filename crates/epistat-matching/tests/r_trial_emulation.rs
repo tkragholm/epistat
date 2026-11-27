@@ -366,9 +366,9 @@ fn controls_by_initiator(outcome: &TrialOutcome) -> BTreeMap<String, Vec<String>
     let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for trial in &outcome.trials {
         for pair in &trial.outcome.pairs {
-            map.entry(key(trial.period, pair.anchor_id()))
+            map.entry(key(trial.period, pair.case_id.as_str()))
                 .or_default()
-                .push(pair.comparator_id().to_string());
+                .push(pair.control_id.as_str().to_string());
         }
     }
     for controls in map.values_mut() {
@@ -505,7 +505,7 @@ fn control_reuse_across_trials() {
                 .outcome
                 .pairs
                 .iter()
-                .map(MatchedPair::comparator_id)
+                .map(|pair: &MatchedPair| pair.control_id.as_str())
                 .collect();
             for control in controls {
                 *seen.entry(control.to_string()).or_default() += 1;
@@ -533,14 +533,14 @@ fn control_reuse_across_trials() {
             t.outcome
                 .pairs
                 .iter()
-                .map(|p| p.comparator_id().to_string())
+                .map(|p| p.control_id.as_str().to_string())
         })
         .collect();
     let initiators_later = outcome.trials.iter().any(|t| {
         t.outcome
             .pairs
             .iter()
-            .any(|p| controls.contains(p.anchor_id()))
+            .any(|p| controls.contains(p.case_id.as_str()))
     });
     assert!(initiators_later, "an earlier control initiates later");
 }
@@ -569,7 +569,7 @@ fn initiators_as_earlier_controls_option() {
             .outcome
             .pairs
             .iter()
-            .any(|p| later_initiator(p.comparator_id(), t.period))),
+            .any(|p| later_initiator(p.control_id.as_str(), t.period))),
         "by default a later initiator is a control"
     );
     let options = TrialOptions {
@@ -581,9 +581,9 @@ fn initiators_as_earlier_controls_option() {
     for trial in &outcome.trials {
         for pair in &trial.outcome.pairs {
             assert!(
-                !later_initiator(pair.comparator_id(), trial.period),
+                !later_initiator(pair.control_id.as_str(), trial.period),
                 "{} controls in trial {} and initiates later",
-                pair.comparator_id(),
+                pair.control_id.as_str(),
                 trial.period
             );
         }
@@ -638,8 +638,8 @@ fn spec_mode_needs_a_panel() {
         run_spec::<BalanceRecord>(
             &spec,
             SpecInput::Standard {
-                anchors: &[],
-                candidates: &[]
+                cases: &[],
+                controls: &[]
             }
         ),
         Err(Error::InputMode {

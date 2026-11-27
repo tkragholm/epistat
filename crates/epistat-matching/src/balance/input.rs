@@ -58,8 +58,8 @@ impl BalanceWeights {
         Self::new(
             estimand,
             UnitWeightSet {
-                anchor: ones(cases),
-                candidate: ones(controls),
+                case: ones(cases),
+                control: ones(controls),
             },
         )
     }
@@ -70,7 +70,9 @@ impl BalanceWeights {
     pub fn from_outcome(outcome: &MatchOutcome) -> Self {
         let mut weights = Self::new(
             outcome.diagnostics.realized_estimand,
-            outcome.match_weights_for_realized_estimand(),
+            outcome.match_weights(crate::MatchWeightMethod::for_estimand(
+                outcome.diagnostics.realized_estimand,
+            )),
         );
         weights.pairs.clone_from(&outcome.pairs);
         weights
@@ -99,8 +101,8 @@ impl BalanceWeights {
         Self::new(
             estimand,
             UnitWeightSet {
-                anchor: pick(cases),
-                candidate: pick(controls),
+                case: pick(cases),
+                control: pick(controls),
             },
         )
     }
@@ -134,7 +136,7 @@ impl BalanceWeights {
     /// of the unit whose identifier sorts first when there are several.
     pub fn validate(&self) -> Result<(), Error> {
         let mut checks: Vec<(&String, f64)> = Vec::new();
-        for group in [&self.matching.anchor, &self.matching.candidate] {
+        for group in [&self.matching.case, &self.matching.control] {
             checks.extend(group.iter().map(|(id, weight)| (id, *weight)));
         }
         if let Some(sampling) = &self.sampling {

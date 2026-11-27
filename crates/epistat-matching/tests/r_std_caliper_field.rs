@@ -112,8 +112,8 @@ fn pairs_from_spec(
     let output = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("the spec runs");
@@ -124,7 +124,7 @@ fn pairs_from_spec(
     outcome
         .pairs
         .iter()
-        .map(|pair| (row(pair.anchor_id()), row(pair.comparator_id())))
+        .map(|pair| (row(pair.case_id.as_str()), row(pair.control_id.as_str())))
         .collect()
 }
 

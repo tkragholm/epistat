@@ -146,9 +146,9 @@ impl CemVariable {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CemStrata {
     /// Stratum of each anchor, in the order of the anchors.
-    pub anchors: Vec<Option<usize>>,
+    pub cases: Vec<Option<usize>>,
     /// Stratum of each candidate, in the order of the candidates.
-    pub candidates: Vec<Option<usize>>,
+    pub controls: Vec<Option<usize>>,
     /// Number of strata that hold both groups. They are numbered from 0 in
     /// order of first appearance among the anchors.
     pub count: usize,
@@ -411,8 +411,8 @@ fn coarsen<R: MatchingRecord>(
     let outcome = subclasses_of_strata(anchors, candidates, &numbers, count)?;
     let (anchor_subclass, candidate_subclass) = outcome.subclass.split_at(anchors.len());
     let strata = CemStrata {
-        anchors: anchor_subclass.to_vec(),
-        candidates: candidate_subclass.to_vec(),
+        cases: anchor_subclass.to_vec(),
+        controls: candidate_subclass.to_vec(),
         count: outcome.subclasses.len(),
     };
     Ok((strata, outcome))
@@ -534,12 +534,12 @@ pub fn cem_k2k_pairs<R: MatchingRecord>(
 
     let mut anchors_of: Vec<Vec<usize>> = vec![Vec::new(); strata.count];
     let mut candidates_of: Vec<Vec<usize>> = vec![Vec::new(); strata.count];
-    for (index, stratum) in strata.anchors.iter().enumerate() {
+    for (index, stratum) in strata.cases.iter().enumerate() {
         if let Some(stratum) = stratum {
             anchors_of[*stratum].push(index);
         }
     }
-    for (index, stratum) in strata.candidates.iter().enumerate() {
+    for (index, stratum) in strata.controls.iter().enumerate() {
         if let Some(stratum) = stratum {
             candidates_of[*stratum].push(index);
         }
@@ -633,9 +633,9 @@ pub fn cem_k2k_pairs<R: MatchingRecord>(
         }
     }
     let mut diagnostics = MatchDiagnostics {
-        total_anchors_evaluated: anchors.len(),
-        anchors_with_no_candidates: anchors.len() - pairs.len(),
-        matched_anchors: pairs.len(),
+        total_cases_evaluated: anchors.len(),
+        cases_with_no_controls: anchors.len() - pairs.len(),
+        matched_cases: pairs.len(),
         pairs_selected: pairs.len(),
         ..MatchDiagnostics::default()
     };
@@ -754,8 +754,8 @@ mod tests {
             )?;
             let subclass = |unit: &R| outcome.assignments.get(unit.id()).copied();
             let strata = CemStrata {
-                anchors: anchors.iter().map(subclass).collect(),
-                candidates: candidates.iter().map(subclass).collect(),
+                cases: anchors.iter().map(subclass).collect(),
+                controls: candidates.iter().map(subclass).collect(),
                 count: outcome.subclasses.len(),
             };
             Ok((strata, outcome))
@@ -828,8 +828,8 @@ mod tests {
         let candidates = vec![unit("c1", 1.5, "p"), unit("c2", 0.5, "p")];
         let variables = [CemVariable::numeric("x", CemBinning::Cutpoints(vec![1.0]))];
         let strata = cem_strata(&anchors, &candidates, &variables).unwrap();
-        assert_eq!(strata.anchors, vec![Some(0), Some(1)]);
-        assert_eq!(strata.candidates, vec![Some(0), Some(1)]);
+        assert_eq!(strata.cases, vec![Some(0), Some(1)]);
+        assert_eq!(strata.controls, vec![Some(0), Some(1)]);
     }
 
     #[test]
@@ -843,8 +843,8 @@ mod tests {
         let variables = [CemVariable::categorical("g", groups)];
         let strata = cem_strata(&anchors, &candidates, &variables).unwrap();
         // q becomes p, which the second group turns into r.
-        assert_eq!(strata.anchors, vec![Some(0)]);
-        assert_eq!(strata.candidates, vec![Some(0), None]);
+        assert_eq!(strata.cases, vec![Some(0)]);
+        assert_eq!(strata.controls, vec![Some(0), None]);
     }
 
     #[test]

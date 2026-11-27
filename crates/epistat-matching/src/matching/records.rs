@@ -515,12 +515,12 @@ mod tests {
         assert_eq!(direct.pairs[0].control_id, "near");
         assert_eq!(through_macro.pairs.len(), direct.pairs.len());
         assert_eq!(
-            through_macro.pairs[0].anchor_id(),
-            direct.pairs[0].anchor_id()
+            through_macro.pairs[0].case_id.as_str(),
+            direct.pairs[0].case_id.as_str()
         );
         assert_eq!(
-            through_macro.pairs[0].comparator_id(),
-            direct.pairs[0].comparator_id()
+            through_macro.pairs[0].control_id.as_str(),
+            direct.pairs[0].control_id.as_str()
         );
         assert_eq!(through_macro.matched_cases, direct.matched_cases);
         assert_eq!(through_macro.unmatched_cases, direct.unmatched_cases);

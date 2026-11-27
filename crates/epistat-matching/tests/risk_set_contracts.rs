@@ -106,8 +106,8 @@ fn trimmed_count(c: &[P], alive: bool, scan: bool, policy: CommonSupport) -> (us
             .expect("a valid job"),
     };
     (
-        o.diagnostics.common_support_trimmed_anchors,
-        o.diagnostics.common_support_trimmed_candidates,
+        o.diagnostics.common_support_trimmed_cases,
+        o.diagnostics.common_support_trimmed_controls,
         o.pairs.is_empty() && o.diagnostics.common_support_overlap.is_none(),
     )
 }
@@ -251,13 +251,13 @@ fn tied_cases_are_not_each_others_controls_and_without_replacement_is_distinct()
         let by: BTreeMap<&str, &P> = c.iter().map(|p| (p.id.as_str(), p)).collect();
         let mut seen = BTreeSet::new();
         for pair in &o.pairs {
-            let a = by[pair.anchor_id()];
-            let k = by[pair.comparator_id()];
+            let a = by[pair.case_id.as_str()];
+            let k = by[pair.control_id.as_str()];
             let d = a.event.unwrap();
             assert!(k.entry.is_none_or(|e| e <= d));
             assert!(k.event.is_none_or(|e| e > d));
             assert!(
-                seen.insert(pair.comparator_id().to_string()),
+                seen.insert(pair.control_id.as_str().to_string()),
                 "control reused"
             );
         }
@@ -288,7 +288,7 @@ fn wide_scan_is_the_same_on_one_and_many_threads() {
             .expect("a valid job")
             .pairs
             .iter()
-            .map(|p| format!("{}>{}", p.anchor_id(), p.comparator_id()))
+            .map(|p| format!("{}>{}", p.case_id.as_str(), p.control_id.as_str()))
             .collect::<Vec<_>>()
     };
     let pool = |t| {
@@ -420,13 +420,13 @@ fn trial_reuse_options() {
     for t in &once.trials {
         for p in &t.outcome.pairs {
             let at = *first_trial
-                .entry(p.comparator_id().to_string())
+                .entry(p.control_id.as_str().to_string())
                 .or_insert(t.period);
             assert_eq!(
                 at,
                 t.period,
                 "{} served in trials {at} and {}",
-                p.comparator_id(),
+                p.control_id.as_str(),
                 t.period
             );
         }

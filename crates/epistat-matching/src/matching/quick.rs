@@ -116,12 +116,14 @@ pub enum SeedMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct QuickMatchOptions {
-    /// Fewest anchors in a subclass, at least 1.
-    pub min_anchors: usize,
-    /// Fewest candidates in a subclass, at least 1.
-    pub min_candidates: usize,
+    /// Fewest cases in a subclass, at least 1. `min_anchors` in 0.2.
+    #[serde(alias = "min_anchors")]
+    pub min_cases: usize,
+    /// Fewest controls in a subclass, at least 1. `min_candidates` in 0.2.
+    #[serde(alias = "min_candidates")]
+    pub min_controls: usize,
     /// Fewest units in a subclass, `size_constraint` of `quickmatch()`. The
-    /// default is `min_anchors + min_candidates`.
+    /// default is `min_cases + min_controls`.
     pub size: Option<usize>,
     /// Widest distance between two units of a subclass, `caliper` of
     /// `quickmatch()` in the units of the distance.
@@ -133,8 +135,8 @@ pub struct QuickMatchOptions {
 impl Default for QuickMatchOptions {
     fn default() -> Self {
         Self {
-            min_anchors: 1,
-            min_candidates: 1,
+            min_cases: 1,
+            min_controls: 1,
             size: None,
             caliper: None,
             seed_method: SeedMethod::default(),
@@ -626,10 +628,10 @@ pub fn quick_clusters(
     if let Some(bad) = points.iter().position(|value| !value.is_finite()) {
         return Err(Error::NonFiniteCoordinate { unit: bad / dim });
     }
-    if options.min_anchors == 0 || options.min_candidates == 0 {
+    if options.min_cases == 0 || options.min_controls == 0 {
         return Err(Error::SubclassMinimum);
     }
-    let minimum_total = options.min_anchors + options.min_candidates;
+    let minimum_total = options.min_cases + options.min_controls;
     let size = options.size.unwrap_or(minimum_total);
     if size < minimum_total {
         return Err(Error::SizeBelowMinimums);
@@ -640,11 +642,11 @@ pub fn quick_clusters(
         return Err(Error::InvalidCaliper);
     }
     let anchors = anchor.iter().filter(|flag| **flag).count();
-    if anchors < options.min_anchors || n - anchors < options.min_candidates || n < size {
+    if anchors < options.min_cases || n - anchors < options.min_controls || n < size {
         return Err(Error::TooFewUnits { stratum: None });
     }
     let constraints = Constraints {
-        minimum: [options.min_anchors, options.min_candidates],
+        minimum: [options.min_cases, options.min_controls],
         size,
         radius: options.caliper.map(|caliper| caliper / 2.0),
     };
@@ -798,7 +800,7 @@ where
             &candidates[position - anchors.len()]
         }
     };
-    let is_anchor = |position: usize| position < anchors.len();
+    let is_case = |position: usize| position < anchors.len();
 
     let (strata, stratum_count): (Vec<u32>, usize) = if exact.is_empty() {
         (vec![0; unit_count], 1)
@@ -832,8 +834,8 @@ where
         .map(|stratum| {
             let positions = &order[start[stratum]..start[stratum + 1]];
             // Anchors come first in position order.
-            let both = positions.first().is_some_and(|p| is_anchor(*p))
-                && positions.last().is_some_and(|p| !is_anchor(*p));
+            let both = positions.first().is_some_and(|p| is_case(*p))
+                && positions.last().is_some_and(|p| !is_case(*p));
             if !both {
                 return Ok(StratumLabels::Absent);
             }
@@ -847,7 +849,7 @@ where
                     })?;
                 points.extend_from_slice(point);
             }
-            let flags: Vec<bool> = positions.iter().map(|p| is_anchor(*p)).collect();
+            let flags: Vec<bool> = positions.iter().map(|p| is_case(*p)).collect();
             match quick_clusters(&points, dimension, &flags, options) {
                 Ok(labels) => Ok(StratumLabels::Labels(labels)),
                 // With several strata, one with too few units or in which no
@@ -908,7 +910,7 @@ where
             candidate_counts.push(0);
         }
         let numbered = *slot as usize;
-        if is_anchor(position) {
+        if is_case(position) {
             anchor_counts[numbered] += 1;
         } else {
             candidate_counts[numbered] += 1;
@@ -920,7 +922,7 @@ where
     }
     Ok(SubclassedUnits {
         ids: unit_ids(anchors, candidates),
-        anchor_count: anchors.len(),
+        case_count: anchors.len(),
         subclass,
         subclasses: build_subclass_summaries(&anchor_counts, &candidate_counts),
         trimmed: crate::TrimmedUnits::default(),
@@ -970,9 +972,9 @@ mod tests {
         let count = labels.iter().flatten().max().map_or(0, |m| m + 1);
         let mut anchors = vec![0; count];
         let mut candidates = vec![0; count];
-        for (label, is_anchor) in labels.iter().zip(anchor) {
+        for (label, is_case) in labels.iter().zip(anchor) {
             if let Some(label) = label {
-                if *is_anchor {
+                if *is_case {
                     anchors[*label] += 1;
                 } else {
                     candidates[*label] += 1;
@@ -981,10 +983,10 @@ mod tests {
         }
         let size = options
             .size
-            .unwrap_or(options.min_anchors + options.min_candidates);
+            .unwrap_or(options.min_cases + options.min_controls);
         for subclass in 0..count {
-            assert!(anchors[subclass] >= options.min_anchors);
-            assert!(candidates[subclass] >= options.min_candidates);
+            assert!(anchors[subclass] >= options.min_cases);
+            assert!(candidates[subclass] >= options.min_controls);
             assert!(anchors[subclass] + candidates[subclass] >= size);
         }
     }
@@ -1097,7 +1099,7 @@ mod tests {
             let mut anchor_counts: Vec<usize> = Vec::new();
             let mut candidate_counts: Vec<usize> = Vec::new();
             let mut subclass_of: Vec<Option<usize>> = Vec::with_capacity(units.len());
-            for (key, (_, is_anchor)) in global.iter().zip(&units) {
+            for (key, (_, is_case)) in global.iter().zip(&units) {
                 let subclass = key.map(|key| {
                     let next = anchor_counts.len();
                     let subclass = *number.entry(key).or_insert(next);
@@ -1105,7 +1107,7 @@ mod tests {
                         anchor_counts.push(0);
                         candidate_counts.push(0);
                     }
-                    if *is_anchor {
+                    if *is_case {
                         anchor_counts[subclass] += 1;
                     } else {
                         candidate_counts[subclass] += 1;
@@ -1122,7 +1124,7 @@ mod tests {
                 subclasses,
                 ..Maps::default()
             };
-            for ((row, is_anchor), subclass) in units.iter().zip(&subclass_of) {
+            for ((row, is_case), subclass) in units.iter().zip(&subclass_of) {
                 let id = row.id().to_string();
                 let Some(subclass) = subclass else {
                     outcome.dropped_ids.push(id);
@@ -1139,7 +1141,7 @@ mod tests {
                 ] {
                     weights.insert(
                         id.clone(),
-                        subclass_weight_for_estimand(estimand, share, *is_anchor),
+                        subclass_weight_for_estimand(estimand, share, *is_case),
                     );
                 }
                 outcome.assignments.insert(id, *subclass);
@@ -1190,8 +1192,8 @@ mod tests {
             for options in [
                 QuickMatchOptions::default(),
                 QuickMatchOptions {
-                    min_anchors: 2,
-                    min_candidates: 1,
+                    min_cases: 2,
+                    min_controls: 1,
                     caliper: Some(1.5),
                     seed_method: SeedMethod::Lexical,
                     ..QuickMatchOptions::default()
@@ -1230,10 +1232,10 @@ mod tests {
         let date = chrono::NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid test date");
         let (mut anchors, mut candidates) = (Vec::new(), Vec::new());
         let mut points = HashMap::new();
-        for (group, anchor_count, candidate_count) in groups {
+        for (group, case_count, control_count) in groups {
             for (prefix, count, list) in [
-                ("a", *anchor_count, &mut anchors),
-                ("c", *candidate_count, &mut candidates),
+                ("a", *case_count, &mut anchors),
+                ("c", *control_count, &mut candidates),
             ] {
                 for i in 0..count {
                     let id = format!("{prefix}{group}{i}");
@@ -1252,7 +1254,7 @@ mod tests {
         let (anchors, candidates, points) = grouped(&[("x", 5, 5), ("y", 1, 0), ("z", 0, 1)]);
         let lookup = |row: &crate::types::BaseRecord| points.get(row.id()).map(Vec::as_slice);
         let options = QuickMatchOptions {
-            min_anchors: 2,
+            min_cases: 2,
             ..QuickMatchOptions::default()
         };
         let out = quick_match_subclasses(&anchors, &candidates, lookup, 1, &["g"], &options)
@@ -1295,12 +1297,11 @@ mod tests {
                 SeedMethod::Lexical,
             ] {
                 let (points, anchor) = sample(400, dim, 7 + dim as u64);
-                for (min_anchors, min_candidates, size) in
-                    [(1, 1, None), (1, 2, None), (2, 3, Some(7))]
+                for (min_cases, min_controls, size) in [(1, 1, None), (1, 2, None), (2, 3, Some(7))]
                 {
                     let options = QuickMatchOptions {
-                        min_anchors,
-                        min_candidates,
+                        min_cases,
+                        min_controls,
                         size,
                         caliper: None,
                         seed_method: method,
@@ -1386,7 +1387,7 @@ mod tests {
             Error::TooFewUnits { stratum: None }
         );
         let zero = QuickMatchOptions {
-            min_candidates: 0,
+            min_controls: 0,
             ..options
         };
         assert_eq!(

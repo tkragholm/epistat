@@ -36,6 +36,7 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::MatchWeightMethod;
 use epistat_matching::prelude::*;
 use epistat_matching::{
     BalanceRecord, BalanceReport, BalanceReportOptions, CovariateValue, Estimand, MatchDiagnostics,
@@ -499,13 +500,22 @@ fn unit_weights_and_sample_sizes_agree_with_matchit() {
                     };
                     (split(true), split(false))
                 } else {
-                    let weights = outcome(&fit.pairs, estimand(&fit.estimand))
-                        .match_weights_for_realized_estimand();
+                    let matched = outcome(&fit.pairs, estimand(&fit.estimand));
+                    let weights = matched.match_weights(MatchWeightMethod::for_estimand(
+                        matched.diagnostics.realized_estimand,
+                    ));
+                    let groups: [HashMap<String, f64>; 2] = [
+                        weights.cases().map(|(id, w)| (id.to_string(), w)).collect(),
+                        weights
+                            .controls()
+                            .map(|(id, w)| (id.to_string(), w))
+                            .collect(),
+                    ];
                     // MatchIt scales the weights of the matched controls (ATT) or
                     // treated units (ATC) so that they sum to the size of the other
                     // group. The scale is constant within a group and drops out of
                     // every statistic, so the weights are compared up to it.
-                    for group in [&weights.anchor, &weights.candidate] {
+                    for group in &groups {
                         let ours: f64 = group.values().sum();
                         let theirs: f64 = group.keys().map(|id| r_weight(id)).sum();
                         for (id, weight) in group {
@@ -517,15 +527,9 @@ fn unit_weights_and_sample_sizes_agree_with_matchit() {
                         }
                     }
                     let positive = fit.weights.iter().filter(|w| **w > 0.0).count();
-                    assert_eq!(
-                        weights.anchor.len() + weights.candidate.len(),
-                        positive,
-                        "{label}"
-                    );
-                    (
-                        weights.anchor.into_iter().collect(),
-                        weights.candidate.into_iter().collect(),
-                    )
+                    assert_eq!(groups[0].len() + groups[1].len(), positive, "{label}");
+                    let [cases, controls] = groups;
+                    (cases, controls)
                 };
             let n_treated = treat.iter().filter(|t| **t).count();
             let n_control = treat.len() - n_treated;

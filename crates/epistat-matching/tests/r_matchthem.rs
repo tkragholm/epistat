@@ -122,8 +122,8 @@ fn matches_and_pooled_effects_agree_with_matchthem() {
     let sets: Vec<ImputedSet<'_, BalanceRecord>> = prepared
         .iter()
         .map(|(a, c)| ImputedSet {
-            anchors: a,
-            candidates: c,
+            cases: a,
+            controls: c,
         })
         .collect();
     let units: Vec<UnitData> = r
@@ -164,8 +164,8 @@ fn matches_and_pooled_effects_agree_with_matchthem() {
                 .iter()
                 .map(|p| {
                     (
-                        p.anchor_id().parse().unwrap(),
-                        p.comparator_id().parse().unwrap(),
+                        p.case_id.as_str().parse().unwrap(),
+                        p.control_id.as_str().parse().unwrap(),
                     )
                 })
                 .collect();
@@ -301,8 +301,8 @@ fn input_errors_are_reported() {
     let sets: Vec<ImputedSet<'_, BalanceRecord>> = prepared
         .iter()
         .map(|(a, c)| ImputedSet {
-            anchors: a,
-            candidates: c,
+            cases: a,
+            controls: c,
         })
         .collect();
     let criteria = MatchingCriteria::builder().match_ratio(1).build();
@@ -331,8 +331,8 @@ fn input_errors_are_reported() {
     let short = [
         sets[0],
         ImputedSet {
-            anchors: &prepared[1].0[1..],
-            candidates: &prepared[1].1,
+            cases: &prepared[1].0[1..],
+            controls: &prepared[1].1,
         },
     ];
     assert!(matches!(

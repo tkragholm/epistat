@@ -96,24 +96,24 @@ pub fn exposure_density_sets<R: RoleIndexedRecord>(
     let mut counts: RapidHashMap<&str, usize> = RapidHashMap::default();
     for pair in &outcome.pairs {
         let inconsistent = || Error::InconsistentPair {
-            case_id: pair.anchor_id().to_string(),
-            control_id: pair.comparator_id().to_string(),
+            case_id: pair.case_id.as_str().to_string(),
+            control_id: pair.control_id.as_str().to_string(),
         };
         let exposed = position
-            .get(pair.anchor_id())
+            .get(pair.case_id.as_str())
             .and_then(|idx| cohort[*idx].event_date())
             .ok_or_else(inconsistent)?;
         let control = position
-            .get(pair.comparator_id())
+            .get(pair.control_id.as_str())
             .map(|idx| &cohort[*idx])
             .ok_or_else(inconsistent)?;
         controls.push(ExposureDensityControl {
-            exposed_id: pair.anchor_id().to_string(),
-            control_id: pair.comparator_id().to_string(),
+            exposed_id: pair.case_id.as_str().to_string(),
+            control_id: pair.control_id.as_str().to_string(),
             index_date: exposed,
             exposure_date: control.event_date(),
         });
-        *counts.entry(pair.anchor_id()).or_insert(0) += 1;
+        *counts.entry(pair.case_id.as_str()).or_insert(0) += 1;
     }
     let mut exposed: Vec<ExposedPerson> = counts
         .into_iter()

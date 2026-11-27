@@ -1052,7 +1052,7 @@ mod tests {
         let units = UnitData::new(vec!["a".into()], vec![true], vec![1.0]).unwrap();
         let data = MatchData {
             id: vec!["b".into()],
-            role: vec![crate::UnitRole::Anchor],
+            role: vec![crate::UnitRole::Case],
             weight: vec![1.0],
             subclass: vec![Some(1)],
         };

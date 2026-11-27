@@ -326,7 +326,7 @@ fn calendar_risk_sets_equal_ccwc() {
     let recs = records_with_entry(&reference.people);
     let outcome = run_calendar(&reference, &recs, 10_000, true, None);
     assert_eq!(
-        outcome.diagnostics.total_anchors_evaluated,
+        outcome.diagnostics.total_cases_evaluated,
         reference.calendar.cases.len(),
         "the cases the age limit leaves"
     );
@@ -368,7 +368,7 @@ fn age_scale_risk_sets_equal_ccwc() {
     let recs = records(&reference.people);
     let outcome = run_age(&reference, &recs, 10_000);
     assert_eq!(
-        outcome.diagnostics.total_anchors_evaluated,
+        outcome.diagnostics.total_cases_evaluated,
         reference.age.cases.len()
     );
     assert_same_sets(&outcome, &reference.age, "age");
@@ -482,8 +482,8 @@ fn shortfall_counts_follow_ccwc_for_cases_alone_at_their_time() {
     let outcome = run_calendar(&reference, &recs, k, true, Some(1));
     let none = sizes.iter().filter(|m| **m == 0).count();
     let below = sizes.iter().filter(|m| **m > 0 && **m < k).count();
-    assert_eq!(outcome.diagnostics.anchors_with_no_candidates, none);
-    assert_eq!(outcome.diagnostics.anchors_below_required_ratio, below);
+    assert_eq!(outcome.diagnostics.cases_with_no_controls, none);
+    assert_eq!(outcome.diagnostics.cases_below_required_ratio, below);
     assert_eq!(none, ccwc_nomatch);
 
     let got = by_case(&outcome);
@@ -551,10 +551,7 @@ fn replacement_and_future_cases() {
         "a future case serves as a control without replacement too"
     );
     // The engine's default can leave cases short that replacement would fill.
-    assert!(
-        without.diagnostics.anchors_with_no_candidates
-            >= with.diagnostics.anchors_with_no_candidates
-    );
+    assert!(without.diagnostics.cases_with_no_controls >= with.diagnostics.cases_with_no_controls);
 }
 
 /// Cases tied at one time are in neither's risk set. `ccwc` makes one set for
