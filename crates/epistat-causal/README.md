@@ -57,8 +57,11 @@ needs the Cox and censoring machinery of that crate.
 Case weights and clusters are supported. The estimators of a contrast return
 the two means with their difference and ratio, and the influence functions of
 both means on the per-unit scale; the standard errors are those of
-`epistat_inference::Influence::variance`, with the factor `G / (G - 1)` for `G`
-clusters and every person its own cluster without clusters. Results do not
+`epistat_inference::Influence::variance` under the cluster rule of each
+estimator's R reference, every person its own cluster without clusters. AIPW,
+the balancing weights and the survival TMLE have the `n` divisor without
+clusters and the factor `G / (G - 1)` for `G` clusters; TMLE has `tmle`'s
+`n - 1` divisor and the factor `G / (G - 1)`. Results do not
 depend on the number of threads, and are checked against `riskRegression::ate` and against
 estimators written out by hand in R. TMLE is checked against `tmle` with its
 learners replaced by `glm`, and its survival form against the estimator written

@@ -33,12 +33,15 @@
 //!
 //! [`Aipw::influence`] holds the influence functions of the two means on the
 //! per-unit scale, each person a unit coded by its row number. Every variance
-//! is `Influence::variance` of them under `ClusterRule::SmallSample`: with the
-//! influences of a cluster summed first, centred, and the factor `G / (G - 1)`
-//! for `G` clusters, every person its own cluster when there are none, so that
-//! without clusters the variance of a mean is `sd(IF)^2 / n` with the `n - 1`
-//! divisor, as `riskRegression::ate` reports it. Fewer than two clusters leave
-//! the standard errors `None`.
+//! is `Influence::variance` of them, with the influences of a cluster summed
+//! first and centred, every person its own cluster when there are none. The
+//! rule follows the R references. Without clusters it is
+//! `ClusterRule::NoSmallSample`, the variance of a mean `sum IF^2 / n^2` with
+//! the `n` divisor, as `riskRegression::ate` reports it (the standard error
+//! `sqrt(sum iid^2)` of its influence functions on the dfbeta scale). With
+//! clusters it is `ClusterRule::SmallSample`, the factor `G / (G - 1)` for `G`
+//! clusters, as `sandwich::vcovCL` and `WeightIt` apply it. Fewer than two
+//! clusters leave the standard errors `None`.
 //!
 //! [`Variance::Efficient`], from [`aipw`], is the variance of the efficient
 //! estimator when both models are right, and the right one for predictions
@@ -91,7 +94,8 @@ use epistat_linalg::{Attempt, Factor, Mat, MatRef, weighted_gram};
 use crate::error::{Error, Result};
 use crate::shared::{
     case_weights, check_arms, check_design, check_estimand, check_finite, check_len,
-    check_separation, clusters, compensated, contrast, fit_glm, glm_data, influence, unit_codes,
+    check_separation, clusters, compensated, contrast, fit_glm, glm_data, influence, rule,
+    unit_codes,
 };
 
 /// Which variance an estimate carries.
@@ -159,9 +163,11 @@ pub struct Aipw {
     /// the p-value of a ratio of 1; `None` when `mean0` is 0.
     pub contrast: Contrast,
     /// The influence functions of `mean1` (column 0) and `mean0` (column 1),
-    /// per person on the per-unit scale, the units the row numbers. Their
-    /// `variance` with the clusters `Clusters::per_unit(rows, cluster)` (or
-    /// none) reproduces the standard errors.
+    /// per person on the per-unit scale, the units the row numbers, with the
+    /// rule of the standard errors: `NoSmallSample` without clusters,
+    /// `SmallSample` with them. Their `variance` with the clusters
+    /// `Clusters::per_unit(rows, cluster)` (or none) reproduces the standard
+    /// errors.
     pub influence: Influence,
     /// The variance of the estimates.
     pub variance: Variance,
@@ -280,7 +286,11 @@ fn finish(
     opts: &AipwOptions,
 ) -> Result<Aipw> {
     let n = c.omega.len();
-    let influence = influence([&dfbeta[0], &dfbeta[1]], unit_codes(0..n)?)?;
+    let influence = influence(
+        [&dfbeta[0], &dfbeta[1]],
+        unit_codes(0..n)?,
+        rule(cluster.is_some()),
+    )?;
     let clusters = clusters(cluster, n)?;
     let contrast = contrast(c.theta, &influence, clusters.as_ref(), opts.level)?;
     Ok(Aipw {

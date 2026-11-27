@@ -15,14 +15,15 @@
 //! every reported number `v`. Later rounds take their clever covariate from the
 //! earlier ones, which `L` includes.
 //!
-//! The R estimator's variances follow the earlier rule, the sum of squares of
-//! the dfbeta influences (of the cluster sums, with `G / (G - 1)`); its
-//! standard errors are converted to the estimator's centred rule with
-//! `G / (G - 1)` and every person its own cluster without clusters by
-//! `rule::rule_ratio`
-//! (see there). Its stopping rule uses the earlier standard error too, which
-//! differs from the estimator's by less than the margin of either rule, as the
-//! equal number of rounds shows.
+//! The R estimator's variances are the sums of squares of the dfbeta
+//! influences, `survtmle`'s rule, and with clusters `G / (G - 1)` times those
+//! of the cluster sums. That is the estimator's rule (`NoSmallSample` without
+//! clusters, `SmallSample` with them) but for the centring. The influence
+//! function has the mean of the targeting score, so the reference's standard
+//! errors are converted by the centring ratio of `rule::conversion` (see there
+//! for the derivation). Its stopping rule uses the uncentred standard error,
+//! which differs from the estimator's by less than the margin of either rule,
+//! as the equal number of rounds shows.
 
 use epistat_causal::tmle::PropensityBound;
 use epistat_causal::tmle::survival::{SurvivalInput, SurvivalOptions, tmle_survival};
@@ -136,7 +137,7 @@ fn matches_the_hand_written_estimator() {
             let want = if k < 4 {
                 s.numbers[k]
             } else {
-                let r = rule::rule_ratio(&got.influence, combinations[k - 4], s.cluster.as_deref());
+                let r = rule::conversion(&got.influence, combinations[k - 4], s.cluster.as_deref());
                 s.numbers[k] * r.sqrt()
             };
             let tol = 8.0 * EPS * s.lipschitz[k] + 16.0 * cells * EPS * want.abs().max(1.0);

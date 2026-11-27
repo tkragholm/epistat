@@ -91,17 +91,19 @@
 //!
 //! # Variance
 //!
-//! The variance of the efficient influence function with the fitted models taken
-//! as given, from [`Tmle::influence`] as in [`crate::aipw`]: the influences of
-//! the rows of a cluster summed first, centred, with the factor `G / (G - 1)`
-//! for `G` clusters, every person used its own cluster when there are none.
-//! Without clusters this is `tmle`'s `var(n IF) / n` over the persons used.
-//! With clusters `tmle` reports the variance of the cluster means of `n IF`
-//! over `G`, which differs for clusters of unequal size by the weighting of
-//! the clusters. The ratio has the delta-method standard error `(IF_1 - ratio
-//! IF_0) / mean_0`. Clusters without a person used do not count. For the
-//! one-step path the influence function does not have mean 0 (see
-//! [`Tmle::score`]), and the centring removes its mean.
+//! The variance of the efficient influence function with the fitted models
+//! taken as given, from [`Tmle::influence`]: the influences of the rows of a
+//! cluster summed first, centred, with the factor `G / (G - 1)` for `G`
+//! clusters (`ClusterRule::SmallSample`), every person used its own cluster
+//! when there are none. The rule is `tmle`'s, whose `var.psi` is `var(IC) /
+//! n.id` with R's `n - 1` divisor. Without clusters this is `var(n IF) / n`
+//! over the persons used. With clusters `tmle` reports the variance of the
+//! cluster means of `n IF` over `G`, the same for clusters of equal size and
+//! different for clusters of unequal size by the weighting of the clusters. The
+//! ratio has the delta-method standard error `(IF_1 - ratio IF_0) / mean_0`.
+//! Clusters without a person used do not count. For the one-step path the
+//! influence function does not have mean 0 (see [`Tmle::score`]), and the
+//! centring removes its mean.
 //!
 //! [`Tmle::initial`] is the plug-in estimate from the predictions before
 //! targeting: the weighted means of the bounded predictions for the effect in
@@ -140,7 +142,7 @@ pub mod survival;
 
 use epistat_core::{Contrast, Estimand, Level};
 use epistat_glm::{Family, Fit, Glm, Link};
-use epistat_inference::Influence;
+use epistat_inference::{ClusterRule, Influence};
 use epistat_linalg::{Mat, MatRef};
 
 use crate::aipw::{AipwInput, GlmInput, fitted_mean};
@@ -295,8 +297,9 @@ pub struct Tmle {
     pub initial: PlugIn,
     /// The influence functions of `mean1` (column 0) and `mean0` (column 1) on
     /// the per-unit scale, over the persons used, whose row numbers are the
-    /// units. Their `variance` with the clusters `Clusters::per_unit(rows,
-    /// cluster)` (or none) reproduces the standard errors.
+    /// units, with the rule `SmallSample`. Their `variance` with the clusters
+    /// `Clusters::per_unit(rows, cluster)` (or none) reproduces the standard
+    /// errors.
     pub influence: Influence,
     /// The targeted prediction `Q*_1` of each person on the scale of the
     /// outcome, `None` for persons not used.
@@ -925,7 +928,11 @@ fn finish(
     let pick = |v: &[f64]| -> Vec<f64> { rows.iter().map(|&i| v[i]).collect() };
     let (d1, d0) = (pick(dfbeta[0]), pick(dfbeta[1]));
     let score = compensated((0..n).map(|i| dfbeta[0][i] - dfbeta[1][i]));
-    let influence = influence([&d1, &d0], unit_codes(rows.iter().copied())?)?;
+    let influence = influence(
+        [&d1, &d0],
+        unit_codes(rows.iter().copied())?,
+        ClusterRule::SmallSample,
+    )?;
     let clusters = clusters(p.cluster, n)?;
     let contrast = contrast(values, &influence, clusters.as_ref(), opts.level)?;
     Ok(Tmle {

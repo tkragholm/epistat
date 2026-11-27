@@ -397,10 +397,10 @@ fn influence_covariance(ij: &Ij, weight: &[f64], cluster: Option<&[f64]>) -> Vec
     // leaves out the factor s_i that the weight puts on the person's score.
     let col = |a: usize, i: usize| weight[i] * ij.influence[a * n + i];
     let mut out = vec![0.0; ij.k * ij.k];
-    // The estimator's rule: G / (G - 1) for G clusters, every person its own
-    // cluster without clusters, so n / (n - 1) there.
+    // The estimator's rule, WeightIt's: G / (G - 1) for G clusters and no
+    // factor without clusters.
     let (labels, factor): (Vec<usize>, f64) = match cluster {
-        None => ((0..n).collect(), n as f64 / (n as f64 - 1.0)),
+        None => ((0..n).collect(), 1.0),
         Some(c) => {
             let mut distinct: Vec<i64> = c.iter().map(|&x| x as i64).collect();
             distinct.sort_unstable();

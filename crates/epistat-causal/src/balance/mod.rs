@@ -33,12 +33,14 @@
 //! IF_i = H^-1 ( s_i w_i r_i z_i + B phi_i ),    B = sum_j s_j w_j r_j z_j dlog_j'
 //! ```
 //!
-//! on the dfbeta scale. The variance is `Influence::variance` of `n IF_i`
-//! under `ClusterRule::SmallSample`: the influences of a cluster summed first,
-//! centred, with the factor `G / (G - 1)` for `G` clusters, every person its
-//! own cluster when there are none, which is `sum IF_i IF_i'` times
-//! `n / (n - 1)` up to the centring. Fewer than two clusters leave the variances `None`.
-//! The term `B phi_i` is
+//! on the dfbeta scale. The variance is `Influence::variance` of `n IF_i`:
+//! the influences of a cluster summed first and centred, every person its own
+//! cluster when there are none. The rule is that of `WeightIt`'s M-estimation
+//! variance (`vcov = "asympt"`, WeightIt 2.2.0), which is also the variance of
+//! the infinitesimal jackknife: `ClusterRule::NoSmallSample` without clusters,
+//! `sum IF_i IF_i'` up to the centring, and `ClusterRule::SmallSample` with
+//! them, the factor `G / (G - 1)` for `G` clusters. Fewer than two clusters
+//! leave the variances `None`. The term `B phi_i` is
 //! what the estimation of the weights adds. [`WeightVariance::Fixed`] leaves it
 //! out, which treats the weights as given and, for balancing weights, gives a
 //! variance that is too large when the model is right, since the weights remove
@@ -77,13 +79,13 @@ pub mod cbps;
 pub mod entropy;
 
 use epistat_core::{Contrast, Covariance, Estimand, Level};
-use epistat_inference::{ClusterRule, Influence};
+use epistat_inference::Influence;
 use epistat_linalg::design::independent_columns;
 use epistat_linalg::{Attempt, Mat, MatRef, inverse, weighted_gram, weighted_xtz};
 
 use crate::error::{Error, Result};
 pub(crate) use crate::shared::{case_weights as resolve_weights, check_len, compensated};
-use crate::shared::{check_finite, clusters, contrast, unit_codes};
+use crate::shared::{check_finite, clusters, contrast, rule, unit_codes};
 
 pub use cbps::{Cbps, CbpsInput, CbpsOptions, Identification, cbps};
 pub use entropy::{EntropyInput, EntropyOptions, balance_columns, entropy_balance};
@@ -165,7 +167,9 @@ pub struct WeightedRegression {
     /// The covariance matrix of the coefficients.
     pub covariance: Covariance,
     /// The influence functions of the coefficients, one column each, per
-    /// person on the per-unit scale, the units the row numbers.
+    /// person on the per-unit scale, the units the row numbers, with the rule
+    /// of the covariance: `NoSmallSample` without clusters, `SmallSample`
+    /// with them.
     pub influence: Influence,
     /// Which variance it is.
     pub variance: WeightVariance,
@@ -194,7 +198,9 @@ pub struct MeanDifference {
     /// when `mean0` is 0.
     pub contrast: Contrast,
     /// The influence functions of `mean1` (column 0) and `mean0` (column 1),
-    /// per person on the per-unit scale, the units the row numbers.
+    /// per person on the per-unit scale, the units the row numbers, with the
+    /// rule of the standard errors: `NoSmallSample` without clusters,
+    /// `SmallSample` with them.
     pub influence: Influence,
     /// Which variance it is.
     pub variance: WeightVariance,
@@ -379,14 +385,14 @@ impl BalanceWeights {
     }
 
     /// The influence function of the columns `columns` of a stage, on the
-    /// per-unit scale.
-    fn influence(&self, columns: &[&[f64]]) -> Result<Influence> {
+    /// per-unit scale, with the rule of the module documentation.
+    fn influence(&self, columns: &[&[f64]], clustered: bool) -> Result<Influence> {
         let values: Vec<f64> = columns.iter().flat_map(|c| c.iter().copied()).collect();
         Influence::from_dfbeta(
             values,
             unit_codes(0..self.n())?,
             columns.len(),
-            ClusterRule::SmallSample,
+            rule(clustered),
         )
         .map_err(|e| Error::input(format!("influence function: {e}")))
     }
@@ -409,7 +415,7 @@ impl BalanceWeights {
         let clusters = clusters(cluster, self.n())?;
         let st = self.stage(outcome, design, variance)?;
         let columns: Vec<&[f64]> = st.influence.iter().map(Vec::as_slice).collect();
-        let influence = self.influence(&columns)?;
+        let influence = self.influence(&columns, cluster.is_some())?;
         let covariance = influence
             .variance(clusters.as_ref())
             .map_err(|e| Error::input(format!("influence function: {e}")))?;
@@ -442,7 +448,7 @@ impl BalanceWeights {
             f64::from(u8::from(self.treatment[i] == (j == 1)))
         });
         let st = self.stage(outcome, z.as_ref(), options.variance)?;
-        let influence = self.influence(&[&st.influence[1], &st.influence[0]])?;
+        let influence = self.influence(&[&st.influence[1], &st.influence[0]], cluster.is_some())?;
         let contrast = contrast(
             [st.theta[1], st.theta[0]],
             &influence,

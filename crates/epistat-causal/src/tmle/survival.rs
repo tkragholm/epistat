@@ -47,9 +47,12 @@
 //!
 //! # Variance
 //!
-//! As in [`crate::tmle`], from [`SurvivalTmle::influence`]: the influences of
-//! a cluster summed first, centred, with the factor `G / (G - 1)` for `G`
-//! clusters, every person its own cluster when there are none. The difference
+//! From [`SurvivalTmle::influence`]: the influences of a cluster summed first
+//! and centred, every person its own cluster when there are none. The rule is
+//! `survtmle`'s without clusters, `ClusterRule::NoSmallSample`, whose variance
+//! is `t(IC) IC / n^2` with the `n` divisor (survtmle 1.1.1, the last version
+//! on CRAN, has no clusters), and `ClusterRule::SmallSample`, the factor `G /
+//! (G - 1)` for `G` clusters, with them, as in [`crate::aipw`]. The difference
 //! and the ratio of the risks have the influences `IF_1 - IF_0` and `(IF_1 -
 //! ratio IF_0) / F_0(t)`. The `se_a` of the stopping rule is the same standard
 //! error of the arm's risk at the current hazards, so fewer than two clusters,
@@ -112,7 +115,7 @@ use super::{PlugIn, PropensityBound, fluctuation_coefficient, logit, plogis};
 use crate::error::{Error, Result};
 use crate::shared::{
     case_weights, check_arms, check_len, clusters, compensated, contrast, fit_glm, glm_data,
-    influence, unit_codes,
+    influence, rule, unit_codes,
 };
 
 /// The data and the predictions of [`tmle_survival`]. Column `k - 1` of a
@@ -184,9 +187,10 @@ pub struct SurvivalTmle {
     pub initial: PlugIn,
     /// The influence functions of the risk of the treated (column 0) and of
     /// the controls (column 1) per person on the per-unit scale, the units the
-    /// row numbers. Their `variance` with the clusters
-    /// `Clusters::per_unit(rows, cluster)` (or none) reproduces the standard
-    /// errors.
+    /// row numbers, with the rule of the standard errors: `NoSmallSample`
+    /// without clusters, `SmallSample` with them. Their `variance` with the
+    /// clusters `Clusters::per_unit(rows, cluster)` (or none) reproduces the
+    /// standard errors.
     pub influence: Influence,
     /// The targeting rounds of the treated and of the control arm.
     pub iterations: [usize; 2],
@@ -220,6 +224,7 @@ struct Common<'a> {
     max_iterations: usize,
     units: Vec<u32>,
     clusters: Option<Clusters>,
+    rule: ClusterRule,
 }
 
 fn target_arm(c: &Common<'_>, treated: bool) -> Result<Arm> {
@@ -285,18 +290,13 @@ fn target_arm(c: &Common<'_>, treated: bool) -> Result<Arm> {
         let influence: Vec<f64> = (0..n)
             .map(|i| c.w[i] * (first[i] + s[i * t + t - 1] - psi) / c.total)
             .collect();
-        let se = Influence::from_dfbeta(
-            influence.clone(),
-            c.units.clone(),
-            1,
-            ClusterRule::SmallSample,
-        )
-        .and_then(|f| f.variance(c.clusters.as_ref()))
-        .map_err(|e| Error::input(format!("influence function: {e}")))?
-        .get(0, 0)
-        .ok_or_else(|| Error::input("cluster: the stopping rule needs two clusters"))?
-        .max(0.0)
-        .sqrt();
+        let se = Influence::from_dfbeta(influence.clone(), c.units.clone(), 1, c.rule)
+            .and_then(|f| f.variance(c.clusters.as_ref()))
+            .map_err(|e| Error::input(format!("influence function: {e}")))?
+            .get(0, 0)
+            .ok_or_else(|| Error::input("cluster: the stopping rule needs two clusters"))?
+            .max(0.0)
+            .sqrt();
         let score = compensated((0..n).map(|i| c.w[i] * first[i])) / c.total;
         if score.abs() <= se / rule {
             return Ok(Arm {
@@ -438,6 +438,7 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
         max_iterations: opts.max_iterations,
         units: unit_codes(0..n)?,
         clusters: clusters(input.cluster, n)?,
+        rule: rule(input.cluster.is_some()),
     };
     let n_trimmed = (0..n)
         .filter(|&i| {
@@ -459,7 +460,7 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
         .count();
     let one = target_arm(&common, true)?;
     let zero = target_arm(&common, false)?;
-    let influence = influence([&one.influence, &zero.influence], common.units)?;
+    let influence = influence([&one.influence, &zero.influence], common.units, common.rule)?;
     let contrast = contrast(
         [one.risk, zero.risk],
         &influence,

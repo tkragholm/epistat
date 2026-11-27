@@ -27,16 +27,16 @@
 //! rounding of its refits, `3 * 1e-13 / h` per influence, times `sqrt(n_units V)`
 //! twice.
 //!
-//! # The small-sample factor
+//! # The variance rule
 //!
-//! The references give the variances `sum IF^2`, with clusters `G / (G - 1) sum
-//! S_g^2`, as `riskRegression::ate` does without clusters. The estimators centre
-//! the influences and apply `G / (G - 1)` with every person its own cluster when
-//! there are none, so their unclustered standard errors are the reference's
-//! times `sqrt(n / (n - 1))`, which [`se_factor`] applies to the reference
-//! before the comparison. The influences have mean 0 up to the rounding of
+//! The references give the variances `sum IF^2` of the influences on the
+//! dfbeta scale, as `riskRegression::ate` reports them (`sqrt(sum iid^2)`), and
+//! with clusters `G / (G - 1) sum S_g^2` of the cluster sums. That is the
+//! estimators' rule, `NoSmallSample` without clusters and `SmallSample` with
+//! them, but for the centring. The influences have mean 0 up to the rounding of
 //! their sums, so the centring changes the variance by the square of that
-//! rounding, far below the tolerances.
+//! rounding, far below the tolerances, and the standard errors are compared
+//! as they are.
 
 use epistat_causal::Estimand;
 use epistat_causal::aipw::{Aipw, AipwInput, AipwOptions, GlmInput, Variance, aipw, aipw_glm};
@@ -155,22 +155,11 @@ fn options(s: &Scenario) -> AipwOptions {
 
 /// The deviation of the point estimates and standard errors of `got` from the
 /// reference, in units of their tolerances.
-/// The factor from the reference's standard errors to the estimators': `sqrt(n
-/// / (n - 1))` without clusters, 1 with them.
-fn se_factor(n: usize, clustered: bool) -> f64 {
-    if clustered {
-        1.0
-    } else {
-        (n as f64 / (n as f64 - 1.0)).sqrt()
-    }
-}
-
 fn compare(
     name: &str,
     got: &Aipw,
     want: &Summary,
     point_tol: [f64; 2],
-    factor: f64,
     se_tol: impl Fn(usize, f64) -> f64,
 ) -> f64 {
     let mut worst = 0.0f64;
@@ -211,7 +200,6 @@ fn compare(
     .into_iter()
     .enumerate()
     {
-        let w = w * factor;
         check(what, g, w, se_tol(k, w));
     }
     worst
@@ -250,8 +238,7 @@ fn core_matches_the_hand_written_estimator() {
         // The predictions are R's own, so only the rounding of the sums differs.
         let theta = [s.efficient.mean1, s.efficient.mean0];
         let point = [0, 1].map(|m| 16.0 * n as f64 * EPS * theta[m].abs().max(1.0));
-        let factor = se_factor(n, s.cluster.is_some());
-        let worst = compare(&s.name, &got, &s.efficient, point, factor, |_, w| {
+        let worst = compare(&s.name, &got, &s.efficient, point, |_, w| {
             64.0 * n as f64 * EPS * w.abs().max(1e-3)
         });
         println!(
@@ -300,8 +287,7 @@ fn glm_wrapper_matches_the_jackknife_of_refits() {
             s.stacked_plain.se_diff,
             s.stacked_plain.se_ratio,
         ];
-        let factor = se_factor(n, s.cluster.is_some());
-        let worst = compare(&s.name, &got, &s.stacked, point, factor, |k, w| {
+        let worst = compare(&s.name, &got, &s.stacked, point, |k, w| {
             let v = w * w;
             let truncation = (plain[k] * plain[k] - v).abs();
             let rounding = 3.0 * FIT_TOLERANCE / H * (units * v).sqrt() * 2.0;
@@ -350,10 +336,9 @@ fn core_matches_riskregression_ate() {
     .unwrap();
     // `ate` takes the glm predictions as they are, so the two sides differ by the
     // rounding of the sums only. Its standard errors are those of the influence
-    // functions with the nuisance models taken as known, `sqrt(sum IF^2)`, so
-    // ours are theirs times `sqrt(n / (n - 1))` (see the module documentation).
+    // functions with the nuisance models taken as known, `sqrt(sum IF^2)`, the
+    // estimator's rule without clusters (see the module documentation).
     let k = &rr.known;
-    let f = se_factor(n, false);
     let tol = 64.0 * n as f64 * EPS;
     let mut worst = 0.0f64;
     for (what, g, w) in [
@@ -361,17 +346,17 @@ fn core_matches_riskregression_ate() {
         ("mean0", got.contrast.mean0.estimate, k.mean0),
         ("difference", got.contrast.difference.estimate, k.diff),
         ("ratio", got.contrast.ratio.unwrap().estimate, k.ratio),
-        ("se mean1", got.contrast.mean1.se.unwrap(), f * k.se_mean1),
-        ("se mean0", got.contrast.mean0.se.unwrap(), f * k.se_mean0),
+        ("se mean1", got.contrast.mean1.se.unwrap(), k.se_mean1),
+        ("se mean0", got.contrast.mean0.se.unwrap(), k.se_mean0),
         (
             "se difference",
             got.contrast.difference.se.unwrap(),
-            f * k.se_diff,
+            k.se_diff,
         ),
         (
             "se ratio",
             got.contrast.ratio.unwrap().se.unwrap(),
-            f * k.se_ratio,
+            k.se_ratio,
         ),
     ] {
         let d = (g - w).abs() / (tol * w.abs());

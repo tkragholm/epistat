@@ -159,7 +159,7 @@ fn the_fitted_models_and_the_estimator_agree_with_r() {
             got.tmle.contrast.difference.se.unwrap(),
             ratio.se.unwrap(),
         ];
-        // The reference's standard errors follow the earlier variance rule,
+        // The reference's standard errors do not centre the influences and are
         // converted as in `r_tmle_survival.rs`.
         let combinations = rule::combinations(got.tmle.contrast.mean0.estimate, ratio.estimate);
         for (k, (v, want)) in values.iter().zip(&s.numbers).enumerate() {
@@ -167,7 +167,7 @@ fn the_fitted_models_and_the_estimator_agree_with_r() {
                 *want
             } else {
                 let cluster = input.cluster;
-                want * rule::rule_ratio(&got.tmle.influence, combinations[k - 4], cluster).sqrt()
+                want * rule::conversion(&got.tmle.influence, combinations[k - 4], cluster).sqrt()
             };
             assert!((v - want).abs() < 1e-8, "{}: {v} against {want}", s.name);
         }

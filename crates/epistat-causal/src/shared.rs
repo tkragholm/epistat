@@ -7,15 +7,18 @@
 //! scale, `D_i` with `theta_hat - theta ~ sum_i D_i`, and [`influence`] turns
 //! it into an [`Influence`] on the per-unit scale, `psi_i = n D_i`, with each
 //! person (row) a unit coded by its row number. The variances are those of
-//! `Influence::variance` under [`ClusterRule::SmallSample`]: with `G` clusters,
-//! every person its own when there are none,
+//! `Influence::variance` under the [`ClusterRule`] of the estimator's R
+//! reference: with `G` clusters, every person its own when there are none,
 //!
 //! ```text
-//! V = G / (G - 1) sum_g (S_g - n_g psi_bar)^2 / n^2
+//! V = c sum_g (S_g - n_g psi_bar)^2 / n^2
 //! ```
 //!
-//! with `S_g` the sum of `psi` over cluster `g`. Fewer than two clusters leave
-//! the standard errors `None`.
+//! with `S_g` the sum of `psi` over cluster `g` and `c` the rule's factor.
+//! [`rule`] gives the rule of the references that have the `n` divisor
+//! without clusters and `G / (G - 1)` with them (`riskRegression::ate`,
+//! `WeightIt`'s M-estimation variance, `survtmle`). Fewer than two clusters
+//! leave the standard errors `None`.
 
 use epistat_core::{Contrast, Estimand, Estimate, Interval, Level, Scale};
 use epistat_glm::{Fit, Glm, GlmData};
@@ -187,15 +190,25 @@ pub(crate) fn clusters(cluster: Option<&[u32]>, n: usize) -> Result<Option<Clust
         .map_err(|e| inference_error(&e))
 }
 
-/// The influence function of the two means on the per-unit scale, from the
-/// values `d[0]` of mean 1 and `d[1]` of mean 0 on the dfbeta scale over the
-/// persons `units`.
-pub(crate) fn influence(d: [&[f64]; 2], units: Vec<u32>) -> Result<Influence> {
+/// The rule of a reference with the `n` divisor without clusters and the
+/// factor `G / (G - 1)` with them: `NoSmallSample` without clusters and
+/// `SmallSample` with them.
+pub(crate) fn rule(clustered: bool) -> ClusterRule {
+    if clustered {
+        ClusterRule::SmallSample
+    } else {
+        ClusterRule::NoSmallSample
+    }
+}
+
+/// The influence function of the two means on the per-unit scale under
+/// `rule`, from the values `d[0]` of mean 1 and `d[1]` of mean 0 on the dfbeta
+/// scale over the persons `units`.
+pub(crate) fn influence(d: [&[f64]; 2], units: Vec<u32>, rule: ClusterRule) -> Result<Influence> {
     let mut values = Vec::with_capacity(2 * units.len());
     values.extend_from_slice(d[0]);
     values.extend_from_slice(d[1]);
-    Influence::from_dfbeta(values, units, 2, ClusterRule::SmallSample)
-        .map_err(|e| inference_error(&e))
+    Influence::from_dfbeta(values, units, 2, rule).map_err(|e| inference_error(&e))
 }
 
 /// The variance of `influence`, which has one column.

@@ -33,10 +33,14 @@
 //! population is an [`Estimand`]: the ATE, ATT or ATC. They also return the
 //! [`Influence`] function of the two means on the per-unit scale, `theta_hat -
 //! theta ~ sum(psi_i) / n`, each person a unit coded by its row number, with
-//! which the standard errors were computed (`Influence::variance` under the
-//! small-sample rule `G / (G - 1)`, every person its own cluster without
-//! clusters), so that a caller can form the variance of any other combination
-//! of the two means.
+//! which the standard errors were computed, so that a caller can form the
+//! variance of any other combination of the two means. The [`ClusterRule`]
+//! of each estimator is its R reference's and is stored on the influence
+//! function: [`aipw`] (`riskRegression::ate`), [`balance`] (`WeightIt`) and
+//! [`tmle::survival`] (`survtmle`) have the `n` divisor without clusters,
+//! `NoSmallSample`, and the factor `G / (G - 1)` with them, `SmallSample`;
+//! [`tmle`] has `tmle`'s `n - 1` divisor, `SmallSample`, with and without
+//! clusters.
 //!
 //! Results do not depend on the number of threads.
 #![warn(missing_docs)]

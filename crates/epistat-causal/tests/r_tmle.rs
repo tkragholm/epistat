@@ -23,15 +23,22 @@
 //!
 //! # The variance rule
 //!
-//! The hand-written estimator reports the variances `sum D^2` of the influences
-//! `D` on the dfbeta scale over the persons used, and with clusters
-//! `G / (G - 1) sum S_g^2` of the cluster sums. The estimators centre the
-//! influences and apply `G / (G - 1)` with every person used its own cluster
-//! when there are none. The two rules differ by the factor `n / (n - 1)` without clusters and
-//! by the centring, which for the one-step path is not negligible: its
-//! influence function has the mean `Tmle::score`. `rule::rule_ratio` gives the
-//! ratio of the two rules on the estimator's own influence function, and the
-//! reference's standard error is multiplied by its square root.
+//! The estimators have `tmle`'s rule, `ClusterRule::SmallSample`: `tmle`
+//! reports `var(IC) / n.id`, centred with the `n - 1` divisor, and with
+//! clusters the same of the cluster means of `IC`, which equals the
+//! estimator's for clusters of equal size. Against a `tmle` run the variance
+//! of the difference is therefore the reported one where the persons used
+//! fill every cluster equally (or there are no clusters), and otherwise
+//! `tmle`'s formula on the estimator's influence function.
+//!
+//! The hand-written estimator reports the variances `sum D^2` of the
+//! influences `D` on the dfbeta scale over the persons used, and with clusters
+//! `G / (G - 1) sum S_g^2` of the cluster sums. The two rules differ by the
+//! factor `m / (m - 1)` without clusters, for `m` persons used, and by the
+//! centring, which for the one-step path is not negligible: its influence
+//! function has the mean `Tmle::score`. The reference's standard error is
+//! multiplied by the square root of `rule::conversion`, the exact ratio of the
+//! two rules derived there.
 
 use epistat_causal::Estimand;
 use epistat_causal::aipw::{AipwInput, GlmInput};
@@ -198,6 +205,21 @@ fn tmle_variance(r: &Tmle, used: &[bool], cluster: Option<&[u32]>) -> f64 {
     values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (k - 1.0) / k
 }
 
+/// Whether the persons used fill every cluster with the same number, or there
+/// are no clusters.
+fn equal_clusters(used: &[bool], cluster: Option<&[u32]>) -> bool {
+    let Some(c) = cluster else {
+        return true;
+    };
+    let mut sizes = std::collections::BTreeMap::<u32, usize>::new();
+    for (i, _) in used.iter().enumerate().filter(|(_, u)| **u) {
+        *sizes.entry(c[i]).or_default() += 1;
+    }
+    let mut it = sizes.values();
+    let first = it.next();
+    it.all(|v| Some(v) == first)
+}
+
 struct Tolerances<'a> {
     s: &'a Scenario,
     n: usize,
@@ -256,7 +278,7 @@ fn compare(s: &Scenario, got: &Tmle, t: usize, tol: &Tolerances<'_>, worst: &mut
         let want = if j < 4 {
             s.numbers[k]
         } else {
-            let r = rule::rule_ratio(&got.influence, combinations[j - 4], s.cluster.as_deref());
+            let r = rule::conversion(&got.influence, combinations[j - 4], s.cluster.as_deref());
             s.numbers[k] * r.sqrt()
         };
         check(&name, label, g, want, tol.of(k), worst);
@@ -294,7 +316,11 @@ fn compare_tmle(
 ) {
     let name = format!("{} {:?} against tmle", s.name, TARGETS[t]);
     let used: Vec<bool> = got.targeted1.iter().map(Option::is_some).collect();
-    let variance = tmle_variance(got, &used, s.cluster.as_deref());
+    let variance = if equal_clusters(&used, s.cluster.as_deref()) {
+        got.contrast.difference.se.unwrap().powi(2)
+    } else {
+        tmle_variance(got, &used, s.cluster.as_deref())
+    };
     let se_tol = tol.of(8 * t + 6);
     let var_tol = 2.0 * got.contrast.difference.se.unwrap() * se_tol;
     match TARGETS[t] {

@@ -8,7 +8,8 @@
 //! their mean, and the coverage within 4 binomial standard errors of 95 percent.
 
 use epistat_causal::aipw::{AipwInput, AipwOptions, GlmInput, aipw, aipw_glm};
-use epistat_causal::{Estimand, Level};
+use epistat_causal::tmle::{TmleOptions, tmle};
+use epistat_causal::{ClusterRule, Clusters, Estimand, Influence, Level};
 use epistat_glm::Family;
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
@@ -302,6 +303,62 @@ fn estimator_is_unbiased_when_one_model_is_wrong() {
             mean - 1.0,
             var.sqrt(),
             ses.iter().sum::<f64>() / reps as f64
+        );
+    }
+}
+
+/// The variance of the difference of the two columns of `influence` with the
+/// clusters `cluster` of the rows, under the influence function's own rule.
+fn difference_variance(influence: &Influence, cluster: Option<&[u32]>) -> f64 {
+    let clusters = cluster.map(|c| {
+        let rows: Vec<u32> = (0..u32::try_from(c.len()).unwrap()).collect();
+        Clusters::per_unit(&rows, c).unwrap()
+    });
+    influence
+        .combine(&[1.0, -1.0])
+        .unwrap()
+        .variance(clusters.as_ref())
+        .unwrap()
+        .get(0, 0)
+        .unwrap()
+}
+
+#[test]
+fn the_influence_function_carries_the_rule_of_the_reference() {
+    let mut rng = Stream::seeded(7);
+    let n = 300;
+    let (y, a, x) = simulate(&mut rng, n);
+    let e: Vec<f64> = x
+        .iter()
+        .map(|xi| 1.0 / (1.0 + (-(0.2 + 0.4 * xi)).exp()))
+        .collect();
+    let m1: Vec<f64> = x.iter().map(|xi| 2.0 + 0.8 * xi).collect();
+    let m0: Vec<f64> = x.iter().map(|xi| 1.0 + 0.8 * xi).collect();
+    let cluster: Vec<u32> = (0..n).map(|i| u32::try_from(i % 40).unwrap()).collect();
+    for (c, aipw_rule) in [
+        (None, ClusterRule::NoSmallSample),
+        (Some(cluster.as_slice()), ClusterRule::SmallSample),
+    ] {
+        let input = AipwInput {
+            cluster: c,
+            ..input(&y, &a, &m1, &m0, &e)
+        };
+        // AIPW follows `riskRegression::ate`, the `n` divisor, without
+        // clusters and `G / (G - 1)` with them.
+        let r = aipw(&input, &AipwOptions::default()).unwrap();
+        assert_eq!(r.influence.rule(), aipw_rule);
+        let se = r.contrast.difference.se.unwrap();
+        assert_eq!(
+            se.to_bits(),
+            difference_variance(&r.influence, c).sqrt().to_bits()
+        );
+        // TMLE follows `tmle`, the `n - 1` divisor and `G / (G - 1)`.
+        let t = tmle(&input, &TmleOptions::default()).unwrap();
+        assert_eq!(t.influence.rule(), ClusterRule::SmallSample);
+        let se = t.contrast.difference.se.unwrap();
+        assert_eq!(
+            se.to_bits(),
+            difference_variance(&t.influence, c).sqrt().to_bits()
         );
     }
 }
