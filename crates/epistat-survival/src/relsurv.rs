@@ -262,7 +262,9 @@ mod standardise;
 pub use cohort::{ExpectedCurve, ExpectedMethod, expected_survival};
 pub use crude::{CrudeMortality, crude_mortality};
 pub use difference::{NetSurvivalTest, net_survival_test};
-pub use estimator::{Grid, Method, NetOptions, NetSurvival, Transform, net_survival};
+pub use estimator::{
+    Grid, Method, NetOptions, NetSurvival, NetSurvivalAt, Transform, net_survival,
+};
 pub use excess::{ExcessFit, ExcessOptions, excess_hazard};
 pub use expected::ExpectedHazard;
 pub use standardise::{ICSS, StandardisedNet, standardise_net};

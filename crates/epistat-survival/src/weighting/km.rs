@@ -53,9 +53,10 @@
 //! Cole SR, Hernan MA. Adjusted survival curves with inverse probability
 //! weights. Comput Methods Programs Biomed 2004;75(1):45-49.
 
-use epistat_core::Covariance;
+use epistat_core::{Covariance, Estimate, Level, Scale};
 use epistat_linalg::{Factor, Mat};
 use epistat_stats::sum::Compensated;
+use epistat_stats::wald;
 
 use super::adjust::Nuisance;
 use super::estimated::{Weights, prepare};
@@ -139,52 +140,110 @@ impl WeightedKm {
         self.covariance.get(time)?.get(group, other)
     }
 
+    /// The survival of `group` (a position in `groups`) at `times[time]`,
+    /// `None` for a position beyond the groups or times.
+    #[must_use]
+    pub fn survival(&self, group: usize, time: usize) -> Option<f64> {
+        let m = self.times.len();
+        (group < self.groups.len() && time < m).then(|| self.surv[group * m + time])
+    }
+
+    /// The position in [`Self::times`] of the last chosen time at or before
+    /// `t`, `None` when every chosen time is after `t`.
+    #[must_use]
+    pub fn position_at(&self, t: f64) -> Option<usize> {
+        self.times.iter().rposition(|&x| x <= t)
+    }
+
+    /// The risk `1 - S` of `group` (a position in `groups`) at `times[time]`,
+    /// with its standard error accounting for the estimation of the weights
+    /// and its normal interval at `level`.
+    ///
+    /// # Errors
+    ///
+    /// An input error when `group` or `time` is beyond the groups or times.
+    pub fn risk(&self, group: usize, time: usize, level: Level) -> Result<Estimate> {
+        self.check_positions(&[group], time)?;
+        let m = self.times.len();
+        let risk = 1.0 - self.surv[group * m + time];
+        Ok(wald(risk, self.se(group, time), level, Scale::Identity))
+    }
+
     /// The difference of the risks `(1 - S_group) - (1 - S_other)` at
     /// `times[time]`, with the standard errors of the difference that account
     /// for the estimation of the weights and that take them as known,
-    /// `sqrt(V_gg + V_hh - 2 V_gh)` from the covariances of the two curves.
+    /// `sqrt(V_gg + V_hh - 2 V_gh)` from the covariances of the two curves,
+    /// and normal intervals at `level` with the p-values of no difference.
     /// `group` and `other` are positions in `groups`, such as the treated and
     /// the control arm.
     ///
-    /// A standard error is `None` when a covariance it needs is (a curve that
-    /// has reached 0).
+    /// A standard error, and with it the interval, is `None` when a
+    /// covariance it needs is (a curve that has reached 0).
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When `group`, `other` or `time` is beyond the groups or times, as
-    /// [`Self::se`].
-    #[must_use]
-    pub fn risk_difference(&self, group: usize, other: usize, time: usize) -> KmDifference {
+    /// An input error when `group`, `other` or `time` is beyond the groups or
+    /// times.
+    pub fn risk_difference(
+        &self,
+        group: usize,
+        other: usize,
+        time: usize,
+        level: Level,
+    ) -> Result<KmDifference> {
+        self.check_positions(&[group, other], time)?;
         let m = self.times.len();
-        assert!(
-            group < self.groups.len() && other < self.groups.len() && time < m,
-            "group {group}, other {other} or time {time} beyond {} groups and {m} times",
-            self.groups.len()
-        );
-        let se = |v: &[Covariance]| -> Option<f64> {
-            let v = &v[time];
-            let gg = v.get(group, group)?;
-            let hh = v.get(other, other)?;
-            let gh = v.get(group, other)?;
+        let se = |known: bool| -> Option<f64> {
+            let var = |a: usize, b: usize| {
+                if known {
+                    self.covariance_known_between(a, b, time)
+                } else {
+                    self.covariance_between(a, b, time)
+                }
+            };
+            let (gg, hh, gh) = (var(group, group)?, var(other, other)?, var(group, other)?);
             Some((gg + hh - 2.0 * gh).max(0.0).sqrt())
         };
-        KmDifference {
-            estimate: self.surv[other * m + time] - self.surv[group * m + time],
-            se: se(&self.covariance),
-            se_known: se(&self.covariance_known),
+        let difference = self.surv[other * m + time] - self.surv[group * m + time];
+        Ok(KmDifference {
+            difference: wald(difference, se(false), level, Scale::Identity),
+            known: wald(difference, se(true), level, Scale::Identity),
+        })
+    }
+
+    /// The covariance of the curves of two groups at `times[time]` with the
+    /// weights taken as known.
+    #[must_use]
+    pub fn covariance_known_between(&self, group: usize, other: usize, time: usize) -> Option<f64> {
+        self.covariance_known.get(time)?.get(group, other)
+    }
+
+    fn check_positions(&self, groups: &[usize], time: usize) -> Result<()> {
+        let n = self.groups.len();
+        if let Some(&g) = groups.iter().find(|&&g| g >= n) {
+            return Err(Error::invalid(format!(
+                "group: position {g} is beyond the {n} groups"
+            )));
         }
+        if time >= self.times.len() {
+            return Err(Error::invalid(format!(
+                "time: position {time} is beyond the {} times",
+                self.times.len()
+            )));
+        }
+        Ok(())
     }
 }
 
 /// The difference of the risks of two weighted curves at one time.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KmDifference {
-    /// `(1 - S_group) - (1 - S_other)`.
-    pub estimate: f64,
-    /// Its standard error, accounting for the estimation of the weights.
-    pub se: Option<f64>,
-    /// Its standard error with the weights taken as known.
-    pub se_known: Option<f64>,
+    /// `(1 - S_group) - (1 - S_other)`, with the standard error and interval
+    /// that account for the estimation of the weights.
+    pub difference: Estimate,
+    /// The same difference with the weights taken as known.
+    pub known: Estimate,
 }
 
 /// What the variance needs of the estimated weights.

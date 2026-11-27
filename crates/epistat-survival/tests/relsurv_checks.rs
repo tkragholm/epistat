@@ -247,3 +247,23 @@ fn invalid_input_is_an_error() {
         .is_err()
     );
 }
+
+#[test]
+fn a_net_survival_curve_is_read_at_the_last_time_before() {
+    let curve = epistat_survival::relsurv::NetSurvival {
+        stratum: 0,
+        times: vec![1.0, 2.5, 4.0],
+        cumulative_excess_hazard: vec![0.1, 0.2, 0.3],
+        variance: vec![0.01, 0.02, 0.03],
+        survival: vec![0.9, 0.8, 0.7],
+        lower: vec![Some(0.85), None, Some(0.6)],
+        upper: vec![Some(0.95), None, Some(0.8)],
+        n_at_risk: vec![10.0, 8.0, 5.0],
+        events: vec![1.0, 1.0, 1.0],
+    };
+    assert!(curve.at(0.5).is_none());
+    let at = curve.at(3.0).unwrap();
+    assert_eq!((at.time, at.survival, at.lower), (2.5, 0.8, None));
+    assert_eq!(curve.at(9.0).unwrap().survival, 0.7);
+    assert_eq!(curve.position_at(1.0), Some(0));
+}

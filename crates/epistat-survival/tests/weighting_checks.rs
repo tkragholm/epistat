@@ -316,3 +316,31 @@ fn censoring_weights_edge_cases() {
         .is_err()
     );
 }
+
+#[test]
+fn weighted_curves_read_without_index_arithmetic() {
+    use epistat_survival::Level;
+    let stop = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 2.5, 3.5];
+    let status = [1, 0, 1, 1, 0, 1, 1, 0];
+    let arm = [0, 0, 0, 0, 1, 1, 1, 1];
+    let data = SurvData::builder(&stop, &status)
+        .stratum(&arm)
+        .build()
+        .unwrap();
+    let times = [1.5, 3.0, 4.5];
+    let curves = km::estimate(&data, &times, &KmOptions::default(), &Weights::known()).unwrap();
+    let m = times.len();
+    assert_eq!(curves.survival(1, 2), Some(curves.surv[m + 2]));
+    assert_eq!(curves.survival(2, 0), None);
+    assert_eq!(curves.position_at(3.2), Some(1));
+    assert_eq!(curves.position_at(1.0), None);
+    let d = curves.risk_difference(1, 0, 1, Level::default()).unwrap();
+    assert_eq!(
+        d.difference.estimate.to_bits(),
+        (curves.surv[1] - curves.surv[m + 1]).to_bits()
+    );
+    let risk = curves.risk(0, 1, Level::default()).unwrap();
+    assert_eq!(risk.estimate.to_bits(), (1.0 - curves.surv[1]).to_bits());
+    assert!(curves.risk_difference(0, 2, 0, Level::default()).is_err());
+    assert!(curves.risk(0, 3, Level::default()).is_err());
+}

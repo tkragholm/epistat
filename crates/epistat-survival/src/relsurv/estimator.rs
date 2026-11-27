@@ -133,6 +133,45 @@ pub struct NetSurvival {
     pub events: Vec<f64>,
 }
 
+/// The net survival of one stratum at a time, as [`NetSurvival::at`] reads it.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NetSurvivalAt {
+    /// The reported time read: the last at or before the time asked for.
+    pub time: f64,
+    /// The net survival.
+    pub survival: f64,
+    /// The lower limit, `None` where the transform is undefined.
+    pub lower: Option<f64>,
+    /// The upper limit.
+    pub upper: Option<f64>,
+    /// The number at risk.
+    pub n_at_risk: f64,
+}
+
+impl NetSurvival {
+    /// The position in [`Self::times`] of the last reported time at or before
+    /// `t`, `None` when every reported time is after `t`.
+    #[must_use]
+    pub fn position_at(&self, t: f64) -> Option<usize> {
+        self.times.iter().rposition(|&x| x <= t)
+    }
+
+    /// The curve at `t`, the step function read at the last reported time at
+    /// or before `t`; `None` before the first reported time.
+    #[must_use]
+    pub fn at(&self, t: f64) -> Option<NetSurvivalAt> {
+        let k = self.position_at(t)?;
+        Some(NetSurvivalAt {
+            time: self.times[k],
+            survival: self.survival[k],
+            lower: self.lower[k],
+            upper: self.upper[k],
+            n_at_risk: self.n_at_risk[k],
+        })
+    }
+}
+
 struct Raw {
     times: Vec<f64>,
     lambda: Vec<f64>,

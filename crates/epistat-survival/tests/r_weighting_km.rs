@@ -201,7 +201,9 @@ fn weighted_curves_match_survfit_and_finite_differences() {
         // the tolerances of the three entries, and that of its square root
         // that sum over the square root of the variance.
         for t in 0..m_times {
-            let d = est.risk_difference(1, 0, t);
+            let d = est
+                .risk_difference(1, 0, t, epistat_survival::Level::default())
+                .unwrap();
             let tol: f64 = (0..2)
                 .map(|g| {
                     let s = r.surv[t][g];
@@ -209,13 +211,13 @@ fn weighted_curves_match_survfit_and_finite_differences() {
                 })
                 .sum();
             assert!(
-                (d.estimate - (r.surv[t][0] - r.surv[t][1])).abs() <= tol,
+                (d.difference.estimate - (r.surv[t][0] - r.surv[t][1])).abs() <= tol,
                 "{} difference ({t})",
                 r.name
             );
             for (mine, cov, plain) in [
-                (d.se, &r.covariance, &r.covariance_plain),
-                (d.se_known, &r.known, &r.known_plain),
+                (d.difference.se, &r.covariance, &r.covariance_plain),
+                (d.known.se, &r.known, &r.known_plain),
             ] {
                 let entry = |g: usize, h: usize| {
                     let scale = (r.covariance[t][g][g] * r.covariance[t][h][h]).sqrt();
