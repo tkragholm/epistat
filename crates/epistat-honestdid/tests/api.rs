@@ -111,15 +111,20 @@ fn relative_magnitude_matches_the_package_on_the_average_effect() {
         mbar: r.relative_magnitude.iter().map(|row| row.mbar).collect(),
         bound: RmBound::ParallelTrends,
     };
-    let summary = honest::summarize(&study, &target, &restriction, &HonestOptions::default())
-        .expect("summary");
+    let summary = honest::summarize(
+        &study,
+        &target,
+        &restriction,
+        &HonestOptions::new(Bootstrap::new(1_000, 0)),
+    )
+    .expect("summary");
     let identified = honest::summarize(
         &study,
         &target,
         &restriction,
         &HonestOptions {
             method: Some(Method::IdentifiedSet),
-            ..HonestOptions::default()
+            ..HonestOptions::new(Bootstrap::new(1_000, 0))
         },
     )
     .expect("identified sets");
@@ -202,7 +207,7 @@ fn smoothness_identified_sets_match_the_package() {
                 &Restriction::Smoothness { m: vec![case.m] },
                 &HonestOptions {
                     method: Some(Method::IdentifiedSet),
-                    ..HonestOptions::default()
+                    ..HonestOptions::new(Bootstrap::new(1_000, 0))
                 },
             )
             .expect("identified set");
@@ -330,14 +335,18 @@ fn joint_regions_cover_every_period_and_calibrate_below_bonferroni() {
         mbar: vec![0.5],
         bound: RmBound::ParallelTrends,
     };
-    let bonferroni =
-        honest::joint_path(&study, &restriction, &JointPathOptions::default()).expect("path");
+    let bonferroni = honest::joint_path(
+        &study,
+        &restriction,
+        &JointPathOptions::new(Bootstrap::new(1_000, 0)),
+    )
+    .expect("path");
     let gaussian = honest::joint_path(
         &study,
         &restriction,
         &JointPathOptions {
             calibration: Calibration::Gaussian(Bootstrap::new(5_000, 7)),
-            ..JointPathOptions::default()
+            ..JointPathOptions::new(Bootstrap::new(1_000, 0))
         },
     )
     .expect("calibrated path");
@@ -355,7 +364,7 @@ fn joint_regions_cover_every_period_and_calibrate_below_bonferroni() {
         &JointPathOptions {
             method: JointMethod::Flci,
             directions: Directions::Weights(vec![vec![1.0, 0.0], vec![0.5, 0.5]]),
-            ..JointPathOptions::default()
+            ..JointPathOptions::new(Bootstrap::new(1_000, 0))
         },
     )
     .expect("joint FLCI");
@@ -378,7 +387,7 @@ fn unusable_input_is_refused_with_a_code() {
         mbar,
         bound: RmBound::ParallelTrends,
     };
-    let options = HonestOptions::default();
+    let options = HonestOptions::new(Bootstrap::new(1_000, 0));
     let cases: Vec<(Error, &str, ErrorKind)> = vec![
         (
             honest::summarize(
@@ -442,8 +451,12 @@ fn unusable_input_is_refused_with_a_code() {
             ErrorKind::Unsupported,
         ),
         (
-            honest::joint_path(&study, &rm(vec![0.5, 1.0]), &JointPathOptions::default())
-                .unwrap_err(),
+            honest::joint_path(
+                &study,
+                &rm(vec![0.5, 1.0]),
+                &JointPathOptions::new(Bootstrap::new(1_000, 0)),
+            )
+            .unwrap_err(),
             "input.length",
             ErrorKind::Input,
         ),
@@ -454,7 +467,7 @@ fn unusable_input_is_refused_with_a_code() {
                     mbar: vec![1.0],
                     bound: RmBound::LinearTrend,
                 },
-                &JointPathOptions::default(),
+                &JointPathOptions::new(Bootstrap::new(1_000, 0)),
             )
             .unwrap_err(),
             "honestdid.unsupported",

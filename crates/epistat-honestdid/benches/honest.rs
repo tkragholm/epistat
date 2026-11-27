@@ -88,8 +88,13 @@ fn bench_summaries(criterion: &mut Criterion) {
             group.bench_function(format!("{name}_{n_pre}pre_{n_post}post"), |bencher| {
                 bencher.iter(|| {
                     for target in targets(n_post) {
-                        honest::summarize(&study, &target, &restriction, &HonestOptions::default())
-                            .expect("summary");
+                        honest::summarize(
+                            &study,
+                            &target,
+                            &restriction,
+                            &HonestOptions::new(Bootstrap::new(1_000, 0)),
+                        )
+                        .expect("summary");
                     }
                 });
             });
@@ -116,7 +121,7 @@ fn bench_joint_regions(criterion: &mut Criterion) {
             "joint_path",
             JointPathOptions {
                 calibration: gaussian,
-                ..JointPathOptions::default()
+                ..JointPathOptions::new(Bootstrap::new(1_000, 0))
             },
         ),
         (
@@ -124,7 +129,7 @@ fn bench_joint_regions(criterion: &mut Criterion) {
             JointPathOptions {
                 directions: Directions::Weights(basis),
                 calibration: gaussian,
-                ..JointPathOptions::default()
+                ..JointPathOptions::new(Bootstrap::new(1_000, 0))
             },
         ),
         (
@@ -132,7 +137,7 @@ fn bench_joint_regions(criterion: &mut Criterion) {
             JointPathOptions {
                 method: JointMethod::Flci,
                 calibration: gaussian,
-                ..JointPathOptions::default()
+                ..JointPathOptions::new(Bootstrap::new(1_000, 0))
             },
         ),
     ] {

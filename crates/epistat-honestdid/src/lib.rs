@@ -9,7 +9,7 @@
 //! return one.
 //!
 //! ```
-//! use epistat_core::{Covariance, EventStudy, Level};
+//! use epistat_core::{Bootstrap, Covariance, EventStudy, Level};
 //! use epistat_honestdid::honest::{self, HonestOptions, Restriction, RmBound, Target};
 //!
 //! // Three pre-treatment and two post-treatment coefficients, reference -1.
@@ -29,7 +29,7 @@
 //!     &study,
 //!     &target,
 //!     &Restriction::RelativeMagnitude { mbar: vec![0.0, 0.5, 1.0], bound: RmBound::ParallelTrends },
-//!     &HonestOptions::default(),
+//!     &HonestOptions::new(Bootstrap::new(1_000, 0)),
 //! )?;
 //! assert!(original.lower().is_some());
 //! assert_eq!(summary.rows.len(), 3);

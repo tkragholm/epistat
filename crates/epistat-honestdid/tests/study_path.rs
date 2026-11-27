@@ -336,8 +336,7 @@ fn honest(out: &mut Vec<(&'static str, u64)>, study: &EventStudy) {
     let level = Level::confidence(CONFIDENCE).expect("level");
     let options = HonestOptions {
         level,
-        least_favorable: Bootstrap::new(DRAWS, 0),
-        ..HonestOptions::default()
+        ..HonestOptions::new(Bootstrap::new(DRAWS, 0))
     };
     let scale = honest_scale(study.covariance());
     let input = scaled(study, scale);
@@ -407,8 +406,7 @@ fn honest(out: &mut Vec<(&'static str, u64)>, study: &EventStudy) {
                 level,
                 null: 0.0 / scale,
                 calibration: Calibration::Gaussian(Bootstrap::new(DRAWS, JOINT_SEED)),
-                least_favorable: Bootstrap::new(DRAWS, 0),
-                ..JointPathOptions::default()
+                ..JointPathOptions::new(Bootstrap::new(DRAWS, 0))
             },
         )
         .expect("joint path");

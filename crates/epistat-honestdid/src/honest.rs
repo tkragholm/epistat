@@ -303,19 +303,22 @@ pub struct HonestOptions {
     /// `monotonicityDirection`. At most one of `bias` and `monotonicity`.
     pub monotonicity: Option<Monotonicity>,
     /// The draws of the least-favourable critical value and their seed, for
-    /// the `C-LF` hybrid. The default is `HonestDiD`'s: 1,000 draws from seed
-    /// 0 (R's `seed = 0`).
+    /// the `C-LF` hybrid. `HonestDiD`'s R default is 1,000 draws from seed 0,
+    /// so a caller who wants R's numbers passes `Bootstrap::new(1_000, 0)`.
     pub least_favorable: Bootstrap,
 }
 
-impl Default for HonestOptions {
-    fn default() -> Self {
+impl HonestOptions {
+    /// The default method, the 95% level and no bias or monotonicity
+    /// restriction, with the given least-favourable draws and seed.
+    #[must_use]
+    pub fn new(least_favorable: Bootstrap) -> Self {
         Self {
             method: None,
             level: Level::default(),
             bias: None,
             monotonicity: None,
-            least_favorable: Bootstrap::new(1_000, 0),
+            least_favorable,
         }
     }
 }
@@ -924,8 +927,8 @@ impl Default for Adaptive {
 pub enum JointMethod {
     /// The conditional interval of each target: `C-LF` under the
     /// relative-magnitude restriction (or `Conditional` with
-    /// [`JointPathOptions::hybrid`] off), `C-F` with 1,000 least-favourable
-    /// draws from seed 0 under the smoothness restriction.
+    /// [`JointPathOptions::hybrid`] off), `C-F` with the options'
+    /// least-favourable draws under the smoothness restriction.
     #[default]
     Conditional,
     /// The fixed-length interval of each target, for [`Directions::Periods`]
@@ -947,8 +950,9 @@ pub struct JointPathOptions {
     /// How the pointwise level is chosen; the default is Bonferroni.
     pub calibration: Calibration,
     /// The draws of the least-favourable critical value under the
-    /// relative-magnitude restriction and their seed; the default is
-    /// `HonestDiD`'s 1,000 draws from seed 0.
+    /// relative-magnitude restriction and their seed. `HonestDiD`'s R default
+    /// is 1,000 draws from seed 0, so a caller who wants R's numbers passes
+    /// `Bootstrap::new(1_000, 0)`.
     pub least_favorable: Bootstrap,
     /// The least-favourable first stage under the relative-magnitude
     /// restriction (`C-LF`); without it the conditional test alone. The
@@ -956,15 +960,19 @@ pub struct JointPathOptions {
     pub hybrid: bool,
 }
 
-impl Default for JointPathOptions {
-    fn default() -> Self {
+impl JointPathOptions {
+    /// The 95% level, null 0, per-period targets, conditional intervals,
+    /// Bonferroni calibration and the hybrid on, with the given
+    /// least-favourable draws and seed.
+    #[must_use]
+    pub fn new(least_favorable: Bootstrap) -> Self {
         Self {
             level: Level::default(),
             null: 0.0,
             directions: Directions::Periods,
             method: JointMethod::Conditional,
             calibration: Calibration::Bonferroni,
-            least_favorable: Bootstrap::new(1_000, 0),
+            least_favorable,
             hybrid: true,
         }
     }

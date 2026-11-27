@@ -24,7 +24,7 @@ fn counts_are_reported_and_repeat() {
             &study,
             &Target::Weights(vec![1.0, 0.0]),
             &restriction,
-            &HonestOptions::default(),
+            &HonestOptions::new(Bootstrap::new(1_000, 0)),
         )
         .expect("smoothness summary")
     };
@@ -39,7 +39,7 @@ fn counts_are_reported_and_repeat() {
     let options = JointPathOptions {
         directions: Directions::Surface(Surface::new(250, 1729)),
         calibration: Calibration::Gaussian(Bootstrap::new(20_000, 42)),
-        ..JointPathOptions::default()
+        ..JointPathOptions::new(Bootstrap::new(1_000, 0))
     };
     let run = || {
         honest::joint_path(&study, &restriction, &options)
