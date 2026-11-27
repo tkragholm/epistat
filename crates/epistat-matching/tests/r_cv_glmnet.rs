@@ -103,15 +103,13 @@ fn fit_case(case: &Case, rule: LambdaRule) -> PropensityDistancePreparation {
         case.name
     );
     let config = PropensityScoreConfig {
-        estimator: PropensityEstimator::ElasticNetCv(
-            ElasticNetCvConfig::builder()
-                .seed(case.seed)
-                .alpha(case.alpha)
-                .nfolds(case.nfolds)
-                .standardize(case.standardize)
-                .rule(rule)
-                .build(),
-        ),
+        estimator: PropensityEstimator::ElasticNetCv(ElasticNetCvConfig {
+            alpha: case.alpha,
+            nfolds: case.nfolds,
+            standardize: case.standardize,
+            rule,
+            ..ElasticNetCvConfig::new(case.seed)
+        }),
         sampling_weights: case.weights.as_ref().map(|w| {
             w.iter()
                 .enumerate()

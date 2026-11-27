@@ -1,10 +1,5 @@
 //! Matching criteria, their validation, and transition options.
 
-#![expect(
-    clippy::allow_attributes,
-    reason = "bon's builder derive writes an `#[allow]` for the `allow_replacement` setter"
-)]
-
 use super::ids::{AgeLimitYears, BirthDateWindowDays, DistanceCaliper, MatchRatio};
 use crate::Error;
 use serde::{Deserialize, Serialize};
@@ -84,24 +79,19 @@ pub enum CommonSupport {
 }
 
 /// Matching criteria used by the core engine.
-#[derive(bon::Builder, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchingCriteria {
     /// Maximum absolute difference in days between record dates.
-    #[builder(default = 30)]
     pub birth_date_window_days: i32,
     /// Requested number of candidates per anchor.
-    #[builder(default = 1)]
     pub match_ratio: usize,
     /// Required exact-match strata keys.
-    #[builder(default)]
     pub required_strata: Vec<String>,
     /// Optional strata key for control uniqueness (fallbacks to `unique_key`).
     pub unique_by_key: Option<String>,
     /// Allow reusing candidates across anchors.
-    #[builder(default = false)]
     pub allow_replacement: bool,
     /// Requested target estimand.
-    #[builder(default)]
     #[serde(default)]
     pub estimand: Estimand,
     /// Optional common-support trimming policy.
@@ -227,31 +217,35 @@ mod tests {
 
     #[test]
     fn matching_criteria_validation_rejects_invalid_values() {
-        let negative_window = MatchingCriteria::builder()
-            .birth_date_window_days(-1)
-            .build();
+        let negative_window = MatchingCriteria {
+            birth_date_window_days: -1,
+            ..MatchingCriteria::default()
+        };
         assert!(matches!(
             negative_window.validate(),
             Err(Error::NegativeBirthDateWindow)
         ));
 
-        let zero_ratio = MatchingCriteria::builder().match_ratio(0).build();
+        let zero_ratio = MatchingCriteria {
+            match_ratio: 0,
+            ..MatchingCriteria::default()
+        };
         assert!(matches!(zero_ratio.validate(), Err(Error::ZeroMatchRatio)));
     }
 
     #[test]
     fn builder_sets_fields_and_builds_validated_criteria() {
-        let validated = MatchingCriteria::builder()
-            .birth_date_window_days(10)
-            .match_ratio(2)
-            .required_strata(vec!["municipality".to_string()])
-            .unique_by_key("family".to_string())
-            .allow_replacement(true)
-            .estimand(Estimand::Ate)
-            .common_support(CommonSupport::Both)
-            .build()
-            .validate()
-            .expect("valid criteria");
+        let validated = MatchingCriteria {
+            birth_date_window_days: 10,
+            match_ratio: 2,
+            required_strata: vec!["municipality".to_string()],
+            unique_by_key: Some("family".to_string()),
+            allow_replacement: true,
+            estimand: Estimand::Ate,
+            common_support: Some(CommonSupport::Both),
+        }
+        .validate()
+        .expect("valid criteria");
 
         assert_eq!(validated.birth_date_window_days, 10);
         assert_eq!(validated.match_ratio, 2);

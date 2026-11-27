@@ -875,16 +875,19 @@ fn nearest_pairs<R: CovariateRecord>(input: &Inputs<R>) -> MatchOutcome {
 }
 
 fn fit_config(link: PropensityLink, estimator: PropensityEstimator) -> PropensityScoreConfig {
-    PropensityScoreConfig::builder()
-        .encoding(
-            CovariateEncodingConfig::builder()
-                .covariate_keys(COVARIATES.iter().map(|s| (*s).to_string()).collect())
-                .include_intercept(true)
-                .build(),
-        )
-        .estimator(estimator)
-        .logistic(LogisticRegressionConfig::builder().link(link).build())
-        .build()
+    PropensityScoreConfig {
+        encoding: CovariateEncodingConfig {
+            covariate_keys: COVARIATES.iter().map(|s| (*s).to_string()).collect(),
+            include_intercept: true,
+            ..CovariateEncodingConfig::default()
+        },
+        estimator,
+        logistic: LogisticRegressionConfig {
+            link,
+            ..LogisticRegressionConfig::default()
+        },
+        ..PropensityScoreConfig::default()
+    }
 }
 
 fn run_fit<R: CovariateRecord>(
@@ -1083,7 +1086,10 @@ fn run_impute_on<R: CovariateRecord>(sets_data: &[Inputs<R>], y: &[f64], reps: u
         })
         .collect();
     let data: Vec<UnitData> = sets_data.iter().map(|s| unit_data_of(s, y)).collect();
-    let criteria = MatchingCriteria::builder().match_ratio(1).build();
+    let criteria = MatchingCriteria {
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    };
     let config = PropensityScoreConfig::default();
     let effect = EffectSpec::new(OutcomeModel::Linear);
     let (times, pooled) = time_reps(reps, || {
@@ -1170,9 +1176,10 @@ fn run_on_groups<R: CovariateRecord>(
             reps,
             &fit_config(
                 PropensityLink::Logit,
-                PropensityEstimator::ElasticNetCv(
-                    ElasticNetCvConfig::builder().seed(3).alpha(1.0).build(),
-                ),
+                PropensityEstimator::ElasticNetCv(ElasticNetCvConfig {
+                    alpha: 1.0,
+                    ..ElasticNetCvConfig::new(3)
+                }),
             ),
         ),
         "fit_cbps" => run_fit(

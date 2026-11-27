@@ -73,9 +73,10 @@ fn fit_with(design: &Design, config: ElasticNetLogisticConfig) -> Fitted {
     let prepared = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .estimator(PropensityEstimator::ElasticNetLogit(config))
-            .build(),
+        &PropensityScoreConfig {
+            estimator: PropensityEstimator::ElasticNetLogit(config),
+            ..PropensityScoreConfig::default()
+        },
         None,
     )
     .expect("elastic net fit succeeds");
@@ -120,10 +121,11 @@ fn default_fit_converges_and_matches_glmnet() {
         let mut worst = 0.0_f64;
         let mut max_iterations = 0;
         for fit in reference.fits.iter().filter(|f| f.design == design.name) {
-            let config = ElasticNetLogisticConfig::builder()
-                .alpha(fit.alpha)
-                .lambda(fit.lambda)
-                .build();
+            let config = ElasticNetLogisticConfig {
+                alpha: fit.alpha,
+                lambda: fit.lambda,
+                ..ElasticNetLogisticConfig::default()
+            };
             let fitted = fit_with(design, config);
             assert!(
                 fitted.converged,
@@ -152,10 +154,11 @@ fn default_fit_converges_and_matches_glmnet() {
 fn truncated_fit_reports_not_converged() {
     let reference = reference();
     let fit = &reference.fits[0];
-    let config = ElasticNetLogisticConfig::builder()
-        .alpha(fit.alpha)
-        .lambda(fit.lambda)
-        .max_iter(1)
-        .build();
+    let config = ElasticNetLogisticConfig {
+        alpha: fit.alpha,
+        lambda: fit.lambda,
+        max_iter: 1,
+        ..ElasticNetLogisticConfig::default()
+    };
     assert!(!fit_with(design_of(&reference, fit), config).converged);
 }

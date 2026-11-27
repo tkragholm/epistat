@@ -1873,13 +1873,14 @@ mod pool_scan_tests {
     /// difference in order would send the walks apart.
     fn walk(seed: u64, n: usize, strata: u64, replace: bool, duplicate_ids: bool) {
         let members = cohort(seed, n, strata, duplicate_ids);
-        let criteria = MatchingCriteria::builder()
-            .required_strata(vec!["s".to_string()])
-            .birth_date_window_days(1000)
-            .allow_replacement(replace)
-            .build()
-            .validate()
-            .expect("valid criteria");
+        let criteria = MatchingCriteria {
+            required_strata: vec!["s".to_string()],
+            birth_date_window_days: 1000,
+            allow_replacement: replace,
+            ..MatchingCriteria::default()
+        }
+        .validate()
+        .expect("valid criteria");
         let engine = MatchEngine::new(&members, criteria.as_ref(), RandomSelection::seeded(seed));
         let mut selector = RandomSelection::seeded(seed);
         let mut used = UsedControlsVec::with_capacity(n);
@@ -1992,13 +1993,14 @@ mod pool_scan_tests {
     #[test]
     fn a_pool_is_the_same_on_every_thread_count() {
         let members = cohort(31, 24_000, 2, false);
-        let criteria = MatchingCriteria::builder()
-            .required_strata(vec!["s".to_string()])
-            .birth_date_window_days(1000)
-            .allow_replacement(true)
-            .build()
-            .validate()
-            .expect("valid criteria");
+        let criteria = MatchingCriteria {
+            required_strata: vec!["s".to_string()],
+            birth_date_window_days: 1000,
+            allow_replacement: true,
+            ..MatchingCriteria::default()
+        }
+        .validate()
+        .expect("valid criteria");
         let engine = MatchEngine::new(&members, criteria.as_ref(), RandomSelection::seeded(1));
         let case = members
             .iter()

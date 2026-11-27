@@ -115,14 +115,15 @@ fn run_ours(run: &Run, mode: BalanceMode) -> Result<FineBalanceOutcome, Error> {
         .caliper
         .map(|width| DistanceCaliper::new(width).expect("caliper"));
     let distance = DistanceConfig::euclidean_map(vectors, 2, width).expect("two columns");
-    let criteria = MatchingCriteria::builder()
-        .match_ratio(run.k)
-        .required_strata(if run.strata {
+    let criteria = MatchingCriteria {
+        match_ratio: run.k,
+        required_strata: if run.strata {
             vec!["s".to_string()]
         } else {
             Vec::new()
-        })
-        .build();
+        },
+        ..MatchingCriteria::default()
+    };
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
     let balance = FineBalance {
         levels: run.fb.clone(),

@@ -102,9 +102,10 @@ pub struct GpsConfig {
 impl Default for GpsConfig {
     fn default() -> Self {
         Self {
-            encoding: CovariateEncodingConfig::builder()
-                .include_intercept(true)
-                .build(),
+            encoding: CovariateEncodingConfig {
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
             fit: Multinom::default(),
         }
     }

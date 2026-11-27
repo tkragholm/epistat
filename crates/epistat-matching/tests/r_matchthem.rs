@@ -135,7 +135,10 @@ fn matches_and_pooled_effects_agree_with_matchthem() {
             UnitData::new(ids, treated, d["re78"].clone()).unwrap()
         })
         .collect();
-    let criteria = MatchingCriteria::builder().match_ratio(1).build();
+    let criteria = MatchingCriteria {
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    };
     let config = PropensityScoreConfig::default();
     let mut spec = EffectSpec::new(OutcomeModel::Linear);
     spec.clustering = Clustering::Pair;
@@ -305,7 +308,10 @@ fn input_errors_are_reported() {
             controls: c,
         })
         .collect();
-    let criteria = MatchingCriteria::builder().match_ratio(1).build();
+    let criteria = MatchingCriteria {
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    };
     let run = |sets: &[ImputedSet<'_, BalanceRecord>], approach, config: &PropensityScoreConfig| {
         match_imputed(
             sets,
@@ -322,7 +328,10 @@ fn input_errors_are_reported() {
         run(&sets[..1], ImputationApproach::Within, &config),
         Err(Error::TooFewSets { found: 1 })
     ));
-    let reestimate = PropensityScoreConfig::builder().reestimate(true).build();
+    let reestimate = PropensityScoreConfig {
+        reestimate: true,
+        ..PropensityScoreConfig::default()
+    };
     assert!(matches!(
         run(&sets, ImputationApproach::Across, &reestimate),
         Err(Error::ReestimateAcross)

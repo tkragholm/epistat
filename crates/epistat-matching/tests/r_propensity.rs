@@ -132,15 +132,15 @@ fn fit_ours(fit: &RFit, options: &Options<'_>) -> PropensityDistancePreparation 
             candidates.push(record);
         }
     }
-    let mut config = PropensityScoreConfig::builder()
-        .output_scale(options.scale)
-        .logistic(
-            LogisticRegressionConfig::builder()
-                .link(options.link)
-                .build(),
-        )
-        .reestimate(options.discard.is_some())
-        .build();
+    let mut config = PropensityScoreConfig {
+        output_scale: options.scale,
+        logistic: LogisticRegressionConfig {
+            link: options.link,
+            ..LogisticRegressionConfig::default()
+        },
+        reestimate: options.discard.is_some(),
+        ..PropensityScoreConfig::default()
+    };
     config.sampling_weights = options.weights.map(|weights| {
         weights
             .iter()

@@ -178,14 +178,15 @@ fn setup(name: &str, scenario: &Scenario, focal: u8, caliper: Option<f64>) -> Se
 }
 
 fn run_ours(setup: &Setup, ratio: usize, exact: bool) -> Result<MatchOutcome, Error> {
-    let criteria = MatchingCriteria::builder()
-        .match_ratio(ratio)
-        .required_strata(if exact {
+    let criteria = MatchingCriteria {
+        match_ratio: ratio,
+        required_strata: if exact {
             vec!["g".to_string()]
         } else {
             Vec::new()
-        })
-        .build();
+        },
+        ..MatchingCriteria::default()
+    };
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&setup.distance);
     match_optimal(&setup.anchors, &setup.candidates, &request)
 }
@@ -410,7 +411,10 @@ fn replacement_and_unique_keys_are_refused() {
     let reference = reference();
     let scenario = &reference.scenarios["wide"];
     let built = setup("wide", scenario, 1, None);
-    let criteria = MatchingCriteria::builder().allow_replacement(true).build();
+    let criteria = MatchingCriteria {
+        allow_replacement: true,
+        ..MatchingCriteria::default()
+    };
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&built.distance);
     assert!(matches!(
         match_optimal(&built.anchors, &built.candidates, &request),
@@ -477,7 +481,10 @@ fn a_distance_matrix_gives_the_pairs_and_subclasses_of_its_distance() {
                 (left, right) => panic!("{name} ratio {ratio}: {left:?} against {right:?}"),
             }
         }
-        let criteria = MatchingCriteria::builder().match_ratio(1).build();
+        let criteria = MatchingCriteria {
+            match_ratio: 1,
+            ..MatchingCriteria::default()
+        };
         let full = |setup: &Setup| {
             let request = OptimalRequest::new(&criteria, &()).with_distance_config(&setup.distance);
             match_full(

@@ -251,14 +251,12 @@ pub enum NumericBalanceTransform {
 }
 
 /// Configuration for balance reporting behavior.
-#[derive(bon::Builder, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BalanceReportOptions {
     /// Which transformed numeric terms to include.
-    #[builder(default)]
     #[serde(default)]
     pub numeric_transforms: NumericBalanceTransform,
     /// Optional supplemental covariates for balance-only diagnostics.
-    #[builder(default)]
     #[serde(default)]
     pub supplemental_covariates: SupplementalBalanceCovariates,
 }

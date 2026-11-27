@@ -133,7 +133,10 @@ fn imputation_matching_does_not_depend_on_the_number_of_threads() {
             controls: c,
         })
         .collect();
-    let criteria = MatchingCriteria::builder().match_ratio(1).build();
+    let criteria = MatchingCriteria {
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    };
     for approach in [ImputationApproach::Within, ImputationApproach::Across] {
         assert_same_on_pools(&POOLS, || {
             let matches = match_imputed(
@@ -180,7 +183,10 @@ fn within_imputation_matches_each_set_as_a_single_set() {
             controls: c,
         })
         .collect();
-    let criteria = MatchingCriteria::builder().match_ratio(1).build();
+    let criteria = MatchingCriteria {
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    };
     let config = PropensityScoreConfig::default();
     let matches = match_imputed(
         &sets,

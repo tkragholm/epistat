@@ -755,7 +755,7 @@ mod tests {
 
     #[test]
     fn replacement_constraint_blocks_reuse_without_replacement() {
-        let criteria = MatchingCriteria::builder().build().validate().unwrap();
+        let criteria = MatchingCriteria::default().validate().unwrap();
         let case = record("a", date(2010, 1, 1));
         let control = record("b", date(2010, 1, 2));
         let mut used_controls = UsedControlsVec::with_capacity(3);
@@ -773,11 +773,12 @@ mod tests {
         );
         assert!(!ReplacementConstraint.allows(&case, &control, &ctx));
 
-        let criteria = MatchingCriteria::builder()
-            .allow_replacement(true)
-            .build()
-            .validate()
-            .unwrap();
+        let criteria = MatchingCriteria {
+            allow_replacement: true,
+            ..MatchingCriteria::default()
+        }
+        .validate()
+        .unwrap();
         let ctx = context(
             &criteria,
             &used_controls,
@@ -792,7 +793,7 @@ mod tests {
 
     #[test]
     fn no_self_match_constraint_blocks_self_pairs() {
-        let criteria = MatchingCriteria::builder().build().validate().unwrap();
+        let criteria = MatchingCriteria::default().validate().unwrap();
         let row = record("same", date(2010, 1, 1));
         let empty_controls = empty_used_controls();
         let empty_unique = FxHashSet::default();
@@ -811,11 +812,12 @@ mod tests {
 
     #[test]
     fn exact_match_constraint_uses_strata_paths() {
-        let criteria = MatchingCriteria::builder()
-            .required_strata(vec!["municipality".to_string()])
-            .build()
-            .validate()
-            .unwrap();
+        let criteria = MatchingCriteria {
+            required_strata: vec!["municipality".to_string()],
+            ..MatchingCriteria::default()
+        }
+        .validate()
+        .unwrap();
         let mut case = record("case", date(2010, 1, 1));
         case.strata
             .insert("municipality".to_string(), "0101".to_string());
@@ -853,11 +855,12 @@ mod tests {
 
     #[test]
     fn unique_key_constraint_blocks_reused_unique_values() {
-        let criteria = MatchingCriteria::builder()
-            .unique_by_key("family".to_string())
-            .build()
-            .validate()
-            .unwrap();
+        let criteria = MatchingCriteria {
+            unique_by_key: Some("family".to_string()),
+            ..MatchingCriteria::default()
+        }
+        .validate()
+        .unwrap();
         let mut control = record("control", date(2010, 1, 1));
         control
             .strata
@@ -879,7 +882,7 @@ mod tests {
         );
         assert!(!UniqueKeyConstraint.allows(&control, &control, &ctx));
 
-        let criteria = MatchingCriteria::builder().build().validate().unwrap();
+        let criteria = MatchingCriteria::default().validate().unwrap();
         let ctx = context(
             &criteria,
             &empty_controls,
@@ -894,11 +897,12 @@ mod tests {
 
     #[test]
     fn date_caliper_constraint_uses_birth_window() {
-        let criteria = MatchingCriteria::builder()
-            .birth_date_window_days(5)
-            .build()
-            .validate()
-            .unwrap();
+        let criteria = MatchingCriteria {
+            birth_date_window_days: 5,
+            ..MatchingCriteria::default()
+        }
+        .validate()
+        .unwrap();
         let case = record("case", date(2010, 1, 1));
         let control_close = record("control_close", date(2010, 1, 5));
         let control_far = record("control_far", date(2010, 1, 10));
@@ -926,7 +930,7 @@ mod tests {
 
     #[test]
     fn generic_caliper_constraint_works_with_custom_metric() {
-        let criteria = MatchingCriteria::builder().build().validate().unwrap();
+        let criteria = MatchingCriteria::default().validate().unwrap();
         let case = record("case", date(2010, 1, 1));
         let near = record("near", date(2010, 1, 2));
         let far = record("far", date(2010, 1, 10));

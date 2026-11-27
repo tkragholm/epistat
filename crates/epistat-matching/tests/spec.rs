@@ -444,15 +444,15 @@ fn spec_nearest_on_a_propensity_score_matches_the_typed_job() {
     };
     assert!(propensity.is_some());
 
-    let config = PropensityScoreConfig::builder()
-        .encoding(
-            CovariateEncodingConfig::builder()
-                .covariate_keys(vec!["age".into(), "income".into(), "region".into()])
-                .include_intercept(true)
-                .build(),
-        )
-        .caliper(DistanceCaliper::new(0.2).unwrap())
-        .build();
+    let config = PropensityScoreConfig {
+        encoding: CovariateEncodingConfig {
+            covariate_keys: vec!["age".into(), "income".into(), "region".into()],
+            include_intercept: true,
+            ..CovariateEncodingConfig::default()
+        },
+        caliper: Some(DistanceCaliper::new(0.2).unwrap()),
+        ..PropensityScoreConfig::default()
+    };
     let prepared =
         prepare_propensity_distance_config(&anchors, &candidates, &config, None).unwrap();
     let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
@@ -493,13 +493,13 @@ fn spec_nearest_on_mahalanobis_with_replacement_matches_the_typed_job() {
         &anchors,
         &candidates,
         None,
-        &MahalanobisPreparationConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .build(),
-            )
-            .build(),
+        &MahalanobisPreparationConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                ..CovariateEncodingConfig::default()
+            },
+            ..MahalanobisPreparationConfig::default()
+        },
     )
     .unwrap();
     let by_hand = MatchJob::new_standard(&anchors, &candidates, 9)
@@ -545,21 +545,20 @@ fn spec_nearest_with_mahvars_and_euclidean_match_the_typed_jobs() {
     let score = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .logistic(
-                LogisticRegressionConfig::builder()
-                    .link(PropensityLink::Probit)
-                    .build(),
-            )
-            .output_scale(PropensityScoreOutputScale::LinearPredictor)
-            .caliper(DistanceCaliper::new(1.0).unwrap())
-            .build(),
+        &PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            logistic: LogisticRegressionConfig {
+                link: PropensityLink::Probit,
+                ..LogisticRegressionConfig::default()
+            },
+            output_scale: PropensityScoreOutputScale::LinearPredictor,
+            caliper: Some(DistanceCaliper::new(1.0).unwrap()),
+            ..PropensityScoreConfig::default()
+        },
         None,
     )
     .unwrap();
@@ -567,13 +566,13 @@ fn spec_nearest_with_mahvars_and_euclidean_match_the_typed_jobs() {
         &anchors,
         &candidates,
         None,
-        &MahalanobisPreparationConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .build(),
-            )
-            .build(),
+        &MahalanobisPreparationConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                ..CovariateEncodingConfig::default()
+            },
+            ..MahalanobisPreparationConfig::default()
+        },
     )
     .unwrap();
     let by_hand = MatchJob::new_standard(&anchors, &candidates, 0)
@@ -600,14 +599,13 @@ fn spec_nearest_with_mahvars_and_euclidean_match_the_typed_jobs() {
         &anchors,
         &candidates,
         None,
-        &EuclideanPreparationConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into(), "region".into()])
-                    .build(),
-            )
-            .scale(EuclideanScale::PooledWithinGroupSd)
-            .build(),
+        &EuclideanPreparationConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into(), "region".into()],
+                ..CovariateEncodingConfig::default()
+            },
+            scale: EuclideanScale::PooledWithinGroupSd,
+        },
     )
     .unwrap();
     let by_hand = MatchJob::new_standard(&anchors, &candidates, 0)
@@ -680,14 +678,14 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
     let prepared = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .build(),
+        &PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        },
         None,
     )
     .unwrap();
@@ -744,14 +742,14 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
     let prepared = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .build(),
+        &PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        },
         None,
     )
     .unwrap();
@@ -1035,13 +1033,13 @@ fn the_typed_jobs_invalid_outcome_is_an_error_from_the_spec() {
         &anchors,
         &candidates,
         None,
-        &MahalanobisPreparationConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .build(),
-            )
-            .build(),
+        &MahalanobisPreparationConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                ..CovariateEncodingConfig::default()
+            },
+            ..MahalanobisPreparationConfig::default()
+        },
     )
     .unwrap();
     let outcome = MatchJob::new_standard(&anchors, &candidates, 0)
@@ -1238,14 +1236,14 @@ fn spec_cem_matches_the_functions_it_wraps() {
         &anchors,
         &candidates,
         None,
-        &MahalanobisPreparationConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(false)
-                    .build(),
-            )
-            .build(),
+        &MahalanobisPreparationConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: false,
+                ..CovariateEncodingConfig::default()
+            },
+            ..MahalanobisPreparationConfig::default()
+        },
     )
     .unwrap();
     let by_hand = cem_k2k_pairs(
@@ -1440,14 +1438,14 @@ fn optimal_and_full_specs_equal_the_typed_calls() {
     let prepared = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .build(),
+        &PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        },
         None,
     )
     .unwrap();
@@ -1460,10 +1458,11 @@ fn optimal_and_full_specs_equal_the_typed_calls() {
         birth_window_days: 36_500,
         ..MatchSpec::default()
     };
-    let criteria = MatchingCriteria::builder()
-        .birth_date_window_days(36_500)
-        .match_ratio(2)
-        .build();
+    let criteria = MatchingCriteria {
+        birth_date_window_days: 36_500,
+        match_ratio: 2,
+        ..MatchingCriteria::default()
+    };
     let request =
         OptimalRequest::new(&criteria, &()).with_distance_config(&prepared.distance_config);
 
@@ -1539,15 +1538,15 @@ fn propensity_spec(caliper: Option<f64>) -> DistanceSpec {
 }
 
 fn propensity_config_by_hand(caliper: Option<f64>) -> PropensityScoreConfig {
-    PropensityScoreConfig::builder()
-        .encoding(
-            CovariateEncodingConfig::builder()
-                .covariate_keys(vec!["age".into(), "income".into(), "region".into()])
-                .include_intercept(true)
-                .build(),
-        )
-        .maybe_caliper(caliper.map(|width| DistanceCaliper::new(width).unwrap()))
-        .build()
+    PropensityScoreConfig {
+        encoding: CovariateEncodingConfig {
+            covariate_keys: vec!["age".into(), "income".into(), "region".into()],
+            include_intercept: true,
+            ..CovariateEncodingConfig::default()
+        },
+        caliper: caliper.map(|width| DistanceCaliper::new(width).unwrap()),
+        ..PropensityScoreConfig::default()
+    }
 }
 
 #[test]
@@ -1675,20 +1674,21 @@ fn spec_reestimate_matches_estimate_propensity_and_match() {
             else {
                 panic!("expected pairs");
             };
-            let criteria = MatchingCriteria::builder()
-                .match_ratio(2)
-                .birth_date_window_days(wide_window())
-                .common_support(typed_policy)
-                .build();
-            let config = PropensityScoreConfig::builder()
-                .encoding(
-                    CovariateEncodingConfig::builder()
-                        .covariate_keys(vec!["age".into(), "income".into(), "region".into()])
-                        .include_intercept(true)
-                        .build(),
-                )
-                .reestimate(true)
-                .build();
+            let criteria = MatchingCriteria {
+                match_ratio: 2,
+                birth_date_window_days: wide_window(),
+                common_support: Some(typed_policy),
+                ..MatchingCriteria::default()
+            };
+            let config = PropensityScoreConfig {
+                encoding: CovariateEncodingConfig {
+                    covariate_keys: vec!["age".into(), "income".into(), "region".into()],
+                    include_intercept: true,
+                    ..CovariateEncodingConfig::default()
+                },
+                reestimate: true,
+                ..PropensityScoreConfig::default()
+            };
             let by_hand = if rounds {
                 estimate_propensity_and_match(
                     &anchors,
@@ -1779,24 +1779,22 @@ fn spec_elastic_net_with_a_penalty_ratio_matches_the_typed_job() {
         else {
             panic!("expected pairs");
         };
-        let config = PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into(), "region".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .estimator(PropensityEstimator::ElasticNetCv(
-                ElasticNetCvConfig::builder()
-                    .seed(5)
-                    .alpha(0.5)
-                    .nfolds(4)
-                    .nlambda(20)
-                    .maybe_lambda_min_ratio(ratio)
-                    .rule(LambdaRule::Min)
-                    .build(),
-            ))
-            .build();
+        let config = PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into(), "region".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            estimator: PropensityEstimator::ElasticNetCv(ElasticNetCvConfig {
+                alpha: 0.5,
+                nfolds: 4,
+                nlambda: 20,
+                lambda_min_ratio: ratio,
+                rule: LambdaRule::Min,
+                ..ElasticNetCvConfig::new(5)
+            }),
+            ..PropensityScoreConfig::default()
+        };
         let prepared =
             prepare_propensity_distance_config(&anchors, &candidates, &config, None).unwrap();
         let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
@@ -1847,20 +1845,19 @@ fn spec_cbps_matches_the_typed_job() {
         else {
             panic!("expected pairs");
         };
-        let config = PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .estimator(PropensityEstimator::Cbps(
-                CbpsConfig::builder()
-                    .estimand(cbps_estimand)
-                    .method(method)
-                    .build(),
-            ))
-            .build();
+        let config = PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            estimator: PropensityEstimator::Cbps(CbpsConfig {
+                estimand: cbps_estimand,
+                method,
+                ..CbpsConfig::default()
+            }),
+            ..PropensityScoreConfig::default()
+        };
         let prepared =
             prepare_propensity_distance_config(&anchors, &candidates, &config, None).unwrap();
         let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
@@ -2218,10 +2215,11 @@ fn fine_balance_spec_equals_the_typed_call() {
     else {
         panic!("expected pairs");
     };
-    let criteria = MatchingCriteria::builder()
-        .birth_date_window_days(36_500)
-        .match_ratio(2)
-        .build();
+    let criteria = MatchingCriteria {
+        birth_date_window_days: 36_500,
+        match_ratio: 2,
+        ..MatchingCriteria::default()
+    };
     let request = OptimalRequest::new(&criteria, &());
     let by_hand = match_fine_balance(&anchors, &candidates, &request, &balance).expect("feasible");
     assert_eq!(outcome.pairs, by_hand.outcome.pairs);
@@ -2378,14 +2376,14 @@ fn spec_genetic_equals_the_direct_search() {
     let prepared = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".into(), "income".into()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .build(),
+        &PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".into(), "income".into()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        },
         None,
     )
     .unwrap();

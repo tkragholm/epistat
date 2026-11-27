@@ -321,11 +321,12 @@ pub struct CovariatesSpec {
 
 impl CovariatesSpec {
     fn encoding(&self, intercept: bool) -> CovariateEncodingConfig {
-        CovariateEncodingConfig::builder()
-            .covariate_keys(self.names.clone())
-            .include_intercept(intercept)
-            .missing_value_policy(self.missing.into())
-            .build()
+        CovariateEncodingConfig {
+            covariate_keys: self.names.clone(),
+            include_intercept: intercept,
+            missing_value_policy: self.missing.into(),
+            ..CovariateEncodingConfig::default()
+        }
     }
 }
 
@@ -1619,33 +1620,31 @@ fn propensity_config(
             alpha,
             lambda,
             standardize,
-        } => PropensityEstimator::ElasticNetLogit(
-            ElasticNetLogisticConfig::builder()
-                .alpha(alpha)
-                .lambda(lambda)
-                .standardize(standardize)
-                .build(),
-        ),
-        EstimatorSpec::Cbps { over } => PropensityEstimator::Cbps(
-            CbpsConfig::builder()
-                .estimand(match estimand {
-                    Estimand::Att => Estimand::Att,
-                    Estimand::Ate => Estimand::Ate,
-                    Estimand::Atc | Estimand::Atm => {
-                        return Err(Error::option(
-                            "estimand",
-                            "the covariate balancing propensity score is defined for the \
+        } => PropensityEstimator::ElasticNetLogit(ElasticNetLogisticConfig {
+            alpha,
+            lambda,
+            standardize,
+            ..ElasticNetLogisticConfig::default()
+        }),
+        EstimatorSpec::Cbps { over } => PropensityEstimator::Cbps(CbpsConfig {
+            estimand: match estimand {
+                Estimand::Att => Estimand::Att,
+                Estimand::Ate => Estimand::Ate,
+                Estimand::Atc | Estimand::Atm => {
+                    return Err(Error::option(
+                        "estimand",
+                        "the covariate balancing propensity score is defined for the \
                              ATT and the ATE only",
-                        ));
-                    }
-                })
-                .method(if over {
-                    CbpsMethod::Over
-                } else {
-                    CbpsMethod::Exact
-                })
-                .build(),
-        ),
+                    ));
+                }
+            },
+            method: if over {
+                CbpsMethod::Over
+            } else {
+                CbpsMethod::Exact
+            },
+            ..CbpsConfig::default()
+        }),
         EstimatorSpec::ElasticNetCv {
             alpha,
             nfolds,
@@ -1653,45 +1652,44 @@ fn propensity_config(
             lambda_min_ratio,
             rule,
             standardize,
-        } => PropensityEstimator::ElasticNetCv(
-            ElasticNetCvConfig::builder()
-                .seed(seed)
-                .alpha(alpha)
-                .nfolds(nfolds)
-                .nlambda(nlambda)
-                .maybe_lambda_min_ratio(lambda_min_ratio)
-                .rule(match rule {
-                    LambdaSpec::Min => LambdaRule::Min,
-                    LambdaSpec::OneStandardError => LambdaRule::OneStandardError,
-                })
-                .standardize(standardize)
-                .build(),
-        ),
+        } => PropensityEstimator::ElasticNetCv(ElasticNetCvConfig {
+            alpha,
+            nfolds,
+            nlambda,
+            lambda_min_ratio,
+            rule: match rule {
+                LambdaSpec::Min => LambdaRule::Min,
+                LambdaSpec::OneStandardError => LambdaRule::OneStandardError,
+            },
+            standardize,
+            ..ElasticNetCvConfig::new(seed)
+        }),
     };
-    let logistic = LogisticRegressionConfig::builder()
-        .link(match link {
+    let logistic = LogisticRegressionConfig {
+        link: match link {
             LinkSpec::Logit => PropensityLink::Logit,
             LinkSpec::Probit => PropensityLink::Probit,
             LinkSpec::Cloglog => PropensityLink::Cloglog,
-        })
-        .build();
-    Ok(PropensityScoreConfig::builder()
-        .encoding(covariates.encoding(true))
-        .estimator(estimator)
-        .logistic(logistic)
-        .output_scale(match scale {
+        },
+        ..LogisticRegressionConfig::default()
+    };
+    Ok(PropensityScoreConfig {
+        encoding: covariates.encoding(true),
+        estimator,
+        logistic,
+        output_scale: match scale {
             ScaleSpec::Probability => PropensityScoreOutputScale::Probability,
             ScaleSpec::Linear => PropensityScoreOutputScale::LinearPredictor,
-        })
-        .maybe_caliper(caliper)
-        .maybe_sampling_weights(sampling_weights.as_ref().map(|weights| {
+        },
+        caliper,
+        sampling_weights: sampling_weights.as_ref().map(|weights| {
             weights
                 .iter()
                 .map(|(id, weight)| (id.clone(), *weight))
                 .collect::<RapidHashMap<_, _>>()
-        }))
-        .reestimate(reestimate)
-        .build())
+        }),
+        reestimate,
+    })
 }
 
 /// The distance of a spec, built from the units, and the model behind it.
@@ -1745,9 +1743,9 @@ fn build_distance<R: CovariateRecord>(
             transform,
             ..
         } => {
-            let config = MahalanobisPreparationConfig::builder()
-                .encoding(covariates.encoding(false))
-                .covariance_strategy(match covariance {
+            let config = MahalanobisPreparationConfig {
+                encoding: covariates.encoding(false),
+                covariance_strategy: match covariance {
                     CovarianceSpec::PooledByDegreesOfFreedom => {
                         MahalanobisCovarianceStrategy::PooledByDegreesOfFreedom
                     }
@@ -1755,13 +1753,13 @@ fn build_distance<R: CovariateRecord>(
                         MahalanobisCovarianceStrategy::PooledWithinGroups
                     }
                     CovarianceSpec::FullSample => MahalanobisCovarianceStrategy::FullSample,
-                })
-                .transform(match transform {
+                },
+                transform: match transform {
                     TransformSpec::Raw => MahalanobisTransform::Raw,
                     TransformSpec::Rank => MahalanobisTransform::Rank,
                     TransformSpec::RankTieAdjusted => MahalanobisTransform::RankTieAdjusted,
-                })
-                .build();
+                },
+            };
             BuiltDistance {
                 config: Some(
                     prepare_mahalanobis_distance_config(anchors, candidates, caliper, &config)?
@@ -1796,14 +1794,14 @@ fn build_distance<R: CovariateRecord>(
         DistanceSpec::Euclidean {
             covariates, scaled, ..
         } => {
-            let config = EuclideanPreparationConfig::builder()
-                .encoding(covariates.encoding(false))
-                .scale(if *scaled {
+            let config = EuclideanPreparationConfig {
+                encoding: covariates.encoding(false),
+                scale: if *scaled {
                     EuclideanScale::PooledWithinGroupSd
                 } else {
                     EuclideanScale::None
-                })
-                .build();
+                },
+            };
             BuiltDistance {
                 config: Some(
                     prepare_euclidean_distance_config(anchors, candidates, caliper, &config)?

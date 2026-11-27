@@ -757,7 +757,6 @@ name = "epistat-matching"
 version = "0.2.0"
 dependencies = [
  "arrow-array",
- "bon",
  "chrono",
  "criterion",
  "epistat-core",

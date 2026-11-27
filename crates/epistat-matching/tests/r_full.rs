@@ -198,13 +198,14 @@ fn subclasses_totals_and_weights_match_matchit() {
         } else {
             DistanceConfig::propensity_score_map(scores, width)
         };
-        let criteria = MatchingCriteria::builder()
-            .required_strata(if run.exact {
+        let criteria = MatchingCriteria {
+            required_strata: if run.exact {
                 vec!["g".to_string()]
             } else {
                 Vec::new()
-            })
-            .build();
+            },
+            ..MatchingCriteria::default()
+        };
         let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance_config);
         let got = match_full(
             &anchors,
@@ -336,7 +337,7 @@ fn match_data_numbers_subclasses_from_one_and_leaves_out_unmatched_units() {
     let anchors = vec![make("a1"), make("a2")];
     let candidates = vec![make("c1"), make("c2"), make("c3")];
     let distance = DistanceConfig::propensity_score_map(scores, None);
-    let criteria = MatchingCriteria::builder().build();
+    let criteria = MatchingCriteria::default();
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
     let outcome =
         match_full(&anchors, &candidates, &request, &FullMatchConfig::default()).expect("feasible");
@@ -395,7 +396,7 @@ fn optmatch_negative_omit_fraction_is_not_the_transposed_problem() {
         }
     }
     let distance = DistanceConfig::euclidean_map(vectors.clone(), 2, None).expect("two columns");
-    let criteria = MatchingCriteria::builder().build();
+    let criteria = MatchingCriteria::default();
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
     let config = FullMatchConfig {
         retain: Retain::OmitFraction(-0.3),

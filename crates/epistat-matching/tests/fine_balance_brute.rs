@@ -92,7 +92,10 @@ fn matches_exhaustive_search() {
         }
         let (anchors, candidates) = records.split_at(na);
         let distance = DistanceConfig::propensity_score_map(scores, None);
-        let criteria = MatchingCriteria::builder().match_ratio(k).build();
+        let criteria = MatchingCriteria {
+            match_ratio: k,
+            ..MatchingCriteria::default()
+        };
         let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
         let balance = FineBalance {
             levels: vec![vec!["a".into()], vec!["b".into()]],

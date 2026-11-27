@@ -19,10 +19,11 @@ fn base_record(id: &str, day_offset: i64) -> BaseRecord {
 
 #[test]
 fn property_no_self_match_and_no_reuse_without_replacement() {
-    let criteria = MatchingCriteria::builder()
-        .birth_date_window_days(365)
-        .match_ratio(2)
-        .build();
+    let criteria = MatchingCriteria {
+        birth_date_window_days: 365,
+        match_ratio: 2,
+        ..MatchingCriteria::default()
+    };
 
     for seed in 0_u64..100 {
         let anchors = (0..20)
@@ -60,9 +61,10 @@ fn property_no_self_match_and_no_reuse_without_replacement() {
 
 #[test]
 fn property_role_transition_respects_age_threshold() {
-    let criteria = MatchingCriteria::builder()
-        .birth_date_window_days(730)
-        .build();
+    let criteria = MatchingCriteria {
+        birth_date_window_days: 730,
+        ..MatchingCriteria::default()
+    };
     let options = RoleTransitionOptions {
         transition_age_limit_years: AgeLimitYears::new(6).expect("positive age limit"),
         ratio_fallback: vec![MatchRatio::new(1).expect("non-zero ratio")],
@@ -156,9 +158,10 @@ fn property_anchor_candidate_api_supports_multiple_record_shapes() {
         }
     }
 
-    let criteria = MatchingCriteria::builder()
-        .birth_date_window_days(365)
-        .build();
+    let criteria = MatchingCriteria {
+        birth_date_window_days: 365,
+        ..MatchingCriteria::default()
+    };
 
     let anchors_a = vec![base_record("a0", 0), base_record("a1", 1)];
     let candidates_a = vec![base_record("c0", 0), base_record("c1", 2)];
@@ -203,19 +206,21 @@ fn property_anchor_candidate_api_supports_multiple_record_shapes() {
 #[test]
 fn criteria_builder_validates() {
     assert!(
-        MatchingCriteria::builder()
-            .match_ratio(0)
-            .build()
-            .validate()
-            .is_err()
+        MatchingCriteria {
+            match_ratio: 0,
+            ..MatchingCriteria::default()
+        }
+        .validate()
+        .is_err()
     );
 
-    let validated = MatchingCriteria::builder()
-        .birth_date_window_days(30)
-        .match_ratio(1)
-        .build()
-        .validate()
-        .expect("valid criteria from builder");
+    let validated = MatchingCriteria {
+        birth_date_window_days: 30,
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    }
+    .validate()
+    .expect("valid criteria from builder");
     assert_eq!(validated.as_ref().match_ratio, 1);
 }
 
@@ -257,10 +262,11 @@ fn requests_accept_an_owned_list_of_boxed_constraints() {
             .with_numeric("mother_birth_year", 1981.0)
             .with_numeric("father_birth_year", 1978.0),
     ];
-    let criteria = MatchingCriteria::builder()
-        .birth_date_window_days(365)
-        .match_ratio(1)
-        .build();
+    let criteria = MatchingCriteria {
+        birth_date_window_days: 365,
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    };
     let constraints = rules_from_config::<BaseRecord>(&config);
     let outcome = match_standard(
         &anchors,

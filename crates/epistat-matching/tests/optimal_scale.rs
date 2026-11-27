@@ -38,7 +38,10 @@ fn one_stratum_of_2000_anchors_and_8000_candidates() {
     let width = DistanceCaliper::new(0.02).expect("caliper");
     let distance = DistanceConfig::propensity_score_map(scores, Some(width));
     for ratio in [1, 2] {
-        let criteria = MatchingCriteria::builder().match_ratio(ratio).build();
+        let criteria = MatchingCriteria {
+            match_ratio: ratio,
+            ..MatchingCriteria::default()
+        };
         let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
         let start = Instant::now();
         let outcome = match_optimal(&anchors, &candidates, &request).expect("feasible");
@@ -48,7 +51,7 @@ fn one_stratum_of_2000_anchors_and_8000_candidates() {
             start.elapsed()
         );
     }
-    let criteria = MatchingCriteria::builder().build();
+    let criteria = MatchingCriteria::default();
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
     let start = Instant::now();
     let outcome =

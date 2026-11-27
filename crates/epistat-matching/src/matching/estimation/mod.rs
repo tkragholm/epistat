@@ -804,14 +804,14 @@ mod tests {
         let elastic_net_prepared = prepare_propensity_distance_config(
             &anchors,
             &candidates,
-            &PropensityScoreConfig::builder()
-                .estimator(PropensityEstimator::ElasticNetLogit(
-                    ElasticNetLogisticConfig::builder()
-                        .lambda(0.5)
-                        .alpha(1.0)
-                        .build(),
-                ))
-                .build(),
+            &PropensityScoreConfig {
+                estimator: PropensityEstimator::ElasticNetLogit(ElasticNetLogisticConfig {
+                    lambda: 0.5,
+                    alpha: 1.0,
+                    ..ElasticNetLogisticConfig::default()
+                }),
+                ..PropensityScoreConfig::default()
+            },
             None,
         )
         .expect("elastic-net propensity estimation should succeed");
@@ -847,18 +847,20 @@ mod tests {
             record("c2", date(2010, 1, 4), 2.0, "south"),
         ];
 
-        let prepared = prepare_propensity_distance_config(
-            &anchors,
-            &candidates,
-            &PropensityScoreConfig::builder()
-                .estimator(PropensityEstimator::ElasticNetLogit(
-                    ElasticNetLogisticConfig::default(),
-                ))
-                .output_scale(PropensityScoreOutputScale::LinearPredictor)
-                .build(),
-            None,
-        )
-        .expect("elastic-net propensity estimation should succeed");
+        let prepared =
+            prepare_propensity_distance_config(
+                &anchors,
+                &candidates,
+                &PropensityScoreConfig {
+                    estimator: PropensityEstimator::ElasticNetLogit(
+                        ElasticNetLogisticConfig::default(),
+                    ),
+                    output_scale: PropensityScoreOutputScale::LinearPredictor,
+                    ..PropensityScoreConfig::default()
+                },
+                None,
+            )
+            .expect("elastic-net propensity estimation should succeed");
         assert_eq!(prepared.estimate.estimator, "elastic_net_logit");
         for (id, score) in prepared
             .estimate
@@ -881,13 +883,13 @@ mod tests {
         let err = prepare_propensity_distance_config(
             &anchors,
             &candidates,
-            &PropensityScoreConfig::builder()
-                .estimator(PropensityEstimator::ElasticNetLogit(
-                    ElasticNetLogisticConfig::builder()
-                        .probability_clip(0.75)
-                        .build(),
-                ))
-                .build(),
+            &PropensityScoreConfig {
+                estimator: PropensityEstimator::ElasticNetLogit(ElasticNetLogisticConfig {
+                    probability_clip: 0.75,
+                    ..ElasticNetLogisticConfig::default()
+                }),
+                ..PropensityScoreConfig::default()
+            },
             None,
         )
         .expect_err("invalid elastic-net configuration should fail");
@@ -909,9 +911,10 @@ mod tests {
             DeterministicSelection,
             &[],
             &(),
-            &PropensityScoreConfig::builder()
-                .caliper(DistanceCaliper::new(10.0).expect("valid positive caliper"))
-                .build(),
+            &PropensityScoreConfig {
+                caliper: Some(DistanceCaliper::new(10.0).expect("valid positive caliper")),
+                ..PropensityScoreConfig::default()
+            },
         )
         .expect("matching wrapper should succeed");
 
@@ -961,10 +964,11 @@ mod tests {
             &anchors,
             &candidates,
             Some(DistanceCaliper::new(5.0).expect("valid positive caliper")),
-            &MahalanobisPreparationConfig::builder()
-                .covariance_strategy(MahalanobisCovarianceStrategy::FullSample)
-                .transform(MahalanobisTransform::Rank)
-                .build(),
+            &MahalanobisPreparationConfig {
+                covariance_strategy: MahalanobisCovarianceStrategy::FullSample,
+                transform: MahalanobisTransform::Rank,
+                ..MahalanobisPreparationConfig::default()
+            },
         )
         .expect("rank + full-sample config should succeed");
         assert_eq!(prepared.vectors.len(), 4);
@@ -1103,14 +1107,14 @@ mod tests {
             .insert("age".to_string(), CovariateValue::Numeric(5.0));
         let candidate = BalanceRecord::new("c1", date(2010, 1, 1));
 
-        let config = PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".to_string()])
-                    .include_intercept(true)
-                    .build(),
-            )
-            .build();
+        let config = PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".to_string()],
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        };
 
         let err = prepare_propensity_distance_config(&[anchor], &[candidate], &config, None)
             .expect_err("missing values should fail");
@@ -1125,15 +1129,15 @@ mod tests {
             .insert("age".to_string(), CovariateValue::Numeric(5.0));
         let candidate = BalanceRecord::new("c1", date(2010, 1, 1));
 
-        let config = PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .covariate_keys(vec!["age".to_string()])
-                    .include_intercept(true)
-                    .missing_value_policy(MissingValuePolicy::Impute)
-                    .build(),
-            )
-            .build();
+        let config = PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                covariate_keys: vec!["age".to_string()],
+                include_intercept: true,
+                missing_value_policy: MissingValuePolicy::Impute,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        };
 
         let prepared = prepare_propensity_distance_config(&[anchor], &[candidate], &config, None)
             .expect("impute mode should succeed");
@@ -1248,9 +1252,13 @@ mod tests {
         assert!(prepared.estimate.fitted_at_boundary);
 
         let (anchors, candidates) = collinear_groups();
-        let short = PropensityScoreConfig::builder()
-            .logistic(LogisticRegressionConfig::builder().max_iter(1).build())
-            .build();
+        let short = PropensityScoreConfig {
+            logistic: LogisticRegressionConfig {
+                max_iter: 1,
+                ..LogisticRegressionConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        };
         let prepared = prepare_propensity_distance_config(&anchors, &candidates, &short, None)
             .expect("a short fit is returned");
         assert!(!prepared.estimate.converged);
@@ -1261,15 +1269,27 @@ mod tests {
     fn invalid_glm_settings_and_reestimate_without_a_policy_are_errors() {
         let (anchors, candidates) = collinear_groups();
         for logistic in [
-            LogisticRegressionConfig::builder().max_iter(0).build(),
-            LogisticRegressionConfig::builder().tolerance(0.0).build(),
+            LogisticRegressionConfig {
+                max_iter: 0,
+                ..LogisticRegressionConfig::default()
+            },
+            LogisticRegressionConfig {
+                tolerance: 0.0,
+                ..LogisticRegressionConfig::default()
+            },
         ] {
-            let config = PropensityScoreConfig::builder().logistic(logistic).build();
+            let config = PropensityScoreConfig {
+                logistic,
+                ..PropensityScoreConfig::default()
+            };
             let err = prepare_propensity_distance_config(&anchors, &candidates, &config, None)
                 .expect_err("invalid settings are refused");
             assert!(matches!(err, Error::InvalidModelControl));
         }
-        let config = PropensityScoreConfig::builder().reestimate(true).build();
+        let config = PropensityScoreConfig {
+            reestimate: true,
+            ..PropensityScoreConfig::default()
+        };
         let err = prepare_propensity_distance_config(&anchors, &candidates, &config, None)
             .expect_err("reestimate needs a policy");
         assert!(matches!(err, Error::ReestimateWithoutDiscard));
@@ -1313,11 +1333,10 @@ mod tests {
     #[test]
     fn elastic_net_fit_reports_no_aliased_column() {
         let (anchors, candidates) = collinear_groups();
-        let config = PropensityScoreConfig::builder()
-            .estimator(PropensityEstimator::ElasticNetLogit(
-                ElasticNetLogisticConfig::default(),
-            ))
-            .build();
+        let config = PropensityScoreConfig {
+            estimator: PropensityEstimator::ElasticNetLogit(ElasticNetLogisticConfig::default()),
+            ..PropensityScoreConfig::default()
+        };
         let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config, None)
             .expect("elastic net fit should succeed");
         assert_eq!(prepared.estimate.aliased_columns, Vec::<String>::new());

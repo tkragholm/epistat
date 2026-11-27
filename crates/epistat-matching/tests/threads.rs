@@ -196,12 +196,13 @@ fn balance_inputs(
 }
 
 fn criteria(ratio: usize, replacement: bool) -> MatchingCriteria {
-    MatchingCriteria::builder()
-        .birth_date_window_days(45)
-        .match_ratio(ratio)
-        .required_strata(vec!["sex".to_string(), "region".to_string()])
-        .allow_replacement(replacement)
-        .build()
+    MatchingCriteria {
+        birth_date_window_days: 45,
+        match_ratio: ratio,
+        required_strata: vec!["sex".to_string(), "region".to_string()],
+        allow_replacement: replacement,
+        ..MatchingCriteria::default()
+    }
 }
 
 fn base_pair(
@@ -524,14 +525,14 @@ fn run_with_balance_and_balance_reports() {
             NumericBalanceTransform::SquaresAndPairwiseInteractions,
         ] {
             for with_supplement in [false, true] {
-                let options = BalanceReportOptions::builder()
-                    .numeric_transforms(transform)
-                    .supplemental_covariates(if with_supplement {
+                let options = BalanceReportOptions {
+                    numeric_transforms: transform,
+                    supplemental_covariates: if with_supplement {
                         supplemental.clone()
                     } else {
                         SupplementalBalanceCovariates::default()
-                    })
-                    .build();
+                    },
+                };
                 let report = balance_report(&cases, &controls, &first, &options);
                 assert!(!report.numeric.is_empty(), "no output, test is vacuous");
                 d.debug(&report);
@@ -607,13 +608,11 @@ fn transition_run_with_balance() {
 fn propensity_estimation_and_matching() {
     let (anchors, candidates) = balance_inputs(600, 2_400, 4);
     let elastic = PropensityEstimator::ElasticNetLogit(ElasticNetLogisticConfig::default());
-    let cross_validated = PropensityEstimator::ElasticNetCv(
-        ElasticNetCvConfig::builder()
-            .seed(11)
-            .nfolds(3)
-            .nlambda(12)
-            .build(),
-    );
+    let cross_validated = PropensityEstimator::ElasticNetCv(ElasticNetCvConfig {
+        nfolds: 3,
+        nlambda: 12,
+        ..ElasticNetCvConfig::new(11)
+    });
     let logit = PropensityLink::Logit;
     for (name, estimator, scale, link) in [
         (
@@ -648,12 +647,11 @@ fn propensity_estimation_and_matching() {
         ),
         (
             "cbps_exact_ate",
-            PropensityEstimator::Cbps(
-                CbpsConfig::builder()
-                    .estimand(Estimand::Ate)
-                    .method(CbpsMethod::Exact)
-                    .build(),
-            ),
+            PropensityEstimator::Cbps(CbpsConfig {
+                estimand: Estimand::Ate,
+                method: CbpsMethod::Exact,
+                ..CbpsConfig::default()
+            }),
             PropensityScoreOutputScale::LinearPredictor,
             logit,
         ),
@@ -670,17 +668,20 @@ fn propensity_estimation_and_matching() {
             logit,
         ),
     ] {
-        let config = PropensityScoreConfig::builder()
-            .estimator(estimator)
-            .output_scale(scale)
-            .logistic(LogisticRegressionConfig::builder().link(link).build())
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .include_intercept(true)
-                    .missing_value_policy(MissingValuePolicy::Impute)
-                    .build(),
-            )
-            .build();
+        let config = PropensityScoreConfig {
+            estimator,
+            output_scale: scale,
+            logistic: LogisticRegressionConfig {
+                link,
+                ..LogisticRegressionConfig::default()
+            },
+            encoding: CovariateEncodingConfig {
+                include_intercept: true,
+                missing_value_policy: MissingValuePolicy::Impute,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        };
         for replacement in [false, true] {
             assert_same_on_pools(&POOLS, || {
                 let mut d = Digest::default();
@@ -720,15 +721,15 @@ fn propensity_estimation_and_matching() {
 fn reestimated_propensity_and_nearest_matching() {
     use epistat_matching::{CommonSupport, NearestSelection};
     let (anchors, candidates) = balance_inputs(600, 2_400, 4);
-    let config = PropensityScoreConfig::builder()
-        .reestimate(true)
-        .encoding(
-            CovariateEncodingConfig::builder()
-                .include_intercept(true)
-                .missing_value_policy(MissingValuePolicy::Impute)
-                .build(),
-        )
-        .build();
+    let config = PropensityScoreConfig {
+        reestimate: true,
+        encoding: CovariateEncodingConfig {
+            include_intercept: true,
+            missing_value_policy: MissingValuePolicy::Impute,
+            ..CovariateEncodingConfig::default()
+        },
+        ..PropensityScoreConfig::default()
+    };
     for policy in [
         CommonSupport::Treated,
         CommonSupport::Control,
@@ -736,10 +737,11 @@ fn reestimated_propensity_and_nearest_matching() {
     ] {
         assert_same_on_pools(&POOLS, || {
             let mut d = Digest::default();
-            let criteria = MatchingCriteria::builder()
-                .match_ratio(2)
-                .common_support(policy)
-                .build();
+            let criteria = MatchingCriteria {
+                match_ratio: 2,
+                common_support: Some(policy),
+                ..MatchingCriteria::default()
+            };
             let matched = estimate_propensity_and_match(
                 &anchors,
                 &candidates,
@@ -766,39 +768,41 @@ fn reestimated_propensity_and_nearest_matching() {
 fn nearest_matching_on_prepared_distances() {
     use epistat_matching::MatchOrder;
     let (anchors, candidates) = balance_inputs(150, 600, 9);
-    let impute = CovariateEncodingConfig::builder()
-        .missing_value_policy(MissingValuePolicy::Impute)
-        .build();
+    let impute = CovariateEncodingConfig {
+        missing_value_policy: MissingValuePolicy::Impute,
+        ..CovariateEncodingConfig::default()
+    };
     assert_same_on_pools(&POOLS, || {
         let mut d = Digest::default();
         let mahalanobis = prepare_mahalanobis_distance_config(
             &anchors,
             &candidates,
             None,
-            &MahalanobisPreparationConfig::builder()
-                .encoding(impute.clone())
-                .build(),
+            &MahalanobisPreparationConfig {
+                encoding: impute.clone(),
+                ..MahalanobisPreparationConfig::default()
+            },
         )
         .unwrap();
         let robust = prepare_mahalanobis_distance_config(
             &anchors,
             &candidates,
             None,
-            &MahalanobisPreparationConfig::builder()
-                .encoding(impute.clone())
-                .covariance_strategy(MahalanobisCovarianceStrategy::FullSample)
-                .transform(MahalanobisTransform::RankTieAdjusted)
-                .build(),
+            &MahalanobisPreparationConfig {
+                encoding: impute.clone(),
+                covariance_strategy: MahalanobisCovarianceStrategy::FullSample,
+                transform: MahalanobisTransform::RankTieAdjusted,
+            },
         )
         .unwrap();
         let euclidean = prepare_euclidean_distance_config(
             &anchors,
             &candidates,
             None,
-            &EuclideanPreparationConfig::builder()
-                .encoding(impute.clone())
-                .scale(EuclideanScale::PooledWithinGroupSd)
-                .build(),
+            &EuclideanPreparationConfig {
+                encoding: impute.clone(),
+                scale: EuclideanScale::PooledWithinGroupSd,
+            },
         )
         .unwrap();
         for config in [
@@ -836,15 +840,14 @@ fn mahalanobis_preparation_and_matching() {
             MahalanobisTransform::Rank,
             MahalanobisTransform::RankTieAdjusted,
         ] {
-            let config = MahalanobisPreparationConfig::builder()
-                .covariance_strategy(strategy)
-                .transform(transform)
-                .encoding(
-                    CovariateEncodingConfig::builder()
-                        .missing_value_policy(MissingValuePolicy::Impute)
-                        .build(),
-                )
-                .build();
+            let config = MahalanobisPreparationConfig {
+                covariance_strategy: strategy,
+                transform,
+                encoding: CovariateEncodingConfig {
+                    missing_value_policy: MissingValuePolicy::Impute,
+                    ..CovariateEncodingConfig::default()
+                },
+            };
             assert_same_on_pools(&POOLS, || {
                 let mut d = Digest::default();
                 let prepared =
@@ -884,14 +887,13 @@ fn mahalanobis_preparation_and_matching() {
 fn euclidean_preparation_and_matching() {
     let (anchors, candidates) = balance_inputs(600, 2_400, 5);
     for scale in [EuclideanScale::None, EuclideanScale::PooledWithinGroupSd] {
-        let config = EuclideanPreparationConfig::builder()
-            .scale(scale)
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .missing_value_policy(MissingValuePolicy::Impute)
-                    .build(),
-            )
-            .build();
+        let config = EuclideanPreparationConfig {
+            scale,
+            encoding: CovariateEncodingConfig {
+                missing_value_policy: MissingValuePolicy::Impute,
+                ..CovariateEncodingConfig::default()
+            },
+        };
         assert_same_on_pools(&POOLS, || {
             let mut d = Digest::default();
             let prepared = prepare_euclidean_distance_config(
@@ -935,14 +937,14 @@ fn subclassification() {
     let prepared = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .include_intercept(true)
-                    .missing_value_policy(MissingValuePolicy::Impute)
-                    .build(),
-            )
-            .build(),
+        &PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                include_intercept: true,
+                missing_value_policy: MissingValuePolicy::Impute,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        },
         None,
     )
     .unwrap();
@@ -1186,13 +1188,13 @@ fn coarsened_exact_matching() {
         &anchors,
         &candidates,
         None,
-        &EuclideanPreparationConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .missing_value_policy(MissingValuePolicy::Impute)
-                    .build(),
-            )
-            .build(),
+        &EuclideanPreparationConfig {
+            encoding: CovariateEncodingConfig {
+                missing_value_policy: MissingValuePolicy::Impute,
+                ..CovariateEncodingConfig::default()
+            },
+            ..EuclideanPreparationConfig::default()
+        },
     )
     .unwrap()
     .distance_config;
@@ -1399,10 +1401,11 @@ fn optimal_and_full_matching() {
         }
     }
     let distance = DistanceConfig::propensity_score_map(scores, None);
-    let criteria = MatchingCriteria::builder()
-        .match_ratio(2)
-        .required_strata(vec!["g".to_string()])
-        .build();
+    let criteria = MatchingCriteria {
+        match_ratio: 2,
+        required_strata: vec!["g".to_string()],
+        ..MatchingCriteria::default()
+    };
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
     assert_same_on_pools(&POOLS, || {
         let mut d = Digest::default();
@@ -1469,10 +1472,11 @@ fn fine_balance_matching() {
         }
     }
     let distance = DistanceConfig::propensity_score_map(scores, None);
-    let criteria = MatchingCriteria::builder()
-        .match_ratio(2)
-        .required_strata(vec!["g".to_string()])
-        .build();
+    let criteria = MatchingCriteria {
+        match_ratio: 2,
+        required_strata: vec!["g".to_string()],
+        ..MatchingCriteria::default()
+    };
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
     let balance = FineBalance {
         levels: vec![vec!["coarse".into()], vec!["fine".into()]],

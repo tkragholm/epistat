@@ -625,13 +625,14 @@ fn run_fit(set_name: &str, set: &Set, fit: &Fit, source: Source) {
         .collect::<Vec<_>>();
     let weights = weights_for(fit, &ids, &sample, source);
     let interactions = fit.int_std.is_some();
-    let options = BalanceReportOptions::builder()
-        .numeric_transforms(if interactions {
+    let options = BalanceReportOptions {
+        numeric_transforms: if interactions {
             NumericBalanceTransform::SquaresAndPairwiseInteractions
         } else {
             NumericBalanceTransform::None
-        })
-        .build();
+        },
+        ..BalanceReportOptions::default()
+    };
     let summary = balance_summary(&sample.cases, &sample.controls, &weights, &options).unwrap();
     let label = format!(
         "{set_name} {} ({})",

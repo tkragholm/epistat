@@ -587,9 +587,10 @@ fn squares_and_interactions_agree_with_matchit() {
             .iter()
             .find(|fit| fit.name == "att_replace")
             .unwrap();
-        let options = BalanceReportOptions::builder()
-            .numeric_transforms(NumericBalanceTransform::SquaresAndPairwiseInteractions)
-            .build();
+        let options = BalanceReportOptions {
+            numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
+            ..BalanceReportOptions::default()
+        };
         let report = balance_report(
             &sample.cases,
             &sample.controls,
@@ -670,9 +671,10 @@ fn supplemental_covariates_agree_with_addlvariables() {
     for (set_name, set, on, addl) in sets(&reference) {
         let sample = groups(&set.data, on, addl);
         for fit in set.fits.iter().filter(|fit| !fit.pairs.is_empty()) {
-            let options = BalanceReportOptions::builder()
-                .supplemental_covariates(sample.supplemental.clone())
-                .build();
+            let options = BalanceReportOptions {
+                supplemental_covariates: sample.supplemental.clone(),
+                ..BalanceReportOptions::default()
+            };
             let report = balance_report(
                 &sample.cases,
                 &sample.controls,

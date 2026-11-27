@@ -2410,10 +2410,11 @@ mod tests {
             let data = case(&mut rng, anchors, candidates, strata, grid);
             let caliper = (round % 5 == 4).then(|| DistanceCaliper::new(0.3).expect("caliper"));
             let distance = DistanceConfig::propensity_score_map(data.scores.clone(), caliper);
-            let criteria = MatchingCriteria::builder()
-                .match_ratio(ratio)
-                .required_strata(vec!["s".to_string()])
-                .build();
+            let criteria = MatchingCriteria {
+                match_ratio: ratio,
+                required_strata: vec!["s".to_string()],
+                ..MatchingCriteria::default()
+            };
             let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
             for levels in [
                 vec![vec!["a".to_string()]],
@@ -2470,9 +2471,10 @@ mod tests {
         let mut rng = Lcg(99);
         let data = case(&mut rng, 60, 200, 5, 16);
         let distance = DistanceConfig::propensity_score_map(data.scores.clone(), None);
-        let criteria = MatchingCriteria::builder()
-            .required_strata(vec!["s".to_string()])
-            .build();
+        let criteria = MatchingCriteria {
+            required_strata: vec!["s".to_string()],
+            ..MatchingCriteria::default()
+        };
         let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
         let balance = FineBalance {
             levels: vec![vec!["a".to_string()], vec!["b".to_string()]],

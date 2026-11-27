@@ -148,10 +148,11 @@ fn mahalanobis_ratio(
     transform: MahalanobisTransform,
 ) -> f64 {
     let (anchors, candidates) = records(case);
-    let config = MahalanobisPreparationConfig::builder()
-        .covariance_strategy(strategy)
-        .transform(transform)
-        .build();
+    let config = MahalanobisPreparationConfig {
+        covariance_strategy: strategy,
+        transform,
+        ..MahalanobisPreparationConfig::default()
+    };
     let prepared = prepare_mahalanobis_distance_config(&anchors, &candidates, None, &config)
         .expect("preparation");
     let metric = IdMapMahalanobisDistance::new(&prepared.vectors, &prepared.inverse_covariance);
@@ -258,7 +259,10 @@ fn euclidean_and_scaled_euclidean() {
             let Some(expected) = case.distances.get(key) else {
                 continue;
             };
-            let config = EuclideanPreparationConfig::builder().scale(scale).build();
+            let config = EuclideanPreparationConfig {
+                scale,
+                ..EuclideanPreparationConfig::default()
+            };
             let prepared =
                 prepare_euclidean_distance_config(&anchors, &candidates, None, &config).unwrap();
             let metric = IdMapEuclideanDistance::new(&prepared.vectors);
@@ -380,9 +384,10 @@ fn column_without_variance_within_groups_cannot_be_scaled() {
         unit("c2", 1.0, 9.0),
         unit("c3", 2.0, 9.0),
     ];
-    let scaled = EuclideanPreparationConfig::builder()
-        .scale(EuclideanScale::PooledWithinGroupSd)
-        .build();
+    let scaled = EuclideanPreparationConfig {
+        scale: EuclideanScale::PooledWithinGroupSd,
+        ..EuclideanPreparationConfig::default()
+    };
     assert!(matches!(
         prepare_euclidean_distance_config(&anchors, &candidates, None, &scaled),
         Err(Error::ZeroWithinGroupVariance { column }) if column == "b"

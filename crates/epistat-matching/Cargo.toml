@@ -39,7 +39,6 @@ epistat-optim = { path = "../epistat-optim", version = "0.2.0", features = ["ray
 epistat-register = { path = "../epistat-register", version = "0.1.1" }
 epistat-rng = { path = "../epistat-rng", version = "0.2.0" }
 epistat-stats = { path = "../epistat-stats", version = "0.3.0" }
-bon = "3"
 chrono = { version = "0.4", features = ["serde"] }
 itertools = "0.14"
 ordered-float = "5"

@@ -358,19 +358,21 @@ fn k2k_pairs_match_matchit() {
         let (anchors, candidates, _) = records(&reference, run, group);
         let strata = cem_strata(&anchors, &candidates, &variables(run)).expect("strata");
         let names: Vec<String> = run.vars.iter().map(|var| var.name.clone()).collect();
-        let encoding = CovariateEncodingConfig::builder()
-            .covariate_keys(names)
-            .include_intercept(false)
-            .build();
+        let encoding = CovariateEncodingConfig {
+            covariate_keys: names,
+            include_intercept: false,
+            ..CovariateEncodingConfig::default()
+        };
         let config = match k2k.method.as_str() {
             "mahalanobis" => {
                 prepare_mahalanobis_distance_config(
                     &anchors,
                     &candidates,
                     None,
-                    &MahalanobisPreparationConfig::builder()
-                        .encoding(encoding)
-                        .build(),
+                    &MahalanobisPreparationConfig {
+                        encoding,
+                        ..MahalanobisPreparationConfig::default()
+                    },
                 )
                 .expect("mahalanobis")
                 .distance_config
@@ -380,14 +382,14 @@ fn k2k_pairs_match_matchit() {
                     &anchors,
                     &candidates,
                     None,
-                    &EuclideanPreparationConfig::builder()
-                        .encoding(encoding)
-                        .scale(if k2k.method == "euclidean" {
+                    &EuclideanPreparationConfig {
+                        encoding,
+                        scale: if k2k.method == "euclidean" {
                             EuclideanScale::None
                         } else {
                             EuclideanScale::PooledWithinGroupSd
-                        })
-                        .build(),
+                        },
+                    },
                 )
                 .expect("euclidean")
                 .distance_config

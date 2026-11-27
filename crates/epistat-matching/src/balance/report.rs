@@ -1591,9 +1591,10 @@ mod tests {
             &[case_a, case_b],
             &[control_a, control_b],
             &test_outcome(vec![MatchedPair::new("case_a", "control_b")], 1, 0),
-            &BalanceReportOptions::builder()
-                .numeric_transforms(NumericBalanceTransform::Squares)
-                .build(),
+            &BalanceReportOptions {
+                numeric_transforms: NumericBalanceTransform::Squares,
+                ..BalanceReportOptions::default()
+            },
         );
 
         let names = report
@@ -1640,9 +1641,10 @@ mod tests {
             &[case_a, case_b],
             &[control_a, control_b],
             &test_outcome(vec![MatchedPair::new("case_a", "control_b")], 1, 0),
-            &BalanceReportOptions::builder()
-                .numeric_transforms(NumericBalanceTransform::SquaresAndPairwiseInteractions)
-                .build(),
+            &BalanceReportOptions {
+                numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
+                ..BalanceReportOptions::default()
+            },
         );
 
         let names = report
@@ -1964,9 +1966,10 @@ mod tests {
             2,
             0,
         );
-        let options = BalanceReportOptions::builder()
-            .numeric_transforms(NumericBalanceTransform::SquaresAndPairwiseInteractions)
-            .build();
+        let options = BalanceReportOptions {
+            numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
+            ..BalanceReportOptions::default()
+        };
         let pairs = balance_report(&cases, &controls, &outcome, &options);
         let weights = BalanceWeights::from_outcome(&outcome);
         let on_weights = balance_summary(&cases, &controls, &weights, &options)
@@ -2167,9 +2170,10 @@ mod tests {
     fn interactions_include_the_dummies_of_a_factor_in_column_order() {
         let (cases, controls) = small_groups();
         let outcome = test_outcome(vec![MatchedPair::new("t1", "c1")], 1, 0);
-        let options = BalanceReportOptions::builder()
-            .numeric_transforms(NumericBalanceTransform::SquaresAndPairwiseInteractions)
-            .build();
+        let options = BalanceReportOptions {
+            numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
+            ..BalanceReportOptions::default()
+        };
         let report = balance_report(&cases, &controls, &outcome, &options);
         let names = report
             .numeric

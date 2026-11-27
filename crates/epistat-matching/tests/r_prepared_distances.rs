@@ -159,10 +159,11 @@ fn prepared(
             .distance_config
         }
         "robust_mahalanobis" => {
-            let config = MahalanobisPreparationConfig::builder()
-                .covariance_strategy(MahalanobisCovarianceStrategy::FullSample)
-                .transform(MahalanobisTransform::RankTieAdjusted)
-                .build();
+            let config = MahalanobisPreparationConfig {
+                covariance_strategy: MahalanobisCovarianceStrategy::FullSample,
+                transform: MahalanobisTransform::RankTieAdjusted,
+                ..MahalanobisPreparationConfig::default()
+            };
             prepare_mahalanobis_distance_config(anchors, candidates, caliper, &config)
                 .expect("preparation")
                 .distance_config
@@ -173,7 +174,10 @@ fn prepared(
             } else {
                 EuclideanScale::PooledWithinGroupSd
             };
-            let config = EuclideanPreparationConfig::builder().scale(scale).build();
+            let config = EuclideanPreparationConfig {
+                scale,
+                ..EuclideanPreparationConfig::default()
+            };
             prepare_euclidean_distance_config(anchors, candidates, caliper, &config)
                 .expect("preparation")
                 .distance_config

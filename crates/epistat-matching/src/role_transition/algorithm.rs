@@ -1438,7 +1438,10 @@ mod tests {
 
     #[test]
     fn transition_policy_filters_non_resident_cases() {
-        let criteria = MatchingCriteria::builder().allow_replacement(true).build();
+        let criteria = MatchingCriteria {
+            allow_replacement: true,
+            ..MatchingCriteria::default()
+        };
         let options = RoleTransitionOptions {
             transition_age_limit_years: age_limit(6),
             ratio_fallback: vec![ratio(1)],
@@ -1478,9 +1481,10 @@ mod tests {
 
     #[test]
     fn transition_supports_reusable_distance_channels() {
-        let criteria = MatchingCriteria::builder()
-            .birth_date_window_days(0)
-            .build();
+        let criteria = MatchingCriteria {
+            birth_date_window_days: 0,
+            ..MatchingCriteria::default()
+        };
         let options = RoleTransitionOptions {
             transition_age_limit_years: age_limit(6),
             ratio_fallback: vec![ratio(1)],
@@ -1519,10 +1523,11 @@ mod tests {
 
     #[test]
     fn transition_default_ratio_behavior_allows_partial_matching() {
-        let criteria = MatchingCriteria::builder()
-            .birth_date_window_days(10)
-            .match_ratio(2)
-            .build();
+        let criteria = MatchingCriteria {
+            birth_date_window_days: 10,
+            match_ratio: 2,
+            ..MatchingCriteria::default()
+        };
         let options = RoleTransitionOptions {
             transition_age_limit_years: age_limit(6),
             ratio_fallback: Vec::new(),
@@ -1552,10 +1557,11 @@ mod tests {
 
     #[test]
     fn transition_explicit_ratio_fallback_is_strict() {
-        let criteria = MatchingCriteria::builder()
-            .birth_date_window_days(10)
-            .match_ratio(2)
-            .build();
+        let criteria = MatchingCriteria {
+            birth_date_window_days: 10,
+            match_ratio: 2,
+            ..MatchingCriteria::default()
+        };
         let options = RoleTransitionOptions {
             transition_age_limit_years: age_limit(6),
             ratio_fallback: vec![ratio(2)],
@@ -1585,9 +1591,10 @@ mod tests {
 
     #[test]
     fn transition_common_support_requires_propensity_score_map() {
-        let criteria = MatchingCriteria::builder()
-            .common_support(CommonSupport::Both)
-            .build();
+        let criteria = MatchingCriteria {
+            common_support: Some(CommonSupport::Both),
+            ..MatchingCriteria::default()
+        };
         let options = RoleTransitionOptions {
             transition_age_limit_years: age_limit(6),
             ratio_fallback: vec![ratio(1)],
@@ -1624,10 +1631,11 @@ mod tests {
 
     #[test]
     fn transition_propensity_common_support_updates_estimand_diagnostics() {
-        let criteria = MatchingCriteria::builder()
-            .birth_date_window_days(0)
-            .common_support(CommonSupport::Control)
-            .build();
+        let criteria = MatchingCriteria {
+            birth_date_window_days: 0,
+            common_support: Some(CommonSupport::Control),
+            ..MatchingCriteria::default()
+        };
         let options = RoleTransitionOptions {
             transition_age_limit_years: age_limit(6),
             ratio_fallback: vec![ratio(1)],

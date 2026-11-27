@@ -111,17 +111,18 @@ fn matching_after_reestimation_keeps_the_units_matchit_keeps() {
                 candidates.push(record);
             }
         }
-        let criteria = MatchingCriteria::builder()
-            .match_ratio(run.ratio)
-            .common_support(policy_of(&run.policy))
-            .build();
-        let config = PropensityScoreConfig::builder()
-            .reestimate(true)
-            .maybe_caliper(
-                run.caliper
-                    .map(|width| DistanceCaliper::new(width).expect("positive")),
-            )
-            .build();
+        let criteria = MatchingCriteria {
+            match_ratio: run.ratio,
+            common_support: Some(policy_of(&run.policy)),
+            ..MatchingCriteria::default()
+        };
+        let config = PropensityScoreConfig {
+            reestimate: true,
+            caliper: run
+                .caliper
+                .map(|width| DistanceCaliper::new(width).expect("positive")),
+            ..PropensityScoreConfig::default()
+        };
         let matched = estimate_propensity_and_match(
             &anchors,
             &candidates,

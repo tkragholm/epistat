@@ -71,14 +71,14 @@ fn folds_with_zero_folds_are_an_error() {
 fn elastic_net_rejects_alpha_above_one_and_negative_lambda() {
     let (a, c) = balance_records(60, |i| (i % 5) as f64 + 0.3 * ((i * 31) % 7) as f64);
     for (alpha, lambda) in [(2.0, 0.01), (0.5, -1.0), (-0.5, 0.01)] {
-        let cfg = PropensityScoreConfig::builder()
-            .estimator(PropensityEstimator::ElasticNetLogit(
-                ElasticNetLogisticConfig::builder()
-                    .alpha(alpha)
-                    .lambda(lambda)
-                    .build(),
-            ))
-            .build();
+        let cfg = PropensityScoreConfig {
+            estimator: PropensityEstimator::ElasticNetLogit(ElasticNetLogisticConfig {
+                alpha,
+                lambda,
+                ..ElasticNetLogisticConfig::default()
+            }),
+            ..PropensityScoreConfig::default()
+        };
         let r = prepare_propensity_distance_config(&a, &c, &cfg, None);
         assert!(r.is_err(), "alpha {alpha}, lambda {lambda} accepted");
     }
