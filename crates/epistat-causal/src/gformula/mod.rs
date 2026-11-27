@@ -172,6 +172,7 @@ mod history;
 mod prepare;
 mod simulate;
 
+use epistat_core::{Level, Panel};
 use epistat_inference::interval::{self, Percentile};
 use epistat_rng::replicate_seed;
 use rayon::prelude::*;
@@ -182,10 +183,10 @@ pub use history::{History, Term};
 /// The person-period table, one row per person and period.
 #[derive(Debug, Clone, Copy)]
 pub struct PersonPeriods<'a> {
-    /// The person of each row. A person's rows are contiguous.
-    pub id: &'a [u64],
-    /// The period of each row, `0, 1, 2, ...` within a person.
-    pub period: &'a [usize],
+    /// The person (unit code) and period of each row, sorted by person and
+    /// period. Each person's periods are `0, 1, 2, ...`, and persons are
+    /// simulated in the order of their codes.
+    pub key: Panel<'a>,
     /// Variables that do not change within a person, one slice of rows each.
     pub baseline: &'a [&'a [f64]],
     /// The time-varying variables, one slice of rows each, in the order in
@@ -195,6 +196,7 @@ pub struct PersonPeriods<'a> {
 }
 
 /// The distribution of a time-varying covariate given its history.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CovariateKind {
     /// 0 or 1, by logistic regression.
@@ -283,13 +285,15 @@ pub enum WeightCutoff {
     #[default]
     None,
     /// At the quantile of this probability of the weights of every row, the
-    /// censored rows' 0 among them (R's type 7 quantile).
+    /// censored rows' 0 among them (R's type 7 quantile). The probability
+    /// must lie in `[0, 1]`.
     Quantile(f64),
-    /// At this value.
+    /// At this value, which must be positive and finite.
     Value(f64),
 }
 
 /// The outcome and its model.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum Outcome<'a> {
     /// An event in discrete time: the risk by each period.
@@ -329,6 +333,7 @@ pub enum Outcome<'a> {
 pub type DynamicRule = Box<dyn Fn(&History<'_>, f64) -> f64 + Send + Sync>;
 
 /// How a rule sets its variable.
+#[non_exhaustive]
 pub enum Action {
     /// The same value at every period (gfoRmula's `static` with one value).
     Set(f64),
@@ -362,6 +367,61 @@ pub struct Rule {
 pub struct Intervention {
     /// At most one rule per variable.
     pub rules: Vec<Rule>,
+}
+
+impl std::fmt::Debug for Restriction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Absorbing => f.write_str("Absorbing"),
+            Self::When { otherwise, .. } => f
+                .debug_struct("When")
+                .field("otherwise", otherwise)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+impl std::fmt::Debug for Covariate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Covariate")
+            .field("kind", &self.kind)
+            .field("terms", &self.terms)
+            .field("restriction", &self.restriction)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for Action {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Set(v) => f.debug_tuple("Set").field(v).finish(),
+            Self::Schedule(v) => f.debug_tuple("Schedule").field(v).finish(),
+            Self::Threshold { lower, upper } => f
+                .debug_struct("Threshold")
+                .field("lower", lower)
+                .field("upper", upper)
+                .finish(),
+            Self::Dynamic(_) => f.debug_tuple("Dynamic").finish_non_exhaustive(),
+        }
+    }
+}
+
+impl std::fmt::Debug for Rule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Rule")
+            .field("variable", &self.variable)
+            .field("action", &self.action)
+            .field("periods", &self.periods)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for Intervention {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Intervention")
+            .field("rules", &self.rules)
+            .finish()
+    }
 }
 
 impl Intervention {
@@ -401,8 +461,8 @@ pub struct GFormulaOptions {
     pub bootstrap: usize,
     /// The seed of the simulation and the bootstrap.
     pub seed: u64,
-    /// One minus the level of the bootstrap limits. The default is 0.05.
-    pub alpha: f64,
+    /// The level of the bootstrap limits, by default 95%.
+    pub level: Level,
     /// How the bootstrap limits are formed.
     pub interval: IntervalMethod,
     /// The strategy that ratios and differences are taken against: 0 for the
@@ -428,7 +488,7 @@ impl Default for GFormulaOptions {
             periods: None,
             bootstrap: 0,
             seed: 20_261_124,
-            alpha: 0.05,
+            level: Level::default(),
             interval: IntervalMethod::Percentile,
             reference: 0,
             baseline_lags: false,
@@ -438,9 +498,10 @@ impl Default for GFormulaOptions {
     }
 }
 
-/// An estimate with its Monte Carlo error and its bootstrap limits.
+/// A simulated estimate with its Monte Carlo error and its bootstrap limits.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Estimate {
+pub struct SimulatedEstimate {
     /// The estimate, `None` where it is undefined.
     pub estimate: Option<f64>,
     /// The standard error of the simulation (see the module documentation).
@@ -454,14 +515,15 @@ pub struct Estimate {
 }
 
 /// The results of one strategy.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Strategy {
     /// The risk by each period, or the mean at the end of follow-up.
-    pub value: Vec<Estimate>,
+    pub value: Vec<SimulatedEstimate>,
     /// The ratio to the reference strategy.
-    pub ratio: Vec<Estimate>,
+    pub ratio: Vec<SimulatedEstimate>,
     /// The difference from the reference strategy.
-    pub difference: Vec<Estimate>,
+    pub difference: Vec<SimulatedEstimate>,
     /// The proportion of simulated persons whose value of some variable a rule
     /// changed at some period.
     pub intervened_persons: f64,
@@ -471,6 +533,7 @@ pub struct Strategy {
 }
 
 /// A fitted model.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct FittedModel {
     /// The coefficients, in the order of the terms.
@@ -483,6 +546,7 @@ pub struct FittedModel {
 }
 
 /// The fitted models.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Models {
     /// One per time-varying covariate, `None` when only one period is
@@ -498,6 +562,7 @@ pub struct Models {
 
 /// The simulated course of one strategy: one row per simulated person and
 /// period, in the order of the persons and then of the periods.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SimulatedCourse {
     /// The simulated person, from 0.
@@ -506,7 +571,7 @@ pub struct SimulatedCourse {
     /// period-0 row the simulated person starts from.
     pub source: Vec<usize>,
     /// The period.
-    pub period: Vec<usize>,
+    pub period: Vec<i64>,
     /// The value of each time-varying variable, one column per variable in
     /// the order of [`PersonPeriods::time_varying`], after the strategy's rules.
     pub values: Vec<Vec<f64>>,
@@ -548,11 +613,12 @@ impl SimulatedCourse {
 }
 
 /// The result of [`gformula`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct GFormula {
     /// The periods the values refer to: `0..K` for a survival outcome, `K - 1`
     /// for an outcome at the end of follow-up.
-    pub periods: Vec<usize>,
+    pub periods: Vec<i64>,
     /// The nonparametric observed risk (or mean) at each of those periods.
     pub observed: Vec<Option<f64>>,
     /// The natural course first, then the interventions in the order given.
@@ -646,7 +712,11 @@ pub fn gformula(
         models.censoring = Some(model.model);
     }
     Ok(GFormula {
-        periods: prepared.reported_periods(),
+        periods: prepared
+            .reported_periods()
+            .into_iter()
+            .map(|k| i64::try_from(k).unwrap_or(i64::MAX))
+            .collect(),
         observed,
         strategies,
         models,
@@ -668,10 +738,10 @@ fn summarise(
 ) -> Result<Vec<Strategy>> {
     let strategies = point.value.len();
     let periods = point.value[0].len();
-    let limits = |estimate: f64, values: Option<Vec<f64>>| -> Result<Estimate> {
-        let mut e = Estimate {
+    let limits = |estimate: f64, values: Option<Vec<f64>>| -> Result<SimulatedEstimate> {
+        let mut e = SimulatedEstimate {
             estimate: Some(estimate),
-            ..Estimate::default()
+            ..SimulatedEstimate::default()
         };
         let Some(mut values) = values else {
             return Ok(e);
@@ -683,8 +753,7 @@ fn summarise(
         let mean = values.iter().sum::<f64>() / b;
         let se = (values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / (b - 1.0)).sqrt();
         e.se = Some(se);
-        let level =
-            epistat_core::Level::alpha(options.alpha).map_err(|e| Error::input(e.to_string()))?;
+        let level = options.level;
         let limits = match options.interval {
             IntervalMethod::Percentile => {
                 interval::percentile(&mut values, level, Percentile::Type7)
@@ -721,7 +790,7 @@ fn summarise(
             dd.monte_carlo_se = d.standard_error();
             difference.push(dd);
             if r.mean == 0.0 {
-                ratio.push(Estimate::default());
+                ratio.push(SimulatedEstimate::default());
             } else {
                 let q = m.mean / r.mean;
                 let mut rr = limits(

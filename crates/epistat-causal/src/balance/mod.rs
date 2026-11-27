@@ -33,8 +33,14 @@
 //! IF_i = H^-1 ( s_i w_i r_i z_i + B phi_i ),    B = sum_j s_j w_j r_j z_j dlog_j'
 //! ```
 //!
-//! and the variance `sum IF_i IF_i'`, with the influences of a cluster summed
-//! first and the factor `G / (G - 1)` for `G` clusters. The term `B phi_i` is
+//! on the dfbeta scale. The variance is `Influence::variance` of `n IF_i`:
+//! the influences of a cluster summed first and centred, every person its own
+//! cluster when there are none. The rule is that of `WeightIt`'s M-estimation
+//! variance (`vcov = "asympt"`, WeightIt 2.2.0), which is also the variance of
+//! the infinitesimal jackknife: `ClusterRule::NoSmallSample` without clusters,
+//! `sum IF_i IF_i'` up to the centring, and `ClusterRule::SmallSample` with
+//! them, the factor `G / (G - 1)` for `G` clusters. Fewer than two clusters
+//! leave the variances `None`. The term `B phi_i` is
 //! what the estimation of the weights adds. [`WeightVariance::Fixed`] leaves it
 //! out, which treats the weights as given and, for balancing weights, gives a
 //! variance that is too large when the model is right, since the weights remove
@@ -72,16 +78,20 @@
 pub mod cbps;
 pub mod entropy;
 
+use epistat_core::{Contrast, Covariance, Estimand, Level};
+use epistat_inference::Influence;
 use epistat_linalg::design::independent_columns;
 use epistat_linalg::{Attempt, Mat, MatRef, inverse, weighted_gram, weighted_xtz};
 
-use crate::aipw::Target;
 use crate::error::{Error, Result};
+pub(crate) use crate::shared::{case_weights as resolve_weights, check_len, compensated};
+use crate::shared::{check_finite, clusters, contrast, rule, unit_codes};
 
 pub use cbps::{Cbps, CbpsInput, CbpsOptions, Identification, cbps};
 pub use entropy::{EntropyInput, EntropyOptions, balance_columns, entropy_balance};
 
 /// What the variance of an outcome estimate takes into account.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum WeightVariance {
     /// The weights were estimated: the stacked estimating equations of the
@@ -92,7 +102,18 @@ pub enum WeightVariance {
     Fixed,
 }
 
+/// What an outcome estimate does besides the data.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct OutcomeOptions {
+    /// What the variance takes into account. The default is
+    /// [`WeightVariance::Estimated`].
+    pub variance: WeightVariance,
+    /// The level of the confidence limits, by default 95%.
+    pub level: Level,
+}
+
 /// The weights of one group of persons.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GroupSummary {
     /// Whether the method changed the weights of the group. The weights of the
@@ -106,32 +127,27 @@ pub struct GroupSummary {
     pub min: f64,
     /// The largest weight.
     pub max: f64,
-    /// The effective sample size `(sum s w)^2 / sum s w^2`.
-    pub effective_sample_size: f64,
+    /// The effective sample size `(sum s w)^2 / sum s w^2`, `None` when the
+    /// group has no weight.
+    pub effective_sample_size: Option<f64>,
 }
 
 /// Weights for a binary treatment and what is needed for the variance of the
 /// estimates that use them.
+///
+/// The fields are private, since the variance of the outcome estimates relies
+/// on the weights being those the method found for the treatment and sample
+/// weights it was given.
 #[derive(Debug, Clone)]
 pub struct BalanceWeights {
-    /// The population the weights refer to.
-    pub target: Target,
-    /// The weight of each person, to be multiplied with the sample weight. For
-    /// entropy balancing the sum of `s w` in a weighted group is the sum of `s`
-    /// in the target group. For CBPS with standardised weights it is 1 in each
-    /// group, as in the `CBPS` package.
-    pub weights: Vec<f64>,
-    /// The sample weight of each person, 1 when none was given.
-    pub sample_weight: Vec<f64>,
-    /// Whether each person is treated.
-    pub treatment: Vec<bool>,
-    /// The summary of the weights of the controls.
-    pub controls: GroupSummary,
-    /// The summary of the weights of the treated.
-    pub treated: GroupSummary,
-    /// The iterations the solver used.
-    pub iterations: usize,
-    pub(crate) nuisance: Nuisance,
+    estimand: Estimand,
+    weights: Vec<f64>,
+    sample_weight: Vec<f64>,
+    treatment: Vec<bool>,
+    controls: GroupSummary,
+    treated: GroupSummary,
+    iterations: usize,
+    nuisance: Nuisance,
 }
 
 /// The influence of the parameters of the weights and the derivative of the
@@ -143,72 +159,51 @@ pub(crate) struct Nuisance {
 }
 
 /// A weighted linear regression and its variance.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct WeightedRegression {
     /// The coefficients, one per design column.
     pub coefficients: Vec<f64>,
-    /// The covariance matrix of the coefficients, row-major.
-    pub covariance: Vec<f64>,
+    /// The covariance matrix of the coefficients.
+    pub covariance: Covariance,
+    /// The influence functions of the coefficients, one column each, per
+    /// person on the per-unit scale, the units the row numbers, with the rule
+    /// of the covariance: `NoSmallSample` without clusters, `SmallSample`
+    /// with them.
+    pub influence: Influence,
     /// Which variance it is.
     pub variance: WeightVariance,
 }
 
 impl WeightedRegression {
-    /// The standard error of coefficient `j`.
-    ///
-    /// # Panics
-    ///
-    /// If `j` is not a column of the design.
+    /// The standard error of coefficient `j`, `None` for a column that is not
+    /// in the design or an undefined variance.
     #[must_use]
-    pub fn se(&self, j: usize) -> f64 {
-        let k = self.coefficients.len();
-        self.covariance[j * k + j].sqrt()
+    pub fn se(&self, j: usize) -> Option<f64> {
+        if j >= self.coefficients.len() {
+            return None;
+        }
+        self.covariance.get(j, j).map(|v| v.max(0.0).sqrt())
     }
 }
 
-pub use crate::aipw::Estimate;
-
-/// The mean outcome in each group and their difference.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// The mean outcome in each group and their contrast.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
 pub struct MeanDifference {
-    /// The mean outcome of the treated, weighted to the target.
-    pub mean1: Estimate,
-    /// The mean outcome of the controls, weighted to the target.
-    pub mean0: Estimate,
-    /// The difference `mean1 - mean0`.
-    pub difference: Estimate,
+    /// The mean outcome of the treated weighted to the target (`mean1`), of
+    /// the controls (`mean0`), their difference, which estimates the effect
+    /// for the target, and their ratio with the delta-method standard error,
+    /// its interval on its own scale and the p-value of a ratio of 1; `None`
+    /// when `mean0` is 0.
+    pub contrast: Contrast,
+    /// The influence functions of `mean1` (column 0) and `mean0` (column 1),
+    /// per person on the per-unit scale, the units the row numbers, with the
+    /// rule of the standard errors: `NoSmallSample` without clusters,
+    /// `SmallSample` with them.
+    pub influence: Influence,
     /// Which variance it is.
     pub variance: WeightVariance,
-}
-
-pub(crate) fn compensated(values: impl IntoIterator<Item = f64>) -> f64 {
-    epistat_stats::sum::compensated(values)
-}
-
-pub(crate) fn check_len(name: &str, found: usize, n: usize) -> Result<()> {
-    if found == n {
-        Ok(())
-    } else {
-        Err(Error::input(format!(
-            "{name}: {found} values for {n} persons"
-        )))
-    }
-}
-
-/// The sample weights or ones, checked.
-pub(crate) fn resolve_weights(name: &str, given: Option<&[f64]>, n: usize) -> Result<Vec<f64>> {
-    match given {
-        None => Ok(vec![1.0; n]),
-        Some(w) => {
-            check_len(name, w.len(), n)?;
-            if let Some(i) = w.iter().position(|&x| !(x.is_finite() && x >= 0.0)) {
-                return Err(Error::input(format!(
-                    "{name}: value {i} is negative or not finite"
-                )));
-            }
-            Ok(w.to_vec())
-        }
-    }
 }
 
 pub(crate) fn summarise(
@@ -227,85 +222,89 @@ pub(crate) fn summarise(
         sum,
         min: idx().map(|i| w[i]).fold(f64::INFINITY, f64::min),
         max: idx().map(|i| w[i]).fold(f64::NEG_INFINITY, f64::max),
-        effective_sample_size: if sq > 0.0 { sum * sum / sq } else { 0.0 },
+        effective_sample_size: (sq > 0.0).then(|| sum * sum / sq),
     }
-}
-
-/// The covariance of the estimators whose influences are `columns[k][i]`: the
-/// sum of products, with the influences of a cluster summed first and the factor
-/// `G / (G - 1)`.
-fn covariance(columns: &[Vec<f64>], cluster: Option<&[u32]>) -> Result<Vec<f64>> {
-    let k = columns.len();
-    let n = columns.first().map_or(0, Vec::len);
-    let mut out = vec![0.0; k * k];
-    let summed: Vec<Vec<f64>>;
-    let (data, factor): (&[Vec<f64>], f64) = match cluster {
-        None => (columns, 1.0),
-        Some(c) => {
-            let mut labels: Vec<u32> = c.to_vec();
-            labels.sort_unstable();
-            labels.dedup();
-            let g = labels.len();
-            if g < 2 {
-                return Err(Error::input("cluster: the variance needs two clusters"));
-            }
-            let pos = |x: u32| labels.binary_search(&x).unwrap_or(0);
-            summed = columns
-                .iter()
-                .map(|col| {
-                    let mut parts: Vec<Vec<f64>> = vec![Vec::new(); g];
-                    for (i, &v) in col.iter().enumerate() {
-                        parts[pos(c[i])].push(v);
-                    }
-                    parts
-                        .iter()
-                        .map(|p| compensated(p.iter().copied()))
-                        .collect()
-                })
-                .collect();
-            (&summed, g as f64 / (g as f64 - 1.0))
-        }
-    };
-    let m = data.first().map_or(n, Vec::len);
-    for a in 0..k {
-        for b in a..k {
-            let v = factor * compensated((0..m).map(|i| data[a][i] * data[b][i]));
-            if !v.is_finite() {
-                return Err(Error::input("the variance is not finite"));
-            }
-            out[a * k + b] = v;
-            out[b * k + a] = v;
-        }
-    }
-    Ok(out)
-}
-
-fn make_estimate(value: f64, variance: f64, alpha: f64) -> Result<Estimate> {
-    let se = variance.max(0.0).sqrt();
-    let level =
-        epistat_core::Level::alpha(alpha).map_err(|e| Error::input(format!("alpha: {e}")))?;
-    let interval = epistat_inference::interval::normal(value, se, level);
-    let (lower, upper) = (
-        interval.lower.unwrap_or(f64::NAN),
-        interval.upper.unwrap_or(f64::NAN),
-    );
-    let p_value = (se > 0.0).then(|| 2.0 * epistat_stats::dist::normal::cdf(-(value / se).abs()));
-    Ok(Estimate {
-        estimate: value,
-        se,
-        lower,
-        upper,
-        p_value,
-    })
 }
 
 struct Stage {
     theta: Vec<f64>,
-    /// `influence[j][i]`: influence of coefficient `j` on person `i`.
+    /// `influence[j][i]`: influence of coefficient `j` on person `i`, on the
+    /// dfbeta scale.
     influence: Vec<Vec<f64>>,
 }
 
 impl BalanceWeights {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the parts the two methods compute"
+    )]
+    pub(crate) const fn new(
+        estimand: Estimand,
+        weights: Vec<f64>,
+        sample_weight: Vec<f64>,
+        treatment: Vec<bool>,
+        controls: GroupSummary,
+        treated: GroupSummary,
+        iterations: usize,
+        nuisance: Nuisance,
+    ) -> Self {
+        Self {
+            estimand,
+            weights,
+            sample_weight,
+            treatment,
+            controls,
+            treated,
+            iterations,
+            nuisance,
+        }
+    }
+
+    /// The population the weights refer to.
+    #[must_use]
+    pub const fn estimand(&self) -> Estimand {
+        self.estimand
+    }
+
+    /// The weight of each person, to be multiplied with the sample weight. For
+    /// entropy balancing the sum of `s w` in a weighted group is the sum of `s`
+    /// in the target group. For CBPS with standardised weights it is 1 in each
+    /// group, as in the `CBPS` package.
+    #[must_use]
+    pub fn weights(&self) -> &[f64] {
+        &self.weights
+    }
+
+    /// The sample weight of each person, 1 when none was given.
+    #[must_use]
+    pub fn sample_weight(&self) -> &[f64] {
+        &self.sample_weight
+    }
+
+    /// Whether each person is treated.
+    #[must_use]
+    pub fn treatment(&self) -> &[bool] {
+        &self.treatment
+    }
+
+    /// The summary of the weights of the controls.
+    #[must_use]
+    pub const fn controls(&self) -> GroupSummary {
+        self.controls
+    }
+
+    /// The summary of the weights of the treated.
+    #[must_use]
+    pub const fn treated(&self) -> GroupSummary {
+        self.treated
+    }
+
+    /// The iterations the solver used.
+    #[must_use]
+    pub const fn iterations(&self) -> usize {
+        self.iterations
+    }
+
     fn n(&self) -> usize {
         self.weights.len()
     }
@@ -319,9 +318,7 @@ impl BalanceWeights {
         let n = self.n();
         check_len("outcome", outcome.len(), n)?;
         check_len("design", design.nrows(), n)?;
-        if let Some(i) = outcome.iter().position(|y| !y.is_finite()) {
-            return Err(Error::input(format!("outcome: value {i} is not finite")));
-        }
+        check_finite("outcome", outcome)?;
         let k = design.ncols();
         if k == 0 {
             return Err(Error::input("design: no columns"));
@@ -387,14 +384,27 @@ impl BalanceWeights {
         Ok(Stage { theta, influence })
     }
 
+    /// The influence function of the columns `columns` of a stage, on the
+    /// per-unit scale, with the rule of the module documentation.
+    fn influence(&self, columns: &[&[f64]], clustered: bool) -> Result<Influence> {
+        let values: Vec<f64> = columns.iter().flat_map(|c| c.iter().copied()).collect();
+        Influence::from_dfbeta(
+            values,
+            unit_codes(0..self.n())?,
+            columns.len(),
+            rule(clustered),
+        )
+        .map_err(|e| Error::input(format!("influence function: {e}")))
+    }
+
     /// A weighted least squares regression of `outcome` on `design`, with the
     /// weights `s w`, and its covariance matrix.
     ///
     /// # Errors
     ///
     /// [`Error::Input`] for values of different lengths, a value that is not
-    /// finite, a design column that is aliased among the persons with positive
-    /// weight, and fewer than two clusters.
+    /// finite and a design column that is aliased among the persons with
+    /// positive weight.
     pub fn weighted_regression(
         &self,
         outcome: &[f64],
@@ -402,51 +412,53 @@ impl BalanceWeights {
         cluster: Option<&[u32]>,
         variance: WeightVariance,
     ) -> Result<WeightedRegression> {
-        if let Some(c) = cluster {
-            check_len("cluster", c.len(), self.n())?;
-        }
+        let clusters = clusters(cluster, self.n())?;
         let st = self.stage(outcome, design, variance)?;
+        let columns: Vec<&[f64]> = st.influence.iter().map(Vec::as_slice).collect();
+        let influence = self.influence(&columns, cluster.is_some())?;
+        let covariance = influence
+            .variance(clusters.as_ref())
+            .map_err(|e| Error::input(format!("influence function: {e}")))?;
         Ok(WeightedRegression {
-            covariance: covariance(&st.influence, cluster)?,
             coefficients: st.theta,
+            covariance,
+            influence,
             variance,
         })
     }
 
-    /// The mean outcome of the treated and of the controls with the weights, and
-    /// their difference, which estimates the effect for the target.
+    /// The mean outcome of the treated and of the controls with the weights,
+    /// their difference, which estimates the effect for the target, and their
+    /// ratio.
     ///
     /// # Errors
     ///
-    /// As [`BalanceWeights::weighted_regression`], and `alpha` outside `(0, 1)`.
+    /// As [`BalanceWeights::weighted_regression`].
     pub fn mean_difference(
         &self,
         outcome: &[f64],
         cluster: Option<&[u32]>,
-        variance: WeightVariance,
-        alpha: f64,
+        options: &OutcomeOptions,
     ) -> Result<MeanDifference> {
         let n = self.n();
-        if !(alpha > 0.0 && alpha < 1.0) {
-            return Err(Error::input(format!("alpha: {alpha} is not in (0, 1)")));
-        }
-        if let Some(c) = cluster {
-            check_len("cluster", c.len(), n)?;
-        }
+        let clusters = clusters(cluster, n)?;
+        // Column 0 of the design is the controls' indicator, column 1 the
+        // treated's.
         let z = Mat::from_fn(n, 2, |i, j| {
             f64::from(u8::from(self.treatment[i] == (j == 1)))
         });
-        let st = self.stage(outcome, z.as_ref(), variance)?;
-        let diff: Vec<f64> = (0..n)
-            .map(|i| st.influence[1][i] - st.influence[0][i])
-            .collect();
-        let cols = [st.influence[0].clone(), st.influence[1].clone(), diff];
-        let cov = covariance(&cols, cluster)?;
+        let st = self.stage(outcome, z.as_ref(), options.variance)?;
+        let influence = self.influence(&[&st.influence[1], &st.influence[0]], cluster.is_some())?;
+        let contrast = contrast(
+            [st.theta[1], st.theta[0]],
+            &influence,
+            clusters.as_ref(),
+            options.level,
+        )?;
         Ok(MeanDifference {
-            mean0: make_estimate(st.theta[0], cov[0], alpha)?,
-            mean1: make_estimate(st.theta[1], cov[4], alpha)?,
-            difference: make_estimate(st.theta[1] - st.theta[0], cov[8], alpha)?,
-            variance,
+            contrast,
+            influence,
+            variance: options.variance,
         })
     }
 }

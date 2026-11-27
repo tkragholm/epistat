@@ -38,7 +38,7 @@
 //! hazards, until the mean of the first term of `D_a` is at most `se_a / (sqrt(n)
 //! ln n)`, with `se_a` its standard error below. The risk is the plug-in `F_a(t)
 //! = 1 - sum w S*(t | a, x) / sum w`, which lies in `[0, 1]`, with the influence
-//! `-w D_a / sum w` per person.
+//! `-n w D_a / sum w` per person on the per-unit scale.
 //!
 //! The arms are targeted separately, each with its own `e`. Without censoring and
 //! with `t = 1` the estimator is the targeted estimator of the effect in the
@@ -47,17 +47,29 @@
 //!
 //! # Variance
 //!
-//! As in [`crate::tmle`]: the sum of squared influences, with clusters summed
-//! first and the factor `G / (G - 1)`. The difference and the ratio of the risks
-//! have the influences `IF_1 - IF_0` and `(IF_1 - ratio IF_0) / F_0(t)`.
+//! From [`SurvivalTmle::influence`]: the influences of a cluster summed first
+//! and centred, every person its own cluster when there are none. The rule is
+//! `survtmle`'s without clusters, `ClusterRule::NoSmallSample`, whose variance
+//! is `t(IC) IC / n^2` with the `n` divisor (survtmle 1.1.1, the last version
+//! on CRAN, has no clusters), and `ClusterRule::SmallSample`, the factor `G /
+//! (G - 1)` for `G` clusters, with them, as in [`crate::aipw`]. The difference
+//! and the ratio of the risks have the influences `IF_1 - IF_0` and `(IF_1 -
+//! ratio IF_0) / F_0(t)`. The `se_a` of the stopping rule is the same standard
+//! error of the arm's risk at the current hazards, so fewer than two clusters,
+//! where it is undefined, are an error.
+//!
+//! [`SurvivalTmle::initial`] is the plug-in risk of each arm from the given
+//! hazards, before targeting.
 //!
 //! # Edge cases
 //!
 //! An event hazard of 0 or 1 or outside the open interval up to the horizon, a
 //! censoring hazard outside `[0, 1)` before it, a propensity outside `(0, 1)`, a
 //! follow-up of 0 intervals, an arm without persons of positive weight, a
-//! fluctuation that does not converge and targeting that has not met its rule
-//! after [`SurvivalOptions::max_iterations`] rounds are errors. The ratio is
+//! fluctuation that does not converge, a fluctuation coefficient that the fit
+//! reports as aliased while the clever covariate is not 0 on every
+//! person-interval at risk, and targeting that has not met its rule after
+//! [`SurvivalOptions::max_iterations`] rounds are errors. The ratio is
 //! `None` when the risk of the controls is 0.
 //!
 //! # Fitting the models
@@ -94,17 +106,17 @@
 //! 3. Benkeser D, Carone M, Gilbert PB. Improved estimation of the cumulative
 //!    incidence of rare outcomes. Stat Med. 2018;37(2):280-93.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
+use epistat_core::{Contrast, Level};
 use epistat_glm::{Family, Glm, Link};
+use epistat_inference::{ClusterRule, Clusters, Influence};
 use epistat_linalg::{Mat, MatRef};
 
-use super::{PropensityBound, logit, plogis};
-use crate::aipw::{Estimate, check_alpha, check_len, compensated, estimate, variance_of};
+use super::{PlugIn, PropensityBound, fluctuation_coefficient, logit, plogis};
 use crate::error::{Error, Result};
+use crate::shared::{
+    case_weights, check_arms, check_len, clusters, compensated, contrast, fit_glm, glm_data,
+    influence, rule, unit_codes,
+};
 
 /// The data and the predictions of [`tmle_survival`]. Column `k - 1` of a
 /// matrix of predictions is interval `k`; columns after those used are ignored.
@@ -140,8 +152,8 @@ pub struct SurvivalInput<'a> {
 pub struct SurvivalOptions {
     /// The interval `t` by whose end the risk is estimated, at least 1.
     pub horizon: usize,
-    /// One minus the level of the confidence limits. The default is 0.05.
-    pub alpha: f64,
+    /// The level of the confidence limits, by default 95%.
+    pub level: Level,
     /// The lower bound `b` of `g_a G(k - 1)`. The default is none.
     pub propensity_bound: PropensityBound,
     /// The largest number of targeting rounds of each arm. The default is 50.
@@ -152,10 +164,10 @@ impl SurvivalOptions {
     /// The options for the risk by the end of interval `horizon`, with the
     /// defaults otherwise.
     #[must_use]
-    pub const fn new(horizon: usize) -> Self {
+    pub fn new(horizon: usize) -> Self {
         Self {
             horizon,
-            alpha: 0.05,
+            level: Level::default(),
             propensity_bound: PropensityBound::None,
             max_iterations: 50,
         }
@@ -163,18 +175,23 @@ impl SurvivalOptions {
 }
 
 /// The result of [`tmle_survival`].
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SurvivalTmle {
-    /// The risk by the horizon had everyone been treated.
-    pub risk1: Estimate,
-    /// The risk had no one been treated.
-    pub risk0: Estimate,
-    /// The difference `risk1 - risk0`.
-    pub difference: Estimate,
-    /// The ratio `risk1 / risk0`, `None` when `risk0` is 0.
-    pub ratio: Option<Estimate>,
-    /// The influence function of the difference, one value per person.
-    pub influence: Vec<f64>,
+    /// The risk by the horizon had everyone been treated (`mean1`), had no one
+    /// been treated (`mean0`), their difference and their ratio, the ratio
+    /// with its interval on its own scale and the p-value of a ratio of 1;
+    /// `None` when the risk of the controls is 0.
+    pub contrast: Contrast,
+    /// The plug-in risks from the given hazards, before targeting.
+    pub initial: PlugIn,
+    /// The influence functions of the risk of the treated (column 0) and of
+    /// the controls (column 1) per person on the per-unit scale, the units the
+    /// row numbers, with the rule of the standard errors: `NoSmallSample`
+    /// without clusters, `SmallSample` with them. Their `variance` with the
+    /// clusters `Clusters::per_unit(rows, cluster)` (or none) reproduces the
+    /// standard errors.
+    pub influence: Influence,
     /// The targeting rounds of the treated and of the control arm.
     pub iterations: [usize; 2],
     /// The fluctuation coefficients of the rounds of the two arms.
@@ -191,6 +208,7 @@ pub struct SurvivalTmle {
 
 struct Arm {
     risk: f64,
+    initial: f64,
     influence: Vec<f64>,
     iterations: usize,
     epsilon: Vec<f64>,
@@ -204,6 +222,9 @@ struct Common<'a> {
     horizon: usize,
     bound: f64,
     max_iterations: usize,
+    units: Vec<u32>,
+    clusters: Option<Clusters>,
+    rule: ClusterRule,
 }
 
 fn target_arm(c: &Common<'_>, treated: bool) -> Result<Arm> {
@@ -246,6 +267,7 @@ fn target_arm(c: &Common<'_>, treated: bool) -> Result<Arm> {
     }
     let rule = (n as f64).sqrt() * (n as f64).ln();
     let mut epsilon = Vec::new();
+    let mut initial = None;
     loop {
         let mut s = vec![0.0; n * t];
         for i in 0..n {
@@ -263,14 +285,23 @@ fn target_arm(c: &Common<'_>, treated: bool) -> Result<Arm> {
             first[ik / t] += h[ik] * (dn[r] - lam[ik]);
         }
         let psi = compensated((0..n).map(|i| c.w[i] * s[i * t + t - 1])) / c.total;
+        let risk = 1.0 - psi;
+        let initial = *initial.get_or_insert(risk);
         let influence: Vec<f64> = (0..n)
             .map(|i| c.w[i] * (first[i] + s[i * t + t - 1] - psi) / c.total)
             .collect();
-        let se = variance_of(&influence, input.cluster)?.sqrt();
+        let se = Influence::from_dfbeta(influence.clone(), c.units.clone(), 1, c.rule)
+            .and_then(|f| f.variance(c.clusters.as_ref()))
+            .map_err(|e| Error::input(format!("influence function: {e}")))?
+            .get(0, 0)
+            .ok_or_else(|| Error::input("cluster: the stopping rule needs two clusters"))?
+            .max(0.0)
+            .sqrt();
         let score = compensated((0..n).map(|i| c.w[i] * first[i])) / c.total;
         if score.abs() <= se / rule {
             return Ok(Arm {
-                risk: 1.0 - psi,
+                risk,
+                initial,
                 influence: influence.iter().map(|x| -x).collect(),
                 iterations: epsilon.len(),
                 epsilon,
@@ -286,15 +317,23 @@ fn target_arm(c: &Common<'_>, treated: bool) -> Result<Arm> {
         let design = Mat::from_fn(rows.len(), 1, |r, _| h[rows[r]]);
         let offset: Vec<f64> = rows.iter().map(|&ik| logit(lam[ik])).collect();
         let weights: Vec<f64> = rows.iter().map(|&ik| c.w[ik / t]).collect();
+        let what = "fluctuation";
         let fit = Glm::new(Family::Binomial, Link::Logit)
-            .fit_slices(design.as_ref(), &dn, Some(&weights), Some(&offset), None)
-            .map_err(|e| Error::input(format!("fluctuation: {e}")))?;
-        if !fit.converged {
-            return Err(Error::NoConvergence(
-                "fluctuation: the logistic fit did not converge".into(),
-            ));
-        }
-        let e = fit.coefficients[0].unwrap_or(0.0);
+            .fit(&glm_data(
+                design.as_ref(),
+                &dn,
+                Some(&weights),
+                Some(&offset),
+                what,
+            )?)
+            .map_err(|e| Error::input(format!("{what}: {e}")))?;
+        let e = fluctuation_coefficient(
+            &fit,
+            0,
+            rows.iter().map(|&ik| h[ik]),
+            weights.iter().copied(),
+            what,
+        )?;
         for (l, &hk) in lam.iter_mut().zip(&h) {
             *l = plogis(logit(*l) + e * hk);
         }
@@ -348,7 +387,6 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
     if n == 0 {
         return Err(Error::input("treatment: no persons"));
     }
-    check_alpha(opts.alpha)?;
     let t = opts.horizon;
     if t == 0 {
         return Err(Error::input("horizon: 0 intervals"));
@@ -356,9 +394,7 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
     check_len("time", input.time.len(), n)?;
     check_len("event", input.event.len(), n)?;
     check_len("propensity", input.propensity.len(), n)?;
-    if let Some(w) = input.weight {
-        check_len("weight", w.len(), n)?;
-    }
+    let raw = case_weights("weight", input.weight, n)?;
     if let Some(c) = input.cluster {
         check_len("cluster", c.len(), n)?;
     }
@@ -377,22 +413,7 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
             input.propensity[i]
         )));
     }
-    let raw: Vec<f64> = input.weight.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
-    if let Some(i) = raw.iter().position(|&w| !(w.is_finite() && w >= 0.0)) {
-        return Err(Error::input(format!(
-            "weight: value {i} is negative or not finite"
-        )));
-    }
-    let (mut treated, mut controls) = (false, false);
-    for (&w, &a) in raw.iter().zip(input.treatment) {
-        if w > 0.0 {
-            treated |= a;
-            controls |= !a;
-        }
-    }
-    if !(treated && controls) {
-        return Err(Error::input("treatment: both groups need persons"));
-    }
+    check_arms(&raw, input.treatment)?;
     let bound = match opts.propensity_bound {
         PropensityBound::None => 0.0,
         PropensityBound::Tmle => {
@@ -415,6 +436,9 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
         horizon: t,
         bound,
         max_iterations: opts.max_iterations,
+        units: unit_codes(0..n)?,
+        clusters: clusters(input.cluster, n)?,
+        rule: rule(input.cluster.is_some()),
     };
     let n_trimmed = (0..n)
         .filter(|&i| {
@@ -436,43 +460,17 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
         .count();
     let one = target_arm(&common, true)?;
     let zero = target_arm(&common, false)?;
-    let diff: Vec<f64> = (0..n)
-        .map(|i| one.influence[i] - zero.influence[i])
-        .collect();
-    let cluster = input.cluster;
-    let risk1 = estimate(
-        one.risk,
-        variance_of(&one.influence, cluster)?,
-        0.0,
-        opts.alpha,
+    let influence = influence([&one.influence, &zero.influence], common.units, common.rule)?;
+    let contrast = contrast(
+        [one.risk, zero.risk],
+        &influence,
+        common.clusters.as_ref(),
+        opts.level,
     )?;
-    let risk0 = estimate(
-        zero.risk,
-        variance_of(&zero.influence, cluster)?,
-        0.0,
-        opts.alpha,
-    )?;
-    let difference = estimate(
-        one.risk - zero.risk,
-        variance_of(&diff, cluster)?,
-        0.0,
-        opts.alpha,
-    )?;
-    let ratio = if zero.risk == 0.0 {
-        None
-    } else {
-        let r = one.risk / zero.risk;
-        let inf: Vec<f64> = (0..n)
-            .map(|i| (one.influence[i] - r * zero.influence[i]) / zero.risk)
-            .collect();
-        Some(estimate(r, variance_of(&inf, cluster)?, 1.0, opts.alpha)?)
-    };
     Ok(SurvivalTmle {
-        risk1,
-        risk0,
-        difference,
-        ratio,
-        influence: diff,
+        contrast,
+        initial: PlugIn::new(one.initial, zero.initial),
+        influence,
         iterations: [one.iterations, zero.iterations],
         epsilon: [one.epsilon, zero.epsilon],
         score: [one.score, zero.score],
@@ -530,6 +528,7 @@ pub struct SurvivalGlmInput<'a> {
 
 /// The result of [`tmle_survival_glm`]: the estimator and the fitted models
 /// with their predictions.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct SurvivalTmleGlm {
     /// The targeted estimator on the predictions.
@@ -555,19 +554,9 @@ pub struct SurvivalTmleGlm {
 }
 
 fn fit_logistic(x: MatRef<'_, f64>, y: &[f64], w: &[f64], what: &str) -> Result<Vec<f64>> {
-    let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit_slices(x, y, Some(w), None, None)
-        .map_err(|e| Error::input(format!("{what} model: {e}")))?;
-    if !fit.converged {
-        return Err(Error::NoConvergence(format!("{what} model")));
-    }
-    fit.coefficients
-        .iter()
-        .enumerate()
-        .map(|(j, c)| {
-            c.ok_or_else(|| Error::input(format!("{what} model: design column {j} is aliased")))
-        })
-        .collect()
+    let glm = Glm::new(Family::Binomial, Link::Logit);
+    let what = &format!("{what} model");
+    Ok(fit_glm(&glm, &glm_data(x, y, Some(w), None, what)?, what)?.1)
 }
 
 /// The person-intervals of a hazard model as a design, a response and weights.
@@ -641,9 +630,7 @@ pub fn tmle_survival_glm(
     let n = input.treatment.len();
     check_len("time", input.time.len(), n)?;
     check_len("event", input.event.len(), n)?;
-    if let Some(w) = input.weight {
-        check_len("weight", w.len(), n)?;
-    }
+    let raw = case_weights("weight", input.weight, n)?;
     if input.propensity.nrows() != n || input.propensity.ncols() == 0 {
         return Err(Error::input(format!(
             "propensity design: {} rows and {} columns for {n} persons",
@@ -656,12 +643,6 @@ pub fn tmle_survival_glm(
     }
     if let Some(i) = input.time.iter().position(|&k| k == 0) {
         return Err(Error::input(format!("time: person {i} has 0 intervals")));
-    }
-    let raw: Vec<f64> = input.weight.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
-    if let Some(i) = raw.iter().position(|&v| !(v.is_finite() && v >= 0.0)) {
-        return Err(Error::input(format!(
-            "weight: value {i} is negative or not finite"
-        )));
     }
     // The fits take the weights rescaled to mean 1, as the estimator does:
     // the coefficients do not depend on the scale, but the stopping rule of

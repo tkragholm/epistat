@@ -5,8 +5,8 @@
 #[non_exhaustive]
 pub enum Error {
     /// The input cannot be used: slices of different lengths, a value outside
-    /// its range, a model that did not converge or has an aliased column, or
-    /// data that contradicts itself. Nothing was estimated.
+    /// its range, an estimand the method does not estimate, a model with an
+    /// aliased column, or data that contradicts itself. Nothing was estimated.
     #[error("{0}")]
     Input(String),
     /// The conditions the method asks of the weights cannot be met by any
@@ -14,7 +14,8 @@ pub enum Error {
     /// Nothing was estimated.
     #[error("{0}")]
     Infeasible(String),
-    /// An iteration did not reach its tolerance. Nothing was estimated.
+    /// An iteration did not reach its tolerance: a fit of a nuisance model, a
+    /// fluctuation or a solver. Nothing was estimated.
     #[error("{0}")]
     NoConvergence(String),
 }

@@ -26,6 +26,8 @@ use epistat_linalg::Mat;
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
+mod rule;
+
 #[derive(Deserialize)]
 struct Scenario {
     name: String,
@@ -146,18 +148,27 @@ fn the_fitted_models_and_the_estimator_agree_with_r() {
         .expect("estimator");
         assert_eq!(format!("{alone:?}"), format!("{:?}", got.tmle));
         assert_eq!(got.tmle.iterations.to_vec(), s.iterations, "{}", s.name);
-        let ratio = got.tmle.ratio.expect("a ratio");
+        let ratio = got.tmle.contrast.ratio.expect("a ratio");
         let values = [
-            got.tmle.risk1.estimate,
-            got.tmle.risk0.estimate,
-            got.tmle.difference.estimate,
+            got.tmle.contrast.mean1.estimate,
+            got.tmle.contrast.mean0.estimate,
+            got.tmle.contrast.difference.estimate,
             ratio.estimate,
-            got.tmle.risk1.se,
-            got.tmle.risk0.se,
-            got.tmle.difference.se,
-            ratio.se,
+            got.tmle.contrast.mean1.se.unwrap(),
+            got.tmle.contrast.mean0.se.unwrap(),
+            got.tmle.contrast.difference.se.unwrap(),
+            ratio.se.unwrap(),
         ];
-        for (v, want) in values.iter().zip(&s.numbers) {
+        // The reference's standard errors do not centre the influences and are
+        // converted as in `r_tmle_survival.rs`.
+        let combinations = rule::combinations(got.tmle.contrast.mean0.estimate, ratio.estimate);
+        for (k, (v, want)) in values.iter().zip(&s.numbers).enumerate() {
+            let want = if k < 4 {
+                *want
+            } else {
+                let cluster = input.cluster;
+                want * rule::conversion(&got.tmle.influence, combinations[k - 4], cluster).sqrt()
+            };
             assert!((v - want).abs() < 1e-8, "{}: {v} against {want}", s.name);
         }
     }

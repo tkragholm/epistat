@@ -5,7 +5,8 @@
 mod balance_sim;
 
 use epistat_causal::Error;
-use epistat_causal::aipw::Target;
+use epistat_causal::Estimand;
+use epistat_causal::balance::OutcomeOptions;
 use epistat_causal::balance::{
     CbpsInput, CbpsOptions, EntropyInput, EntropyOptions, Identification, WeightVariance,
     balance_columns, cbps, entropy_balance,
@@ -22,7 +23,7 @@ fn entropy_balancing_matches_the_target_moments_exactly() {
     let sim = balance_sim::simulate(1500);
     let cols = balance_columns(sim.c.as_ref(), 2, true).unwrap();
     assert_eq!(cols.ncols(), 3 + 2 + 3);
-    for target in [Target::Att, Target::Atc, Target::Ate] {
+    for target in [Estimand::Att, Estimand::Atc, Estimand::Ate] {
         let r = entropy_balance(
             &EntropyInput {
                 treatment: &sim.a,
@@ -31,20 +32,20 @@ fn entropy_balancing_matches_the_target_moments_exactly() {
                 base_weight: Some(&sim.q),
             },
             &EntropyOptions {
-                target,
+                estimand: target,
                 ..EntropyOptions::default()
             },
         )
         .unwrap();
         assert!(r.max_imbalance <= 1e-10, "{target:?} {}", r.max_imbalance);
-        let w = &r.weights.weights;
+        let w = &r.weights.weights();
         let all: Vec<usize> = (0..sim.a.len()).collect();
         let tr: Vec<usize> = all.iter().copied().filter(|&i| sim.a[i]).collect();
         let co: Vec<usize> = all.iter().copied().filter(|&i| !sim.a[i]).collect();
         let tgt = match target {
-            Target::Att => &tr,
-            Target::Atc => &co,
-            Target::Ate => &all,
+            Estimand::Att => &tr,
+            Estimand::Atc => &co,
+            _ => &all,
         };
         let ones = vec![1.0; w.len()];
         for j in 0..cols.ncols() {
@@ -57,7 +58,8 @@ fn entropy_balancing_matches_the_target_moments_exactly() {
                 / tgt.iter().map(|&i| sim.s[i]).sum::<f64>())
             .sqrt();
             for (group, flag) in [(&tr, true), (&co, false)] {
-                let weighted = (flag && target != Target::Att) || (!flag && target != Target::Atc);
+                let weighted =
+                    (flag && target != Estimand::Att) || (!flag && target != Estimand::Atc);
                 if weighted {
                     let got = weighted_mean(col, group, &sim.s, w);
                     assert!((got - m).abs() <= 1e-9 * sd, "{target:?} col {j}");
@@ -65,7 +67,7 @@ fn entropy_balancing_matches_the_target_moments_exactly() {
             }
         }
         let size: f64 = tgt.iter().map(|&i| sim.s[i]).sum();
-        for (g, summary) in [(false, r.weights.controls), (true, r.weights.treated)] {
+        for (g, summary) in [(false, r.weights.controls()), (true, r.weights.treated())] {
             if summary.weighted {
                 assert!((summary.sum - size).abs() <= 1e-9 * size, "{g}");
             }
@@ -107,7 +109,7 @@ fn entropy_balancing_refuses_an_unreachable_target() {
     let err = entropy_balance(
         &input,
         &EntropyOptions {
-            target: Target::Att,
+            estimand: Estimand::Att,
             ..EntropyOptions::default()
         },
     )
@@ -143,7 +145,7 @@ fn entropy_balancing_refuses_a_hull_problem_without_a_marginal_cause() {
             base_weight: None,
         },
         &EntropyOptions {
-            target: Target::Att,
+            estimand: Estimand::Att,
             ..EntropyOptions::default()
         },
     )
@@ -226,9 +228,9 @@ fn a_case_weight_of_two_is_a_repeated_row() {
     let c2 = Mat::from_fn(m, 3, |i, j| sim.c[(rows[i], j)]);
     let a2: Vec<bool> = rows.iter().map(|&i| sim.a[i]).collect();
     let y2: Vec<f64> = rows.iter().map(|&i| sim.y[i]).collect();
-    for target in [Target::Att, Target::Ate] {
+    for target in [Estimand::Att, Estimand::Ate] {
         let opts = EntropyOptions {
-            target,
+            estimand: target,
             ..EntropyOptions::default()
         };
         let one = entropy_balance(
@@ -251,19 +253,33 @@ fn a_case_weight_of_two_is_a_repeated_row() {
         .unwrap();
         for (k, &i) in rows.iter().enumerate() {
             assert!(
-                (one.weights.weights[i] - two.weights.weights[k]).abs() <= 1e-9,
+                (one.weights.weights()[i] - two.weights.weights()[k]).abs() <= 1e-9,
                 "{target:?}"
             );
         }
         let d1 = one
             .weights
-            .mean_difference(&sim.y, None, WeightVariance::Fixed, 0.05)
+            .mean_difference(
+                &sim.y,
+                None,
+                &OutcomeOptions {
+                    variance: WeightVariance::Fixed,
+                    ..OutcomeOptions::default()
+                },
+            )
             .unwrap();
         let d2 = two
             .weights
-            .mean_difference(&y2, None, WeightVariance::Fixed, 0.05)
+            .mean_difference(
+                &y2,
+                None,
+                &OutcomeOptions {
+                    variance: WeightVariance::Fixed,
+                    ..OutcomeOptions::default()
+                },
+            )
             .unwrap();
-        assert!((d1.difference.estimate - d2.difference.estimate).abs() <= 1e-9);
+        assert!((d1.contrast.difference.estimate - d2.contrast.difference.estimate).abs() <= 1e-9);
     }
     // CBPS, over identified.
     let x2 = Mat::from_fn(
@@ -301,7 +317,7 @@ fn a_case_weight_of_two_is_a_repeated_row() {
 #[test]
 fn cbps_balances_the_weighted_groups_and_flips_for_the_controls() {
     let sim = balance_sim::simulate(1200);
-    for target in [Target::Ate, Target::Att, Target::Atc] {
+    for target in [Estimand::Ate, Estimand::Att, Estimand::Atc] {
         let r = cbps(
             &CbpsInput {
                 treatment: &sim.a,
@@ -309,7 +325,7 @@ fn cbps_balances_the_weighted_groups_and_flips_for_the_controls() {
                 sample_weight: Some(&sim.s),
             },
             &CbpsOptions {
-                target,
+                estimand: target,
                 identification: Identification::Exact,
                 ..CbpsOptions::default()
             },
@@ -317,13 +333,13 @@ fn cbps_balances_the_weighted_groups_and_flips_for_the_controls() {
         .unwrap();
         assert!(r.max_imbalance <= 1e-8, "{target:?} {}", r.max_imbalance);
         assert!(r.objective.is_none() && r.start.is_none());
-        for g in [r.weights.controls, r.weights.treated] {
+        for g in [r.weights.controls(), r.weights.treated()] {
             assert!((g.sum - 1.0).abs() <= 1e-12);
         }
     }
     let flipped: Vec<bool> = sim.a.iter().map(|&a| !a).collect();
     let opts = |target| CbpsOptions {
-        target,
+        estimand: target,
         identification: Identification::Exact,
         ..CbpsOptions::default()
     };
@@ -333,7 +349,7 @@ fn cbps_balances_the_weighted_groups_and_flips_for_the_controls() {
             design: sim.x.as_ref(),
             sample_weight: None,
         },
-        &opts(Target::Atc),
+        &opts(Estimand::Atc),
     )
     .unwrap();
     let att_flipped = cbps(
@@ -342,14 +358,14 @@ fn cbps_balances_the_weighted_groups_and_flips_for_the_controls() {
             design: sim.x.as_ref(),
             sample_weight: None,
         },
-        &opts(Target::Att),
+        &opts(Estimand::Att),
     )
     .unwrap();
     for j in 0..4 {
         assert!((atc.coefficients[j] + att_flipped.coefficients[j]).abs() <= 1e-9);
     }
     for i in 0..1200 {
-        assert!((atc.weights.weights[i] - att_flipped.weights.weights[i]).abs() <= 1e-12);
+        assert!((atc.weights.weights()[i] - att_flipped.weights.weights()[i]).abs() <= 1e-12);
     }
 }
 
@@ -364,7 +380,7 @@ fn over_identified_cbps_does_not_do_worse_than_its_starts() {
                 sample_weight: None,
             },
             &CbpsOptions {
-                target: Target::Att,
+                estimand: Estimand::Att,
                 two_step,
                 ..CbpsOptions::default()
             },
@@ -429,19 +445,34 @@ fn the_outcome_stage_agrees_with_group_means_and_refuses_aliased_designs() {
         .unwrap()
         .weights;
     let md = r
-        .mean_difference(&sim.y, None, WeightVariance::Estimated, 0.05)
+        .mean_difference(
+            &sim.y,
+            None,
+            &OutcomeOptions {
+                variance: WeightVariance::Estimated,
+                ..OutcomeOptions::default()
+            },
+        )
         .unwrap();
     let mean = |arm: bool| {
         let rows: Vec<usize> = (0..500).filter(|&i| sim.a[i] == arm).collect();
-        weighted_mean(|i| sim.y[i], &rows, &vec![1.0; 500], &r.weights)
+        weighted_mean(|i| sim.y[i], &rows, &vec![1.0; 500], r.weights())
     };
-    assert!((md.mean1.estimate - mean(true)).abs() <= 1e-12);
-    assert!((md.mean0.estimate - mean(false)).abs() <= 1e-12);
-    assert!(md.difference.se > 0.0 && md.difference.lower < md.difference.upper);
+    assert!((md.contrast.mean1.estimate - mean(true)).abs() <= 1e-12);
+    assert!((md.contrast.mean0.estimate - mean(false)).abs() <= 1e-12);
+    let d = md.contrast.difference;
+    assert!(d.se.unwrap() > 0.0 && d.lower().unwrap() < d.upper().unwrap());
     let fixed = r
-        .mean_difference(&sim.y, None, WeightVariance::Fixed, 0.05)
+        .mean_difference(
+            &sim.y,
+            None,
+            &OutcomeOptions {
+                variance: WeightVariance::Fixed,
+                ..OutcomeOptions::default()
+            },
+        )
         .unwrap();
-    assert!((fixed.difference.se - md.difference.se).abs() > 1e-6);
+    assert!((fixed.contrast.difference.se.unwrap() - d.se.unwrap()).abs() > 1e-6);
     let bad = Mat::from_fn(500, 3, |i, j| {
         if j == 2 {
             2.0 * sim.x[(i, 1)]
@@ -453,11 +484,19 @@ fn the_outcome_stage_agrees_with_group_means_and_refuses_aliased_designs() {
         r.weighted_regression(&sim.y, bad.as_ref(), None, WeightVariance::Estimated)
             .is_err()
     );
+    // A coefficient outside the design has no standard error.
+    let reg = r
+        .weighted_regression(&sim.y, sim.x.as_ref(), None, WeightVariance::Estimated)
+        .unwrap();
+    let k = sim.x.ncols();
+    assert!((0..k).all(|j| reg.se(j).is_some()) && reg.se(k).is_none());
+    assert_eq!(reg.covariance.dim(), k);
     let one_cluster = vec![0_u32; 500];
-    assert!(
-        r.mean_difference(&sim.y, Some(&one_cluster), WeightVariance::Estimated, 0.05)
-            .is_err()
-    );
+    // One cluster has no variance: the standard errors are undefined.
+    let one = r
+        .mean_difference(&sim.y, Some(&one_cluster), &OutcomeOptions::default())
+        .unwrap();
+    assert!(one.contrast.difference.se.is_none());
 }
 
 #[test]

@@ -23,7 +23,7 @@
 //! `g1 = max(g, b)` and `g0 = max(1 - g, b)`, as `tmle`'s `gbound`; its default
 //! is `b = 5 / (sqrt(n) ln n)`, here [`PropensityBound::Tmle`].
 //!
-//! The effect in the population ([`Target::Ate`]). Logistic fluctuation with
+//! The effect in the population ([`Estimand::Ate`]). Logistic fluctuation with
 //! the two clever covariates `H0 = (1 - A) / g0` and `H1 = A / g1`:
 //!
 //! ```text
@@ -42,7 +42,7 @@
 //! only. The fit stops at R's `glm` rule, so the equations hold to its
 //! tolerance, which [`Tmle::score`] reports.
 //!
-//! The effect on the treated ([`Target::Att`]). The one-step estimator of van der
+//! The effect on the treated ([`Estimand::Att`]). The one-step estimator of van der
 //! Laan and Gruber (2016) along the universal least favourable path, which moves
 //! both `Q` and `g` in steps of size `h` ([`TmleOptions::step`]), as `tmle`'s
 //! `oneStepATT`. With `q = mean(w A)`, the target is `psi = mean(w (Q_1 - Q_0) g1)
@@ -67,9 +67,10 @@
 //! the derivative of the loss along the path has `(A - g)(Q_1 - Q_0 - psi)`
 //! where `IC` has `A (Q_1 - Q_0 - psi)`, and the plug-in divides by `q` and not
 //! by the mean of the moved `g`. The remainder is of the order of the movement
-//! of `g`; it is `tmle`'s estimator and is kept for agreement with it. The effect on the controls ([`Target::Atc`]) is minus the
-//! effect on the treated with the roles of the arms swapped. The influence of the
-//! difference is `IC (u - l) / m` over the `m` persons used. The mean of the
+//! of `g`; it is `tmle`'s estimator and is kept for agreement with it. The
+//! effect on the controls ([`Estimand::Atc`]) is minus the effect on the
+//! treated with the roles of the arms swapped. The influence of the difference
+//! is `IC (u - l)` per person over the `m` persons used. The mean of the
 //! treated arm is the weighted mean of `Y` among the treated, and that of the
 //! other arm is it minus the effect, with the influences that follow (for the
 //! controls the other way round).
@@ -90,13 +91,24 @@
 //!
 //! # Variance
 //!
-//! The variance of the efficient influence function with the fitted models taken
-//! as given: `sum IF_i^2`, with the influences of the rows of a cluster summed
-//! first and the factor `G / (G - 1)` for `G` clusters, as in [`crate::aipw`].
-//! `tmle` reports `var(n IF) / n` over persons, and with clusters the variance of
-//! the cluster means of `n IF` over `G`: the same up to `n / (n - 1)`, the
-//! centring and, for clusters of unequal size, the weighting of the clusters.
-//! The ratio has the delta-method standard error `(IF_1 - ratio IF_0) / mean_0`.
+//! The variance of the efficient influence function with the fitted models
+//! taken as given, from [`Tmle::influence`]: the influences of the rows of a
+//! cluster summed first, centred, with the factor `G / (G - 1)` for `G`
+//! clusters (`ClusterRule::SmallSample`), every person used its own cluster
+//! when there are none. The rule is `tmle`'s, whose `var.psi` is `var(IC) /
+//! n.id` with R's `n - 1` divisor. Without clusters this is `var(n IF) / n`
+//! over the persons used. With clusters `tmle` reports the variance of the
+//! cluster means of `n IF` over `G`, the same for clusters of equal size and
+//! different for clusters of unequal size by the weighting of the clusters. The
+//! ratio has the delta-method standard error `(IF_1 - ratio IF_0) / mean_0`.
+//! Clusters without a person used do not count. For the one-step path the
+//! influence function does not have mean 0 (see [`Tmle::score`]), and the
+//! centring removes its mean.
+//!
+//! [`Tmle::initial`] is the plug-in estimate from the predictions before
+//! targeting: the weighted means of the bounded predictions for the effect in
+//! the population, and the target `psi` at the start of the one-step path for
+//! the effect on an arm.
 //!
 //! # Edge cases
 //!
@@ -104,8 +116,12 @@
 //! known range, an outcome with one value under the observed range, a group
 //! without persons of positive weight, a fluctuation that does not converge and a
 //! one-step path that reaches its step limit while the loss still falls are
-//! errors. The ratio is `None` when the mean of the controls is 0. The targeted
-//! predictions of persons left out by the support rule are `None`.
+//! errors, and so is a fluctuation coefficient that the logistic fit reports
+//! as aliased while its clever covariate is not 0 for every person of
+//! positive weight. When it is 0 for every such person, any coefficient solves
+//! the score equation and the coefficient is 0. The ratio is `None` when the
+//! mean of the controls is 0. The targeted predictions of persons left out by
+//! the support rule are `None`.
 //!
 //! # References
 //!
@@ -122,21 +138,19 @@
 //! 5. Schuler MS, Rose S. Targeted maximum likelihood estimation for causal
 //!    inference in observational studies. Am J Epidemiol. 2017;185(1):65-73.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
 pub mod survival;
 
-use epistat_glm::{Family, Glm, Link};
+use epistat_core::{Contrast, Estimand, Level};
+use epistat_glm::{Family, Fit, Glm, Link};
+use epistat_inference::{ClusterRule, Influence};
 use epistat_linalg::{Mat, MatRef};
 
-use crate::aipw::{
-    AipwInput, Estimate, GlmInput, Target, check_alpha, check_len, compensated, estimate,
-    fit_model, variance_of,
-};
+use crate::aipw::{AipwInput, GlmInput, fitted_mean};
 use crate::error::{Error, Result};
+use crate::shared::{
+    case_weights, check_arms, check_design, check_estimand, check_finite, check_len,
+    check_separation, clusters, compensated, contrast, fit_glm, glm_data, influence, unit_codes,
+};
 
 /// The predictions of the models and the data of [`tmle`], the same as those of
 /// [`crate::aipw::aipw`]. The predictions `mu1` and `mu0` are on the scale of the
@@ -171,6 +185,7 @@ pub enum PropensityBound {
 }
 
 /// The outcome model of [`tmle_glm`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OutcomeModel {
     /// One model with the treatment as a column after the design, the main-terms
@@ -184,8 +199,14 @@ pub enum OutcomeModel {
 /// What the estimators do besides the data.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TmleOptions {
-    /// One minus the level of the confidence limits. The default is 0.05.
-    pub alpha: f64,
+    /// The population the effect refers to: the ATE (the default), ATT or ATC,
+    /// `tmle`'s `ATE`, `ATT` and `ATC`.
+    pub estimand: Estimand,
+    /// The level of the confidence limits, by default 95%.
+    pub level: Level,
+    /// The outcome model that [`tmle_glm`] fits. The default is
+    /// [`OutcomeModel::Pooled`]; [`tmle`] does not read it.
+    pub outcome_model: OutcomeModel,
     /// The range that maps the outcome to `[0, 1]`. The default is the observed
     /// range.
     pub range: OutcomeRange,
@@ -206,7 +227,9 @@ pub struct TmleOptions {
 impl Default for TmleOptions {
     fn default() -> Self {
         Self {
-            alpha: 0.05,
+            estimand: Estimand::Ate,
+            level: Level::default(),
+            outcome_model: OutcomeModel::Pooled,
             range: OutcomeRange::Observed,
             propensity_bound: PropensityBound::None,
             outcome_bound: 0.0005,
@@ -217,6 +240,7 @@ impl Default for TmleOptions {
 }
 
 /// How the outcome predictions were moved.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Targeting {
     /// The logistic fluctuation of the effect in the population.
@@ -236,23 +260,47 @@ pub enum Targeting {
     },
 }
 
+/// A plug-in estimate of the two means without standard errors.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PlugIn {
+    /// The mean (or risk) had everyone been treated.
+    pub mean1: f64,
+    /// The mean (or risk) had no one been treated.
+    pub mean0: f64,
+    /// `mean1 - mean0`.
+    pub difference: f64,
+}
+
+impl PlugIn {
+    pub(crate) fn new(mean1: f64, mean0: f64) -> Self {
+        Self {
+            mean1,
+            mean0,
+            difference: mean1 - mean0,
+        }
+    }
+}
+
 /// The result of a targeted estimator.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Tmle {
     /// The population of the estimate.
-    pub target: Target,
-    /// The mean outcome had everyone been treated.
-    pub mean1: Estimate,
-    /// The mean outcome had no one been treated.
-    pub mean0: Estimate,
-    /// The difference `mean1 - mean0`.
-    pub difference: Estimate,
-    /// The ratio `mean1 / mean0`, `None` when `mean0` is 0.
-    pub ratio: Option<Estimate>,
-    /// The influence function of the difference, one value per person and 0 for
-    /// persons not used, so that the variance is the sum of squares of the sums
-    /// over clusters.
-    pub influence: Vec<f64>,
+    pub estimand: Estimand,
+    /// The mean outcome had everyone been treated (`mean1`), had no one been
+    /// treated (`mean0`), their difference and their ratio, the ratio with its
+    /// interval on its own scale and the p-value of a ratio of 1; `None` when
+    /// `mean0` is 0.
+    pub contrast: Contrast,
+    /// The plug-in estimate from the predictions before targeting.
+    pub initial: PlugIn,
+    /// The influence functions of `mean1` (column 0) and `mean0` (column 1) on
+    /// the per-unit scale, over the persons used, whose row numbers are the
+    /// units, with the rule `SmallSample`. Their `variance` with the clusters
+    /// `Clusters::per_unit(rows, cluster)` (or none) reproduces the standard
+    /// errors.
+    pub influence: Influence,
     /// The targeted prediction `Q*_1` of each person on the scale of the
     /// outcome, `None` for persons not used.
     pub targeted1: Vec<Option<f64>>,
@@ -260,8 +308,9 @@ pub struct Tmle {
     pub targeted0: Vec<Option<f64>>,
     /// How the predictions were moved.
     pub targeting: Targeting,
-    /// The sum of [`Tmle::influence`], the mean of the efficient influence
-    /// function at the targeted predictions: 0 up to the tolerance of the
+    /// The mean of the efficient influence function of the difference at the
+    /// targeted predictions, the mean of the combination `[1, -1]` of
+    /// [`Tmle::influence`]: 0 up to the tolerance of the
     /// fluctuation for the effect in the population, and up to the step and the
     /// remainder described in the module documentation for the one-step path.
     pub score: f64,
@@ -315,11 +364,8 @@ fn prepare<'a>(
     if n == 0 {
         return Err(Error::input("treatment: no persons"));
     }
-    check_alpha(opts.alpha)?;
+    check_estimand(opts.estimand)?;
     check_len("outcome", outcome.len(), n)?;
-    if let Some(w) = weight {
-        check_len("weight", w.len(), n)?;
-    }
     if let Some(c) = cluster {
         check_len("cluster", c.len(), n)?;
     }
@@ -335,25 +381,9 @@ fn prepare<'a>(
             opts.step
         )));
     }
-    if let Some(i) = outcome.iter().position(|y| !y.is_finite()) {
-        return Err(Error::input(format!("outcome: value {i} is not finite")));
-    }
-    let raw: Vec<f64> = weight.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
-    if let Some(i) = raw.iter().position(|&w| !(w.is_finite() && w >= 0.0)) {
-        return Err(Error::input(format!(
-            "weight: value {i} is negative or not finite"
-        )));
-    }
-    let (mut treated, mut controls) = (false, false);
-    for (&w, &t) in raw.iter().zip(treatment) {
-        if w > 0.0 {
-            treated |= t;
-            controls |= !t;
-        }
-    }
-    if !(treated && controls) {
-        return Err(Error::input("treatment: both groups need persons"));
-    }
+    check_finite("outcome", outcome)?;
+    let raw = case_weights("weight", weight, n)?;
+    check_arms(&raw, treatment)?;
     let total = compensated(raw.iter().copied());
     let w: Vec<f64> = raw.iter().map(|&x| x / total * n as f64).collect();
     let (lower, upper) = match opts.range {
@@ -428,6 +458,38 @@ fn check_propensity(g: &[f64]) -> Result<()> {
     }
 }
 
+/// Coefficient `j` of a fluctuation, whose clever covariate `column` has the
+/// case weights `weights`: the fitted value, or 0 for an aliased coefficient
+/// when the covariate is 0 for every person of positive weight, where every
+/// coefficient solves the score equation.
+pub(crate) fn fluctuation_coefficient(
+    fit: &Fit,
+    j: usize,
+    column: impl IntoIterator<Item = f64>,
+    weights: impl IntoIterator<Item = f64>,
+    what: &str,
+) -> Result<f64> {
+    if !fit.converged {
+        return Err(Error::NoConvergence(format!(
+            "{what}: the logistic fit did not converge"
+        )));
+    }
+    if let Some(e) = fit.coefficients[j] {
+        return Ok(e);
+    }
+    if column
+        .into_iter()
+        .zip(weights)
+        .all(|(h, w)| w <= 0.0 || h == 0.0)
+    {
+        Ok(0.0)
+    } else {
+        Err(Error::input(format!(
+            "{what}: the coefficient of clever covariate {j} is aliased"
+        )))
+    }
+}
+
 /// How the propensity is refitted when the support rule leaves out more than a
 /// tenth of an arm.
 #[derive(Clone, Copy)]
@@ -445,13 +507,12 @@ fn targeted(
     q1: &[f64],
     q0: &[f64],
     g: &[f64],
-    target: Target,
     refit: Refit<'_>,
     opts: &TmleOptions,
 ) -> Result<Tmle> {
-    match target {
-        Target::Ate => population(p, q1, q0, g, opts),
-        Target::Att | Target::Atc => on_arm(p, q1, q0, g, target, refit, opts),
+    match opts.estimand {
+        Estimand::Att | Estimand::Atc => on_arm(p, q1, q0, g, refit, opts),
+        _ => population(p, q1, q0, g, opts),
     }
 }
 
@@ -471,29 +532,48 @@ fn population(
     let offset: Vec<f64> = (0..n)
         .map(|i| if p.treatment[i] { l1[i] } else { l0[i] })
         .collect();
-    let design = Mat::from_fn(n, 2, |i, j| {
+    let clever = |i: usize, j: usize| {
         if j == 0 {
             (1.0 - a[i]) / g0[i]
         } else {
             a[i] / g1[i]
         }
-    });
+    };
+    let design = Mat::from_fn(n, 2, clever);
     let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit_slices(design.as_ref(), &p.ystar, Some(&p.w), Some(&offset), None)
+        .fit(&glm_data(
+            design.as_ref(),
+            &p.ystar,
+            Some(&p.w),
+            Some(&offset),
+            "fluctuation",
+        )?)
         .map_err(|e| Error::input(format!("fluctuation: {e}")))?;
-    if !fit.converged {
-        return Err(Error::NoConvergence(
-            "fluctuation: the logistic fit did not converge".into(),
-        ));
-    }
-    let e0 = fit.coefficients[0].unwrap_or(0.0);
-    let e1 = fit.coefficients[1].unwrap_or(0.0);
+    let weights = || p.w.iter().copied();
+    let e0 = fluctuation_coefficient(
+        &fit,
+        0,
+        (0..n).map(|i| clever(i, 0)),
+        weights(),
+        "fluctuation",
+    )?;
+    let e1 = fluctuation_coefficient(
+        &fit,
+        1,
+        (0..n).map(|i| clever(i, 1)),
+        weights(),
+        "fluctuation",
+    )?;
     let back = |x: f64| x * p.width + p.lower;
     let s1: Vec<f64> = (0..n).map(|i| back(plogis(l1[i] + e1 / g1[i]))).collect();
     let s0: Vec<f64> = (0..n).map(|i| back(plogis(l0[i] + e0 / g0[i]))).collect();
     let total = compensated(p.w.iter().copied());
     let mean1 = compensated((0..n).map(|i| p.w[i] * s1[i])) / total;
     let mean0 = compensated((0..n).map(|i| p.w[i] * s0[i])) / total;
+    let initial = PlugIn::new(
+        compensated((0..n).map(|i| p.w[i] * back(q1[i]))) / total,
+        compensated((0..n).map(|i| p.w[i] * back(q0[i]))) / total,
+    );
     let y = p.outcome;
     let if1: Vec<f64> = (0..n)
         .map(|i| p.w[i] * (a[i] / g1[i] * (y[i] - s1[i]) + s1[i] - mean1) / total)
@@ -507,8 +587,8 @@ fn population(
         .count();
     finish(
         p,
-        Target::Ate,
         [mean1, mean0],
+        initial,
         [&if1, &if0],
         None,
         (
@@ -520,7 +600,6 @@ fn population(
             iterations: fit.iterations,
         },
         n_trimmed,
-        n,
         opts,
     )
 }
@@ -530,7 +609,6 @@ fn population(
 fn support(
     p: &Prepared<'_>,
     g: &[f64],
-    target: Target,
     refit: Refit<'_>,
     opts: &TmleOptions,
 ) -> Result<(Vec<usize>, Vec<f64>, bool)> {
@@ -555,7 +633,7 @@ fn support(
     if !(controls_kept > 10 && treated_kept > 10) {
         return Ok((all(), g.to_vec(), false));
     }
-    let (rows, kept, total) = if target == Target::Att {
+    let (rows, kept, total) = if opts.estimand == Estimand::Att {
         (att, controls_kept, a.iter().filter(|&&t| !t).count())
     } else {
         (atc, treated_kept, a.iter().filter(|&&t| t).count())
@@ -575,14 +653,13 @@ fn support(
                     }
                 });
                 let wr: Vec<f64> = rows.iter().map(|&i| p.w[i]).collect();
-                let fitted = fit_model(
+                fitted_mean(
                     &Glm::new(Family::Binomial, Link::Logit),
                     x.as_ref(),
                     &ar,
                     &wr,
                     "propensity (support)",
-                )?;
-                fitted.mean
+                )?
             }
         }
     };
@@ -594,15 +671,17 @@ fn support(
 fn intercept(rows: &[usize], a: &[f64], g: &[f64]) -> Result<Vec<f64>> {
     let offset: Vec<f64> = rows.iter().map(|&i| logit(g[i])).collect();
     let ones = Mat::from_fn(rows.len(), 1, |_, _| 1.0);
+    let what = "propensity recalibration";
     let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit_slices(ones.as_ref(), a, None, Some(&offset), None)
-        .map_err(|e| Error::input(format!("propensity recalibration: {e}")))?;
-    if !fit.converged {
-        return Err(Error::NoConvergence(
-            "propensity recalibration: the logistic fit did not converge".into(),
-        ));
-    }
-    let c = fit.coefficients[0].unwrap_or(0.0);
+        .fit(&glm_data(ones.as_ref(), a, None, Some(&offset), what)?)
+        .map_err(|e| Error::input(format!("{what}: {e}")))?;
+    let c = fluctuation_coefficient(
+        &fit,
+        0,
+        std::iter::repeat_n(1.0, rows.len()),
+        std::iter::repeat_n(1.0, rows.len()),
+        what,
+    )?;
     Ok(offset.iter().map(|&l| plogis(c + l)).collect())
 }
 
@@ -620,6 +699,8 @@ struct OneStep {
     state: State,
     ic: Vec<f64>,
     steps: usize,
+    /// The target at the start of the path.
+    initial: f64,
 }
 
 /// The one-step estimator of the effect on the arm `a = 1`, on scaled data.
@@ -660,6 +741,7 @@ fn one_step(
             .collect()
     };
     let psi = psi_of(&q, &g1);
+    let initial = psi;
     let mut current = State { q, g1, g0, psi };
     let mut current_ic = ic(&current);
     let derivative = mean(&mut current_ic.iter().map(|&x| qq * x));
@@ -716,6 +798,7 @@ fn one_step(
         state: previous,
         ic: previous_ic,
         steps: k - 1,
+        initial,
     })
 }
 
@@ -724,14 +807,13 @@ fn on_arm(
     q1: &[f64],
     q0: &[f64],
     g: &[f64],
-    target: Target,
     refit: Refit<'_>,
     opts: &TmleOptions,
 ) -> Result<Tmle> {
     let n = g.len();
-    let (rows, calibrated, recalibrated) = support(p, g, target, refit, opts)?;
+    let (rows, calibrated, recalibrated) = support(p, g, refit, opts)?;
     let m = rows.len();
-    let treated_arm = target == Target::Att;
+    let treated_arm = opts.estimand == Estimand::Att;
     // The arm whose effect is estimated is the arm `a = 1` of the one-step path.
     let arm = |i: usize| p.treatment[i] == treated_arm;
     let a: Vec<f64> = rows.iter().map(|&i| flag(arm(i))).collect();
@@ -763,6 +845,7 @@ fn on_arm(
     let path = one_step(&y, &a, q, &ga, &w, p.bound, p.delta, opts.step)?;
     let sign = if treated_arm { 1.0 } else { -1.0 };
     let effect = sign * path.state.psi * p.width;
+    let initial_effect = sign * path.initial * p.width;
     let mut influence = vec![0.0; n];
     for (r, &i) in rows.iter().enumerate() {
         influence[i] = sign * path.ic[r] * p.width / m as f64;
@@ -774,12 +857,22 @@ fn on_arm(
     for (r, &i) in rows.iter().enumerate() {
         own_if[i] = w[r] * a[r] * (p.outcome[i] - own_mean) / size;
     }
-    let (means, if1, if0) = if treated_arm {
+    let (means, initial, if1, if0) = if treated_arm {
         let if0: Vec<f64> = (0..n).map(|i| own_if[i] - influence[i]).collect();
-        ([own_mean, own_mean - effect], own_if, if0)
+        (
+            [own_mean, own_mean - effect],
+            PlugIn::new(own_mean, own_mean - initial_effect),
+            own_if,
+            if0,
+        )
     } else {
         let if1: Vec<f64> = (0..n).map(|i| own_if[i] + influence[i]).collect();
-        ([own_mean + effect, own_mean], if1, own_if)
+        (
+            [own_mean + effect, own_mean],
+            PlugIn::new(own_mean + initial_effect, own_mean),
+            if1,
+            own_if,
+        )
     };
     let back = |x: f64| x * p.width + p.lower;
     let (mut t1, mut t0) = (vec![None; n], vec![None; n]);
@@ -791,20 +884,18 @@ fn on_arm(
             (t1[i], t0[i]) = (Some(s_other), Some(s_own));
         }
     }
-    let used = Some(rows.as_slice());
     finish(
         p,
-        target,
         means,
+        initial,
         [&if1, &if0],
-        used,
+        Some(&rows),
         (t1, t0),
         Targeting::OneStep {
             steps: path.steps,
             recalibrated,
         },
         n_trimmed,
-        m,
         opts,
     )
 }
@@ -815,50 +906,40 @@ fn on_arm(
 )]
 fn finish(
     p: &Prepared<'_>,
-    target: Target,
     values: [f64; 2],
-    influence: [&[f64]; 2],
+    initial: PlugIn,
+    dfbeta: [&[f64]; 2],
     rows: Option<&[usize]>,
     targeted: (Vec<Option<f64>>, Vec<Option<f64>>),
     targeting: Targeting,
     n_trimmed: usize,
-    n_used: usize,
     opts: &TmleOptions,
 ) -> Result<Tmle> {
     let n = p.w.len();
-    let diff: Vec<f64> = (0..n).map(|i| influence[0][i] - influence[1][i]).collect();
-    // The variance over the persons used, so that clusters without them do not
-    // count.
-    let variance = |v: &[f64]| -> Result<f64> {
-        match rows {
-            None => variance_of(v, p.cluster),
-            Some(rows) => {
-                let sub: Vec<f64> = rows.iter().map(|&i| v[i]).collect();
-                let cl: Option<Vec<u32>> = p.cluster.map(|c| rows.iter().map(|&i| c[i]).collect());
-                variance_of(&sub, cl.as_deref())
-            }
-        }
-    };
-    let mean1 = estimate(values[0], variance(influence[0])?, 0.0, opts.alpha)?;
-    let mean0 = estimate(values[1], variance(influence[1])?, 0.0, opts.alpha)?;
-    let difference = estimate(values[0] - values[1], variance(&diff)?, 0.0, opts.alpha)?;
-    let ratio = if values[1] == 0.0 {
-        None
+    let all: Vec<usize>;
+    let rows = if let Some(rows) = rows {
+        rows
     } else {
-        let r = values[0] / values[1];
-        let if_r: Vec<f64> = (0..n)
-            .map(|i| (influence[0][i] - r * influence[1][i]) / values[1])
-            .collect();
-        Some(estimate(r, variance(&if_r)?, 1.0, opts.alpha)?)
+        all = (0..n).collect();
+        &all
     };
-    let score = compensated(diff.iter().copied());
+    // The influence over the persons used, so that clusters without them do
+    // not count.
+    let pick = |v: &[f64]| -> Vec<f64> { rows.iter().map(|&i| v[i]).collect() };
+    let (d1, d0) = (pick(dfbeta[0]), pick(dfbeta[1]));
+    let score = compensated((0..n).map(|i| dfbeta[0][i] - dfbeta[1][i]));
+    let influence = influence(
+        [&d1, &d0],
+        unit_codes(rows.iter().copied())?,
+        ClusterRule::SmallSample,
+    )?;
+    let clusters = clusters(p.cluster, n)?;
+    let contrast = contrast(values, &influence, clusters.as_ref(), opts.level)?;
     Ok(Tmle {
-        target,
-        mean1,
-        mean0,
-        difference,
-        ratio,
-        influence: diff,
+        estimand: opts.estimand,
+        contrast,
+        initial,
+        influence,
         targeted1: targeted.0,
         targeted0: targeted.1,
         targeting,
@@ -866,7 +947,7 @@ fn finish(
         range: (p.lower, p.lower + p.width),
         propensity_bound: p.bound,
         n_trimmed,
-        n_used,
+        n_used: rows.len(),
     })
 }
 
@@ -883,11 +964,12 @@ fn finish(
 ///
 /// [`Error::Input`] for inputs of different lengths, no persons, a value that is
 /// not finite, a negative weight, a propensity outside `(0, 1)`, an outcome
-/// outside the known range or with one value, options outside their ranges, a
-/// group without persons of positive weight and fewer than two clusters;
-/// [`Error::NoConvergence`] for a fluctuation, a recalibration or a one-step path
-/// that does not converge.
-pub fn tmle(input: &TmleInput<'_>, target: Target, opts: &TmleOptions) -> Result<Tmle> {
+/// outside the known range or with one value, options outside their ranges, an
+/// estimand other than the ATE, ATT and ATC, a group without persons of
+/// positive weight and an aliased fluctuation coefficient (see the module
+/// documentation); [`Error::NoConvergence`] for a fluctuation, a recalibration
+/// or a one-step path that does not converge.
+pub fn tmle(input: &TmleInput<'_>, opts: &TmleOptions) -> Result<Tmle> {
     let p = prepare(
         input.outcome,
         input.treatment,
@@ -899,11 +981,8 @@ pub fn tmle(input: &TmleInput<'_>, target: Target, opts: &TmleOptions) -> Result
     check_len("mu1", input.mu1.len(), n)?;
     check_len("mu0", input.mu0.len(), n)?;
     check_len("propensity", input.propensity.len(), n)?;
-    for (name, v) in [("mu1", input.mu1), ("mu0", input.mu0)] {
-        if let Some(i) = v.iter().position(|x| !x.is_finite()) {
-            return Err(Error::input(format!("{name}: value {i} is not finite")));
-        }
-    }
+    check_finite("mu1", input.mu1)?;
+    check_finite("mu0", input.mu0)?;
     check_propensity(input.propensity)?;
     let scale = |v: &[f64]| -> Vec<f64> {
         v.iter()
@@ -911,15 +990,7 @@ pub fn tmle(input: &TmleInput<'_>, target: Target, opts: &TmleOptions) -> Result
             .collect()
     };
     let (q1, q0) = (scale(input.mu1), scale(input.mu0));
-    targeted(
-        &p,
-        &q1,
-        &q0,
-        input.propensity,
-        target,
-        Refit::Intercept,
-        opts,
-    )
+    targeted(&p, &q1, &q0, input.propensity, Refit::Intercept, opts)
 }
 
 /// The targeted estimator with generalised linear models for the outcome and a
@@ -928,24 +999,20 @@ pub fn tmle(input: &TmleInput<'_>, target: Target, opts: &TmleOptions) -> Result
 ///
 /// The outcome model is fitted to the scaled outcome `Y*`, logistic for
 /// [`Family::Binomial`] and linear for [`Family::Gaussian`], as `tmle` with
-/// `Q.SL.library = "SL.glm"` and `cvQinit = FALSE`; [`OutcomeModel::Pooled`] is
-/// `tmle`'s main-terms model. The propensity model is a logistic regression of
-/// the treatment on `propensity_design`. Both get the case weights rescaled to
+/// `Q.SL.library = "SL.glm"` and `cvQinit = FALSE`, in the form of
+/// [`TmleOptions::outcome_model`]; [`OutcomeModel::Pooled`] is `tmle`'s
+/// main-terms model. The propensity model is a logistic regression of the
+/// treatment on `propensity_design`. Both get the case weights rescaled to
 /// mean 1.
 ///
 /// # Errors
 ///
 /// The errors of [`tmle`], and [`Error::Input`] for a design with another number
 /// of rows than the data or without columns, a family other than the two above,
-/// a model that does not converge or has an aliased column, and a propensity
-/// model whose fitted probabilities are numerically 0 or 1.
-pub fn tmle_glm(
-    input: &GlmInput<'_>,
-    family: Family,
-    model: OutcomeModel,
-    target: Target,
-    opts: &TmleOptions,
-) -> Result<Tmle> {
+/// a model that has an aliased column, and a propensity model whose fitted
+/// probabilities are numerically 0 or 1; [`Error::NoConvergence`] for a model
+/// that does not converge.
+pub fn tmle_glm(input: &GlmInput<'_>, family: Family, opts: &TmleOptions) -> Result<Tmle> {
     let p = prepare(
         input.outcome,
         input.treatment,
@@ -954,23 +1021,8 @@ pub fn tmle_glm(
         opts,
     )?;
     let n = p.w.len();
-    for (name, m) in [
-        ("outcome_design", input.outcome_design),
-        ("propensity_design", input.propensity_design),
-    ] {
-        if m.nrows() != n {
-            return Err(Error::input(format!(
-                "{name}: {} rows for {n} persons",
-                m.nrows()
-            )));
-        }
-        if m.ncols() == 0 {
-            return Err(Error::input(format!("{name}: no columns")));
-        }
-        if !epistat_linalg::is_finite(m) {
-            return Err(Error::input(format!("{name}: a value is not finite")));
-        }
-    }
+    check_design("outcome_design", input.outcome_design, n)?;
+    check_design("propensity_design", input.propensity_design, n)?;
     let link = match family {
         Family::Binomial => Link::Logit,
         Family::Gaussian => Link::Identity,
@@ -982,42 +1034,26 @@ pub fn tmle_glm(
     };
     let a: Vec<f64> = p.treatment.iter().map(|&t| flag(t)).collect();
     let z = input.propensity_design;
-    let propensity = fit_model(
+    let propensity = fitted_mean(
         &Glm::new(Family::Binomial, Link::Logit),
         z,
         &a,
         &p.w,
         "propensity",
     )?;
-    let eps10 = 10.0 * f64::EPSILON;
-    if let Some(i) = propensity
-        .mean
-        .iter()
-        .position(|&g| g < eps10 || g > 1.0 - eps10)
-    {
-        return Err(Error::input(format!(
-            "propensity model: person {i} has fitted probability {} (separation)",
-            propensity.mean[i]
-        )));
-    }
+    check_separation(&propensity)?;
     let glm = Glm::new(family, link);
     let x = input.outcome_design;
-    let (q1, q0) = match model {
+    let (q1, q0) = match opts.outcome_model {
         OutcomeModel::Pooled => {
             let k = x.ncols();
             let design = Mat::from_fn(n, k + 1, |i, j| if j < k { x[(i, j)] } else { a[i] });
-            let fit = glm
-                .fit_slices(design.as_ref(), &p.ystar, Some(&p.w), None, None)
-                .map_err(|e| Error::input(format!("outcome model: {e}")))?;
-            if !fit.converged {
-                return Err(Error::input("outcome model: no convergence"));
-            }
-            let mut beta = Vec::with_capacity(k + 1);
-            for (j, c) in fit.coefficients.iter().enumerate() {
-                beta.push(c.ok_or_else(|| {
-                    Error::input(format!("outcome model: design column {j} is aliased"))
-                })?);
-            }
+            let what = "outcome model";
+            let (_, beta) = fit_glm(
+                &glm,
+                &glm_data(design.as_ref(), &p.ystar, Some(&p.w), None, what)?,
+                what,
+            )?;
             let eta = |i: usize| -> f64 { (0..k).map(|j| x[(i, j)] * beta[j]).sum() };
             let q1: Vec<f64> = (0..n).map(|i| link.inverse(eta(i) + beta[k])).collect();
             let q0: Vec<f64> = (0..n).map(|i| link.inverse(eta(i))).collect();
@@ -1035,9 +1071,9 @@ pub fn tmle_glm(
                     })
                     .collect()
             };
-            let m1 = fit_model(&glm, x, &p.ystar, &arm(true), "outcome (treated)")?;
-            let m0 = fit_model(&glm, x, &p.ystar, &arm(false), "outcome (controls)")?;
-            (m1.mean, m0.mean)
+            let m1 = fitted_mean(&glm, x, &p.ystar, &arm(true), "outcome (treated)")?;
+            let m0 = fitted_mean(&glm, x, &p.ystar, &arm(false), "outcome (controls)")?;
+            (m1, m0)
         }
     };
     let bound = |v: Vec<f64>| -> Vec<f64> {
@@ -1046,13 +1082,47 @@ pub fn tmle_glm(
             .collect()
     };
     let (q1, q0) = (bound(q1), bound(q0));
-    targeted(
-        &p,
-        &q1,
-        &q0,
-        &propensity.mean,
-        target,
-        Refit::Design(z),
-        opts,
-    )
+    targeted(&p, &q1, &q0, &propensity, Refit::Design(z), opts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A logistic fit whose second column is aliased: a copy of the first, or
+    /// zero.
+    fn aliased_fit(second: impl Fn(f64) -> f64) -> (Fit, Vec<f64>) {
+        let n = 40_u32;
+        let x: Vec<f64> = (0..n).map(|i| f64::from(i) / 10.0 - 2.0).collect();
+        let y: Vec<f64> = (0..n).map(|i| f64::from(u8::from(i % 3 == 0))).collect();
+        let column: Vec<f64> = x.iter().map(|&v| second(v)).collect();
+        let design = Mat::from_fn(x.len(), 2, |i, j| if j == 0 { x[i] } else { column[i] });
+        let fit = Glm::new(Family::Binomial, Link::Logit)
+            .fit(&glm_data(design.as_ref(), &y, None, None, "test").unwrap())
+            .unwrap();
+        assert!(fit.converged && fit.coefficients[1].is_none());
+        (fit, column)
+    }
+
+    #[test]
+    fn an_aliased_fluctuation_coefficient_is_an_error_unless_its_covariate_is_zero() {
+        let ones = || std::iter::repeat_n(1.0, 40);
+        let (fit, column) = aliased_fit(|v| v);
+        let refused = fluctuation_coefficient(&fit, 1, column.iter().copied(), ones(), "test");
+        assert!(matches!(refused, Err(Error::Input(m)) if m.contains("aliased")));
+        let (fit, column) = aliased_fit(|_| 0.0);
+        let zero = fluctuation_coefficient(&fit, 1, column.iter().copied(), ones(), "test");
+        assert_eq!(zero.unwrap(), 0.0);
+        // A covariate that is not 0 only where the weight is 0 counts as 0.
+        let weights = (0..40).map(|i| if i == 5 { 0.0 } else { 1.0 });
+        let covariate = (0..40).map(|i| if i == 5 { 1.0 } else { 0.0 });
+        assert_eq!(
+            fluctuation_coefficient(&fit, 1, covariate, weights, "test").unwrap(),
+            0.0
+        );
+        assert_eq!(
+            fluctuation_coefficient(&fit, 0, column.iter().copied(), ones(), "test").unwrap(),
+            fit.coefficients[0].unwrap()
+        );
+    }
 }

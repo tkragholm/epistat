@@ -3,7 +3,7 @@
 
 mod balance_sim;
 
-use epistat_causal::aipw::Target;
+use epistat_causal::Estimand;
 use epistat_causal::balance::{
     CbpsInput, CbpsOptions, EntropyInput, EntropyOptions, Identification, balance_columns, cbps,
     entropy_balance,
@@ -14,7 +14,7 @@ use epistat_testkit::{POOLS, assert_same_on_pools};
 fn entropy_balancing_is_the_same_on_every_pool() {
     let s = balance_sim::simulate(4500);
     let cols = balance_columns(s.c.as_ref(), 2, true).unwrap();
-    for target in [Target::Att, Target::Ate, Target::Atc] {
+    for target in [Estimand::Att, Estimand::Ate, Estimand::Atc] {
         assert_same_on_pools(&POOLS, || {
             let r = entropy_balance(
                 &EntropyInput {
@@ -24,7 +24,7 @@ fn entropy_balancing_is_the_same_on_every_pool() {
                     base_weight: Some(&s.q),
                 },
                 &EntropyOptions {
-                    target,
+                    estimand: target,
                     ..EntropyOptions::default()
                 },
             )
@@ -40,9 +40,9 @@ fn entropy_balancing_is_the_same_on_every_pool() {
 fn cbps_is_the_same_on_every_pool() {
     let s = balance_sim::simulate(4500);
     for (target, identification, two_step) in [
-        (Target::Ate, Identification::Exact, true),
-        (Target::Att, Identification::Over, true),
-        (Target::Atc, Identification::Over, false),
+        (Estimand::Ate, Identification::Exact, true),
+        (Estimand::Att, Identification::Over, true),
+        (Estimand::Atc, Identification::Over, false),
     ] {
         assert_same_on_pools(&POOLS, || {
             let r = cbps(
@@ -52,7 +52,7 @@ fn cbps_is_the_same_on_every_pool() {
                     sample_weight: Some(&s.s),
                 },
                 &CbpsOptions {
-                    target,
+                    estimand: target,
                     identification,
                     two_step,
                     ..CbpsOptions::default()

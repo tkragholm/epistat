@@ -14,7 +14,8 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
-use epistat_causal::aipw::{AipwOptions, GlmInput, Target, aipw_glm};
+use epistat_causal::Estimand;
+use epistat_causal::aipw::{AipwOptions, GlmInput, aipw_glm};
 use epistat_glm::Family;
 use epistat_linalg::Mat;
 
@@ -60,17 +61,19 @@ fn main() {
         aipw_glm(
             &input,
             Family::Gaussian,
-            Target::Ate,
-            &AipwOptions::default(),
+            &AipwOptions {
+                estimand: Estimand::Ate,
+                ..AipwOptions::default()
+            },
         )
         .expect("aipw")
     });
     let mut lines = Lines::default();
-    lines.push("mean1", fit.mean1.estimate);
-    lines.push("mean0", fit.mean0.estimate);
-    lines.push("difference", fit.difference.estimate);
-    lines.push("info_se_mean1", fit.mean1.se);
-    lines.push("info_se_mean0", fit.mean0.se);
-    lines.push("info_se_difference", fit.difference.se);
+    lines.push("mean1", fit.contrast.mean1.estimate);
+    lines.push("mean0", fit.contrast.mean0.estimate);
+    lines.push("difference", fit.contrast.difference.estimate);
+    lines.push("info_se_mean1", fit.contrast.mean1.se.unwrap());
+    lines.push("info_se_mean0", fit.contrast.mean0.se.unwrap());
+    lines.push("info_se_difference", fit.contrast.difference.se.unwrap());
     common::finish(&method, n, &times, &lines);
 }

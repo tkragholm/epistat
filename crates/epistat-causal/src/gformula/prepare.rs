@@ -97,13 +97,10 @@ pub(super) fn prepare<'a>(
     interventions: &'a [Intervention],
     options: &GFormulaOptions,
 ) -> Result<Prepared<'a>> {
-    let rows = data.id.len();
+    let id = data.key.unit();
+    let rows = id.len();
     let width = data.time_varying.len();
     let n_baseline = data.baseline.len();
-    if rows == 0 {
-        return Err(Error::input("the data have no rows"));
-    }
-    check_length("period", rows, data.period.len())?;
     for (j, column) in data.baseline.iter().enumerate() {
         check_length(&format!("baseline variable {j}"), rows, column.len())?;
     }
@@ -111,9 +108,6 @@ pub(super) fn prepare<'a>(
         check_length(&format!("time-varying variable {j}"), rows, column.len())?;
     }
     check_length("covariates", width, covariates.len())?;
-    if !(options.alpha > 0.0 && options.alpha < 1.0) {
-        return Err(Error::input("alpha must lie in (0, 1)"));
-    }
     if options.simulated == Some(0) {
         return Err(Error::input("at least one person must be simulated"));
     }
@@ -125,44 +119,36 @@ pub(super) fn prepare<'a>(
         )));
     }
 
-    // Persons: contiguous rows at periods 0, 1, 2, ...
+    // Persons: the key sorts the rows by person and period, and each person's
+    // periods must be 0, 1, 2, ...
     let mut start = vec![0];
-    for r in 0..rows {
-        let first = r == 0 || data.id[r] != data.id[r - 1];
-        if first {
-            if r > 0 {
-                start.push(r);
-            }
-            if data.period[r] != 0 {
-                return Err(Error::input(format!(
-                    "row {r}: the first row of person {} is at period {}, not 0",
-                    data.id[r], data.period[r]
-                )));
-            }
-        } else if data.period[r] != data.period[r - 1] + 1 {
-            return Err(Error::input(format!(
-                "row {r}: person {} goes from period {} to {}; the rows of a person \
-                 must be contiguous and at consecutive periods",
-                data.id[r],
-                data.period[r - 1],
-                data.period[r]
-            )));
+    let mut period = Vec::with_capacity(rows);
+    for (r, &k) in data.key.period().iter().enumerate() {
+        let first = r == 0 || id[r] != id[r - 1];
+        if first && r > 0 {
+            start.push(r);
         }
+        let expected = if first { 0 } else { period[r - 1] + 1 };
+        if usize::try_from(k).ok() != Some(expected) {
+            return Err(Error::input(if first {
+                format!(
+                    "row {r}: the first row of person {} is at period {k}, not 0",
+                    id[r]
+                )
+            } else {
+                format!(
+                    "row {r}: person {} goes from period {} to {k}; the periods of a person \
+                     must be consecutive",
+                    id[r],
+                    period[r - 1]
+                )
+            }));
+        }
+        period.push(expected);
     }
     start.push(rows);
     let persons = start.len() - 1;
-    {
-        let mut seen = std::collections::HashSet::with_capacity(persons);
-        for &first in &start[..persons] {
-            if !seen.insert(data.id[first]) {
-                return Err(Error::input(format!(
-                    "the rows of person {} are not contiguous",
-                    data.id[first]
-                )));
-            }
-        }
-    }
-    let last_period = *data.period.iter().max().unwrap_or(&0);
+    let last_period = *period.iter().max().unwrap_or(&0);
     let periods = options.periods.unwrap_or(last_period + 1);
     if periods == 0 || periods > last_period + 1 {
         return Err(Error::input(format!(
@@ -187,7 +173,7 @@ pub(super) fn prepare<'a>(
             {
                 return Err(Error::input(format!(
                     "row {r}: baseline variable {j} changes within person {}",
-                    data.id[r]
+                    id[r]
                 )));
             }
             baseline.push(value);
@@ -226,7 +212,7 @@ pub(super) fn prepare<'a>(
                 )));
             }
             values[r * width + j] = x;
-            let before = if data.period[r] == 0 {
+            let before = if period[r] == 0 {
                 0.0
             } else {
                 sums[(r - 1) * width + j]
@@ -271,6 +257,19 @@ pub(super) fn prepare<'a>(
             check_length("the outcome", rows, event.len())?;
             if let Some(c) = censoring {
                 check_length("the censoring", rows, c.censored.len())?;
+                match c.cutoff {
+                    super::WeightCutoff::Quantile(q) if !(0.0..=1.0).contains(&q) => {
+                        return Err(Error::input(format!(
+                            "weight cutoff: the quantile {q} is not a probability in [0, 1]"
+                        )));
+                    }
+                    super::WeightCutoff::Value(v) if !(v.is_finite() && v > 0.0) => {
+                        return Err(Error::input(format!(
+                            "weight cutoff: the value {v} is not positive and finite"
+                        )));
+                    }
+                    _ => {}
+                }
                 check_terms(&c.terms, n_baseline, width, width, "the censoring model")?;
                 for p in 0..persons {
                     for r in start[p]..start[p + 1] {
@@ -280,7 +279,7 @@ pub(super) fn prepare<'a>(
                         if r + 1 != start[p + 1] {
                             return Err(Error::input(format!(
                                 "row {r}: person {} has rows after censoring",
-                                data.id[r]
+                                id[r]
                             )));
                         }
                         if event[r] || competing.as_ref().is_some_and(|d| d.event[r]) {
@@ -308,17 +307,13 @@ pub(super) fn prepare<'a>(
                     if event[r] || d {
                         return Err(Error::input(format!(
                             "row {r}: person {} has rows after an event",
-                            data.id[r]
+                            id[r]
                         )));
                     }
                 }
             }
-            let observed = observed_risk(
-                data.period,
-                event,
-                competing.as_ref().map(|c| c.event),
-                periods,
-            );
+            let observed =
+                observed_risk(&period, event, competing.as_ref().map(|c| c.event), periods);
             (false, observed)
         }
         Outcome::BinaryEnd { value, terms } | Outcome::ContinuousEnd { value, terms } => {
@@ -333,7 +328,7 @@ pub(super) fn prepare<'a>(
             let mut sum = 0.0;
             let mut count = 0usize;
             for r in 0..rows {
-                if data.period[r] != last_period {
+                if period[r] != last_period {
                     continue;
                 }
                 let y = value[r];
@@ -516,7 +511,13 @@ pub(super) fn weighted_observed_risk(
     let cut = match censoring.cutoff {
         super::WeightCutoff::None => None,
         super::WeightCutoff::Value(v) => Some(v),
-        super::WeightCutoff::Quantile(q) => Some(quantile_type7(&weight, q)),
+        super::WeightCutoff::Quantile(q) => {
+            let mut sorted = weight.clone();
+            sorted.sort_by(f64::total_cmp);
+            // The quantile was checked to lie in [0, 1] and the weights are
+            // finite and not empty, so it exists.
+            epistat_stats::quantile::type7(&sorted, q)
+        }
     };
     if let Some(c) = cut {
         for v in &mut weight {
@@ -563,29 +564,4 @@ pub(super) fn weighted_observed_risk(
         out.push(Some(risk));
     }
     out
-}
-
-/// R's type 7 quantile at `p` of `x`, formed as `stats::quantile` forms it:
-/// with the index `i = 1 + (n - 1) p` from 1, `lo = floor(i)` and `h = i -
-/// lo`, `(1 - h) x_(lo) + h x_(lo + 1)` when `i > lo` and the two differ, and
-/// `x_(lo)` otherwise.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss,
-    reason = "the index lies in [1, n]"
-)]
-fn quantile_type7(x: &[f64], p: f64) -> f64 {
-    let mut sorted = x.to_vec();
-    sorted.sort_by(f64::total_cmp);
-    let index = 1.0 + (sorted.len() - 1) as f64 * p;
-    let lo = index.floor();
-    let q = sorted[lo as usize - 1];
-    let high = sorted[index.ceil() as usize - 1];
-    if index > lo && high.to_bits() != q.to_bits() {
-        let h = index - lo;
-        (1.0 - h) * q + h * high
-    } else {
-        q
-    }
 }

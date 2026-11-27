@@ -19,7 +19,8 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
-use epistat_causal::aipw::Target;
+use epistat_causal::Estimand;
+use epistat_causal::balance::OutcomeOptions;
 use epistat_causal::balance::{
     BalanceWeights, CbpsInput, CbpsOptions, EntropyInput, EntropyOptions, Identification,
     WeightVariance, balance_columns, cbps, entropy_balance,
@@ -43,18 +44,28 @@ fn generate(n: usize) {
 }
 
 fn report(lines: &mut Lines, w: &BalanceWeights, y: &[f64]) {
-    let sum: f64 = w.weights.iter().sum();
+    let sum: f64 = w.weights().iter().sum();
     lines.push("sum_w", sum);
-    lines.push("sum_w_square", w.weights.iter().map(|x| x * x).sum());
+    lines.push("sum_w_square", w.weights().iter().map(|x| x * x).sum());
     lines.push(
         "max_w",
-        w.weights.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        w.weights()
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max),
     );
     let fit = w
-        .mean_difference(y, None, WeightVariance::Estimated, 0.05)
+        .mean_difference(
+            y,
+            None,
+            &OutcomeOptions {
+                variance: WeightVariance::Estimated,
+                ..OutcomeOptions::default()
+            },
+        )
         .expect("mean difference");
-    lines.push("difference", fit.difference.estimate);
-    lines.push("info_se_difference", fit.difference.se);
+    lines.push("difference", fit.contrast.difference.estimate);
+    lines.push("info_se_difference", fit.contrast.difference.se.unwrap());
 }
 
 fn main() {
@@ -72,9 +83,9 @@ fn main() {
     let times = match method.as_str() {
         "ebal_att" | "ebal_ate_m2" => {
             let (moments, target) = if method == "ebal_att" {
-                (1, Target::Att)
+                (1, Estimand::Att)
             } else {
-                (2, Target::Ate)
+                (2, Estimand::Ate)
             };
             let cols = balance_columns(raw.as_ref(), moments, false).expect("columns");
             let (times, r) = common::timed(common::reps(), || {
@@ -86,7 +97,7 @@ fn main() {
                         base_weight: None,
                     },
                     &EntropyOptions {
-                        target,
+                        estimand: target,
                         ..EntropyOptions::default()
                     },
                 )
@@ -97,9 +108,9 @@ fn main() {
         }
         "cbps_exact" | "cbps_over" => {
             let (identification, target) = if method == "cbps_exact" {
-                (Identification::Exact, Target::Ate)
+                (Identification::Exact, Estimand::Ate)
             } else {
-                (Identification::Over, Target::Att)
+                (Identification::Over, Estimand::Att)
             };
             let (times, r) = common::timed(common::reps(), || {
                 cbps(
@@ -109,7 +120,7 @@ fn main() {
                         sample_weight: None,
                     },
                     &CbpsOptions {
-                        target,
+                        estimand: target,
                         identification,
                         ..CbpsOptions::default()
                     },

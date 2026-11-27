@@ -3,12 +3,12 @@
 
 mod gformula_sim;
 
-use epistat_causal::Error;
 use epistat_causal::gformula::Competing;
 use epistat_causal::gformula::{
     Action, Covariate, CovariateKind, GFormula, GFormulaOptions, History, IntervalMethod,
     Intervention, Otherwise, Outcome, PersonPeriods, Restriction, Rule, Term, gformula,
 };
+use epistat_causal::{Error, Panel};
 use gformula_sim::{A, L, Sim, Z, complete, covariates, flatten, interventions, simulate};
 
 fn run(sim: &Sim, interventions: &[Intervention], options: &GFormulaOptions) -> GFormula {
@@ -364,9 +364,14 @@ fn unusable_input_is_refused() {
     // The data.
     let mut gap = sim.period.clone();
     let r = (1..gap.len()).find(|&r| gap[r] == 1).unwrap();
-    gap[r] = 2;
+    for k in r..gap.len() {
+        if sim.id[k] != sim.id[r] {
+            break;
+        }
+        gap[k] += 1;
+    }
     let d = PersonPeriods {
-        period: &gap,
+        key: Panel::new(&sim.id, &gap).unwrap(),
         ..data
     };
     expect_input(
@@ -376,13 +381,19 @@ fn unusable_input_is_refused() {
     let mut late_id = sim.id.clone();
     let last = late_id.len() - 1;
     late_id[last] = late_id[0];
+    // A person whose rows are not together is not a sorted key.
+    assert!(Panel::new(&late_id, &sim.period).is_err());
+    let mut late_start = sim.period.clone();
+    for k in late_start.iter_mut().take(3) {
+        *k += 1;
+    }
     let d = PersonPeriods {
-        id: &late_id,
+        key: Panel::new(&sim.id, &late_start).unwrap(),
         ..data
     };
     expect_input(
         gformula(&d, &covariates(), &outcome, &[], &default),
-        "period",
+        "not 0",
     );
     let mut binary = sim.l.clone();
     binary[3] = 0.5;
@@ -460,13 +471,9 @@ fn the_simulated_courses_give_the_estimates() {
     );
     assert!(plain.courses.is_none());
     let courses = kept.courses.clone().expect("kept");
-    assert_eq!(
-        GFormula {
-            courses: None,
-            ..kept
-        },
-        plain
-    );
+    let mut without = kept.clone();
+    without.courses = None;
+    assert_eq!(without, plain);
     assert_eq!(courses.len(), plain.strategies.len());
     let periods = plain.periods.len();
     for (s, c) in courses.iter().enumerate() {
@@ -474,7 +481,7 @@ fn the_simulated_courses_give_the_estimates() {
         assert_eq!(c.values.len(), sim.time_varying().len());
         for (k, want) in values(&plain, s).iter().enumerate() {
             let at: Vec<f64> = (0..c.person.len())
-                .filter(|&r| c.period[r] == k)
+                .filter(|&r| c.period[r] == i64::try_from(k).unwrap())
                 .map(|r| c.value[r])
                 .collect();
             let mean = at.iter().sum::<f64>() / at.len() as f64;

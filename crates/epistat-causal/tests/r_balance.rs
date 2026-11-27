@@ -46,7 +46,8 @@
     reason = "the cluster labels written by R are small whole numbers"
 )]
 
-use epistat_causal::aipw::Target;
+use epistat_causal::Estimand;
+use epistat_causal::balance::OutcomeOptions;
 use epistat_causal::balance::{
     CbpsInput, CbpsOptions, EntropyInput, EntropyOptions, Identification, WeightVariance,
     balance_columns, cbps, entropy_balance,
@@ -222,17 +223,17 @@ fn reference() -> Reference {
     ))
 }
 
-fn target(name: &str) -> Target {
+fn target(name: &str) -> Estimand {
     match name {
-        "ATT" => Target::Att,
-        "ATC" => Target::Atc,
-        _ => Target::Ate,
+        "ATT" => Estimand::Att,
+        "ATC" => Estimand::Atc,
+        _ => Estimand::Ate,
     }
 }
 
 fn opts(name: &str) -> EntropyOptions {
     EntropyOptions {
-        target: target(name),
+        estimand: target(name),
         tolerance: 1e-12,
         max_iterations: 100,
     }
@@ -295,7 +296,7 @@ fn entropy_balancing_matches_weightit_and_the_own_solver() {
         .unwrap();
         assert!(res.max_imbalance <= 1e-12, "{}", case.name);
         assert_weights(
-            &res.weights.weights,
+            res.weights.weights(),
             &case.weights,
             case,
             res.max_imbalance,
@@ -303,7 +304,7 @@ fn entropy_balancing_matches_weightit_and_the_own_solver() {
             "WeightIt",
         );
         assert_weights(
-            &res.weights.weights,
+            res.weights.weights(),
             &case.weights_own,
             case,
             res.max_imbalance,
@@ -337,7 +338,7 @@ fn entropy_balancing_matches_the_ebal_package() {
     .unwrap();
     let controls: Vec<f64> = (0..t.len())
         .filter(|&i| !t[i])
-        .map(|i| res.weights.weights[i])
+        .map(|i| res.weights.weights()[i])
         .collect();
     // ebal's constraint tolerance is on the raw means.
     let sd_min = r
@@ -396,6 +397,8 @@ fn influence_covariance(ij: &Ij, weight: &[f64], cluster: Option<&[f64]>) -> Vec
     // leaves out the factor s_i that the weight puts on the person's score.
     let col = |a: usize, i: usize| weight[i] * ij.influence[a * n + i];
     let mut out = vec![0.0; ij.k * ij.k];
+    // The estimator's rule, WeightIt's: G / (G - 1) for G clusters and no
+    // factor without clusters.
     let (labels, factor): (Vec<usize>, f64) = match cluster {
         None => ((0..n).collect(), 1.0),
         Some(c) => {
@@ -426,6 +429,11 @@ fn influence_covariance(ij: &Ij, weight: &[f64], cluster: Option<&[f64]>) -> Vec
         }
     }
     out
+}
+
+/// The entries of a covariance, row-major, NaN where undefined.
+fn dense(c: &epistat_core::Covariance) -> Vec<f64> {
+    c.as_slice().iter().map(|v| v.unwrap_or(f64::NAN)).collect()
 }
 
 fn assert_covariance(
@@ -493,7 +501,7 @@ fn the_stacked_variance_of_entropy_balancing_is_the_infinitesimal_jackknife() {
                 .unwrap();
             assert_covariance(
                 &fit.coefficients,
-                &fit.covariance,
+                &dense(&fit.covariance),
                 ij,
                 &d.s,
                 None,
@@ -507,7 +515,7 @@ fn the_stacked_variance_of_entropy_balancing_is_the_infinitesimal_jackknife() {
                 .unwrap();
             assert_covariance(
                 &fit.coefficients,
-                &fit.covariance,
+                &dense(&fit.covariance),
                 ij,
                 &d.s,
                 Some(&d.cl),
@@ -518,13 +526,13 @@ fn the_stacked_variance_of_entropy_balancing_is_the_infinitesimal_jackknife() {
     }
 }
 
-fn cbps_target(name: &str) -> Target {
+fn cbps_target(name: &str) -> Estimand {
     target(name)
 }
 
 fn cbps_opts(case_att: &str, ident: &str, twostep: bool, std: bool) -> CbpsOptions {
     CbpsOptions {
-        target: cbps_target(case_att),
+        estimand: cbps_target(case_att),
         identification: if ident == "exact" {
             Identification::Exact
         } else {
@@ -590,7 +598,7 @@ fn cbps_matches_the_package_and_the_own_solver() {
                 pkg[i]
             );
             // A weight is `exp` of the linear predictor up to its normalisation.
-            let wg = (res.weights.weights[i] - case.weights_pkg[i]).abs() / case.weights_pkg[i];
+            let wg = (res.weights.weights()[i] - case.weights_pkg[i]).abs() / case.weights_pkg[i];
             let wb = deta[i] + deta_max + 64.0 * n as f64 * EPS;
             assert!(
                 wg <= wb,
@@ -605,7 +613,7 @@ fn cbps_matches_the_package_and_the_own_solver() {
                 "{} person {i}: own solver gap {og:e}",
                 case.name
             );
-            let owg = (res.weights.weights[i] - case.weights_own[i]).abs() / case.weights_own[i];
+            let owg = (res.weights.weights()[i] - case.weights_own[i]).abs() / case.weights_own[i];
             assert!(
                 owg <= 10.0 * own_tolerance,
                 "{} person {i}: own solver weight gap {owg:e}",
@@ -669,7 +677,7 @@ fn the_stacked_variance_of_cbps_is_the_infinitesimal_jackknife() {
             .unwrap();
         assert_covariance(
             &fit.coefficients,
-            &fit.covariance,
+            &dense(&fit.covariance),
             ij,
             &d.s,
             None,
@@ -733,7 +741,7 @@ fn the_stacked_variance_of_the_continuously_updated_cbps_is_the_infinitesimal_ja
             .unwrap();
         assert_covariance(
             &fit.coefficients,
-            &fit.covariance,
+            &dense(&fit.covariance),
             ij,
             &d.s,
             None,
@@ -762,9 +770,16 @@ fn the_stacked_standard_error_agrees_with_a_bootstrap_that_refits_the_weights() 
         .unwrap();
         let md = res
             .weights
-            .mean_difference(&d.y, None, WeightVariance::Estimated, 0.05)
+            .mean_difference(
+                &d.y,
+                None,
+                &OutcomeOptions {
+                    variance: WeightVariance::Estimated,
+                    ..OutcomeOptions::default()
+                },
+            )
             .unwrap();
-        check_boot(&md.difference, b, "ebal");
+        check_boot(&md.contrast.difference, b, "ebal");
     }
     for b in &r.boot_cbps {
         let res = cbps(
@@ -778,13 +793,20 @@ fn the_stacked_standard_error_agrees_with_a_bootstrap_that_refits_the_weights() 
         .unwrap();
         let md = res
             .weights
-            .mean_difference(&d.y, None, WeightVariance::Estimated, 0.05)
+            .mean_difference(
+                &d.y,
+                None,
+                &OutcomeOptions {
+                    variance: WeightVariance::Estimated,
+                    ..OutcomeOptions::default()
+                },
+            )
             .unwrap();
-        check_boot(&md.difference, b, "cbps");
+        check_boot(&md.contrast.difference, b, "cbps");
     }
 }
 
-fn check_boot(e: &epistat_causal::aipw::Estimate, b: &Boot, what: &str) {
+fn check_boot(e: &epistat_causal::Estimate, b: &Boot, what: &str) {
     assert!(
         (e.estimate - b.estimate).abs() <= 1e-9,
         "{what}: {} against {}",
@@ -792,11 +814,11 @@ fn check_boot(e: &epistat_causal::aipw::Estimate, b: &Boot, what: &str) {
         b.estimate
     );
     let mce = b.se / (2.0 * (b.b as f64 - 1.0)).sqrt();
-    let gap = (e.se - b.se).abs();
+    let gap = (e.se.unwrap() - b.se).abs();
     eprintln!(
         "{what} {}: se {} bootstrap {} ({} Monte Carlo errors)",
         b.estimand,
-        e.se,
+        e.se.unwrap(),
         b.se,
         gap / mce
     );
@@ -804,7 +826,7 @@ fn check_boot(e: &epistat_causal::aipw::Estimate, b: &Boot, what: &str) {
         gap <= 5.0 * mce,
         "{what} {}: {} against {} (Monte Carlo error {mce})",
         b.estimand,
-        e.se,
+        e.se.unwrap(),
         b.se
     );
 }

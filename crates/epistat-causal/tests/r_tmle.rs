@@ -20,8 +20,28 @@
 //! the one-step path moves every prediction by a few rounding errors of `ln` and
 //! `exp`, which adds `64 K eps max(|v|, 1)`. A variance `V = se^2` has the
 //! tolerance `2 se` times that of `se`.
+//!
+//! # The variance rule
+//!
+//! The estimators have `tmle`'s rule, `ClusterRule::SmallSample`: `tmle`
+//! reports `var(IC) / n.id`, centred with the `n - 1` divisor, and with
+//! clusters the same of the cluster means of `IC`, which equals the
+//! estimator's for clusters of equal size. Against a `tmle` run the variance
+//! of the difference is therefore the reported one where the persons used
+//! fill every cluster equally (or there are no clusters), and otherwise
+//! `tmle`'s formula on the estimator's influence function.
+//!
+//! The hand-written estimator reports the variances `sum D^2` of the
+//! influences `D` on the dfbeta scale over the persons used, and with clusters
+//! `G / (G - 1) sum S_g^2` of the cluster sums. The two rules differ by the
+//! factor `m / (m - 1)` without clusters, for `m` persons used, and by the
+//! centring, which for the one-step path is not negligible: its influence
+//! function has the mean `Tmle::score`. The reference's standard error is
+//! multiplied by the square root of `rule::conversion`, the exact ratio of the
+//! two rules derived there.
 
-use epistat_causal::aipw::{AipwInput, GlmInput, Target};
+use epistat_causal::Estimand;
+use epistat_causal::aipw::{AipwInput, GlmInput};
 use epistat_causal::tmle::{
     OutcomeModel, OutcomeRange, PropensityBound, Targeting, Tmle, TmleOptions, tmle, tmle_glm,
 };
@@ -29,6 +49,8 @@ use epistat_glm::Family;
 use epistat_linalg::Mat;
 use epistat_testkit::load_json;
 use serde::Deserialize;
+
+mod rule;
 
 const EPS: f64 = f64::EPSILON;
 
@@ -100,7 +122,7 @@ fn load() -> Reference {
     r
 }
 
-const TARGETS: [Target; 3] = [Target::Ate, Target::Att, Target::Atc];
+const TARGETS: [Estimand; 3] = [Estimand::Ate, Estimand::Att, Estimand::Atc];
 
 fn options(s: &Scenario) -> TmleOptions {
     TmleOptions {
@@ -141,16 +163,16 @@ fn data(r: &Reference, s: &Scenario) -> Data {
 
 /// The eight numbers of a result in the order of the reference.
 fn numbers(r: &Tmle) -> [f64; 8] {
-    let ratio = r.ratio.unwrap();
+    let ratio = r.contrast.ratio.unwrap();
     [
-        r.mean1.estimate,
-        r.mean0.estimate,
-        r.difference.estimate,
+        r.contrast.mean1.estimate,
+        r.contrast.mean0.estimate,
+        r.contrast.difference.estimate,
         ratio.estimate,
-        r.mean1.se,
-        r.mean0.se,
-        r.difference.se,
-        ratio.se,
+        r.contrast.mean1.se.unwrap(),
+        r.contrast.mean0.se.unwrap(),
+        r.contrast.difference.se.unwrap(),
+        ratio.se.unwrap(),
     ]
 }
 
@@ -159,14 +181,20 @@ fn numbers(r: &Tmle) -> [f64; 8] {
 /// `m IF` over the number of clusters.
 fn tmle_variance(r: &Tmle, used: &[bool], cluster: Option<&[u32]>) -> f64 {
     let rows: Vec<usize> = (0..used.len()).filter(|&i| used[i]).collect();
-    let m = rows.len() as f64;
+    // The influence of the difference per person used, on the per-unit scale
+    // over the persons used, `m IF`.
+    let difference = r.influence.combine(&[1.0, -1.0]).unwrap();
+    let mut psi = vec![0.0; used.len()];
+    for (&unit, &v) in r.influence.units().iter().zip(difference.column(0)) {
+        psi[unit as usize] = v;
+    }
     let values: Vec<f64> = match cluster {
-        None => rows.iter().map(|&i| m * r.influence[i]).collect(),
+        None => rows.iter().map(|&i| psi[i]).collect(),
         Some(c) => {
             let mut groups = std::collections::BTreeMap::<u32, (f64, f64)>::new();
             for &i in &rows {
                 let e = groups.entry(c[i]).or_default();
-                e.0 += m * r.influence[i];
+                e.0 += psi[i];
                 e.1 += 1.0;
             }
             groups.values().map(|(s, k)| s / k).collect()
@@ -175,6 +203,21 @@ fn tmle_variance(r: &Tmle, used: &[bool], cluster: Option<&[u32]>) -> f64 {
     let k = values.len() as f64;
     let mean = values.iter().sum::<f64>() / k;
     values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (k - 1.0) / k
+}
+
+/// Whether the persons used fill every cluster with the same number, or there
+/// are no clusters.
+fn equal_clusters(used: &[bool], cluster: Option<&[u32]>) -> bool {
+    let Some(c) = cluster else {
+        return true;
+    };
+    let mut sizes = std::collections::BTreeMap::<u32, usize>::new();
+    for (i, _) in used.iter().enumerate().filter(|(_, u)| **u) {
+        *sizes.entry(c[i]).or_default() += 1;
+    }
+    let mut it = sizes.values();
+    let first = it.next();
+    it.all(|v| Some(v) == first)
 }
 
 struct Tolerances<'a> {
@@ -227,12 +270,21 @@ fn compare(s: &Scenario, got: &Tmle, t: usize, tol: &Tolerances<'_>, worst: &mut
         "se difference",
         "se ratio",
     ];
+    let c = &got.contrast;
+    let (theta0, ratio) = (c.mean0.estimate, c.ratio.unwrap().estimate);
+    let combinations = rule::combinations(theta0, ratio);
     for (j, (label, g)) in labels.iter().zip(numbers(got)).enumerate() {
         let k = 8 * t + j;
-        check(&name, label, g, s.numbers[k], tol.of(k), worst);
+        let want = if j < 4 {
+            s.numbers[k]
+        } else {
+            let r = rule::conversion(&got.influence, combinations[j - 4], s.cluster.as_deref());
+            s.numbers[k] * r.sqrt()
+        };
+        check(&name, label, g, want, tol.of(k), worst);
     }
     match (TARGETS[t], got.targeting) {
-        (Target::Ate, Targeting::Fluctuation { .. }) => {
+        (Estimand::Ate, Targeting::Fluctuation { .. }) => {
             assert_eq!(got.n_trimmed, s.n_trimmed, "{name}");
             assert_eq!(got.n_used, tol.n);
         }
@@ -264,26 +316,44 @@ fn compare_tmle(
 ) {
     let name = format!("{} {:?} against tmle", s.name, TARGETS[t]);
     let used: Vec<bool> = got.targeted1.iter().map(Option::is_some).collect();
-    let variance = tmle_variance(got, &used, s.cluster.as_deref());
+    let variance = if equal_clusters(&used, s.cluster.as_deref()) {
+        got.contrast.difference.se.unwrap().powi(2)
+    } else {
+        tmle_variance(got, &used, s.cluster.as_deref())
+    };
     let se_tol = tol.of(8 * t + 6);
-    let var_tol = 2.0 * got.difference.se * se_tol;
+    let var_tol = 2.0 * got.contrast.difference.se.unwrap() * se_tol;
     match TARGETS[t] {
-        Target::Ate => {
+        Estimand::Ate => {
             check(
                 &name,
                 "ATE",
-                got.difference.estimate,
+                got.contrast.difference.estimate,
                 run.ate,
                 tol.of(2),
                 worst,
             );
-            check(&name, "EY1", got.mean1.estimate, run.ey1, tol.of(0), worst);
-            check(&name, "EY0", got.mean0.estimate, run.ey0, tol.of(1), worst);
+            check(
+                &name,
+                "EY1",
+                got.contrast.mean1.estimate,
+                run.ey1,
+                tol.of(0),
+                worst,
+            );
+            check(
+                &name,
+                "EY0",
+                got.contrast.mean0.estimate,
+                run.ey0,
+                tol.of(1),
+                worst,
+            );
             if let Some(rr) = run.rr {
                 check(
                     &name,
                     "RR",
-                    got.ratio.unwrap().estimate,
+                    got.contrast.ratio.unwrap().estimate,
                     rr,
                     tol.of(3),
                     worst,
@@ -303,28 +373,29 @@ fn compare_tmle(
                 }
             }
         }
-        Target::Att => {
+        Estimand::Att => {
             check(
                 &name,
                 "ATT",
-                got.difference.estimate,
+                got.contrast.difference.estimate,
                 run.att,
                 tol.of(10),
                 worst,
             );
             check(&name, "var ATT", variance, run.var_att, var_tol, worst);
         }
-        Target::Atc => {
+        Estimand::Atc => {
             check(
                 &name,
                 "ATC",
-                got.difference.estimate,
+                got.contrast.difference.estimate,
                 run.atc,
                 tol.of(18),
                 worst,
             );
             check(&name, "var ATC", variance, run.var_atc, var_tol, worst);
         }
+        _ => unreachable!("the estimands of TARGETS"),
     }
 }
 
@@ -358,7 +429,16 @@ fn glm_wrapper_matches_tmle_and_the_hand_written_estimator() {
         };
         let mut worst = 0.0f64;
         for (t, &target) in TARGETS.iter().enumerate() {
-            let got = tmle_glm(&input, family, model, target, &options(s)).unwrap();
+            let got = tmle_glm(
+                &input,
+                family,
+                &TmleOptions {
+                    estimand: target,
+                    outcome_model: model,
+                    ..options(s)
+                },
+            )
+            .unwrap();
             compare(s, &got, t, &tol, &mut worst);
             if let Some(run) = &s.tmle_fit {
                 compare_tmle(s, &got, t, run, &tol, &mut worst);
@@ -397,7 +477,14 @@ fn core_matches_tmle_given_the_predictions() {
             if t > 0 && s.branches[t - 1] == "refit" {
                 continue;
             }
-            let got = tmle(&input, target, &options(s)).unwrap();
+            let got = tmle(
+                &input,
+                &TmleOptions {
+                    estimand: target,
+                    ..options(s)
+                },
+            )
+            .unwrap();
             compare(s, &got, t, &tol, &mut worst);
             if let Some(run) = &s.tmle_core {
                 compare_tmle(s, &got, t, run, &tol, &mut worst);

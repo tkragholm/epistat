@@ -20,13 +20,13 @@ use epistat_testkit::Fingerprint;
 
 /// `(name, length, digest)` of each recorded output.
 const EXPECTED: &[(&str, usize, u64)] = &[
-    ("glm ate pooled", 9029, 0xdae9_a385_b984_d875),
-    ("glm att pooled", 9028, 0x89af_51d8_1d6c_a707),
-    ("glm atc by arm", 9028, 0x3e1b_6330_252d_af3a),
-    ("core ate", 9029, 0x7696_aa07_a432_de04),
-    ("core att", 9028, 0x7231_f2fe_0ded_fdd2),
-    ("survival horizon 3", 3030, 0xf543_2985_0e42_f1b7),
-    ("survival horizon 5", 3029, 0x6428_78ac_8c97_f602),
+    ("glm ate pooled", 15032, 0x99a6_4aef_cbf2_ef34),
+    ("glm att pooled", 15019, 0xa26a_9002_f983_b7c7),
+    ("glm atc by arm", 15013, 0xfede_d7af_c4dc_bd2a),
+    ("core ate", 15032, 0x534e_6945_fc8b_a687),
+    ("core att", 15019, 0xa652_62ab_acb3_9f92),
+    ("survival horizon 3", 9033, 0x072b_73be_9352_a0f3),
+    ("survival horizon 5", 9032, 0x1e90_f3cc_ea3b_6ad4),
 ];
 
 #[test]

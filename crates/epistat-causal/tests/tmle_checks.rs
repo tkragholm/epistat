@@ -7,7 +7,8 @@
     reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
 )]
 
-use epistat_causal::aipw::{AipwInput, AipwOptions, GlmInput, Target, aipw, aipw_glm};
+use epistat_causal::Estimand;
+use epistat_causal::aipw::{AipwInput, AipwOptions, GlmInput, aipw, aipw_glm};
 use epistat_causal::tmle::{
     OutcomeModel, OutcomeRange, PropensityBound, Targeting, TmleOptions, tmle, tmle_glm,
 };
@@ -76,9 +77,11 @@ fn fluctuation_solves_its_score_equations() {
     let r = tmle_glm(
         &d.input(),
         Family::Binomial,
-        OutcomeModel::Pooled,
-        Target::Ate,
-        &opts,
+        &TmleOptions {
+            estimand: Estimand::Ate,
+            outcome_model: OutcomeModel::Pooled,
+            ..opts
+        },
     )
     .unwrap();
     let Targeting::Fluctuation { epsilon, .. } = r.targeting else {
@@ -131,7 +134,7 @@ fn propensity(d: &Data) -> Vec<f64> {
 fn one_step_score_converges_with_the_step() {
     let d = simulate(32, 2000);
     let steps = [1e-3, 1e-4, 1e-5];
-    for target in [Target::Att, Target::Atc] {
+    for target in [Estimand::Att, Estimand::Atc] {
         let runs: Vec<_> = steps
             .iter()
             .map(|&step| {
@@ -142,15 +145,17 @@ fn one_step_score_converges_with_the_step() {
                 tmle_glm(
                     &d.input(),
                     Family::Binomial,
-                    OutcomeModel::Pooled,
-                    target,
-                    &opts,
+                    &TmleOptions {
+                        estimand: target,
+                        outcome_model: OutcomeModel::Pooled,
+                        ..opts
+                    },
                 )
                 .unwrap()
             })
             .collect();
         let last = runs.last().unwrap();
-        let curvature = 2.0 * last.n_used as f64 * last.difference.se.powi(2);
+        let curvature = 2.0 * last.n_used as f64 * last.contrast.difference.se.unwrap().powi(2);
         for (r, &h) in runs.iter().zip(&steps) {
             let Targeting::OneStep { steps: k, .. } = r.targeting else {
                 panic!("targeting");
@@ -189,14 +194,31 @@ fn estimates_stay_in_the_range_of_the_outcome() {
         weight: None,
         cluster: None,
     };
-    let augmented = aipw(&input, Target::Ate, &AipwOptions::default()).unwrap();
+    let augmented = aipw(
+        &input,
+        &AipwOptions {
+            estimand: Estimand::Ate,
+            ..AipwOptions::default()
+        },
+    )
+    .unwrap();
     assert!(
-        !(0.0..=1.0).contains(&augmented.mean1.estimate),
+        !(0.0..=1.0).contains(&augmented.contrast.mean1.estimate),
         "{}",
-        augmented.mean1.estimate
+        augmented.contrast.mean1.estimate
     );
-    let targeted = tmle(&input, Target::Ate, &TmleOptions::default()).unwrap();
-    for m in [targeted.mean1.estimate, targeted.mean0.estimate] {
+    let targeted = tmle(
+        &input,
+        &TmleOptions {
+            estimand: Estimand::Ate,
+            ..TmleOptions::default()
+        },
+    )
+    .unwrap();
+    for m in [
+        targeted.contrast.mean1.estimate,
+        targeted.contrast.mean0.estimate,
+    ] {
         assert!(m > 0.0 && m < 1.0, "{m}");
     }
 }
@@ -215,22 +237,29 @@ fn targeted_estimate_approaches_the_augmented_one() {
         let t = tmle_glm(
             &d.input(),
             Family::Binomial,
-            OutcomeModel::ByArm,
-            Target::Ate,
-            &opts,
+            &TmleOptions {
+                estimand: Estimand::Ate,
+                outcome_model: OutcomeModel::ByArm,
+                ..opts
+            },
         )
         .unwrap();
         let s = aipw_glm(
             &d.input(),
             Family::Binomial,
-            Target::Ate,
-            &AipwOptions::default(),
+            &AipwOptions {
+                estimand: Estimand::Ate,
+                ..AipwOptions::default()
+            },
         )
         .unwrap();
-        let ratio = (t.difference.estimate - s.difference.estimate).abs() / t.difference.se;
+        let ratio = (t.contrast.difference.estimate - s.contrast.difference.estimate).abs()
+            / t.contrast.difference.se.unwrap();
         println!(
             "n {n}: tmle {} aipw {} se {} ratio {ratio:e}",
-            t.difference.estimate, s.difference.estimate, t.difference.se
+            t.contrast.difference.estimate,
+            s.contrast.difference.estimate,
+            t.contrast.difference.se.unwrap()
         );
         ratios.push(ratio);
     }
@@ -254,27 +283,31 @@ fn options_that_change_nothing_change_no_bits() {
         },
         ..base
     };
-    for target in [Target::Ate, Target::Att, Target::Atc] {
+    for target in [Estimand::Ate, Estimand::Att, Estimand::Atc] {
         let r1 = tmle_glm(
             &d.input(),
             Family::Binomial,
-            OutcomeModel::Pooled,
-            target,
-            &base,
+            &TmleOptions {
+                estimand: target,
+                outcome_model: OutcomeModel::Pooled,
+                ..base
+            },
         )
         .unwrap();
         let r2 = tmle_glm(
             &d.input(),
             Family::Binomial,
-            OutcomeModel::Pooled,
-            target,
-            &known,
+            &TmleOptions {
+                estimand: target,
+                outcome_model: OutcomeModel::Pooled,
+                ..known
+            },
         )
         .unwrap();
         assert_eq!(r1.influence, r2.influence);
         assert_eq!(
-            r1.difference.estimate.to_bits(),
-            r2.difference.estimate.to_bits()
+            r1.contrast.difference.estimate.to_bits(),
+            r2.contrast.difference.estimate.to_bits()
         );
     }
     let open = TmleOptions {
@@ -284,9 +317,11 @@ fn options_that_change_nothing_change_no_bits() {
     let r = tmle_glm(
         &d.input(),
         Family::Binomial,
-        OutcomeModel::Pooled,
-        Target::Att,
-        &open,
+        &TmleOptions {
+            estimand: Estimand::Att,
+            outcome_model: OutcomeModel::Pooled,
+            ..open
+        },
     )
     .unwrap();
     assert_eq!(r.n_used, d.y.len());
@@ -308,9 +343,15 @@ fn refusals() {
             weight: None,
             cluster: None,
         };
-        tmle(&input, Target::Ate, &TmleOptions::default())
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        tmle(
+            &input,
+            &TmleOptions {
+                estimand: Estimand::Ate,
+                ..TmleOptions::default()
+            },
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
     };
     assert!(input(&e).is_ok());
     let mut bad = e.clone();
@@ -323,9 +364,10 @@ fn refusals() {
         tmle_glm(
             &d.input(),
             Family::Binomial,
-            OutcomeModel::Pooled,
-            Target::Ate,
-            &opts,
+            &TmleOptions {
+                outcome_model: OutcomeModel::Pooled,
+                ..opts
+            },
         )
     };
     let base = TmleOptions::default();
@@ -353,7 +395,10 @@ fn refusals() {
             ..base
         },
         TmleOptions { step: 0.0, ..base },
-        TmleOptions { alpha: 1.0, ..base },
+        TmleOptions {
+            estimand: Estimand::Atm,
+            ..base
+        },
     ] {
         assert!(run(opts).is_err(), "{opts:?}");
     }
@@ -361,9 +406,11 @@ fn refusals() {
         tmle_glm(
             &d.input(),
             Family::Poisson,
-            OutcomeModel::Pooled,
-            Target::Ate,
-            &base
+            &TmleOptions {
+                estimand: Estimand::Ate,
+                outcome_model: OutcomeModel::Pooled,
+                ..base
+            }
         )
         .is_err()
     );
@@ -376,9 +423,11 @@ fn refusals() {
         tmle_glm(
             &flat,
             Family::Binomial,
-            OutcomeModel::Pooled,
-            Target::Ate,
-            &base
+            &TmleOptions {
+                estimand: Estimand::Ate,
+                outcome_model: OutcomeModel::Pooled,
+                ..base
+            }
         )
         .is_err()
     );
@@ -426,8 +475,10 @@ fn survival_with_one_interval_is_the_binary_estimator() {
             weight: None,
             cluster: None,
         },
-        Target::Ate,
-        &TmleOptions::default(),
+        &TmleOptions {
+            estimand: Estimand::Ate,
+            ..TmleOptions::default()
+        },
     )
     .unwrap();
     let h1 = Mat::from_fn(n, 1, |i, _| m1[i]);
@@ -453,8 +504,8 @@ fn survival_with_one_interval_is_the_binary_estimator() {
     .unwrap();
     assert_eq!(survival.iterations, [1, 1]);
     for (arm, (risk, mean)) in [
-        (survival.risk1, binary.mean1),
-        (survival.risk0, binary.mean0),
+        (survival.contrast.mean1, binary.contrast.mean1),
+        (survival.contrast.mean0, binary.contrast.mean0),
     ]
     .into_iter()
     .enumerate()
@@ -481,7 +532,10 @@ fn survival_with_one_interval_is_the_binary_estimator() {
             risk.estimate,
             mean.estimate
         );
-        assert!((risk.se - mean.se).abs() <= tol, "arm {arm}: se");
+        assert!(
+            (risk.se.unwrap() - mean.se.unwrap()).abs() <= tol,
+            "arm {arm}: se"
+        );
         println!(
             "arm {arm}: {:e} apart, tolerance {tol:e}",
             (risk.estimate - mean.estimate).abs()
@@ -517,7 +571,7 @@ fn survival_refusals() {
         )
     };
     let ok = run(&time, &h, &c, 3).unwrap();
-    for r in [ok.risk1.estimate, ok.risk0.estimate] {
+    for r in [ok.contrast.mean1.estimate, ok.contrast.mean0.estimate] {
         assert!(r > 0.0 && r < 1.0);
     }
     assert!(run(&time, &h, &c, 0).is_err());

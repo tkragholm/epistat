@@ -7,7 +7,9 @@
 //! test: the bias of the mean of `R` estimates is within 4 standard errors of
 //! their mean, and the coverage within 4 binomial standard errors of 95 percent.
 
-use epistat_causal::aipw::{AipwInput, AipwOptions, GlmInput, Target, aipw, aipw_glm};
+use epistat_causal::aipw::{AipwInput, AipwOptions, GlmInput, aipw, aipw_glm};
+use epistat_causal::tmle::{TmleOptions, tmle};
+use epistat_causal::{ClusterRule, Clusters, Estimand, Influence, Level};
 use epistat_glm::Family;
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
@@ -35,13 +37,24 @@ fn refusals() {
     let (y, a) = ([1.0, 0.0, 1.0, 0.0], [true, false, true, false]);
     let (m1, m0, e) = ([0.5; 4], [0.4; 4], [0.5; 4]);
     let ok = input(&y, &a, &m1, &m0, &e);
-    assert!(aipw(&ok, Target::Ate, &AipwOptions::default()).is_ok());
+    assert!(
+        aipw(
+            &ok,
+            &AipwOptions {
+                estimand: Estimand::Ate,
+                ..AipwOptions::default()
+            }
+        )
+        .is_ok()
+    );
     let short = [0.5; 3];
     assert!(
         aipw(
             &input(&y, &a, &short, &m0, &e),
-            Target::Ate,
-            &AipwOptions::default()
+            &AipwOptions {
+                estimand: Estimand::Ate,
+                ..AipwOptions::default()
+            }
         )
         .is_err()
     );
@@ -50,8 +63,10 @@ fn refusals() {
         assert!(
             aipw(
                 &input(&y, &a, &m1, &m0, &p),
-                Target::Ate,
-                &AipwOptions::default()
+                &AipwOptions {
+                    estimand: Estimand::Ate,
+                    ..AipwOptions::default()
+                }
             )
             .is_err(),
             "propensity {bad}"
@@ -61,8 +76,10 @@ fn refusals() {
     assert!(
         aipw(
             &input(&y, &all_treated, &m1, &m0, &e),
-            Target::Ate,
-            &AipwOptions::default()
+            &AipwOptions {
+                estimand: Estimand::Ate,
+                ..AipwOptions::default()
+            }
         )
         .is_err()
     );
@@ -70,8 +87,10 @@ fn refusals() {
     assert!(
         aipw(
             &input(&nan_y, &a, &m1, &m0, &e),
-            Target::Ate,
-            &AipwOptions::default()
+            &AipwOptions {
+                estimand: Estimand::Ate,
+                ..AipwOptions::default()
+            }
         )
         .is_err()
     );
@@ -80,32 +99,56 @@ fn refusals() {
             truncation: Some(truncation),
             ..AipwOptions::default()
         };
-        assert!(aipw(&ok, Target::Ate, &opts).is_err(), "{truncation:?}");
+        assert!(
+            aipw(
+                &ok,
+                &AipwOptions {
+                    estimand: Estimand::Ate,
+                    ..opts
+                }
+            )
+            .is_err(),
+            "{truncation:?}"
+        );
     }
-    for alpha in [0.0, 1.0] {
-        let opts = AipwOptions {
-            alpha,
-            ..AipwOptions::default()
-        };
-        assert!(aipw(&ok, Target::Ate, &opts).is_err());
-    }
-    // One cluster has no variance.
+    // A level of 0 or 1 cannot be built, so it cannot reach the estimator.
+    assert!(Level::alpha(0.0).is_err() && Level::alpha(1.0).is_err());
+    // One cluster has no variance: the standard errors are undefined.
     let one = [1_u32; 4];
     let clustered = AipwInput {
         cluster: Some(&one),
         ..ok
     };
-    assert!(aipw(&clustered, Target::Ate, &AipwOptions::default()).is_err());
+    let r = aipw(&clustered, &AipwOptions::default()).unwrap();
+    let c = r.contrast;
+    assert!(
+        [c.mean1, c.mean0, c.difference]
+            .iter()
+            .all(|e| e.se.is_none() && e.interval.is_none())
+    );
+    // An estimand the estimator does not estimate is an error.
+    assert!(
+        aipw(
+            &ok,
+            &AipwOptions {
+                estimand: Estimand::Ato,
+                ..AipwOptions::default()
+            }
+        )
+        .is_err()
+    );
     // The ratio is undefined when the mean of the controls is 0.
     let zero = [0.0; 4];
     let y0 = [1.0, 0.0, 1.0, 0.0];
     let r = aipw(
         &input(&y0, &a, &m1, &zero, &e),
-        Target::Att,
-        &AipwOptions::default(),
+        &AipwOptions {
+            estimand: Estimand::Att,
+            ..AipwOptions::default()
+        },
     )
     .unwrap();
-    assert!(r.ratio.is_none() || r.mean0.estimate != 0.0);
+    assert!(r.contrast.ratio.is_none() || r.contrast.mean0.estimate != 0.0);
 }
 
 #[test]
@@ -126,8 +169,10 @@ fn separated_propensity_model_is_an_error() {
     let r = aipw_glm(
         &input,
         Family::Gaussian,
-        Target::Ate,
-        &AipwOptions::default(),
+        &AipwOptions {
+            estimand: Estimand::Ate,
+            ..AipwOptions::default()
+        },
     );
     assert!(r.is_err(), "{r:?}");
     // An aliased design column and an unsupported family are errors.
@@ -145,8 +190,10 @@ fn separated_propensity_model_is_an_error() {
         aipw_glm(
             &input,
             Family::Gaussian,
-            Target::Ate,
-            &AipwOptions::default()
+            &AipwOptions {
+                estimand: Estimand::Ate,
+                ..AipwOptions::default()
+            }
         )
         .is_err()
     );
@@ -154,7 +201,17 @@ fn separated_propensity_model_is_an_error() {
         outcome_design: x.as_ref(),
         ..input
     };
-    assert!(aipw_glm(&input, Family::Gamma, Target::Ate, &AipwOptions::default()).is_err());
+    assert!(
+        aipw_glm(
+            &input,
+            Family::Gamma,
+            &AipwOptions {
+                estimand: Estimand::Ate,
+                ..AipwOptions::default()
+            }
+        )
+        .is_err()
+    );
 }
 
 /// One simulated data set: `x` standard normal truncated at 2.5 in absolute value (the weights of the tails of an untruncated normal make the sampling distribution of the estimate heavy-tailed, which no variance estimate describes), a propensity and an outcome that depend on
@@ -211,13 +268,16 @@ fn estimator_is_unbiased_when_one_model_is_wrong() {
                     cluster: None,
                 },
                 Family::Gaussian,
-                Target::Ate,
-                &AipwOptions::default(),
+                &AipwOptions {
+                    estimand: Estimand::Ate,
+                    ..AipwOptions::default()
+                },
             )
             .unwrap();
-            estimates.push(r.difference.estimate);
-            ses.push(r.difference.se);
-            covered += usize::from(r.difference.lower <= 1.0 && 1.0 <= r.difference.upper);
+            estimates.push(r.contrast.difference.estimate);
+            let d = r.contrast.difference;
+            ses.push(d.se.unwrap());
+            covered += usize::from(d.lower().unwrap() <= 1.0 && 1.0 <= d.upper().unwrap());
         }
         let mean = estimates.iter().sum::<f64>() / reps as f64;
         let var = estimates.iter().map(|e| (e - mean).powi(2)).sum::<f64>() / (reps as f64 - 1.0);
@@ -243,6 +303,62 @@ fn estimator_is_unbiased_when_one_model_is_wrong() {
             mean - 1.0,
             var.sqrt(),
             ses.iter().sum::<f64>() / reps as f64
+        );
+    }
+}
+
+/// The variance of the difference of the two columns of `influence` with the
+/// clusters `cluster` of the rows, under the influence function's own rule.
+fn difference_variance(influence: &Influence, cluster: Option<&[u32]>) -> f64 {
+    let clusters = cluster.map(|c| {
+        let rows: Vec<u32> = (0..u32::try_from(c.len()).unwrap()).collect();
+        Clusters::per_unit(&rows, c).unwrap()
+    });
+    influence
+        .combine(&[1.0, -1.0])
+        .unwrap()
+        .variance(clusters.as_ref())
+        .unwrap()
+        .get(0, 0)
+        .unwrap()
+}
+
+#[test]
+fn the_influence_function_carries_the_rule_of_the_reference() {
+    let mut rng = Stream::seeded(7);
+    let n = 300;
+    let (y, a, x) = simulate(&mut rng, n);
+    let e: Vec<f64> = x
+        .iter()
+        .map(|xi| 1.0 / (1.0 + (-(0.2 + 0.4 * xi)).exp()))
+        .collect();
+    let m1: Vec<f64> = x.iter().map(|xi| 2.0 + 0.8 * xi).collect();
+    let m0: Vec<f64> = x.iter().map(|xi| 1.0 + 0.8 * xi).collect();
+    let cluster: Vec<u32> = (0..n).map(|i| u32::try_from(i % 40).unwrap()).collect();
+    for (c, aipw_rule) in [
+        (None, ClusterRule::NoSmallSample),
+        (Some(cluster.as_slice()), ClusterRule::SmallSample),
+    ] {
+        let input = AipwInput {
+            cluster: c,
+            ..input(&y, &a, &m1, &m0, &e)
+        };
+        // AIPW follows `riskRegression::ate`, the `n` divisor, without
+        // clusters and `G / (G - 1)` with them.
+        let r = aipw(&input, &AipwOptions::default()).unwrap();
+        assert_eq!(r.influence.rule(), aipw_rule);
+        let se = r.contrast.difference.se.unwrap();
+        assert_eq!(
+            se.to_bits(),
+            difference_variance(&r.influence, c).sqrt().to_bits()
+        );
+        // TMLE follows `tmle`, the `n - 1` divisor and `G / (G - 1)`.
+        let t = tmle(&input, &TmleOptions::default()).unwrap();
+        assert_eq!(t.influence.rule(), ClusterRule::SmallSample);
+        let se = t.contrast.difference.se.unwrap();
+        assert_eq!(
+            se.to_bits(),
+            difference_variance(&t.influence, c).sqrt().to_bits()
         );
     }
 }
