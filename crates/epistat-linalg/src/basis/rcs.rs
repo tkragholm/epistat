@@ -269,7 +269,8 @@ mod tests {
             RestrictedCubic::new(&[1.0, f64::NAN, 2.0], false),
             Err(Error::Input(InputError::NotFinite {
                 what: "knots",
-                row: 1
+                row: 1,
+                column: None
             }))
         );
     }

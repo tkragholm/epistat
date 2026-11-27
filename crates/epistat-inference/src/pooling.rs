@@ -156,6 +156,7 @@ fn non_negative(what: &'static str, values: &[f64]) -> Result<(), Error> {
             what,
             value,
             domain: "[0, inf)",
+            row: None,
         }
         .into()),
         None => Ok(()),
@@ -174,6 +175,7 @@ fn check_dfcom(dfcom: Option<f64>, allow_infinite: bool) -> Result<(), Error> {
                 } else {
                     "(0, inf)"
                 },
+                row: None,
             }
             .into())
         }
@@ -426,6 +428,7 @@ fn check_sets(estimates: MatRef<'_, f64>, covariances: &[MatRef<'_, f64>]) -> Re
                     what: "covariance diagonal",
                     value: u[i * k + i],
                     domain: "[0, inf)",
+                    row: None,
                 }
                 .into());
             }
@@ -837,6 +840,7 @@ impl Transform {
                 what: self.name(),
                 value: q,
                 domain: self.domain(),
+                row: None,
             }
             .into()
         })

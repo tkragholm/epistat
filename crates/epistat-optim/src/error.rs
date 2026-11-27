@@ -136,6 +136,7 @@ pub(crate) const fn domain(what: &'static str, value: f64, domain: &'static str)
         what,
         value,
         domain,
+        row: None,
     })
 }
 

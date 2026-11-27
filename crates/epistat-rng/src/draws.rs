@@ -96,6 +96,7 @@ fn positive(value: f64, what: &'static str) -> Result<(), Error> {
             what,
             value,
             domain: POSITIVE,
+            row: None,
         }))
     }
 }
@@ -221,6 +222,7 @@ impl Stream {
                 what: "p",
                 value: p,
                 domain: "[0, 1]",
+                row: None,
             }));
         }
         let (mut n, mut p) = (n, p);
@@ -367,6 +369,7 @@ fn check_wishart(df: f64, scale_cholesky: &[f64], dim: usize) -> Result<(), Erro
             what: "df",
             value: df,
             domain: "(dim - 1, inf)",
+            row: None,
         }));
     }
     for i in 0..dim {

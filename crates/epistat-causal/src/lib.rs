@@ -53,5 +53,5 @@ mod shared;
 pub mod tmle;
 
 pub use epistat_core::{Contrast, Estimand, Estimate, Level, Panel};
-pub use epistat_inference::{ClusterRule, Clusters, Influence};
+pub use epistat_inference::{ClusterRule, Clusters, Influence, KeyedBy};
 pub use error::{Error, Result};

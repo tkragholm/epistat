@@ -772,7 +772,11 @@ impl Error {
 
     /// An [`InputError::NotFinite`].
     pub(crate) const fn not_finite(what: &'static str, row: usize) -> Self {
-        Self::Input(InputError::NotFinite { what, row })
+        Self::Input(InputError::NotFinite {
+            what,
+            row,
+            column: None,
+        })
     }
 
     /// An [`InputError::Empty`].

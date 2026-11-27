@@ -115,7 +115,7 @@ use super::{PlugIn, PropensityBound, fluctuation_coefficient, logit, plogis};
 use crate::error::{Error, Result};
 use crate::shared::{
     case_weights, check_arms, check_len, clusters, compensated, contrast, fit_glm, glm_data,
-    influence, rule, unit_codes,
+    influence, row_keys, rule,
 };
 
 /// The data and the predictions of [`tmle_survival`]. Column `k - 1` of a
@@ -186,11 +186,10 @@ pub struct SurvivalTmle {
     /// The plug-in risks from the given hazards, before targeting.
     pub initial: PlugIn,
     /// The influence functions of the risk of the treated (column 0) and of
-    /// the controls (column 1) per person on the per-unit scale, the units the
-    /// row numbers, with the rule of the standard errors: `NoSmallSample`
-    /// without clusters, `SmallSample` with them. Their `variance` with the
-    /// clusters `Clusters::per_unit(rows, cluster)` (or none) reproduces the
-    /// standard errors.
+    /// the controls (column 1) per person on the per-unit scale, keyed by
+    /// row, with the rule of the standard errors: `NoSmallSample` without
+    /// clusters, `SmallSample` with them. Their `variance` with the clusters
+    /// `Clusters::per_row(cluster)` (or none) reproduces the standard errors.
     pub influence: Influence,
     /// The targeting rounds of the treated and of the control arm.
     pub iterations: [usize; 2],
@@ -222,7 +221,7 @@ struct Common<'a> {
     horizon: usize,
     bound: f64,
     max_iterations: usize,
-    units: Vec<u32>,
+    rows: Vec<u32>,
     clusters: Option<Clusters>,
     rule: ClusterRule,
 }
@@ -290,7 +289,7 @@ fn target_arm(c: &Common<'_>, treated: bool) -> Result<Arm> {
         let influence: Vec<f64> = (0..n)
             .map(|i| c.w[i] * (first[i] + s[i * t + t - 1] - psi) / c.total)
             .collect();
-        let se = Influence::from_dfbeta(influence.clone(), c.units.clone(), 1, c.rule)
+        let se = Influence::from_dfbeta_over_rows(influence.clone(), c.rows.clone(), 1, c.rule)
             .and_then(|f| f.variance(c.clusters.as_ref()))
             .map_err(|e| Error::input(format!("influence function: {e}")))?
             .get(0, 0)
@@ -436,7 +435,7 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
         horizon: t,
         bound,
         max_iterations: opts.max_iterations,
-        units: unit_codes(0..n)?,
+        rows: row_keys(0..n)?,
         clusters: clusters(input.cluster, n)?,
         rule: rule(input.cluster.is_some()),
     };
@@ -460,7 +459,7 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
         .count();
     let one = target_arm(&common, true)?;
     let zero = target_arm(&common, false)?;
-    let influence = influence([&one.influence, &zero.influence], common.units, common.rule)?;
+    let influence = influence([&one.influence, &zero.influence], common.rows, common.rule)?;
     let contrast = contrast(
         [one.risk, zero.risk],
         &influence,

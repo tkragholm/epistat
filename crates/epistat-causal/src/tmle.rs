@@ -149,7 +149,7 @@ use crate::aipw::{AipwInput, GlmInput, fitted_mean};
 use crate::error::{Error, Result};
 use crate::shared::{
     case_weights, check_arms, check_design, check_estimand, check_finite, check_len,
-    check_separation, clusters, compensated, contrast, fit_glm, glm_data, influence, unit_codes,
+    check_separation, clusters, compensated, contrast, fit_glm, glm_data, influence, row_keys,
 };
 
 /// The predictions of the models and the data of [`tmle`], the same as those of
@@ -296,10 +296,9 @@ pub struct Tmle {
     /// The plug-in estimate from the predictions before targeting.
     pub initial: PlugIn,
     /// The influence functions of `mean1` (column 0) and `mean0` (column 1) on
-    /// the per-unit scale, over the persons used, whose row numbers are the
-    /// units, with the rule `SmallSample`. Their `variance` with the clusters
-    /// `Clusters::per_unit(rows, cluster)` (or none) reproduces the standard
-    /// errors.
+    /// the per-unit scale, over the persons used and keyed by their rows, with
+    /// the rule `SmallSample`. Their `variance` with the clusters
+    /// `Clusters::per_row(cluster)` (or none) reproduces the standard errors.
     pub influence: Influence,
     /// The targeted prediction `Q*_1` of each person on the scale of the
     /// outcome, `None` for persons not used.
@@ -930,7 +929,7 @@ fn finish(
     let score = compensated((0..n).map(|i| dfbeta[0][i] - dfbeta[1][i]));
     let influence = influence(
         [&d1, &d0],
-        unit_codes(rows.iter().copied())?,
+        row_keys(rows.iter().copied())?,
         ClusterRule::SmallSample,
     )?;
     let clusters = clusters(p.cluster, n)?;

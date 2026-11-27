@@ -36,9 +36,12 @@
 //! totals, replicate by replicate. All columns use the same counts within a
 //! replicate.
 //!
-//! [`unit_counts`] gives those counts themselves, for a bootstrap that draws
-//! `n` units with replacement and refits on each replicate: replicate `r`
-//! is `resample_counts(n, replicate_seed(seed, r))`.
+//! [`unit_counts_of`] gives those counts themselves, one replicate at a time,
+//! for a bootstrap that draws `n` units with replacement and refits on each
+//! replicate: replicate `r` is `resample_counts(n, replicate_seed(seed, r))`.
+//! A caller refits replicate by replicate, in parallel if it likes, and
+//! never holds the counts of every replicate, which at 999 replicates of
+//! 10^7 units would be 40 GB.
 //!
 //! # Determinism
 //!
@@ -149,19 +152,17 @@ pub fn cluster_totals(columns: &[&[f64]], bootstrap: Bootstrap) -> Result<Vec<f6
     Ok(totals)
 }
 
-/// How often each of `n` units is drawn, with replacement, in each replicate:
-/// one vector of `n` counts summing to `n` per replicate, replicate `r` from
-/// `resample_counts(n, replicate_seed(seed, r))`.
+/// How often each of `n` units is drawn, with replacement, in replicate
+/// `replicate` of `bootstrap`: `n` counts summing to `n`, from
+/// `resample_counts(n, replicate_seed(seed, replicate))`.
 ///
-/// The result holds `n * replicates` counts. A caller that refits one
-/// replicate at a time and cannot hold them all draws replicate `r` with
-/// `epistat_rng::resample_counts` and the same seed.
+/// The draws depend on the seed and the replicate number only, so replicates
+/// may be drawn in any order and on any thread. The function does not check
+/// `replicate` against `bootstrap.replicates`; the caller loops over
+/// `0..bootstrap.replicates`.
 #[must_use]
-pub fn unit_counts(n: usize, bootstrap: &Bootstrap) -> Vec<Vec<u32>> {
-    (0..bootstrap.replicates as u64)
-        .into_par_iter()
-        .map(|r| resample_counts(n, replicate_seed(bootstrap.seed, r)))
-        .collect()
+pub fn unit_counts_of(n: usize, bootstrap: Bootstrap, replicate: usize) -> Vec<u32> {
+    resample_counts(n, replicate_seed(bootstrap.seed, replicate as u64))
 }
 
 #[cfg(test)]
@@ -176,12 +177,12 @@ mod tests {
         assert_same_on_threads(|| {
             let mut out = multiplier(1.0, &psi, Bootstrap::new(500, 42)).unwrap();
             out.extend(cluster_totals(&[&columns, &columns], Bootstrap::new(200, 7)).unwrap());
-            out.extend(
-                unit_counts(37, &Bootstrap::new(50, 3))
-                    .into_iter()
-                    .flatten()
-                    .map(f64::from),
-            );
+            let bootstrap = Bootstrap::new(50, 3);
+            let counts: Vec<Vec<u32>> = (0..bootstrap.replicates)
+                .into_par_iter()
+                .map(|r| unit_counts_of(37, bootstrap, r))
+                .collect();
+            out.extend(counts.into_iter().flatten().map(f64::from));
             out
         });
     }
@@ -190,10 +191,9 @@ mod tests {
     fn a_cluster_total_matches_its_resample_counts() {
         let values = [1.0, 10.0, 100.0];
         let totals = cluster_totals(&[&values], Bootstrap::new(3, 5)).unwrap();
-        let all = unit_counts(3, &Bootstrap::new(3, 5));
         for (r, &total) in totals.iter().enumerate() {
             let counts = resample_counts(3, replicate_seed(5, r as u64));
-            assert_eq!(all[r], counts);
+            assert_eq!(unit_counts_of(3, Bootstrap::new(3, 5), r), counts);
             let expected: f64 = counts
                 .iter()
                 .zip(values)

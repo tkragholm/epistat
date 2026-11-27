@@ -183,6 +183,7 @@ pub(crate) fn domain(what: &'static str, value: f64, domain: &'static str) -> Er
         what,
         value,
         domain,
+        row: None,
     }
     .into()
 }
@@ -478,11 +479,13 @@ impl From<DrDidError> for Error {
             DrDidError::InvalidOutcome { .. } => InputError::NotFinite {
                 what: "outcome",
                 row: 0,
+                column: None,
             }
             .into(),
             DrDidError::InvalidCovariate { .. } => InputError::NotFinite {
                 what: "covariates",
                 row: 0,
+                column: None,
             }
             .into(),
             DrDidError::InconsistentCovariateCount { expected, actual } => InputError::Length {

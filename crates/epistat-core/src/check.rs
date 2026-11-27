@@ -7,14 +7,21 @@
 //! variants everywhere and a binding reads one set of codes.
 //!
 //! `what` names the argument as the function's documentation does, such as
-//! `"weights"` or `"period"`. Row numbers count from 0 in the caller's input.
+//! `"weights"` or `"period"`. Row and column numbers count from 0 in the
+//! caller's input, and an error names the position of the first value it
+//! refuses wherever the check sees one.
 //!
 //! | check | refuses | error |
 //! |---|---|---|
 //! | [`same_length`] | a length other than the expected one | `Length` |
 //! | [`non_empty`] | no rows | `Empty` |
 //! | [`finite`] | NaN or an infinity | `NotFinite` |
+//! | [`finite_column`] | NaN or an infinity in one column of several | `NotFinite` |
+//! | [`weights`] | NaN, an infinity or a negative weight | `NotFinite`, `Domain` |
+//! | [`positive_weights`] | that, or a weight of 0 | `NotFinite`, `Domain` |
 //! | [`probability`] | a value outside `[0, 1]` | `Domain` |
+//! | [`positive`] | a value that is not finite and above 0 | `Domain` |
+//! | [`below`] | a value not below a limit the call sets | `NotBelow` |
 //! | [`sorted_by`] | a row before its predecessor | `Unsorted` |
 //! | [`strictly_sorted_by`] | that, or a row equal to its predecessor | `Unsorted`, `Duplicate` |
 //! | [`csr_offsets`] | offsets that are not a layout of the rows | `Empty`, `Domain`, `Unsorted`, `Length` |
@@ -48,12 +55,15 @@ pub enum InputError {
         /// The argument.
         what: &'static str,
     },
-    /// An argument holds NaN or an infinity at `row`.
+    /// An argument holds NaN or an infinity at `row`, and in `column` when
+    /// the argument has several.
     NotFinite {
         /// The argument.
         what: &'static str,
         /// The first such row.
         row: usize,
+        /// The column of that row, for an argument of several columns.
+        column: Option<usize>,
     },
     /// An argument's value lies outside the set it must lie in.
     Domain {
@@ -63,6 +73,18 @@ pub enum InputError {
         value: f64,
         /// The set the value must lie in, as text, such as `"(0, 1)"`.
         domain: &'static str,
+        /// The row of the value, for an argument with one value per row.
+        row: Option<usize>,
+    },
+    /// An argument's value is not below the limit the call sets for it, such
+    /// as a lag that must be below the number of periods.
+    NotBelow {
+        /// The argument.
+        what: &'static str,
+        /// The value given.
+        value: f64,
+        /// The limit the value must lie below.
+        limit: f64,
     },
     /// Row `row` of an argument sorts before row `row - 1`.
     Unsorted {
@@ -107,14 +129,31 @@ impl fmt::Display for InputError {
                 found,
             } => write!(f, "{what} has length {found}, expected {expected}"),
             Self::Empty { what } => write!(f, "{what} is empty"),
-            Self::NotFinite { what, row } => {
-                write!(f, "{what} is not finite at row {row}")
-            }
+            Self::NotFinite {
+                what,
+                row,
+                column: None,
+            } => write!(f, "{what} is not finite at row {row}"),
+            Self::NotFinite {
+                what,
+                row,
+                column: Some(column),
+            } => write!(f, "{what} is not finite at row {row}, column {column}"),
             Self::Domain {
                 what,
                 value,
                 domain,
+                row: None,
             } => write!(f, "{what} is {value}, outside {domain}"),
+            Self::Domain {
+                what,
+                value,
+                domain,
+                row: Some(row),
+            } => write!(f, "{what} is {value} at row {row}, outside {domain}"),
+            Self::NotBelow { what, value, limit } => {
+                write!(f, "{what} is {value}, not below {limit}")
+            }
             Self::Unsorted { what, row } => {
                 write!(
                     f,
@@ -150,6 +189,7 @@ impl Classify for InputError {
             Self::Empty { .. } => "input.empty",
             Self::NotFinite { .. } => "input.not_finite",
             Self::Domain { .. } => "input.domain",
+            Self::NotBelow { .. } => "input.not_below",
             Self::Unsorted { .. } => "input.unsorted",
             Self::Duplicate { .. } => "input.duplicate",
             Self::NotConstant { .. } => "input.not_constant",
@@ -199,8 +239,108 @@ pub const fn non_empty(what: &'static str, len: usize) -> Result<(), InputError>
 /// [`InputError::NotFinite`] at the first NaN or infinity.
 pub fn finite(what: &'static str, values: &[f64]) -> Result<(), InputError> {
     match values.iter().position(|value| !value.is_finite()) {
-        Some(row) => Err(InputError::NotFinite { what, row }),
+        Some(row) => Err(InputError::NotFinite {
+            what,
+            row,
+            column: None,
+        }),
         None => Ok(()),
+    }
+}
+
+/// Every value of column `column` of a multi-column argument is finite.
+///
+/// # Errors
+///
+/// [`InputError::NotFinite`] at the first NaN or infinity, naming the column.
+pub fn finite_column(what: &'static str, column: usize, values: &[f64]) -> Result<(), InputError> {
+    match values.iter().position(|value| !value.is_finite()) {
+        Some(row) => Err(InputError::NotFinite {
+            what,
+            row,
+            column: Some(column),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// Case weights: every weight finite and not negative. A weight of 0 is
+/// allowed.
+///
+/// # Errors
+///
+/// At the first weight refused: [`InputError::NotFinite`] for NaN or an
+/// infinity and [`InputError::Domain`], with its row, for a negative weight.
+pub fn weights(what: &'static str, values: &[f64]) -> Result<(), InputError> {
+    weights_in(what, values, |w| w >= 0.0, "[0, inf)")
+}
+
+/// Weights that must be positive: every weight finite and above 0.
+///
+/// # Errors
+///
+/// At the first weight refused: [`InputError::NotFinite`] for NaN or an
+/// infinity and [`InputError::Domain`], with its row, for a weight of 0 or
+/// below.
+pub fn positive_weights(what: &'static str, values: &[f64]) -> Result<(), InputError> {
+    weights_in(what, values, |w| w > 0.0, "(0, inf)")
+}
+
+fn weights_in(
+    what: &'static str,
+    values: &[f64],
+    allowed: impl Fn(f64) -> bool,
+    domain: &'static str,
+) -> Result<(), InputError> {
+    let Some(row) = values.iter().position(|&w| !(w.is_finite() && allowed(w))) else {
+        return Ok(());
+    };
+    let value = values[row];
+    Err(if value.is_finite() {
+        InputError::Domain {
+            what,
+            value,
+            domain,
+            row: Some(row),
+        }
+    } else {
+        InputError::NotFinite {
+            what,
+            row,
+            column: None,
+        }
+    })
+}
+
+/// `value` is finite and above 0, as a tolerance or a scale must be.
+///
+/// # Errors
+///
+/// [`InputError::Domain`] for 0, a negative value, NaN or an infinity.
+pub fn positive(what: &'static str, value: f64) -> Result<(), InputError> {
+    if value.is_finite() && value > 0.0 {
+        Ok(())
+    } else {
+        Err(InputError::Domain {
+            what,
+            value,
+            domain: "(0, inf)",
+            row: None,
+        })
+    }
+}
+
+/// `value` lies below `limit`, a bound that depends on the call, such as the
+/// number of periods for a lag.
+///
+/// # Errors
+///
+/// [`InputError::NotBelow`] for a value at or above the limit, or NaN.
+pub fn below(what: &'static str, value: f64, limit: f64) -> Result<(), InputError> {
+    if value < limit {
+        Ok(())
+    } else {
+        Err(InputError::NotBelow { what, value, limit })
     }
 }
 
@@ -217,6 +357,7 @@ pub fn probability(what: &'static str, value: f64) -> Result<(), InputError> {
             what,
             value,
             domain: "[0, 1]",
+            row: None,
         })
     }
 }
@@ -288,6 +429,7 @@ pub fn csr_offsets(what: &'static str, offsets: &[usize], rows: usize) -> Result
             what,
             value: first as f64,
             domain: "a first offset of 0",
+            row: None,
         });
     }
     sorted_by(what, offsets, usize::cmp)?;
@@ -357,8 +499,65 @@ mod tests {
         assert_eq!(finite("y", &[1.0, 2.0]), Ok(()));
         assert_eq!(
             finite("y", &[1.0, f64::INFINITY, f64::NAN]),
-            Err(InputError::NotFinite { what: "y", row: 1 })
+            Err(InputError::NotFinite {
+                what: "y",
+                row: 1,
+                column: None
+            })
         );
+        assert_eq!(
+            finite_column("x", 2, &[0.0, f64::NAN])
+                .unwrap_err()
+                .to_string(),
+            "x is not finite at row 1, column 2"
+        );
+    }
+
+    #[test]
+    fn weights_report_the_row_of_the_first_refused() {
+        assert_eq!(weights("w", &[0.0, 1.5]), Ok(()));
+        assert_eq!(
+            weights("w", &[1.0, -0.5, f64::NAN]),
+            Err(InputError::Domain {
+                what: "w",
+                value: -0.5,
+                domain: "[0, inf)",
+                row: Some(1)
+            })
+        );
+        assert_eq!(
+            weights("w", &[1.0, f64::INFINITY, -1.0]),
+            Err(InputError::NotFinite {
+                what: "w",
+                row: 1,
+                column: None
+            })
+        );
+        let zero = positive_weights("w", &[1.0, 0.0]).unwrap_err();
+        assert_eq!(zero.code(), "input.domain");
+        assert_eq!(zero.to_string(), "w is 0 at row 1, outside (0, inf)");
+        assert_eq!(positive_weights("w", &[1e-300]), Ok(()));
+    }
+
+    #[test]
+    fn positive_and_below_refuse_the_boundary_and_nan() {
+        assert_eq!(positive("tol", 1e-9), Ok(()));
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(positive("tol", bad).unwrap_err().code(), "input.domain");
+        }
+        assert_eq!(below("lag", 2.0, 3.0), Ok(()));
+        let error = below("lag", 3.0, 3.0).unwrap_err();
+        assert_eq!(
+            error,
+            InputError::NotBelow {
+                what: "lag",
+                value: 3.0,
+                limit: 3.0
+            }
+        );
+        assert_eq!(error.code(), "input.not_below");
+        assert_eq!(error.to_string(), "lag is 3, not below 3");
+        assert!(below("lag", f64::NAN, 3.0).is_err());
     }
 
     #[test]
@@ -444,11 +643,21 @@ mod tests {
                 found: 0,
             },
             InputError::Empty { what: "a" },
-            InputError::NotFinite { what: "a", row: 0 },
+            InputError::NotFinite {
+                what: "a",
+                row: 0,
+                column: None,
+            },
             InputError::Domain {
                 what: "a",
                 value: 0.0,
                 domain: "x",
+                row: None,
+            },
+            InputError::NotBelow {
+                what: "a",
+                value: 1.0,
+                limit: 1.0,
             },
             InputError::Unsorted { what: "a", row: 1 },
             InputError::Duplicate { what: "a", row: 1 },

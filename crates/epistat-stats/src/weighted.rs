@@ -241,6 +241,7 @@ pub fn effective_sample_size(weights: &[f64]) -> Result<Option<f64>, Error> {
             return Err(InputError::NotFinite {
                 what: "weights",
                 row,
+                column: None,
             }
             .into());
         }
@@ -249,6 +250,7 @@ pub fn effective_sample_size(weights: &[f64]) -> Result<Option<f64>, Error> {
                 what: "weights",
                 value: weight,
                 domain: "[0, inf)",
+                row: None,
             }
             .into());
         }
@@ -323,6 +325,7 @@ impl WeightLimits {
             return Err(InputError::NotFinite {
                 what: "weights",
                 row,
+                column: None,
             }
             .into());
         }
@@ -331,6 +334,7 @@ impl WeightLimits {
                 what: "weights",
                 value,
                 domain: "[0, inf)",
+                row: None,
             }
             .into());
         }
@@ -363,6 +367,7 @@ fn ordered(what: &'static str, lower: f64, upper: f64) -> Result<(), InputError>
             what,
             value: lower,
             domain: "at most the upper limit",
+            row: None,
         });
     }
     Ok(())

@@ -181,7 +181,7 @@ mod tests {
     fn the_covariance_diagonal_is_the_squared_standard_error_to_the_bit() {
         let a = vec![0.5, -1.25, 2.0, 0.75, -2.0, 0.0, 1.0, -1.0];
         let b = vec![1.5, 0.25, -0.5, 0.75, 1.0, -3.0, 0.0, 0.5];
-        let clusters = Clusters::from_labels(&[1_i64, 1, 2, 2, 3, 3, 3, 4]);
+        let clusters = Clusters::from_labels_first_seen(&[1_i64, 1, 2, 2, 3, 3, 3, 4]);
         let cov = did_covariance(&[a.clone(), b.clone()], &clusters).unwrap();
         let se_a = did_standard_error(&a, &clusters).unwrap();
         let se_b = did_standard_error(&b, &clusters).unwrap();
@@ -195,7 +195,7 @@ mod tests {
         // Two clusters of equal size with sums +s and -s: the variance is
         // 2 (s / n)^2, not 2 times G / (G - 1) = 4 times that.
         let psi = [1.0, 1.0, -1.0, -1.0];
-        let clusters = Clusters::from_labels(&[0_i64, 0, 1, 1]);
+        let clusters = Clusters::from_labels_first_seen(&[0_i64, 0, 1, 1]);
         let se = did_standard_error(&psi, &clusters).unwrap();
         assert!((se - (2.0_f64 * 0.25).sqrt()).abs() < 1e-15);
     }
@@ -211,7 +211,7 @@ mod tests {
         let psi: Vec<Vec<f64>> = (0..3)
             .map(|_| (0..n).map(|_| stream.uniform() - 0.4).collect())
             .collect();
-        let clusters = Clusters::from_labels(&labels);
+        let clusters = Clusters::from_labels_first_seen(&labels);
 
         let transcribed_sums = |values: &[f64]| {
             let n_f = values.len() as f64;

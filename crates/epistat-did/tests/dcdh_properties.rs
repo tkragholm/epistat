@@ -313,7 +313,7 @@ fn the_influence_function_gives_the_standard_errors() {
     )
     .expect("estimate");
     let influence = r.influence.as_ref().expect("influence");
-    assert_eq!(influence.units(), &r.units[..]);
+    assert_eq!(influence.units(), Some(&r.units[..]));
     let centred = influence.variance(None).expect("variance");
     let g = r.n_units as f64;
     let terms: Vec<_> = r.effects.iter().chain(&r.placebos).collect();

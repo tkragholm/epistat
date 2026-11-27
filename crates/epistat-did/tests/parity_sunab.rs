@@ -302,13 +302,14 @@ fn sunab_matches_fixest() {
         let influence = result.influence.as_ref().unwrap();
         let unit_cluster: Vec<u32> = influence
             .units()
+            .expect("keyed by units")
             .iter()
             .map(|&u| {
                 let row = case.unit.iter().position(|&v| v == u).unwrap();
                 clusters[row]
             })
             .collect();
-        let of = Clusters::from_labels(&unit_cluster);
+        let of = Clusters::from_labels_first_seen(&unit_cluster);
         assert_eq!(influence.n_columns(), p);
         let raw = influence
             .variance_with(Some(&of), ClusterRule::NoSmallSample)

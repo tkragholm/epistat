@@ -194,6 +194,7 @@ impl<'a> TripleDidDataBuilder<'a> {
                     return Err(InputError::NotFinite {
                         what: "covariates",
                         row,
+                        column: None,
                     }
                     .into());
                 }

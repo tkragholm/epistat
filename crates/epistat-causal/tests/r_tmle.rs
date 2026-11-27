@@ -185,7 +185,7 @@ fn tmle_variance(r: &Tmle, used: &[bool], cluster: Option<&[u32]>) -> f64 {
     // over the persons used, `m IF`.
     let difference = r.influence.combine(&[1.0, -1.0]).unwrap();
     let mut psi = vec![0.0; used.len()];
-    for (&unit, &v) in r.influence.units().iter().zip(difference.column(0)) {
+    for (&unit, &v) in r.influence.keys().iter().zip(difference.column(0)) {
         psi[unit as usize] = v;
     }
     let values: Vec<f64> = match cluster {

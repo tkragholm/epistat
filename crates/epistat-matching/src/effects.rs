@@ -700,9 +700,12 @@ fn covariance(
     let mut terms: Vec<(Clusters, f64)> = Vec::new();
     match spec.clustering {
         Clustering::Pair => {
-            terms.push((Clusters::from_labels(pairs.as_deref().unwrap_or(&[])), 1.0));
+            terms.push((
+                Clusters::from_labels_first_seen(pairs.as_deref().unwrap_or(&[])),
+                1.0,
+            ));
         }
-        Clustering::Unit => terms.push((Clusters::from_labels(&sample.unit), 1.0)),
+        Clustering::Unit => terms.push((Clusters::from_labels_first_seen(&sample.unit), 1.0)),
         Clustering::PairAndUnit => {
             let pairs = pairs.unwrap_or_default();
             let both: Vec<(usize, usize)> = pairs
@@ -710,9 +713,9 @@ fn covariance(
                 .copied()
                 .zip(sample.unit.iter().copied())
                 .collect();
-            terms.push((Clusters::from_labels(&pairs), 1.0));
-            terms.push((Clusters::from_labels(&sample.unit), 1.0));
-            terms.push((Clusters::from_labels(&both), -1.0));
+            terms.push((Clusters::from_labels_first_seen(&pairs), 1.0));
+            terms.push((Clusters::from_labels_first_seen(&sample.unit), 1.0));
+            terms.push((Clusters::from_labels_first_seen(&both), -1.0));
         }
     }
     if terms.iter().any(|(c, _)| c.count() < 2) {

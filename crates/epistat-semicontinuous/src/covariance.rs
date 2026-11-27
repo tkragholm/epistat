@@ -21,7 +21,7 @@ pub(crate) fn score_meat(
     residual: impl Fn(usize) -> f64 + Sync,
     clusters: Option<&[u32]>,
 ) -> (Mat<f64>, Option<usize>) {
-    let clusters = clusters.map(Clusters::from_labels);
+    let clusters = clusters.map(Clusters::from_labels_first_seen);
     let meat =
         epistat_sandwich::meat(x, residual, clusters.as_ref()).expect("one cluster label per row");
     (meat, clusters.map(|clusters| clusters.count()))

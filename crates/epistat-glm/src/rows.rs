@@ -85,7 +85,7 @@ pub struct Block<'a> {
     pub weight: &'a mut [f64],
     /// The cluster of each row, numbered from 0 in the order in which the
     /// clusters first appear among the rows, as
-    /// `epistat_inference::Clusters::from_labels` numbers labels. Read only by
+    /// `epistat_inference::Clusters::from_labels_first_seen` numbers labels. Read only by
     /// a clustered covariance.
     pub cluster: &'a mut [usize],
 }
@@ -321,10 +321,20 @@ impl Glm {
             return Err(weight_error("weights", row, value));
         }
         if let Some(row) = bad_x {
-            return Err(epistat_core::InputError::NotFinite { what: "x", row }.into());
+            return Err(epistat_core::InputError::NotFinite {
+                what: "x",
+                row,
+                column: None,
+            }
+            .into());
         }
         if let Some(row) = bad_y {
-            return Err(epistat_core::InputError::NotFinite { what: "y", row }.into());
+            return Err(epistat_core::InputError::NotFinite {
+                what: "y",
+                row,
+                column: None,
+            }
+            .into());
         }
         crate::error::tolerance("tolerance", self.tolerance)?;
         family.check()?;
@@ -582,6 +592,7 @@ const fn working_weight(row: usize) -> Error {
         epistat_core::InputError::NotFinite {
             what: "working weights",
             row,
+            column: None,
         },
     ))
 }

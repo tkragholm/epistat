@@ -141,6 +141,7 @@ pub fn contrast_curve<B: Basis + ?Sized>(
                 return Err(InputError::NotFinite {
                     what: "covariance",
                     row,
+                    column: None,
                 }
                 .into());
             }
@@ -153,6 +154,7 @@ pub fn contrast_curve<B: Basis + ?Sized>(
                 what: "covariance diagonal",
                 value: v[i * p + i],
                 domain: "[0, inf)",
+                row: None,
             }
             .into());
         }

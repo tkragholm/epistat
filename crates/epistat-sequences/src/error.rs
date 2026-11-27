@@ -64,6 +64,7 @@ pub(crate) fn below(
             what,
             value: value as f64,
             domain,
+            row: None,
         }
         .into())
     }
@@ -82,6 +83,7 @@ pub(crate) fn check_symbols(
             what,
             value: f64::from(rank),
             domain: "below the alphabet size",
+            row: None,
         }
         .into()),
     }
@@ -92,13 +94,19 @@ pub(crate) fn check_symbols(
 pub(crate) fn weights(what: &'static str, values: &[f64]) -> Result<(), Error> {
     for (row, &value) in values.iter().enumerate() {
         if !value.is_finite() {
-            return Err(InputError::NotFinite { what, row }.into());
+            return Err(InputError::NotFinite {
+                what,
+                row,
+                column: None,
+            }
+            .into());
         }
         if value < 0.0 {
             return Err(InputError::Domain {
                 what,
                 value,
                 domain: "[0, inf)",
+                row: None,
             }
             .into());
         }

@@ -164,8 +164,8 @@ pub(crate) fn check_separation(propensity: &[f64]) -> Result<()> {
     }
 }
 
-/// The unit codes of `rows`, the row numbers as `u32`.
-pub(crate) fn unit_codes(rows: impl IntoIterator<Item = usize>) -> Result<Vec<u32>> {
+/// The rows `rows` as the `u32` keys of an influence function keyed by row.
+pub(crate) fn row_keys(rows: impl IntoIterator<Item = usize>) -> Result<Vec<u32>> {
     rows.into_iter()
         .map(|i| {
             u32::try_from(i).map_err(|_| Error::input(format!("more than {} persons", u32::MAX)))
@@ -177,15 +177,14 @@ fn inference_error(e: &epistat_inference::Error) -> Error {
     Error::input(format!("influence function: {e}"))
 }
 
-/// The clusters of every person by row number, for an influence function
-/// over all persons or a subset of them.
+/// The clusters of every person keyed by row, for an influence function over
+/// all persons or a subset of them.
 pub(crate) fn clusters(cluster: Option<&[u32]>, n: usize) -> Result<Option<Clusters>> {
     let Some(cluster) = cluster else {
         return Ok(None);
     };
     check_len("cluster", cluster.len(), n)?;
-    let units = unit_codes(0..n)?;
-    Clusters::per_unit(&units, cluster)
+    Clusters::per_row(cluster)
         .map(Some)
         .map_err(|e| inference_error(&e))
 }
@@ -203,12 +202,12 @@ pub(crate) fn rule(clustered: bool) -> ClusterRule {
 
 /// The influence function of the two means on the per-unit scale under
 /// `rule`, from the values `d[0]` of mean 1 and `d[1]` of mean 0 on the dfbeta
-/// scale over the persons `units`.
-pub(crate) fn influence(d: [&[f64]; 2], units: Vec<u32>, rule: ClusterRule) -> Result<Influence> {
-    let mut values = Vec::with_capacity(2 * units.len());
+/// scale over the persons of the rows `rows`.
+pub(crate) fn influence(d: [&[f64]; 2], rows: Vec<u32>, rule: ClusterRule) -> Result<Influence> {
+    let mut values = Vec::with_capacity(2 * rows.len());
     values.extend_from_slice(d[0]);
     values.extend_from_slice(d[1]);
-    Influence::from_dfbeta(values, units, 2, rule).map_err(|e| inference_error(&e))
+    Influence::from_dfbeta_over_rows(values, rows, 2, rule).map_err(|e| inference_error(&e))
 }
 
 /// The variance of `influence`, which has one column.

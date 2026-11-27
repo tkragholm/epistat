@@ -267,6 +267,7 @@ impl Aggte {
                 return Err(InputError::NotFinite {
                     what: "weights",
                     row: 0,
+                    column: None,
                 }
                 .into());
             }
@@ -278,6 +279,7 @@ impl Aggte {
                     what: "key",
                     value: key as f64,
                     domain: "the keys of the path",
+                    row: None,
                 })?;
             columns[index] += weight;
             estimate += weight * self.points[index].estimate.estimate;
@@ -913,6 +915,7 @@ pub(super) fn aggregate(fit: &AttGt, options: &AggteOptions) -> Result<Aggte, Er
             what: "bootstrap replicates",
             value: 0.0,
             domain: "[1, inf)",
+            row: None,
         }
         .into());
     }
@@ -1002,13 +1005,9 @@ fn into_aggte(
     for point in summary.points.iter().chain(summary.overall.as_ref()) {
         values.extend_from_slice(&point.influence);
     }
-    let influence = Influence::new(
-        values,
-        cells_influence.units().to_vec(),
-        n_columns,
-        ClusterRule::NoSmallSample,
-    )
-    .map_err(|_| Error::NotFinite)?;
+    let influence = cells_influence
+        .with_values(values, n_columns, ClusterRule::NoSmallSample)
+        .map_err(|_| Error::NotFinite)?;
     Ok(Aggte {
         aggregation: options.aggregation,
         weights: options.weights,

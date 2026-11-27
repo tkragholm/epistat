@@ -258,6 +258,7 @@ fn check_replicates(replicates: &[f64]) -> Result<(), Error> {
         Some(row) => Err(InputError::NotFinite {
             what: "replicates",
             row,
+            column: None,
         }
         .into()),
         None => Ok(()),
@@ -331,6 +332,7 @@ mod tests {
             Err(Error::Input(InputError::NotFinite {
                 what: "replicates",
                 row,
+                column: None,
             }))
         };
         for rule in [

@@ -2,6 +2,7 @@
 //! every censoring time it is the exact sum, and with fewer cells the risk
 //! approaches the exact one as the cells get narrower.
 
+use epistat_inference::{Clusters, Error as InferenceError, KeyedBy};
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
@@ -74,6 +75,44 @@ fn worst(a: &AipwSurv, b: &AipwSurv) -> f64 {
         w = w.max((x.unwrap() - y.unwrap()).abs());
     }
     w
+}
+
+#[test]
+fn unit_clusters_on_the_row_keyed_influence_are_refused() {
+    let r: Reference = load_json(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/data/aipw_surv.json"
+    ));
+    let s = r.scenarios.iter().find(|s| s.name == "km").unwrap();
+    let fit = run(s, true, None);
+    let influence = &fit.influence;
+    assert_eq!(influence.keyed_by(), KeyedBy::Rows);
+    // Person codes in an order other than the rows, and a family per person:
+    // a lookup by code would succeed, since every row number is also a
+    // person code, and pair each row with another person's family.
+    let n = u32::try_from(s.time.len()).unwrap();
+    let person: Vec<u32> = (0..n).rev().collect();
+    let family_of_person: Vec<u32> = (0..n).map(|p| p / 3).collect();
+    let by_person = Clusters::per_unit(&person, &family_of_person).unwrap();
+    assert_eq!(
+        influence.variance(Some(&by_person)),
+        Err(InferenceError::KeyMismatch {
+            influence: KeyedBy::Rows,
+            clusters: KeyedBy::Units
+        })
+    );
+    // The family of each row, given per row or by position, is accepted.
+    let family_of_row: Vec<u32> = person
+        .iter()
+        .map(|&p| family_of_person[p as usize])
+        .collect();
+    let per_row = influence
+        .variance(Some(&Clusters::per_row(&family_of_row).unwrap()))
+        .unwrap();
+    let positional = influence
+        .variance(Some(&Clusters::from_codes(&family_of_row)))
+        .unwrap();
+    assert_eq!(per_row, positional);
 }
 
 #[test]

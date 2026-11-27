@@ -91,6 +91,7 @@ fn at_least_one(what: &'static str, value: usize) -> Error {
         what,
         value: value as f64,
         domain: "[1, inf)",
+        row: None,
     }
     .into()
 }
@@ -130,13 +131,19 @@ pub fn kmeans(
                 },
                 value: values.len() as f64,
                 domain: "a multiple of d",
+                row: None,
             }
             .into());
         }
     }
     for (what, values) in [("points", points), ("start", start)] {
         if let Some(row) = values.iter().position(|v| !v.is_finite()) {
-            return Err(InputError::NotFinite { what, row }.into());
+            return Err(InputError::NotFinite {
+                what,
+                row,
+                column: None,
+            }
+            .into());
         }
     }
     let (n, k) = (points.len() / d, start.len() / d);
@@ -145,6 +152,7 @@ pub fn kmeans(
             what: "number of centres",
             value: k as f64,
             domain: "1 to the number of points",
+            row: None,
         }
         .into());
     }
@@ -551,7 +559,8 @@ mod tests {
             Err(Error::Input(InputError::Domain {
                 what: "number of centres",
                 value: 3.0,
-                domain: "1 to the number of points"
+                domain: "1 to the number of points",
+                row: None
             }))
         );
         // A start far from every point leaves its cluster empty.
@@ -575,7 +584,8 @@ mod tests {
                 Err(Error::Input(InputError::Domain {
                     what: "max_iterations",
                     value: 0.0,
-                    domain: "[1, inf)"
+                    domain: "[1, inf)",
+                    row: None
                 }))
             );
         }

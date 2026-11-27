@@ -599,7 +599,7 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
         .map_err(Error::model("outcome model"))?;
     let p = input.design.ncols();
     let coefficients = fit.full_rank().map_err(Error::model("outcome model"))?;
-    let clusters = Clusters::from_labels(input.person);
+    let clusters = Clusters::from_labels_first_seen(input.person);
     let cov = robust_covariance(
         &model,
         &fit,

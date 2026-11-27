@@ -92,6 +92,7 @@ impl Covariance {
             return Err(InputError::NotFinite {
                 what: "covariance",
                 row,
+                column: None,
             });
         }
         Ok(Self { dim, values })
@@ -211,7 +212,8 @@ mod tests {
             Covariance::from_values(2, &[1.0, f64::NAN, 0.0, 1.0]),
             Err(InputError::NotFinite {
                 what: "covariance",
-                row: 1
+                row: 1,
+                column: None
             })
         );
         assert!(Covariance::new(usize::MAX, Vec::new()).is_err());

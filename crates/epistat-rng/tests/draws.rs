@@ -150,7 +150,8 @@ fn a_refusal_names_the_parameter_and_is_an_input_error() {
         Error::Input(InputError::Domain {
             what: "shape",
             value: -2.0,
-            domain: "(0, inf)"
+            domain: "(0, inf)",
+            row: None
         })
     );
     assert_eq!(

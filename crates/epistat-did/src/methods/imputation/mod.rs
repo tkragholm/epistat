@@ -358,7 +358,7 @@ impl UnitIndex {
         Self {
             units,
             position,
-            clusters: Clusters::from_labels(&labels),
+            clusters: Clusters::from_labels_first_seen(&labels),
         }
     }
 

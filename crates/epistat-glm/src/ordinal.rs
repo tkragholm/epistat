@@ -760,7 +760,7 @@ impl Ordinal {
         let robust = match cluster {
             None => None,
             Some(labels) => {
-                let clusters = Clusters::from_labels(labels);
+                let clusters = Clusters::from_labels_first_seen(labels);
                 let mut scores = Mat::<f64>::zeros(n, t);
                 let mut row_score = vec![0.0; t];
                 for i in 0..n {

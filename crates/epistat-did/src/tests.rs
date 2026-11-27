@@ -76,7 +76,8 @@ fn validate_two_by_two_inputs() {
         error,
         Error::Input(InputError::NotFinite {
             what: "outcome",
-            row: 1
+            row: 1,
+            column: None
         })
     );
 }
@@ -182,7 +183,8 @@ fn drdid_rejects_invalid_options_and_values() {
         err,
         Error::Input(InputError::NotFinite {
             what: "change",
-            row: 0
+            row: 0,
+            column: None
         })
     );
     let err = dr_panel(
@@ -196,7 +198,8 @@ fn drdid_rejects_invalid_options_and_values() {
         err,
         Error::Input(InputError::NotFinite {
             what: "covariates",
-            row: 0
+            row: 0,
+            column: None
         })
     );
 }

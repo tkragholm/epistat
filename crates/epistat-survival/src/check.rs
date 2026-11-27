@@ -59,7 +59,12 @@ pub(crate) fn refuse_non_finite(values: &[f64], name: &'static str) -> Result<()
 /// an entry that is not finite.
 pub(crate) fn refuse_non_finite_matrix(x: MatRef<'_, f64>, name: &'static str) -> Result<()> {
     match (0..x.nrows()).find(|&i| (0..x.ncols()).any(|j| !x[(i, j)].is_finite())) {
-        Some(row) => Err(InputError::NotFinite { what: name, row }.into()),
+        Some(row) => Err(InputError::NotFinite {
+            what: name,
+            row,
+            column: None,
+        }
+        .into()),
         None => Ok(()),
     }
 }

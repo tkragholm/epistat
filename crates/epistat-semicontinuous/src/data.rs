@@ -55,7 +55,14 @@ fn first_not_finite(x: MatRef<'_, f64>) -> Option<usize> {
 }
 
 fn finite_matrix(what: &'static str, x: MatRef<'_, f64>) -> Result<(), Error> {
-    first_not_finite(x).map_or(Ok(()), |row| Err(Refusal::NotFinite { what, row }.into()))
+    first_not_finite(x).map_or(Ok(()), |row| {
+        Err(Refusal::NotFinite {
+            what,
+            row,
+            column: None,
+        }
+        .into())
+    })
 }
 
 fn non_negative(what: &'static str, values: &[f64]) -> Result<(), Error> {
@@ -65,6 +72,7 @@ fn non_negative(what: &'static str, values: &[f64]) -> Result<(), Error> {
             what,
             value,
             domain: "[0, inf)",
+            row: None,
         }
         .into())
     })
@@ -88,6 +96,7 @@ pub(crate) fn check_weights(n: usize, weights: &[f64]) -> Result<(), Error> {
                 what: "weights",
                 value,
                 domain: "(0, inf)",
+                row: None,
             }
             .into())
         })
@@ -466,19 +475,28 @@ mod tests {
         let nan = Mat::from_fn(3, 1, |i, _| if i == 1 { f64::NAN } else { 1.0 });
         assert_eq!(
             refused(CostData::builder(nan.as_ref(), &y).build()),
-            Refusal::NotFinite { what: "x", row: 1 }
+            Refusal::NotFinite {
+                what: "x",
+                row: 1,
+                column: None
+            }
         );
         assert_eq!(
             refused(CostData::builder(x.as_ref(), &[0.0, -1.0, 2.0]).build()),
             Refusal::Domain {
                 what: "y",
                 value: -1.0,
-                domain: "[0, inf)"
+                domain: "[0, inf)",
+                row: None
             }
         );
         assert_eq!(
             refused(CostData::builder(x.as_ref(), &[0.0, f64::INFINITY, 2.0]).build()),
-            Refusal::NotFinite { what: "y", row: 1 }
+            Refusal::NotFinite {
+                what: "y",
+                row: 1,
+                column: None
+            }
         );
         assert_eq!(
             refused(
@@ -489,7 +507,8 @@ mod tests {
             Refusal::Domain {
                 what: "weights",
                 value: 0.0,
-                domain: "(0, inf)"
+                domain: "(0, inf)",
+                row: None
             }
         );
         assert_eq!(
@@ -500,7 +519,8 @@ mod tests {
             ),
             Refusal::NotFinite {
                 what: "weights",
-                row: 1
+                row: 1,
+                column: None
             }
         );
         assert_eq!(

@@ -268,8 +268,9 @@ pub struct AipwSurv {
     /// The times.
     pub times: Vec<f64>,
     /// The influence function of the risks per person, `phi - est`: column
-    /// `l * times.len() + s` is level `l` at `times[s]`, and the units are the
-    /// rows of the data. Its rule is that of the standard errors, without a
+    /// `l * times.len() + s` is level `l` at `times[s]`, keyed by the rows of
+    /// the data ([`Influence::over_rows`]), so it is clustered by position or
+    /// by `Clusters::per_row`, not by unit codes. Its rule is that of the standard errors, without a
     /// small-sample factor, so the variance of the two columns of a time is
     /// the covariance in `risks`.
     pub influence: Influence,
@@ -1189,10 +1190,10 @@ impl Model {
                 *value = phi[i * 2 * k + j] - est[j];
             }
         }
-        let units: Vec<u32> = (0..n)
+        let rows: Vec<u32> = (0..n)
             .map(|i| u32::try_from(i).map_err(|_| Error::invalid("more persons than u32::MAX")))
             .collect::<Result<_>>()?;
-        let influence = Influence::new(values, units, 2 * k, ClusterRule::NoSmallSample)?;
+        let influence = Influence::over_rows(values, rows, 2 * k, ClusterRule::NoSmallSample)?;
         // The covariance of the two levels at each time from a two-column
         // influence function of that time: the variance of all `2k` columns at
         // once would form a `2k` by `2k` matrix, `k` times the work.
@@ -1202,14 +1203,7 @@ impl Model {
                 if self.times[s] > self.max_stop {
                     return Ok(None);
                 }
-                let mut pair = influence.column(s).to_vec();
-                pair.extend_from_slice(influence.column(k + s));
-                let time = Influence::new(
-                    pair,
-                    influence.units().to_vec(),
-                    2,
-                    ClusterRule::NoSmallSample,
-                )?;
+                let time = influence.select(&[s, k + s])?;
                 Ok(Some(time.variance(None)?))
             })
             .collect::<Result<_>>()?;

@@ -454,6 +454,7 @@ fn a_fit_refuses_what_it_cannot_answer_reliably() {
             what: "weights",
             value: 0.0,
             domain: "(0, inf)",
+            row: None,
         })
     );
     assert_eq!(
@@ -603,7 +604,8 @@ fn a_two_part_fit_refuses_what_it_cannot_answer_reliably() {
         code(two_part_options(), &bad, &warm, &mut scratch),
         Error::Input(InputError::NotFinite {
             what: "weights",
-            row: 0
+            row: 0,
+            column: None
         })
     );
     assert_eq!(

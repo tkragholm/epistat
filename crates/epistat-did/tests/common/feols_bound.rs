@@ -135,7 +135,7 @@ pub fn feols_bound(
         }
     };
     let fit_clusters: Vec<u32> = rows.iter().map(|&i| clusters[i]).collect();
-    let of = Clusters::from_labels(&fit_clusters);
+    let of = Clusters::from_labels_first_seen(&fit_clusters);
     let g = of.count();
     let mut s = vec![0.0; g * k];
     let mut u = vec![0.0; g * k];

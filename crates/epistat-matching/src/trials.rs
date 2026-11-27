@@ -259,6 +259,7 @@ impl<'a, R: MatchingRecord> TrialPanelBuilder<'a, R> {
                 what: "unit",
                 value: f64::from(unit),
                 domain: "the positions of the records",
+                row: None,
             })?;
             person.periods.push(TrialPeriod {
                 period,

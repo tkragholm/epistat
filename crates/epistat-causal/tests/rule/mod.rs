@@ -42,7 +42,7 @@ use epistat_causal::{ClusterRule, Influence};
 /// the cluster of each person (by row) `cluster`.
 pub fn conversion(influence: &Influence, w: [f64; 2], cluster: Option<&[u32]>) -> f64 {
     let combined = influence.combine(&w).unwrap();
-    let units = combined.units();
+    let units = combined.keys();
     let m = units.len() as f64;
     let d: Vec<f64> = combined.column(0).iter().map(|psi| psi / m).collect();
     let mean = d.iter().sum::<f64>() / m;

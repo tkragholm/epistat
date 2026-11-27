@@ -373,6 +373,7 @@ impl Family {
                 what,
                 value,
                 domain,
+                row: None,
             }
             .into())
         }

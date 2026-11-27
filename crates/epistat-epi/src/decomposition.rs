@@ -449,6 +449,7 @@ pub fn kitagawa_poisson(
             what: "scale",
             value: scale,
             domain: "(0, inf)",
+            row: None,
         }
         .into());
     }
@@ -464,6 +465,7 @@ pub fn kitagawa_poisson(
                 what,
                 value,
                 domain: "[0, inf)",
+                row: None,
             }
             .into());
         }

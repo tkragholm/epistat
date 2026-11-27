@@ -155,6 +155,7 @@ pub(crate) fn prune_design(
         LinalgError::Input(InputError::NotFinite {
             what: "weights",
             row,
+            column: None,
         }) => DrDidError::InvalidWeight {
             value: weights[row],
         },

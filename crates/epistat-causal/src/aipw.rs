@@ -94,8 +94,8 @@ use epistat_linalg::{Attempt, Factor, Mat, MatRef, weighted_gram};
 use crate::error::{Error, Result};
 use crate::shared::{
     case_weights, check_arms, check_design, check_estimand, check_finite, check_len,
-    check_separation, clusters, compensated, contrast, fit_glm, glm_data, influence, rule,
-    unit_codes,
+    check_separation, clusters, compensated, contrast, fit_glm, glm_data, influence, row_keys,
+    rule,
 };
 
 /// Which variance an estimate carries.
@@ -163,11 +163,10 @@ pub struct Aipw {
     /// the p-value of a ratio of 1; `None` when `mean0` is 0.
     pub contrast: Contrast,
     /// The influence functions of `mean1` (column 0) and `mean0` (column 1),
-    /// per person on the per-unit scale, the units the row numbers, with the
-    /// rule of the standard errors: `NoSmallSample` without clusters,
-    /// `SmallSample` with them. Their `variance` with the clusters
-    /// `Clusters::per_unit(rows, cluster)` (or none) reproduces the standard
-    /// errors.
+    /// per person on the per-unit scale, keyed by row, with the rule of the
+    /// standard errors: `NoSmallSample` without clusters, `SmallSample` with
+    /// them. Their `variance` with the clusters `Clusters::per_row(cluster)`
+    /// (or none) reproduces the standard errors.
     pub influence: Influence,
     /// The variance of the estimates.
     pub variance: Variance,
@@ -288,7 +287,7 @@ fn finish(
     let n = c.omega.len();
     let influence = influence(
         [&dfbeta[0], &dfbeta[1]],
-        unit_codes(0..n)?,
+        row_keys(0..n)?,
         rule(cluster.is_some()),
     )?;
     let clusters = clusters(cluster, n)?;

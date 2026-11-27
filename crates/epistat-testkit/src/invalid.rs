@@ -42,6 +42,38 @@
 //! panic. The kinds of input a particular entry point cannot see, such as an
 //! unsorted column where order does not matter, are answered with `None`.
 //!
+//! [`assert_rejects_bad_input_with_codes`] checks the code as well as the
+//! kind, so that a crate reporting a NaN under its own code instead of
+//! `input.not_finite` fails. It takes the expected code of each kind, usually
+//! [`BadInput::code`], the code of the shared check that refuses it. A crate
+//! opts in per entry point once its errors use the shared codes; an entry
+//! point that meets an empty column through a length check passes its own
+//! mapping.
+//!
+//! ```
+//! # use epistat_core::{InputError, check};
+//! # use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
+//! # fn entry(x: &[f64], y: &[f64]) -> Result<f64, InputError> {
+//! #     check::same_length("y", x.len(), y.len())?;
+//! #     check::finite("x", x)?;
+//! #     check::sorted_by("x", x, f64::total_cmp)?;
+//! #     Ok(x.iter().sum::<f64>() + y.iter().sum::<f64>())
+//! # }
+//! # let x = [1.0, 2.0, 3.0, 4.0];
+//! # let y = [0.5, 0.1, 0.9, 0.3];
+//! // An empty x differs in length from y, so it is a length error here.
+//! let code = |bad| match bad {
+//!     BadInput::Empty => "input.length",
+//!     other => other.code(),
+//! };
+//! assert_rejects_bad_input_with_codes("entry", code, |bad| {
+//!     Some(match bad {
+//!         BadInput::Mismatched => entry(&x, &bad.column(&y)),
+//!         _ => entry(&bad.column(&x), &y),
+//!     })
+//! });
+//! ```
+//!
 //! # Error codes
 //!
 //! [`assert_codes_unique`] takes one value of every variant of a crate's error
@@ -127,6 +159,19 @@ impl BadInput {
         }
         column
     }
+
+    /// The code of the shared check that refuses this kind:
+    /// `input.empty`, `input.not_finite` for NaN and infinities,
+    /// `input.length` and `input.unsorted`.
+    #[must_use]
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Empty => "input.empty",
+            Self::Nan | Self::Infinite => "input.not_finite",
+            Self::Mismatched => "input.length",
+            Self::Unsorted => "input.unsorted",
+        }
+    }
 }
 
 /// Calls `call` and checks that it returns an `Input` error.
@@ -159,6 +204,30 @@ where
     }
 }
 
+/// Calls `call` and checks that it returns an `Input` error with the code
+/// `code`.
+///
+/// # Panics
+///
+/// As [`assert_input_error`], and if the code is not `code`.
+pub fn assert_input_error_code<T, E>(label: &str, code: &str, call: impl FnOnce() -> Result<T, E>)
+where
+    T: Debug,
+    E: Classify + Debug,
+{
+    assert_input_error(label, || {
+        call().map_err(|error| {
+            assert_eq!(
+                error.code(),
+                code,
+                "{label}: error {error:?} has code {}, expected {code}",
+                error.code()
+            );
+            error
+        })
+    });
+}
+
 /// Calls `build` once for each [`BadInput`] and checks that each call returns
 /// an `Input` error.
 ///
@@ -184,6 +253,39 @@ where
             Ok(Some(result)) => {
                 checked += 1;
                 assert_input_error(&format!("{label} on {bad:?}"), || result);
+            }
+        }
+    }
+    assert!(checked > 0, "{label}: no kind of bad input was tried");
+}
+
+/// [`assert_rejects_bad_input`] that also checks the code of each error
+/// against `code` of its kind, usually [`BadInput::code`].
+///
+/// # Panics
+///
+/// As [`assert_rejects_bad_input`], and if an error's code is not the one
+/// `code` gives for its kind.
+pub fn assert_rejects_bad_input_with_codes<T, E>(
+    label: &str,
+    code: impl Fn(BadInput) -> &'static str,
+    build: impl Fn(BadInput) -> Option<Result<T, E>>,
+) where
+    T: Debug,
+    E: Classify + Debug,
+{
+    let mut checked = 0;
+    for bad in BadInput::ALL {
+        let label = format!("{label} on {bad:?}");
+        let outcome = catch_unwind(AssertUnwindSafe(|| build(bad)));
+        match outcome {
+            Err(_) => assert_input_error_code(&label, code(bad), || {
+                build(bad).unwrap_or_else(|| unreachable!("the first call returned Some"))
+            }),
+            Ok(None) => {}
+            Ok(Some(result)) => {
+                checked += 1;
+                assert_input_error_code(&label, code(bad), || result);
             }
         }
     }
@@ -276,6 +378,33 @@ mod tests {
                 Ok(0)
             } else {
                 Err(Fail(ErrorKind::Input, "x.y"))
+            })
+        });
+    }
+
+    #[test]
+    fn the_shared_checks_give_the_codes_of_the_kinds() {
+        use epistat_core::check;
+        let good = [1.0, 2.0, 3.0];
+        let entry = |x: &[f64]| -> Result<(), epistat_core::InputError> {
+            check::non_empty("x", x.len())?;
+            check::same_length("x", 3, x.len())?;
+            check::finite("x", x)?;
+            check::sorted_by("x", x, f64::total_cmp)
+        };
+        assert_rejects_bad_input_with_codes("entry", BadInput::code, |bad| {
+            Some(entry(&bad.column(&good)))
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "has code x.y, expected input.not_finite")]
+    fn another_code_is_reported() {
+        assert_rejects_bad_input_with_codes("f", BadInput::code, |bad| {
+            Some(if bad == BadInput::Nan {
+                Err::<(), _>(Fail(ErrorKind::Input, "x.y"))
+            } else {
+                Err(Fail(ErrorKind::Input, bad.code()))
             })
         });
     }

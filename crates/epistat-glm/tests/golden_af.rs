@@ -89,7 +89,7 @@ fn attributable_fraction_bits_are_recorded() {
     let plain = model.fit5(x.as_ref(), &y, None, None, None).unwrap();
     let weighted = model.fit5(x.as_ref(), &y, Some(&w), None, None).unwrap();
     for (name, design) in [("cs", Design::CrossSectional), ("cc", Design::CaseControl)] {
-        let clusters = Clusters::from_labels(&cluster);
+        let clusters = Clusters::from_labels_first_seen(&cluster);
         let unweighted = glm_data(x.as_ref(), &y, None, None, None).unwrap();
         let with_weights = glm_data(x.as_ref(), &y, Some(&w), None, None).unwrap();
         for (variant, fit, data, cl) in [

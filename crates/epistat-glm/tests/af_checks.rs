@@ -119,7 +119,7 @@ fn unusable_input_is_refused() {
     let negative = vec![-1.0; 400];
     assert!(run(&fit, &x, &x0, &y, Some(&negative), None, &d).is_err());
     assert!(run(&fit, &x, &x0, &y, Some(&negative[..10]), None, &d).is_err());
-    let two = Clusters::from_labels(&[1, 2]);
+    let two = Clusters::from_labels_first_seen(&[1, 2]);
     assert!(run(&fit, &x, &x0, &y, None, Some(&two), &d).is_err());
     // A fit with another link is not logistic.
     let probit = Glm::new(Family::Binomial, Link::Probit)
@@ -152,7 +152,7 @@ fn bad_columns_are_input_errors() {
 fn one_cluster_has_no_standard_error() {
     let (x, x0, y) = data(false);
     let fit = fitted(&x, &y);
-    let one = Clusters::from_labels(&vec![1_u32; 400]);
+    let one = Clusters::from_labels_first_seen(&vec![1_u32; 400]);
     let a = run(&fit, &x, &x0, &y, None, Some(&one), &AfOptions::default())
         .unwrap()
         .af
