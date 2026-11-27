@@ -86,9 +86,10 @@
 
 use rayon::prelude::*;
 
+use crate::error::{below, check_symbols, length};
 use crate::fit::{FitDistance, check_lengths, check_partition, check_types, check_weights, fit};
 use crate::silhouette::{rank_labels, weighted_average};
-use crate::{Attempt, Restarts, SequenceError};
+use crate::{Attempt, Error, Restarts};
 
 /// Rows of the triangle one worker takes at a time in the cluster sums.
 ///
@@ -277,7 +278,7 @@ impl CondensedMatrix {
     ///
     /// # Errors
     ///
-    /// [`SequenceError::Input`] when the weights do not match the offsets, an
+    /// [`Error::Input`] when the weights do not match the offsets, an
     /// offset is outside the triangle, or `k` is zero or more than the
     /// sequences.
     pub fn kmedoids(
@@ -287,15 +288,10 @@ impl CondensedMatrix {
         k: usize,
         restarts: &Restarts,
         max_iterations: usize,
-    ) -> Result<Attempt, SequenceError> {
+    ) -> Result<Attempt, Error> {
         let count = offsets.len();
-        check_weights("offsets", count, weights.len())?;
-        if let Some(bad) = offsets.iter().find(|&&o| o as usize >= self.size) {
-            return Err(SequenceError::input(format!(
-                "offset {bad} is outside the {} sequences this matrix covers",
-                self.size
-            )));
-        }
+        check_weights(count, weights.len())?;
+        self.check_offsets(offsets)?;
         check_types(count, k)?;
         let distance = Offsets {
             matrix: self,
@@ -321,14 +317,14 @@ impl CondensedMatrix {
     ///
     /// # Errors
     ///
-    /// [`SequenceError::Input`] when the weights or labels do not cover the
+    /// [`Error::Input`] when the weights or labels do not cover the
     /// triangle's sequences, or a label is not below `k`.
     pub fn cluster_distance_sums(
         &self,
         weights: &[f64],
         labels: &[u32],
         k: usize,
-    ) -> Result<Vec<f64>, SequenceError> {
+    ) -> Result<Vec<f64>, Error> {
         let n = self.size;
         check_partition(n, weights.len(), labels, k)?;
         if k == 0 {
@@ -343,28 +339,23 @@ impl CondensedMatrix {
     /// `offsets` maps the caller's position to this triangle's, as for
     /// [`kmedoids`](CondensedMatrix::kmedoids), and may name fewer sequences
     /// than the triangle covers. `labels` are the caller's cluster numbers,
-    /// any integers, ranked in ascending order. The weighting is described in
-    /// [`silhouette`](crate::silhouette). Returns 0.0 for fewer than two
+    /// ranked in ascending order. The weighting is described in
+    /// [`silhouette`](crate::silhouette). Returns [`None`] for fewer than two
     /// distinct labels or when no sequence can be scored.
     ///
     /// # Errors
     ///
-    /// [`SequenceError::Input`] when the weights or labels do not match the
+    /// [`Error::Input`] when the weights or labels do not match the
     /// offsets, or an offset is outside the triangle.
     pub fn silhouette(
         &self,
         offsets: &[u32],
         weights: &[f64],
-        labels: &[i64],
-    ) -> Result<f64, SequenceError> {
+        labels: &[u32],
+    ) -> Result<Option<f64>, Error> {
         let count = offsets.len();
-        check_lengths("offsets", count, weights.len(), labels.len())?;
-        if let Some(bad) = offsets.iter().find(|&&o| o as usize >= self.size) {
-            return Err(SequenceError::input(format!(
-                "offset {bad} is outside the {} sequences this matrix covers",
-                self.size
-            )));
-        }
+        check_lengths(count, weights.len(), labels.len())?;
+        self.check_offsets(offsets)?;
         Ok(self.silhouette_by_offset(offsets, weights, labels))
     }
 
@@ -373,10 +364,15 @@ impl CondensedMatrix {
     /// The sums come from the full pass over the triangle by offset. An offset
     /// the caller did not name keeps rank 0 and weight 0, so it adds exactly
     /// zero to cluster 0's sums and is never scored.
-    fn silhouette_by_offset(&self, offsets: &[u32], weights: &[f64], labels: &[i64]) -> f64 {
+    fn silhouette_by_offset(
+        &self,
+        offsets: &[u32],
+        weights: &[f64],
+        labels: &[u32],
+    ) -> Option<f64> {
         let (ranks, k) = rank_labels(labels);
         if k < 2 {
-            return 0.0;
+            return None;
         }
         let mut rank_by_offset = vec![0u32; self.size];
         let mut weight_by_offset = vec![0.0f64; self.size];
@@ -386,6 +382,19 @@ impl CondensedMatrix {
         }
         let sums = self.cluster_sums(&weight_by_offset, &rank_by_offset, k);
         weighted_average(&sums, k, |index| offsets[index] as usize, weights, &ranks)
+    }
+
+    /// That every offset is a sequence of the triangle.
+    fn check_offsets(&self, offsets: &[u32]) -> Result<(), Error> {
+        for &offset in offsets {
+            below(
+                "offsets",
+                offset as usize,
+                self.size,
+                "below the number of sequences of the matrix",
+            )?;
+        }
+        Ok(())
     }
 
     /// One distance, by the two sequences' offsets into the triangle.
@@ -608,7 +617,7 @@ impl FitDistance for Offsets<'_> {
 ///
 /// # Errors
 ///
-/// [`SequenceError::Input`] when the substitution matrix is not dense and
+/// [`Error::Input`] when the substitution matrix is not dense and
 /// square, the lengths do not add up to the symbols given, or a symbol is
 /// outside the alphabet.
 pub fn condensed(
@@ -617,29 +626,18 @@ pub fn condensed(
     substitution: &[f32],
     alphabet_size: usize,
     indel: f32,
-) -> Result<CondensedMatrix, SequenceError> {
-    if substitution.len() != alphabet_size * alphabet_size {
-        return Err(SequenceError::input(format!(
-            "substitution matrix has {} entries for an alphabet of {}; it must be \
-             dense and square, or a symbol pair would silently take another pair's cost",
-            substitution.len(),
-            alphabet_size
-        )));
-    }
+) -> Result<CondensedMatrix, Error> {
+    // Dense and square, or a symbol pair would silently take another pair's
+    // cost.
+    length(
+        "substitution",
+        alphabet_size * alphabet_size,
+        substitution.len(),
+    )?;
     let declared: usize = lengths.iter().map(|&length| length as usize).sum();
-    if declared != encoded.len() {
-        return Err(SequenceError::input(format!(
-            "the lengths add up to {declared} symbols but {} were sent; each \
-             sequence would be read from the wrong place",
-            encoded.len()
-        )));
-    }
-    if let Some(bad) = encoded.iter().find(|&&rank| rank as usize >= alphabet_size) {
-        return Err(SequenceError::input(format!(
-            "symbol rank {bad} is outside an alphabet of {alphabet_size}; the caller \
-             encoded against a different alphabet from the one it sent"
-        )));
-    }
+    // Otherwise each sequence would be read from the wrong place.
+    length("encoded", declared, encoded.len())?;
+    check_symbols("encoded", encoded, alphabet_size)?;
     let mut sequences: Vec<&[u8]> = Vec::with_capacity(lengths.len());
     let mut rest = encoded;
     for &length in lengths {
@@ -864,7 +862,7 @@ mod tests {
     const WEIGHTS: [f64; 12] = [
         4000.0, 3500.0, 40.0, 30.0, 8.0, 6.0, 5.0, 3.0, 2.0, 1.0, 1.0, 1.0,
     ];
-    const PARTITION: [i64; 12] = [1, 2, 1, 4, 4, 1, 2, 1, 1, 1, 4, 1];
+    const PARTITION: [u32; 12] = [1, 2, 1, 4, 4, 1, 2, 1, 1, 1, 4, 1];
 
     /// A triangle of Hamming distances over `sequences`, in their order.
     // `usize as f32` on a count of at most eight positions.
@@ -890,7 +888,9 @@ mod tests {
         // 2.0, TraMineR 2.2.13, R 4.6.1, on Hamming distances.
         let matrix = hamming_triangle(&SEQUENCES);
         let offsets: Vec<u32> = (0..12).collect();
-        let value = matrix.silhouette_by_offset(&offsets, &WEIGHTS, &PARTITION);
+        let value = matrix
+            .silhouette_by_offset(&offsets, &WEIGHTS, &PARTITION)
+            .unwrap();
         assert!((value - 0.981_074_279_353).abs() < 1e-9, "{value}");
     }
 
@@ -903,7 +903,9 @@ mod tests {
         wide.extend(["VVVVVVVV", "TTTTTTTT"]);
         let matrix = hamming_triangle(&wide);
         let offsets: Vec<u32> = (0..12).map(|i| 11 - i).collect();
-        let value = matrix.silhouette_by_offset(&offsets, &WEIGHTS, &PARTITION);
+        let value = matrix
+            .silhouette_by_offset(&offsets, &WEIGHTS, &PARTITION)
+            .unwrap();
         assert!((value - 0.981_074_279_353).abs() < 1e-9, "{value}");
     }
 
@@ -911,11 +913,9 @@ mod tests {
     fn one_label_has_no_silhouette() {
         let matrix = hamming_triangle(&SEQUENCES);
         let offsets: Vec<u32> = (0..12).collect();
-        assert!(
-            matrix
-                .silhouette_by_offset(&offsets, &WEIGHTS, &[0; 12])
-                .abs()
-                < f64::EPSILON
+        assert_eq!(
+            matrix.silhouette_by_offset(&offsets, &WEIGHTS, &[0; 12]),
+            None
         );
     }
 

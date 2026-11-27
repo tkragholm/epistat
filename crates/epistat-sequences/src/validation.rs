@@ -2,7 +2,9 @@
 //! from data, and the replicate loops that compare a fit with null data and
 //! with refits.
 //!
-//! [`null_silhouettes`] runs one (k, null model) batch of a parametric
+//! [`fit_typology`] fits one typology: it derives the distance's costs from
+//! the weights, fits k-medoids with restarts and scores the fit by its
+//! silhouette. [`null_silhouettes`] runs one (k, null model) batch of a parametric
 //! bootstrap: draw null data, collapse it to distinct sequences, derive the
 //! distance's costs from the null's own sequences, fit k-medoids and score the
 //! fit by its silhouette. A typology whose silhouette is not above those of its
@@ -60,8 +62,10 @@
 //!   agreement measures. The ARI is also NaN when the ceiling equals the
 //!   expected value, as when both partitions are a single cluster.
 //! - A null with fewer than `k` distinct sequences, or a refit with fewer than
-//!   `k` sequences of positive weight, gives `None` for that replicate.
-//! - Negative and NaN weights are refused.
+//!   `k` sequences of positive weight, gives `None` for that replicate. So does
+//!   a null whose fit has no silhouette, with fewer than two types.
+//! - Negative and NaN weights are refused, as are weights, symbols and cost
+//!   tables that do not match the panel.
 //!
 //! # References
 //!
@@ -90,10 +94,12 @@ use rayon::prelude::*;
 use epistat_rng::replicate_seed;
 use epistat_stats::sum::compensated;
 
+use crate::error::{check_symbols, length, weights as check_weight_values};
 use crate::nulls::{self, NullModel};
-use crate::optimal_matching;
+use crate::optimal_matching::{self, CondensedMatrix};
 use crate::positionwise::{self, Panel};
-use crate::{Attempt, Restarts, SequenceError};
+use crate::{Attempt, Error, Restarts};
+use epistat_core::InputError;
 
 /// The distances a typology can be fitted with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,50 +118,50 @@ impl Distance {
     ///
     /// # Errors
     ///
-    /// [`SequenceError::Input`] for any other name.
-    pub fn named(name: &str) -> Result<Self, SequenceError> {
+    /// [`Error::Input`] for any other name.
+    pub fn named(name: &str) -> Result<Self, Error> {
         match name {
             "hamming" => Ok(Self::Hamming),
             "dhd" => Ok(Self::DynamicHamming),
             "om" => Ok(Self::OptimalMatching),
-            other => Err(SequenceError::input(format!(
+            other => Err(Error::invalid(format!(
                 "unknown distance {other:?}; choose from \"dhd\", \"hamming\" and \"om\""
             ))),
         }
     }
 }
 
-/// The restart seeds of a fit, as a function of the seed of that fit.
-pub type RestartSeeds = dyn Fn(u64) -> Result<Restarts, SequenceError> + Sync;
-
 /// The settings every fit in a batch shares.
-#[derive(Clone, Copy)]
-pub struct FitSettings<'a> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FitSettings {
     /// The distance the fits use.
     pub distance: Distance,
     /// Number of types.
     pub k: usize,
-    /// The restarts of a fit, given the seed of that fit. The functions of
-    /// this module fit once per null replicate or per refit, and each fit calls
-    /// this with its own seed: [`replicate_seed`]`(seed, r)` for null replicate
-    /// `r` of [`null_silhouettes`], which is also the seed of that replicate's
-    /// null draw, and `seed` itself for every refit of [`refit_agreements`].
-    /// Nothing else is derived. A new user writes
-    /// `&|seed| Restarts::from_seed(seed, 10)`; a caller reproducing seeds
-    /// computed another way returns [`Restarts::from_seeds`] of them.
-    pub restarts: &'a RestartSeeds,
+    /// The number of restarts of a fit, at least one. The functions of this
+    /// module fit once per null replicate or per refit, and each fit draws
+    /// its restart seeds with [`Restarts::from_seed`]`(seed, restarts)` from
+    /// its own seed: [`replicate_seed`]`(seed, r)` for null replicate `r` of
+    /// [`null_silhouettes`], which is also the seed of that replicate's null
+    /// draw, and `seed` itself for every refit of [`refit_agreements`] and for
+    /// [`fit_typology`]. A caller that needs other restart seeds calls
+    /// [`positionwise::kmedoids`] or [`CondensedMatrix::kmedoids`] with
+    /// [`Restarts::from_seeds`].
+    pub restarts: usize,
     /// Cap on the iterations of each seeding's alternating loop.
     pub max_iterations: usize,
 }
 
-impl std::fmt::Debug for FitSettings<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FitSettings")
-            .field("distance", &self.distance)
-            .field("k", &self.k)
-            .field("max_iterations", &self.max_iterations)
-            .finish_non_exhaustive()
-    }
+/// A fitted typology: the best of the restarts and its silhouette.
+#[non_exhaustive]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Typology {
+    /// The best attempt: its medoids, the cluster of each sequence, and the
+    /// objective.
+    pub attempt: Attempt,
+    /// The weighted average silhouette width, or [`None`] when it is undefined:
+    /// fewer than two types, or no sequence that can be scored.
+    pub silhouette: Option<f64>,
 }
 
 /// Agreement between two partitions of the same weighted sequences.
@@ -168,7 +174,7 @@ pub struct Agreement {
     pub share_agreeing: f64,
     /// `(type in first, type in second)` in the order the greedy relabelling
     /// matched them.
-    pub correspondence: Vec<(i64, i64)>,
+    pub correspondence: Vec<(u32, u32)>,
     /// Distinct types in the first partition.
     pub k_first: usize,
     /// Distinct types in the second partition.
@@ -217,25 +223,18 @@ fn pairs(value: f64) -> f64 {
 ///
 /// # Errors
 ///
-/// [`SequenceError::Input`] when the three inputs differ in length.
+/// [`Error::Input`] when the three inputs differ in length.
 #[expect(
     clippy::float_cmp,
     reason = "a zero pair count and a ceiling equal to the expected value are the undefined cases"
 )]
 pub fn partition_agreement(
-    first: &[i64],
-    second: &[i64],
+    first: &[u32],
+    second: &[u32],
     weights: &[f64],
-) -> Result<Agreement, SequenceError> {
-    if first.len() != second.len() || first.len() != weights.len() {
-        return Err(SequenceError::input(format!(
-            "{} labels, {} labels and {} weights; all three describe the same \
-             sequences and must correspond one to one",
-            first.len(),
-            second.len(),
-            weights.len()
-        )));
-    }
+) -> Result<Agreement, Error> {
+    length("second", first.len(), second.len())?;
+    length("weights", first.len(), weights.len())?;
     if first.is_empty() {
         return Ok(Agreement {
             adjusted_rand: f64::NAN,
@@ -246,9 +245,9 @@ pub fn partition_agreement(
         });
     }
 
-    let mut contingency: Ordered<(i64, i64)> = Ordered::new();
-    let mut rows: Ordered<i64> = Ordered::new();
-    let mut columns: Ordered<i64> = Ordered::new();
+    let mut contingency: Ordered<(u32, u32)> = Ordered::new();
+    let mut rows: Ordered<u32> = Ordered::new();
+    let mut columns: Ordered<u32> = Ordered::new();
     let mut total = 0.0;
     for ((&left, &right), &weight) in first.iter().zip(second).zip(weights) {
         contingency.add((left, right), weight);
@@ -289,7 +288,7 @@ pub fn partition_agreement(
 
     // Heaviest cell first, ties by the pair of types, and a cell is kept when
     // neither of its types is matched yet.
-    let mut cells: Vec<((i64, i64), f64)> = contingency
+    let mut cells: Vec<((u32, u32), f64)> = contingency
         .keys
         .iter()
         .copied()
@@ -300,9 +299,9 @@ pub fn partition_agreement(
             .unwrap_or(Ordering::Equal)
             .then(a.0.cmp(&b.0))
     });
-    let mut correspondence: Vec<(i64, i64)> = Vec::new();
-    let mut matched_first: HashSet<i64> = HashSet::new();
-    let mut matched_second: HashSet<i64> = HashSet::new();
+    let mut correspondence: Vec<(u32, u32)> = Vec::new();
+    let mut matched_first: HashSet<u32> = HashSet::new();
+    let mut matched_second: HashSet<u32> = HashSet::new();
     let mut matched = 0.0;
     for ((left, right), weight) in cells {
         if matched_first.contains(&left) || matched_second.contains(&right) {
@@ -323,6 +322,66 @@ pub fn partition_agreement(
     })
 }
 
+/// Weighted counts of moves between states, per group of steps, and the rates
+/// they give.
+///
+/// A group is a step between two positions for [`transition_costs`] and the
+/// whole sequence for [`substitution_costs`]. For each (group, state) the
+/// targets are remembered in the order they were first seen, which is the order
+/// the row total adds in.
+struct Tally {
+    alphabet: usize,
+    counts: Vec<f64>,
+    seen: Vec<bool>,
+    order: Vec<Vec<u8>>,
+}
+
+impl Tally {
+    fn new(groups: usize, alphabet: usize) -> Self {
+        Self {
+            alphabet,
+            counts: vec![0.0; groups * alphabet * alphabet],
+            seen: vec![false; groups * alphabet * alphabet],
+            order: vec![Vec::new(); groups * alphabet],
+        }
+    }
+
+    fn cell(&self, group: usize, from: usize, to: usize) -> usize {
+        (group * self.alphabet + from) * self.alphabet + to
+    }
+
+    fn add(&mut self, group: usize, from: u8, to: u8, weight: f64) {
+        let at = self.cell(group, usize::from(from), usize::from(to));
+        if !self.seen[at] {
+            self.seen[at] = true;
+            self.order[group * self.alphabet + usize::from(from)].push(to);
+        }
+        self.counts[at] += weight;
+    }
+
+    /// The rate of each move, 0 where the state is never left in the group.
+    fn rates(&self, groups: usize) -> Vec<f64> {
+        let mut rates = vec![0.0f64; self.counts.len()];
+        for group in 0..groups {
+            for from in 0..self.alphabet {
+                let targets = &self.order[group * self.alphabet + from];
+                let total = compensated(
+                    targets
+                        .iter()
+                        .map(|&to| self.counts[self.cell(group, from, usize::from(to))]),
+                );
+                if total > 0.0 {
+                    for &to in targets {
+                        let at = self.cell(group, from, usize::from(to));
+                        rates[at] = self.counts[at] / total;
+                    }
+                }
+            }
+        }
+        rates
+    }
+}
+
 /// Position-specific substitution costs for dynamic Hamming distance.
 ///
 /// Returns the dense `length * alphabet * alphabet` table the position-wise
@@ -331,48 +390,24 @@ pub fn partition_agreement(
 /// a pair is 2 minus the mean, over the steps into and out of the position, of
 /// the weighted transition rates in the two directions, as in the module
 /// documentation.
-#[must_use]
-pub fn transition_costs(panel: &Panel<'_>, weights: &[f64]) -> Vec<f64> {
+///
+/// # Errors
+///
+/// [`Error::Input`] when there is not one weight per sequence of the panel.
+pub fn transition_costs(panel: &Panel<'_>, weights: &[f64]) -> Result<Vec<f64>, Error> {
+    length("weights", panel.count, weights.len())?;
     let (length, alphabet) = (panel.length, panel.alphabet);
     let steps = length.saturating_sub(1);
-    let cell = |step: usize, from: usize, to: usize| (step * alphabet + from) * alphabet + to;
 
-    // Weighted counts per step, and per (step, state) the targets in the order
-    // they were first seen, which is the order the row total adds in.
-    let mut counts = vec![0.0f64; steps * alphabet * alphabet];
-    let mut seen = vec![false; steps * alphabet * alphabet];
-    let mut order: Vec<Vec<u8>> = vec![Vec::new(); steps * alphabet];
-    for (index, &weight) in weights.iter().enumerate().take(panel.count) {
+    let mut tally = Tally::new(steps, alphabet);
+    for (index, &weight) in weights.iter().enumerate() {
         let sequence = panel.at(index);
         for step in 0..steps {
-            let (from, to) = (sequence[step] as usize, sequence[step + 1] as usize);
-            let at = cell(step, from, to);
-            if !seen[at] {
-                seen[at] = true;
-                order[step * alphabet + from].push(sequence[step + 1]);
-            }
-            counts[at] += weight;
+            tally.add(step, sequence[step], sequence[step + 1], weight);
         }
     }
-
-    // Rates, 0 where the state is never left at that step.
-    let mut rates = vec![0.0f64; steps * alphabet * alphabet];
-    for step in 0..steps {
-        for from in 0..alphabet {
-            let targets = &order[step * alphabet + from];
-            let total = compensated(
-                targets
-                    .iter()
-                    .map(|&to| counts[cell(step, from, to as usize)]),
-            );
-            if total > 0.0 {
-                for &to in targets {
-                    let at = cell(step, from, to as usize);
-                    rates[at] = counts[at] / total;
-                }
-            }
-        }
-    }
+    let rates = tally.rates(steps);
+    let cell = |step: usize, from: usize, to: usize| tally.cell(step, from, to);
 
     let mut costs = vec![0.0f64; length * alphabet * alphabet];
     for position in 0..length {
@@ -398,7 +433,7 @@ pub fn transition_costs(panel: &Panel<'_>, weights: &[f64]) -> Vec<f64> {
             }
         }
     }
-    costs
+    Ok(costs)
 }
 
 /// The optimal-matching substitution matrix from transition rates pooled over
@@ -407,39 +442,36 @@ pub fn transition_costs(panel: &Panel<'_>, weights: &[f64]) -> Vec<f64> {
 /// `sequences` yields each rank-encoded sequence; they need not share a
 /// length. Returns the dense `alphabet * alphabet` matrix, row-major, with 0
 /// on the diagonal.
-#[must_use]
+///
+/// # Errors
+///
+/// [`Error::Input`] when there is not one weight per sequence or a symbol is
+/// not below `alphabet`.
 pub fn substitution_costs<'a>(
     sequences: impl Iterator<Item = &'a [u8]>,
     weights: &[f64],
     alphabet: usize,
-) -> Vec<f64> {
-    let mut counts = vec![0.0f64; alphabet * alphabet];
-    let mut seen = vec![false; alphabet * alphabet];
-    let mut order: Vec<Vec<u8>> = vec![Vec::new(); alphabet];
-    for (sequence, &weight) in sequences.zip(weights) {
+) -> Result<Vec<f64>, Error> {
+    let mut tally = Tally::new(1, alphabet);
+    let mut sequences = sequences;
+    let mut seen = 0_usize;
+    while let Some(sequence) = sequences.next() {
+        let Some(&weight) = weights.get(seen) else {
+            return Err(InputError::Length {
+                what: "weights",
+                expected: seen + 1 + sequences.count(),
+                found: weights.len(),
+            }
+            .into());
+        };
+        check_symbols("sequences", sequence, alphabet)?;
         for pair in sequence.windows(2) {
-            let at = pair[0] as usize * alphabet + pair[1] as usize;
-            if !seen[at] {
-                seen[at] = true;
-                order[pair[0] as usize].push(pair[1]);
-            }
-            counts[at] += weight;
+            tally.add(0, pair[0], pair[1], weight);
         }
+        seen += 1;
     }
-    let mut rates = vec![0.0f64; alphabet * alphabet];
-    for (from, targets) in order.iter().enumerate() {
-        let total = compensated(
-            targets
-                .iter()
-                .map(|&to| counts[from * alphabet + to as usize]),
-        );
-        if total > 0.0 {
-            for &to in targets {
-                let at = from * alphabet + to as usize;
-                rates[at] = counts[at] / total;
-            }
-        }
-    }
+    length("weights", seen, weights.len())?;
+    let rates = tally.rates(1);
     let mut costs = vec![0.0f64; alphabet * alphabet];
     for first in 0..alphabet {
         for second in 0..alphabet {
@@ -449,12 +481,17 @@ pub fn substitution_costs<'a>(
             }
         }
     }
-    costs
+    Ok(costs)
 }
 
 /// Half the largest off-diagonal substitution cost, or 1.0 without one.
-#[must_use]
-pub fn indel_for(substitution: &[f64], alphabet: usize) -> f64 {
+///
+/// # Errors
+///
+/// [`Error::Input`] when `substitution` is not a dense `alphabet * alphabet`
+/// matrix.
+pub fn indel_for(substitution: &[f64], alphabet: usize) -> Result<f64, Error> {
+    length("substitution", alphabet * alphabet, substitution.len())?;
     let mut largest: Option<f64> = None;
     for first in 0..alphabet {
         for second in 0..alphabet {
@@ -468,7 +505,7 @@ pub fn indel_for(substitution: &[f64], alphabet: usize) -> f64 {
             }
         }
     }
-    largest.map_or(1.0, |cost| cost / 2.0)
+    Ok(largest.map_or(1.0, |cost| cost / 2.0))
 }
 
 /// Duplicate sequences merged with summed weights, heaviest first, ties by the
@@ -529,79 +566,101 @@ fn gather(panel: &Panel<'_>, order: &[u32]) -> Vec<u8> {
 /// `weights` over the panel in the panel's order.
 ///
 /// `order` is the order the fit walks, a permutation of the panel, and
-/// `fit_weights` the weights in that order. Returns the labels in `order`'s
-/// order and, when asked, the silhouette of the fit.
+/// `fit_weights` the weights in that order. Returns the best attempt, its
+/// labels in `order`'s order, and, when asked, the silhouette of the fit.
 fn fit(
     panel: &Panel<'_>,
     weights: &[f64],
     order: &[u32],
     fit_weights: &[f64],
-    settings: FitSettings<'_>,
+    settings: FitSettings,
     seed: u64,
     score: bool,
-) -> Result<(Vec<u32>, Option<f64>), SequenceError> {
+) -> Result<Typology, Error> {
     let FitSettings {
         distance,
         k,
         restarts,
         max_iterations,
     } = settings;
-    let labels_of = |attempt: Attempt| attempt.labels;
-    let restarts = restarts(seed)?;
+    let restarts = Restarts::from_seed(seed, restarts)?;
     if distance == Distance::OptimalMatching {
         let substitution = substitution_costs(
             (0..panel.count).map(|index| panel.at(index)),
             weights,
             panel.alphabet,
-        );
-        let indel = indel_for(&substitution, panel.alphabet);
+        )?;
+        let indel = indel_for(&substitution, panel.alphabet)?;
         // The triangle holds single-precision values, so the costs are narrowed.
         let narrowed: Vec<f32> = substitution.iter().map(|&cost| cost as f32).collect();
         let indel = indel as f32;
         let lengths = vec![panel.length as u32; panel.count];
         let encoded = gather(panel, &(0..panel.count as u32).collect::<Vec<_>>());
-        let matrix =
+        let matrix: CondensedMatrix =
             optimal_matching::condensed(&encoded, &lengths, &narrowed, panel.alphabet, indel)?;
-        let labels =
-            labels_of(matrix.kmedoids(order, fit_weights, k, &restarts, max_iterations)?);
+        let attempt = matrix.kmedoids(order, fit_weights, k, &restarts, max_iterations)?;
         let silhouette = if score {
-            let ranked: Vec<i64> = labels.iter().map(|&label| i64::from(label)).collect();
-            Some(matrix.silhouette(order, fit_weights, &ranked)?)
+            matrix.silhouette(order, fit_weights, &attempt.labels)?
         } else {
             None
         };
-        return Ok((labels, silhouette));
+        return Ok(Typology {
+            attempt,
+            silhouette,
+        });
     }
 
-    let costs = (distance == Distance::DynamicHamming).then(|| transition_costs(panel, weights));
-    let encoded = gather(panel, order);
-    let ordered = Panel::new(&encoded, panel.length, panel.alphabet, costs.as_deref())?;
-    let labels = labels_of(positionwise::kmedoids(
-        &ordered,
-        fit_weights,
-        k,
-        &restarts,
-        max_iterations,
-    )?);
-    let silhouette = if score {
-        let ranked: Vec<i64> = labels.iter().map(|&label| i64::from(label)).collect();
-        Some(positionwise::silhouette(&ordered, fit_weights, &ranked)?)
+    let costs = if distance == Distance::DynamicHamming {
+        Some(transition_costs(panel, weights)?)
     } else {
         None
     };
-    Ok((labels, silhouette))
+    let encoded = gather(panel, order);
+    let ordered = Panel::new(&encoded, panel.length, panel.alphabet, costs.as_deref())?;
+    let attempt = positionwise::kmedoids(&ordered, fit_weights, k, &restarts, max_iterations)?;
+    let silhouette = if score {
+        positionwise::silhouette(&ordered, fit_weights, &attempt.labels)?
+    } else {
+        None
+    };
+    Ok(Typology {
+        attempt,
+        silhouette,
+    })
 }
 
-/// Refuse a weight that is negative or NaN, which the seeding cannot draw by.
-fn refuse_bad_weights(weights: &[f64]) -> Result<(), SequenceError> {
-    if let Some(bad) = weights
-        .iter()
-        .find(|weight| weight.partial_cmp(&&0.0).is_none_or(Ordering::is_lt))
-    {
-        return Err(SequenceError::input(format!(
-            "weights must be non-negative, got {bad}; the seeding draws \
-             proportional to weight and a negative one has no meaning there"
-        )));
+/// A typology of the panel: costs derived from `weights`, a k-medoids fit with
+/// `settings.restarts` restarts, and the silhouette of the best.
+///
+/// The sequences are fitted in the panel's order, which the seeding walks: the
+/// first sequence is the first medoid, so a caller who wants the heaviest
+/// sequence to seed the fit sorts the panel heaviest first. The costs of
+/// [`Distance::DynamicHamming`] and [`Distance::OptimalMatching`] are derived
+/// from `weights` over the same sequences ([`transition_costs`],
+/// [`substitution_costs`] and [`indel_for`]). The restarts use the seeds of
+/// [`Restarts::from_seed`]`(seed, settings.restarts)`.
+///
+/// # Errors
+///
+/// [`Error::Input`] when the weights do not match the panel or a weight is
+/// negative or NaN, and [`Error::Invalid`] when `settings.restarts` is zero
+/// or `settings.k` is zero or more than the sequences.
+pub fn fit_typology(
+    panel: &Panel<'_>,
+    weights: &[f64],
+    settings: FitSettings,
+    seed: u64,
+) -> Result<Typology, Error> {
+    length("weights", panel.count, weights.len())?;
+    check_weight_values("weights", weights)?;
+    let order: Vec<u32> = (0..panel.count as u32).collect();
+    fit(panel, weights, &order, weights, settings, seed, true)
+}
+
+/// That a fit has at least one restart, before any replicate is drawn.
+fn check_restarts(settings: FitSettings) -> Result<(), Error> {
+    if settings.restarts == 0 {
+        return Err(Error::invalid("a fit needs at least one restart"));
     }
     Ok(())
 }
@@ -611,8 +670,8 @@ fn refuse_bad_weights(weights: &[f64]) -> Result<(), SequenceError> {
 fn each_replicate<T: Send>(
     replicates: usize,
     distance: Distance,
-    replicate: impl Fn(usize) -> Result<T, SequenceError> + Sync + Send,
-) -> Result<Vec<T>, SequenceError> {
+    replicate: impl Fn(usize) -> Result<T, Error> + Sync + Send,
+) -> Result<Vec<T>, Error> {
     if distance == Distance::OptimalMatching {
         (0..replicates).map(replicate).collect()
     } else {
@@ -631,29 +690,24 @@ fn each_replicate<T: Send>(
 ///
 /// # Errors
 ///
-/// [`SequenceError::Input`] when the weights do not match the panel, a weight is
+/// [`Error::Input`] when the weights do not match the panel, a weight is
 /// negative or NaN, there is no positive weight, or `k` is zero.
 pub fn null_silhouettes(
     panel: &Panel<'_>,
     weights: &[f64],
     model: NullModel,
-    settings: FitSettings<'_>,
+    settings: FitSettings,
     seed: u64,
     replicates: usize,
-) -> Result<Vec<Option<f64>>, SequenceError> {
-    if weights.len() != panel.count {
-        return Err(SequenceError::input(format!(
-            "{} sequences but {} weights; they must correspond one to one",
-            panel.count,
-            weights.len()
-        )));
-    }
-    refuse_bad_weights(weights)?;
+) -> Result<Vec<Option<f64>>, Error> {
+    length("weights", panel.count, weights.len())?;
+    check_weight_values("weights", weights)?;
     if settings.k == 0 {
-        return Err(SequenceError::input(
+        return Err(Error::invalid(
             "asked for 0 types; a typology has at least one",
         ));
     }
+    check_restarts(settings)?;
     each_replicate(replicates, settings.distance, |replicate| {
         let seed = replicate_seed(seed, replicate as u64);
         let drawn = nulls::null_sequences(panel, weights, model, seed)?;
@@ -663,8 +717,8 @@ pub fn null_silhouettes(
         }
         let null = Panel::new(&encoded, panel.length, alphabet, None)?;
         let order: Vec<u32> = (0..null.count as u32).collect();
-        let (_, silhouette) = fit(&null, &merged, &order, &merged, settings, seed, true)?;
-        Ok(silhouette)
+        let typology = fit(&null, &merged, &order, &merged, settings, seed, true)?;
+        Ok(typology.silhouette)
     })
 }
 
@@ -680,40 +734,35 @@ pub fn null_silhouettes(
 ///
 /// # Errors
 ///
-/// [`SequenceError::Input`] when the weights, the reference or the replicate
+/// [`Error::Input`] when the weights, the reference or the replicate
 /// weights do not match the panel, a replicate weight is negative or NaN, or
 /// `k` is zero or more than the sequences.
 pub fn refit_agreements(
     panel: &Panel<'_>,
     weights: &[f64],
     replicate_weights: &[f64],
-    reference: &[i64],
-    settings: FitSettings<'_>,
+    reference: &[u32],
+    settings: FitSettings,
     seed: u64,
-) -> Result<Vec<Option<(f64, f64)>>, SequenceError> {
+) -> Result<Vec<Option<(f64, f64)>>, Error> {
     let count = panel.count;
-    if weights.len() != count || reference.len() != count {
-        return Err(SequenceError::input(format!(
-            "{count} sequences but {} weights and {} reference labels; all three \
-             describe the same sequences",
-            weights.len(),
-            reference.len()
-        )));
-    }
+    length("weights", count, weights.len())?;
+    length("reference", count, reference.len())?;
     if count == 0 || !replicate_weights.len().is_multiple_of(count) {
-        return Err(SequenceError::input(format!(
+        return Err(Error::invalid(format!(
             "{} replicate weights do not divide into replicates of {count} \
              sequences",
             replicate_weights.len()
         )));
     }
-    refuse_bad_weights(replicate_weights)?;
+    check_weight_values("replicate_weights", replicate_weights)?;
     if settings.k == 0 || settings.k > count {
-        return Err(SequenceError::input(format!(
+        return Err(Error::invalid(format!(
             "asked for {} types from {count} distinct sequences",
             settings.k
         )));
     }
+    check_restarts(settings)?;
     let replicates = replicate_weights.len() / count;
     each_replicate(replicates, settings.distance, |replicate| {
         let drawn = &replicate_weights[replicate * count..(replicate + 1) * count];
@@ -728,10 +777,12 @@ pub fn refit_agreements(
                 .then_with(|| panel.at(a as usize).cmp(panel.at(b as usize)))
         });
         let fit_weights: Vec<f64> = order.iter().map(|&index| drawn[index as usize]).collect();
-        let (labels, _) = fit(panel, drawn, &order, &fit_weights, settings, seed, false)?;
-        let mut by_sequence = vec![0i64; count];
+        let labels = fit(panel, drawn, &order, &fit_weights, settings, seed, false)?
+            .attempt
+            .labels;
+        let mut by_sequence = vec![0_u32; count];
         for (&index, &label) in order.iter().zip(&labels) {
-            by_sequence[index as usize] = i64::from(label);
+            by_sequence[index as usize] = label;
         }
         let agreement = partition_agreement(reference, &by_sequence, weights)?;
         Ok(Some((agreement.adjusted_rand, agreement.share_agreeing)))
@@ -741,8 +792,9 @@ pub fn refit_agreements(
 #[cfg(test)]
 mod tests {
     use super::{
-        Distance, FitSettings, NullModel, Panel, Restarts, collapse, null_silhouettes,
-        partition_agreement, refit_agreements, substitution_costs, transition_costs,
+        Distance, FitSettings, NullModel, Panel, Restarts, collapse, fit_typology, indel_for,
+        null_silhouettes, partition_agreement, refit_agreements, substitution_costs,
+        transition_costs,
     };
     use crate::{nulls, positionwise};
     use epistat_rng::replicate_seed;
@@ -773,7 +825,7 @@ mod tests {
         // and C never meets either, so its pairs cost 2.
         let encoded = [0u8, 1, 0, 1, 2, 2];
         let panel = Panel::new(&encoded, 2, 3, None).unwrap();
-        let costs = transition_costs(&panel, &[1.0, 2.0, 1.0]);
+        let costs = transition_costs(&panel, &[1.0, 2.0, 1.0]).unwrap();
         let at = |position: usize, first: usize, second: usize| {
             costs[(position * 3 + first) * 3 + second]
         };
@@ -783,16 +835,16 @@ mod tests {
             assert!((at(position, 0, 2) - 2.0).abs() < 1e-15);
             assert!(at(position, 2, 2).abs() < 1e-15);
         }
-        let pooled = substitution_costs(encoded.chunks(2), &[1.0, 2.0, 1.0], 3);
+        let pooled = substitution_costs(encoded.chunks(2), &[1.0, 2.0, 1.0], 3).unwrap();
         assert!((pooled[1] - 1.0).abs() < 1e-15);
         assert!((pooled[2] - 2.0).abs() < 1e-15);
     }
 
-    fn settings(distance: Distance, k: usize) -> FitSettings<'static> {
+    fn settings(distance: Distance, k: usize) -> FitSettings {
         FitSettings {
             distance,
             k,
-            restarts: &|seed| Restarts::from_seed(seed, 2),
+            restarts: 2,
             max_iterations: 10,
         }
     }
@@ -877,7 +929,7 @@ mod tests {
         }
         let panel = Panel::new(&encoded, 4, 2, None).unwrap();
         let weights = vec![1.0; 10];
-        let reference: Vec<i64> = (0..10).map(|i| i64::from(i >= 5)).collect();
+        let reference: Vec<u32> = (0..10).map(|i| u32::from(i >= 5)).collect();
         let replicate_weights = vec![2.0; 20];
         let result = refit_agreements(
             &panel,
@@ -908,13 +960,11 @@ mod tests {
         assert_eq!(none, vec![None]);
     }
 
-    /// Explicit seeds following the rule `seed + 7919 i` reproduce a loop
-    /// written out by hand over the same replicates.
+    /// The restart seeds of a null replicate are `Restarts::from_seed(seed, n)`
+    /// of that replicate's seed, so a loop written out by hand over the same
+    /// replicates gives the same silhouettes.
     #[test]
-    fn explicit_legacy_seeds_equal_a_hand_rolled_loop() {
-        let legacy = |seed: u64| {
-            Restarts::from_seeds((0..3u64).map(|i| seed.wrapping_add(i * 7919)).collect())
-        };
+    fn the_null_loop_equals_a_hand_rolled_loop() {
         let encoded: Vec<u8> = (0..40u8).map(|i| (i / 3 + i % 2) % 3).collect();
         let panel = Panel::new(&encoded, 4, 3, None).unwrap();
         let weights: Vec<f64> = (0..10).map(|i| 1.0 + f64::from(i)).collect();
@@ -922,7 +972,7 @@ mod tests {
         let given = FitSettings {
             distance: Distance::Hamming,
             k: 2,
-            restarts: &legacy,
+            restarts: 3,
             max_iterations: 10,
         };
         let got = null_silhouettes(&panel, &weights, model, given, 7, 4).unwrap();
@@ -935,15 +985,72 @@ mod tests {
                     return None;
                 }
                 let null = Panel::new(&encoded, 4, alphabet, None).unwrap();
-                let fit =
-                    positionwise::kmedoids(&null, &merged, 2, &legacy(seed).unwrap(), 10).unwrap();
-                let ranked: Vec<i64> = fit.labels.iter().map(|&l| i64::from(l)).collect();
-                Some(positionwise::silhouette(&null, &merged, &ranked).unwrap())
+                let restarts = Restarts::from_seed(seed, 3).unwrap();
+                let fit = positionwise::kmedoids(&null, &merged, 2, &restarts, 10).unwrap();
+                positionwise::silhouette(&null, &merged, &fit.labels).unwrap()
             })
             .collect();
         let bits = |v: &[Option<f64>]| -> Vec<Option<u64>> {
             v.iter().map(|x| x.map(f64::to_bits)).collect()
         };
         assert_eq!(bits(&got), bits(&by_hand));
+    }
+
+    #[test]
+    fn a_typology_is_the_chain_of_its_parts() {
+        let encoded: Vec<u8> = (0..40u8).map(|i| (i / 3 + i % 2) % 3).collect();
+        let panel = Panel::new(&encoded, 4, 3, None).unwrap();
+        let weights: Vec<f64> = (0..10).map(|i| 10.0 - f64::from(i)).collect();
+        let costs = transition_costs(&panel, &weights).unwrap();
+        let costed = Panel::new(&encoded, 4, 3, Some(&costs)).unwrap();
+        let restarts = Restarts::from_seed(5, 3).unwrap();
+        let attempt = positionwise::kmedoids(&costed, &weights, 2, &restarts, 10).unwrap();
+        let silhouette = positionwise::silhouette(&costed, &weights, &attempt.labels).unwrap();
+        let given = FitSettings {
+            distance: Distance::DynamicHamming,
+            k: 2,
+            restarts: 3,
+            max_iterations: 10,
+        };
+        let typology = fit_typology(&panel, &weights, given, 5).unwrap();
+        assert_eq!(typology.attempt, attempt);
+        assert_eq!(
+            typology.silhouette.map(f64::to_bits),
+            silhouette.map(f64::to_bits)
+        );
+        for distance in [Distance::Hamming, Distance::OptimalMatching] {
+            let settings = FitSettings { distance, ..given };
+            assert_eq!(
+                fit_typology(&panel, &weights, settings, 5)
+                    .unwrap()
+                    .attempt
+                    .labels
+                    .len(),
+                10
+            );
+        }
+    }
+
+    #[test]
+    fn a_fit_with_one_type_has_no_silhouette() {
+        let encoded: Vec<u8> = (0..40u8).map(|i| (i / 3 + i % 2) % 3).collect();
+        let panel = Panel::new(&encoded, 4, 3, None).unwrap();
+        let weights = vec![1.0; 10];
+        let typology = fit_typology(&panel, &weights, settings(Distance::Hamming, 1), 5).unwrap();
+        assert_eq!(typology.silhouette, None);
+    }
+
+    #[test]
+    fn cost_helpers_refuse_what_does_not_fit() {
+        let encoded = [0u8, 1, 0, 1, 2, 2];
+        let panel = Panel::new(&encoded, 2, 3, None).unwrap();
+        assert!(transition_costs(&panel, &[1.0, 1.0]).is_err());
+        assert!(transition_costs(&panel, &[1.0; 4]).is_err());
+        assert!(substitution_costs(encoded.chunks(2), &[1.0, 1.0], 3).is_err());
+        assert!(substitution_costs(encoded.chunks(2), &[1.0; 4], 3).is_err());
+        assert!(substitution_costs(encoded.chunks(2), &[1.0; 3], 2).is_err());
+        assert!(indel_for(&[0.0, 1.0, 1.0], 2).is_err());
+        assert_eq!(indel_for(&[0.0, 1.0, 1.0, 0.0], 2).unwrap(), 0.5);
+        assert_eq!(indel_for(&[0.0], 1).unwrap(), 1.0);
     }
 }

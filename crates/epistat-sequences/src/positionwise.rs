@@ -74,19 +74,17 @@
 
 use rayon::prelude::*;
 
+use crate::error::{check_symbols, length as length_check};
 use crate::fit::{FitDistance, check_lengths, check_partition, check_types, check_weights, fit};
 use crate::silhouette::{rank_labels, weighted_average};
-use crate::{Attempt, Restarts, SequenceError};
+use crate::{Attempt, Error, Restarts};
 
 /// One panel of equal-length rank-encoded sequences and the costs over them.
 pub struct Panel<'a> {
     encoded: &'a [u8],
-    /// The number of sequences.
-    pub count: usize,
-    /// Positions per sequence.
-    pub length: usize,
-    /// The number of states a symbol rank can take.
-    pub alphabet: usize,
+    pub(crate) count: usize,
+    pub(crate) length: usize,
+    pub(crate) alphabet: usize,
     /// Dense `length * alphabet * alphabet` substitution costs, or `None` for
     /// plain Hamming.
     ///
@@ -102,7 +100,7 @@ impl<'a> Panel<'a> {
     ///
     /// # Errors
     ///
-    /// [`SequenceError::Input`] when the length or alphabet is zero, the symbols
+    /// [`Error::Input`] when the length or alphabet is zero, the symbols
     /// do not divide into sequences of `length`, a symbol is outside the
     /// alphabet, the cost table is not dense, or there are more than `2^32`
     /// sequences.
@@ -111,38 +109,30 @@ impl<'a> Panel<'a> {
         length: usize,
         alphabet: usize,
         costs: Option<&'a [f64]>,
-    ) -> Result<Self, SequenceError> {
+    ) -> Result<Self, Error> {
         if length == 0 || alphabet == 0 {
-            return Err(SequenceError::input(
+            return Err(Error::invalid(
                 "a position-wise panel needs a positive length and alphabet",
             ));
         }
         if !encoded.len().is_multiple_of(length) {
-            return Err(SequenceError::input(format!(
+            return Err(Error::invalid(format!(
                 "{} encoded symbols do not divide into sequences of {length}; a \
                  position-wise distance is only defined on a common time axis",
                 encoded.len()
             )));
         }
-        if let Some(bad) = encoded.iter().find(|&&rank| rank as usize >= alphabet) {
-            return Err(SequenceError::input(format!(
-                "symbol rank {bad} is outside an alphabet of {alphabet}; the caller \
-                 encoded against a different alphabet from the one it sent"
-            )));
-        }
-        if let Some(table) = costs.filter(|table| table.len() != length * alphabet * alphabet) {
-            return Err(SequenceError::input(format!(
-                "cost table has {} entries for {length} positions over an alphabet \
-                 of {alphabet}; it must be dense, or a symbol pair would silently \
-                 take another pair's cost",
-                table.len()
-            )));
+        check_symbols("encoded", encoded, alphabet)?;
+        if let Some(table) = costs {
+            // The table is dense, or a symbol pair would silently take another
+            // pair's cost.
+            length_check("costs", length * alphabet * alphabet, table.len())?;
         }
         // Sequence indices are carried as `u32`, because a fit holds several
         // arrays of them. This is the only place a panel is built, so it is the
         // only place the bound is established.
         if encoded.len() / length > u32::MAX as usize {
-            return Err(SequenceError::input(
+            return Err(Error::invalid(
                 "more than 2^32 sequences; the fit indexes them with 32-bit integers",
             ));
         }
@@ -153,6 +143,24 @@ impl<'a> Panel<'a> {
             alphabet,
             costs,
         })
+    }
+
+    /// The number of sequences.
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.count
+    }
+
+    /// Positions per sequence.
+    #[must_use]
+    pub fn length(&self) -> usize {
+        self.length
+    }
+
+    /// The number of states a symbol rank can take.
+    #[must_use]
+    pub fn alphabet(&self) -> usize {
+        self.alphabet
     }
 
     /// The sequence at `index`.
@@ -305,7 +313,7 @@ fn members_by_cluster(labels: &[u32], k: usize) -> Vec<Vec<u32>> {
 ///
 /// # Errors
 ///
-/// [`SequenceError::Input`] when the weights do not match the panel one to
+/// [`Error::Input`] when the weights do not match the panel one to
 /// one, or `k` is zero or more than the sequences.
 pub fn kmedoids(
     panel: &Panel<'_>,
@@ -313,8 +321,8 @@ pub fn kmedoids(
     k: usize,
     restarts: &Restarts,
     max_iterations: usize,
-) -> Result<Attempt, SequenceError> {
-    check_weights("sequences", panel.count, weights.len())?;
+) -> Result<Attempt, Error> {
+    check_weights(panel.count, weights.len())?;
     check_types(panel.count, k)?;
     fit(panel, panel.count, weights, k, restarts, max_iterations)
 }
@@ -378,14 +386,14 @@ fn cluster_sums(panel: &Panel, weights: &[f64], labels: &[u32], k: usize) -> Vec
 ///
 /// # Errors
 ///
-/// [`SequenceError::Input`] when the weights or labels do not match the panel
+/// [`Error::Input`] when the weights or labels do not match the panel
 /// one to one, or a label is not below `k`.
 pub fn cluster_distance_sums(
     panel: &Panel<'_>,
     weights: &[f64],
     labels: &[u32],
     k: usize,
-) -> Result<Vec<f64>, SequenceError> {
+) -> Result<Vec<f64>, Error> {
     check_partition(panel.count, weights.len(), labels, k)?;
     if k == 0 {
         return Ok(Vec::new());
@@ -396,23 +404,23 @@ pub fn cluster_distance_sums(
 /// The weighted average silhouette width of a partition, under a position-wise
 /// distance.
 ///
-/// `labels` are the caller's cluster numbers, any integers; they are ranked
-/// in ascending order. See [`crate::silhouette`] for the weighting. Returns 0.0
-/// for fewer than two distinct labels or when no sequence can be scored.
+/// `labels` are the caller's cluster numbers; they are ranked in ascending
+/// order. See [`crate::silhouette`] for the weighting. Returns [`None`] for
+/// fewer than two distinct labels or when no sequence can be scored.
 ///
 /// # Errors
 ///
-/// [`SequenceError::Input`] when the weights or labels do not match the panel
+/// [`Error::Input`] when the weights or labels do not match the panel
 /// one to one.
 pub fn silhouette(
     panel: &Panel<'_>,
     weights: &[f64],
-    labels: &[i64],
-) -> Result<f64, SequenceError> {
-    check_lengths("sequences", panel.count, weights.len(), labels.len())?;
+    labels: &[u32],
+) -> Result<Option<f64>, Error> {
+    check_lengths(panel.count, weights.len(), labels.len())?;
     let (ranks, k) = rank_labels(labels);
     if k < 2 {
-        return Ok(0.0);
+        return Ok(None);
     }
     let sums = cluster_sums(panel, weights, &ranks, k);
     Ok(weighted_average(&sums, k, |index| index, weights, &ranks))
@@ -465,7 +473,7 @@ mod tests {
     const WEIGHTS: [f64; 12] = [
         4000.0, 3500.0, 40.0, 30.0, 8.0, 6.0, 5.0, 3.0, 2.0, 1.0, 1.0, 1.0,
     ];
-    const PARTITION: [i64; 12] = [1, 2, 1, 4, 4, 1, 2, 1, 1, 1, 4, 1];
+    const PARTITION: [u32; 12] = [1, 2, 1, 4, 4, 1, 2, 1, 1, 1, 4, 1];
 
     /// Rank-encoded over the sorted alphabet.
     // `usize as u8` on a rank in an alphabet of five.
@@ -487,15 +495,15 @@ mod tests {
         // 2.0, TraMineR 2.2.13, R 4.6.1, on Hamming distances.
         let (bytes, alphabet) = encoded();
         let panel = Panel::new(&bytes, 8, alphabet, None).expect("a valid panel");
-        let value = silhouette(&panel, &WEIGHTS, &PARTITION).unwrap();
+        let value = silhouette(&panel, &WEIGHTS, &PARTITION).unwrap().unwrap();
         assert!((value - 0.981_074_279_353).abs() < 1e-9, "{value}");
     }
 
     #[test]
-    fn fewer_than_two_labels_score_zero() {
+    fn fewer_than_two_labels_have_no_silhouette() {
         let (bytes, alphabet) = encoded();
         let panel = Panel::new(&bytes, 8, alphabet, None).expect("a valid panel");
-        assert!(silhouette(&panel, &WEIGHTS, &[3; 12]).unwrap().abs() < f64::EPSILON);
+        assert_eq!(silhouette(&panel, &WEIGHTS, &[3; 12]).unwrap(), None);
     }
 
     #[test]
@@ -506,8 +514,8 @@ mod tests {
         let ones = vec![1.0; 8 * alphabet * alphabet];
         let plain = Panel::new(&bytes, 8, alphabet, None).expect("a valid panel");
         let costed = Panel::new(&bytes, 8, alphabet, Some(&ones)).expect("a valid panel");
-        let left = silhouette(&plain, &WEIGHTS, &PARTITION).unwrap();
-        let right = silhouette(&costed, &WEIGHTS, &PARTITION).unwrap();
+        let left = silhouette(&plain, &WEIGHTS, &PARTITION).unwrap().unwrap();
+        let right = silhouette(&costed, &WEIGHTS, &PARTITION).unwrap().unwrap();
         assert!((left - right).abs() < 1e-12, "{left} against {right}");
     }
 
@@ -534,8 +542,7 @@ mod tests {
         assert!(fit.labels[6..].iter().all(|&label| label != first));
         let again = kmedoids(&panel, &weights, 2, &four, 20).unwrap();
         assert_eq!(fit, again);
-        let ranked: Vec<i64> = fit.labels.iter().map(|&label| i64::from(label)).collect();
-        assert!(silhouette(&panel, &weights, &ranked).unwrap() > 0.5);
+        assert!(silhouette(&panel, &weights, &fit.labels).unwrap().unwrap() > 0.5);
     }
 
     #[test]

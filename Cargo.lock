@@ -851,12 +851,13 @@ dependencies = [
 
 [[package]]
 name = "epistat-sequences"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "epistat-core",
  "epistat-optim",
  "epistat-rng",
  "epistat-stats",
+ "epistat-testkit",
  "rayon",
  "thiserror 2.0.21",
 ]
