@@ -604,7 +604,7 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
         input.design,
         &y,
         Some(&clusters),
-        SandwichType::Hc0,
+        SandwichType::Cr1,
     )
     .map_err(Error::model("outcome model"))?;
     let g = clusters.count();
@@ -613,14 +613,10 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
             "outcome model: at least two persons are needed",
         ));
     }
-    let factor = g as f64 / (g - 1) as f64;
     let covariance: Vec<f64> = cov
         .as_slice()
         .iter()
-        .map(|v| {
-            v.map(|v| v * factor)
-                .ok_or_else(|| Error::invalid("outcome model: the covariance is not defined"))
-        })
+        .map(|v| v.ok_or_else(|| Error::undefined("outcome model: the covariance is not defined")))
         .collect::<Result<_>>()?;
     debug_assert_eq!(covariance.len(), p * p);
     Ok(Msm {
@@ -865,7 +861,7 @@ pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Re
         .map_err(Error::model("outcome model"))?;
     let coefficients = crate::logistic::full_rank(&fit, "outcome model")?;
     let cov = fit
-        .robust_covariance(rows, true, SandwichType::Hc0)
+        .robust_covariance(rows, true, SandwichType::Cr1)
         .map_err(Error::model("outcome model"))?;
     let g = rows.n_clusters();
     if g < 2 {
@@ -873,14 +869,10 @@ pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Re
             "outcome model: at least two persons are needed",
         ));
     }
-    let factor = g as f64 / (g - 1) as f64;
     let covariance: Vec<f64> = cov
         .as_slice()
         .iter()
-        .map(|v| {
-            v.map(|v| v * factor)
-                .ok_or_else(|| Error::invalid("outcome model: the covariance is not defined"))
-        })
+        .map(|v| v.ok_or_else(|| Error::undefined("outcome model: the covariance is not defined")))
         .collect::<Result<_>>()?;
     Ok(Msm {
         coefficients,

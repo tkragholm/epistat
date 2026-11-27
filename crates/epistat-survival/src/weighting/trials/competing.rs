@@ -78,6 +78,7 @@
 
 use epistat_core::InputError;
 use epistat_inference::Clusters;
+use epistat_inference::sandwich::SmallSample;
 use epistat_linalg::{Attempt, Mat, inverse};
 
 use super::{Msm, MsmInput, check_design, fit_msm, quadratic_form};
@@ -171,7 +172,11 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
     };
     let a_inv = invert(&a)?;
     let b_inv = invert(&b)?;
-    let factor = g as f64 / (g - 1) as f64;
+    // The person-clustered factor `G / (G - 1)` of the outcome model's `Cr1`
+    // covariance, which the cross-covariance shares.
+    let factor = SmallSample::Clusters
+        .factor(n, p, Some(g))
+        .ok_or_else(|| Error::invalid("outcome model: at least two persons are needed"))?;
     let am = product(&a_inv, &meat);
     let cross = product(&am, &b_inv);
     let cross_covariance = (0..p * p).map(|k| cross[(k / p, k % p)] * factor).collect();
