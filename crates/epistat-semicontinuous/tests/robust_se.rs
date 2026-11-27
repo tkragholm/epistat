@@ -7,9 +7,9 @@
 
 use epistat_linalg::{Attempt, Mat, Method, inverse};
 use epistat_rng::{Stream, replicate_seed};
-use epistat_semicontinuous::{
-    FitOptions, ModelInput, TweedieOptions, fit_tweedie_input, fit_two_part_input,
-};
+use epistat_semicontinuous::tweedie::TweedieOptions;
+use epistat_semicontinuous::two_part::TwoPartOptions;
+use epistat_semicontinuous::{CostData, tweedie, two_part};
 
 const N_ROWS: usize = 20_000;
 
@@ -17,10 +17,10 @@ const N_ROWS: usize = 20_000;
 /// logit `0.2 + 0.8 x1 - 0.5 x2`, and a positive `y` is exponential with mean
 /// `exp(1 + 0.3 x1 + 0.2 x2)`, so both parts are correctly specified with unit
 /// dispersion.
-fn two_part_fixture() -> (Mat<f64>, Mat<f64>) {
+fn two_part_fixture() -> (Mat<f64>, Vec<f64>) {
     let mut stream = Stream::seeded(20_261_002);
     let mut x = Mat::<f64>::zeros(N_ROWS, 3);
-    let mut y = Mat::<f64>::zeros(N_ROWS, 1);
+    let mut y = vec![0.0; N_ROWS];
     for i in 0..N_ROWS {
         x[(i, 0)] = 1.0;
         x[(i, 1)] = 2.0f64.mul_add(stream.uniform(), -1.0);
@@ -31,17 +31,17 @@ fn two_part_fixture() -> (Mat<f64>, Mat<f64>) {
         let draw = -(1.0 - stream.uniform()).ln();
         if positive {
             let mean = 0.3f64.mul_add(x[(i, 1)], 1.0 + 0.2 * x[(i, 2)]).exp();
-            y[(i, 0)] = mean * draw;
+            y[i] = mean * draw;
         }
     }
     (x, y)
 }
 
-fn positive_rows(x: &Mat<f64>, y: &Mat<f64>) -> (Mat<f64>, Mat<f64>) {
-    let rows: Vec<usize> = (0..y.nrows()).filter(|&i| y[(i, 0)] > 0.0).collect();
+fn positive_rows(x: &Mat<f64>, y: &[f64]) -> (Mat<f64>, Vec<f64>) {
+    let rows: Vec<usize> = (0..y.len()).filter(|&i| y[i] > 0.0).collect();
     (
         Mat::from_fn(rows.len(), x.ncols(), |i, j| x[(rows[i], j)]),
-        Mat::from_fn(rows.len(), 1, |i, _| y[(rows[i], 0)]),
+        rows.iter().map(|&i| y[i]).collect(),
     )
 }
 
@@ -111,10 +111,17 @@ const R_TOLERANCE: f64 = 1e-8;
 #[test]
 fn two_part_standard_errors_match_r() {
     let (x, y) = two_part_fixture();
-    let input = ModelInput::new(x, y);
-    let (_, model_based) = fit_two_part_input(&input, FitOptions::default()).expect("fit");
-    let (_, robust) =
-        fit_two_part_input(&input, FitOptions::builder().robust_se(true).build()).expect("fit");
+    let data = CostData::builder(x.as_ref(), &y).build().expect("data");
+    let model_based = two_part::fit(&data, &TwoPartOptions::default(), None)
+        .expect("fit")
+        .report;
+    let robust_options = TwoPartOptions {
+        robust_se: true,
+        ..TwoPartOptions::default()
+    };
+    let robust = two_part::fit(&data, &robust_options, None)
+        .expect("fit")
+        .report;
 
     let model_se = column(model_based.se_logit.as_ref().expect("model-based SE"));
     let robust_se = column(robust.se_logit.as_ref().expect("robust SE"));
@@ -142,13 +149,24 @@ fn two_part_standard_errors_match_r() {
 #[test]
 fn two_part_singleton_clusters_reproduce_the_unclustered_sandwich() {
     let (x, y) = two_part_fixture();
-    let clusters: Vec<u64> = (0..N_ROWS as u64).collect();
-    let options = FitOptions::builder().robust_se(true).build();
-    let (_, plain) = fit_two_part_input(&ModelInput::new(x.clone(), y.clone()), options)
-        .expect("unclustered fit");
-    let (_, clustered) =
-        fit_two_part_input(&ModelInput::new(x, y).with_cluster_ids(clusters), options)
-            .expect("clustered fit");
+    let clusters: Vec<u32> = (0..N_ROWS)
+        .map(|i| u32::try_from(i).expect("small"))
+        .collect();
+    let options = TwoPartOptions {
+        robust_se: true,
+        ..TwoPartOptions::default()
+    };
+    let data = CostData::builder(x.as_ref(), &y).build().expect("data");
+    let plain = two_part::fit(&data, &options, None)
+        .expect("unclustered fit")
+        .report;
+    let clustered_data = CostData::builder(x.as_ref(), &y)
+        .clusters(&clusters)
+        .build()
+        .expect("data");
+    let clustered = two_part::fit(&clustered_data, &options, None)
+        .expect("clustered fit")
+        .report;
     assert_close(
         "logit",
         &column(clustered.se_logit.as_ref().expect("SE")),
@@ -167,15 +185,18 @@ fn two_part_singleton_clusters_reproduce_the_unclustered_sandwich() {
 fn tweedie_gamma_standard_errors_match_r() {
     let (x, y) = two_part_fixture();
     let (x_pos, y_pos) = positive_rows(&x, &y);
-    let input = ModelInput::new(x_pos, y_pos);
-    let options = TweedieOptions::builder()
-        .robust_se(true)
-        .tolerance(TIGHT_TOLERANCE)
-        .build();
-    let (model, report) = fit_tweedie_input(&input, 2.0, options).expect("fit");
+    let data = CostData::builder(x_pos.as_ref(), &y_pos)
+        .build()
+        .expect("data");
+    let options = TweedieOptions {
+        robust_se: true,
+        tolerance: TIGHT_TOLERANCE,
+        ..TweedieOptions::default()
+    };
+    let model = tweedie::fit(&data, 2.0, &options, None, None).expect("fit");
 
-    let robust_se = column(report.se.as_ref().expect("robust SE"));
-    let model_se = tweedie_model_based_se(&input.design_matrix, &model.beta, 2.0);
+    let robust_se = column(model.report.se.as_ref().expect("robust SE"));
+    let model_se = tweedie_model_based_se(&x_pos, &model.beta, 2.0);
     assert_close(
         "tweedie(2) model-based vs R",
         &model_se,
@@ -197,22 +218,23 @@ fn tweedie_standard_errors_match_r_at_power_one_and_a_half() {
     let mut stream = Stream::seeded(20_261_003);
     let mut rng = Stream::seeded(replicate_seed(20_261_003, 1));
     let mut x = Mat::<f64>::zeros(N_ROWS, 3);
-    let mut y = Mat::<f64>::zeros(N_ROWS, 1);
+    let mut y = vec![0.0; N_ROWS];
     for i in 0..N_ROWS {
         x[(i, 0)] = 1.0;
         x[(i, 1)] = 2.0f64.mul_add(stream.uniform(), -1.0);
         x[(i, 2)] = if stream.uniform() < 0.3 { 1.0 } else { 0.0 };
         let mu = 0.3f64.mul_add(x[(i, 1)], 2.0 + 0.2 * x[(i, 2)]).exp();
-        y[(i, 0)] = rng.gamma(mu.sqrt(), mu.sqrt()).expect("gamma parameters");
+        y[i] = rng.gamma(mu.sqrt(), mu.sqrt()).expect("gamma parameters");
     }
-    let input = ModelInput::new(x, y);
-    let options = TweedieOptions::builder()
-        .robust_se(true)
-        .tolerance(TIGHT_TOLERANCE)
-        .build();
-    let (model, report) = fit_tweedie_input(&input, 1.5, options).expect("fit");
-    let robust_se = column(report.se.as_ref().expect("robust SE"));
-    let model_se = tweedie_model_based_se(&input.design_matrix, &model.beta, 1.5);
+    let data = CostData::builder(x.as_ref(), &y).build().expect("data");
+    let options = TweedieOptions {
+        robust_se: true,
+        tolerance: TIGHT_TOLERANCE,
+        ..TweedieOptions::default()
+    };
+    let model = tweedie::fit(&data, 1.5, &options, None, None).expect("fit");
+    let robust_se = column(model.report.se.as_ref().expect("robust SE"));
+    let model_se = tweedie_model_based_se(&x, &model.beta, 1.5);
     assert_close(
         "tweedie(1.5) model-based vs R",
         &model_se,
@@ -226,12 +248,18 @@ fn tweedie_standard_errors_match_r_at_power_one_and_a_half() {
         R_TOLERANCE,
     );
 
-    let clusters: Vec<u64> = (0..N_ROWS as u64).collect();
-    let (_, clustered) =
-        fit_tweedie_input(&input.with_cluster_ids(clusters), 1.5, options).expect("clustered fit");
+    let clusters: Vec<u32> = (0..N_ROWS)
+        .map(|i| u32::try_from(i).expect("small"))
+        .collect();
+    let clustered_data = CostData::builder(x.as_ref(), &y)
+        .clusters(&clusters)
+        .build()
+        .expect("data");
+    let clustered =
+        tweedie::fit(&clustered_data, 1.5, &options, None, None).expect("clustered fit");
     assert_close(
         "tweedie(1.5) singleton clusters",
-        &column(clustered.se.as_ref().expect("SE")),
+        &column(clustered.report.se.as_ref().expect("SE")),
         &robust_se,
         1e-9,
     );

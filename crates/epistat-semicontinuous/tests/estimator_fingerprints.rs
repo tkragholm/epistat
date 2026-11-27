@@ -8,20 +8,24 @@
 //! gives, and the test asserts them only on that target. Elsewhere it computes them
 //! and, when `EPISTAT_HASH_OUT` is set, appends them to that file. Print them with
 //! `GOLDEN_PRINT=1 cargo test --test estimator_fingerprints -- --nocapture`.
+use epistat_core::{Bootstrap, Interval, Level};
 use epistat_linalg::Mat;
 use epistat_rng::Stream as Draws;
-use epistat_semicontinuous::{
-    BootstrapOptions, ConfidenceInterval, FamilyRandomEffects, FitOptions, LogNormalOptions,
-    LongitudinalModelInput, ModelComparison, ModelComparisonOptions, ModelFitMetrics, ModelInput,
-    MtpFitOptions, MtpMultiChainOptions, MtpPosteriorSummary, MtpSamplerConfig, ParameterSummary,
+use epistat_semicontinuous::compare::{CompareOptions, ModelComparison, ModelFitMetrics};
+use epistat_semicontinuous::lognormal::LogNormalOptions;
+use epistat_semicontinuous::mtp::{
+    FamilyRandomEffects, MtpOptions, MtpPosteriorSummary, ParameterSummary, autocorrelation,
+    effective_sample_size, posterior_predictive_summary,
+};
+use epistat_semicontinuous::prepared::{
     PreparedGammaDesign, PreparedPredictionDesign, PreparedScratch, PreparedTwoPartDesign,
-    Regularization, TweedieOptions, TweedieScratch, TwoPartModel, TwoPartReport, TwoPartWarmStart,
-    autocorrelation, bootstrap_percentile_ci, bootstrap_summary, bootstrap_two_part,
-    coefficient_confidence_intervals, compare_models_input, effective_sample_size,
-    fit_lognormal_smearing_input, fit_mtp_input_multi_chain_with_posterior_config,
-    fit_tweedie_input, fit_tweedie_ref_warm_prevalidated_with_scratch,
-    fit_two_part_clustered_input, fit_two_part_input, fit_two_part_ref_warm_prevalidated,
-    posterior_predictive_summary, select_models_input,
+};
+use epistat_semicontinuous::tweedie::{TweedieOptions, TweedieScratch};
+use epistat_semicontinuous::two_part::{
+    Regularization, TwoPartModel, TwoPartOptions, TwoPartWarmStart,
+};
+use epistat_semicontinuous::{
+    CostData, LongitudinalData, compare, lognormal, mtp, tweedie, two_part,
 };
 use epistat_testkit::Fingerprint;
 
@@ -44,12 +48,35 @@ impl Stream {
     }
 }
 
+/// The columns of a fixture.
+#[derive(Clone)]
+struct Fixture {
+    x: Mat<f64>,
+    y: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    clusters: Option<Vec<u32>>,
+}
+
+impl Fixture {
+    fn data(&self) -> CostData<'_> {
+        let mut data = CostData::builder(self.x.as_ref(), &self.y);
+        if let Some(weights) = &self.weights {
+            data = data.weights(weights);
+        }
+        if let Some(clusters) = &self.clusters {
+            data = data.clusters(clusters);
+        }
+        data.build().expect("data")
+    }
+}
+
 /// An intercept, three dummies and two continuous columns, a gamma-like cost with
-/// about 35% zeros, positive weights and clusters of one to four rows.
-fn fixture(seed: u64) -> ModelInput {
+/// about 35% zeros, positive weights and clusters of one to four rows, each a code
+/// of its own.
+fn fixture(seed: u64) -> Fixture {
     let mut stream = Stream(seed);
     let mut x = Mat::<f64>::zeros(N_ROWS, N_COLS);
-    let mut y = Mat::<f64>::zeros(N_ROWS, 1);
+    let mut y = vec![0.0; N_ROWS];
     for i in 0..N_ROWS {
         x[(i, 0)] = 1.0;
         for j in 1..4 {
@@ -62,42 +89,72 @@ fn fixture(seed: u64) -> ModelInput {
         let zero = stream.uniform() < 0.35 - 0.1 * x[(i, 3)];
         let noise = -stream.uniform().max(1e-12).ln() - stream.uniform().max(1e-12).ln();
         if !zero {
-            y[(i, 0)] = (6.0 + eta).exp() / 2.0 * noise + 1.0;
+            y[i] = (6.0 + eta).exp() / 2.0 * noise + 1.0;
         }
     }
     let mut clusters = Vec::with_capacity(N_ROWS);
-    let mut cluster = 0_u64;
+    let mut cluster = 0_u32;
     while clusters.len() < N_ROWS {
         let size = 1 + usize::try_from(stream.next_u64() % 4).expect("small");
         for _ in 0..size.min(N_ROWS - clusters.len()) {
-            clusters.push(cluster * 7_919 + 13);
+            clusters.push(cluster);
         }
         cluster += 1;
     }
-    let weights = Mat::from_fn(N_ROWS, 1, |_, _| 0.5 + stream.uniform());
-    ModelInput::new(x, y)
-        .with_cluster_ids(clusters)
-        .with_sample_weights(weights)
+    let weights = (0..N_ROWS).map(|_| 0.5 + stream.uniform()).collect();
+    Fixture {
+        x,
+        y,
+        weights: Some(weights),
+        clusters: Some(clusters),
+    }
 }
 
-fn unweighted(input: &ModelInput) -> ModelInput {
-    ModelInput::new(input.design_matrix.clone(), input.outcome.clone())
+fn unweighted(input: &Fixture) -> Fixture {
+    Fixture {
+        weights: None,
+        clusters: None,
+        ..input.clone()
+    }
 }
 
-fn positive_rows(input: &ModelInput) -> ModelInput {
-    let rows: Vec<usize> = (0..input.outcome.nrows())
-        .filter(|&i| input.outcome[(i, 0)] > 0.0)
-        .collect();
-    let x = Mat::from_fn(rows.len(), input.design_matrix.ncols(), |i, j| {
-        input.design_matrix[(rows[i], j)]
-    });
-    let y = Mat::from_fn(rows.len(), 1, |i, _| input.outcome[(rows[i], 0)]);
-    ModelInput::new(x, y)
+fn positive_rows(input: &Fixture) -> Fixture {
+    let rows: Vec<usize> = (0..input.y.len()).filter(|&i| input.y[i] > 0.0).collect();
+    let x = Mat::from_fn(rows.len(), input.x.ncols(), |i, j| input.x[(rows[i], j)]);
+    let y = rows.iter().map(|&i| input.y[i]).collect();
+    Fixture {
+        x,
+        y,
+        weights: None,
+        clusters: None,
+    }
+}
+
+/// A panel and its subject codes, to build the data from.
+struct Panel {
+    outcome: Vec<f64>,
+    design: Mat<f64>,
+    ids: Vec<u32>,
+    time: Vec<f64>,
+}
+
+impl Panel {
+    fn data(&self) -> LongitudinalData<'_> {
+        LongitudinalData::builder(
+            &self.outcome,
+            self.design.as_ref(),
+            self.design.as_ref(),
+            &self.ids,
+            &self.time,
+        )
+        .build()
+        .expect("data")
+    }
 }
 
 /// A panel of subjects over periods, a logistic zero part and a log-normal positive
 /// part with subject intercepts.
-fn panel(subjects: usize, periods: usize, seed: u64) -> LongitudinalModelInput {
+fn panel(subjects: usize, periods: usize, seed: u64) -> Panel {
     let rows = subjects * periods;
     let mut draws = Draws::seeded(seed);
     let mut outcome = Vec::with_capacity(rows);
@@ -116,17 +173,16 @@ fn panel(subjects: usize, periods: usize, seed: u64) -> LongitudinalModelInput {
             };
             outcome.push(y);
             design.extend_from_slice(&[1.0, t]);
-            ids.push(subject as u64 + 1);
+            ids.push(u32::try_from(subject + 1).expect("small"));
             time.push(period as f64);
         }
     }
-    LongitudinalModelInput::new(
-        Mat::from_fn(rows, 1, |i, _| outcome[i]),
-        Mat::from_fn(rows, 2, |i, j| design[2 * i + j]),
-        Mat::from_fn(rows, 2, |i, j| design[2 * i + j]),
+    Panel {
+        outcome,
+        design: Mat::from_fn(rows, 2, |i, j| design[2 * i + j]),
         ids,
         time,
-    )
+    }
 }
 
 struct Hasher(Fingerprint);
@@ -172,11 +228,12 @@ impl Hasher {
         }
     }
 
-    fn intervals(&mut self, intervals: &[ConfidenceInterval]) {
+    /// A limit that is `None` hashes as NaN, its value before it was undefined.
+    fn intervals(&mut self, intervals: &[Interval]) {
         self.n(intervals.len());
         for interval in intervals {
-            self.f(interval.lower);
-            self.f(interval.upper);
+            self.f(interval.lower.unwrap_or(f64::NAN));
+            self.f(interval.upper.unwrap_or(f64::NAN));
         }
     }
 
@@ -192,7 +249,8 @@ impl Hasher {
         }
     }
 
-    fn two_part(&mut self, model: &TwoPartModel, report: &TwoPartReport) {
+    fn two_part(&mut self, model: &TwoPartModel) {
+        let report = &model.report;
         self.mat(&model.beta_logit);
         self.mat(&model.beta_gamma);
         self.opt(report.se_logit.as_ref());
@@ -212,7 +270,7 @@ impl Hasher {
         ] {
             self.n(table.len());
             for score in table {
-                self.word(score.name.len() as u64);
+                self.word(score.candidate.label().len() as u64);
                 self.metrics(&score.metrics);
             }
         }
@@ -227,8 +285,8 @@ impl Hasher {
         for row in &comparison.tweedie_cv_ranking {
             self.f(row.power);
             self.metrics(&row.metrics);
-            self.f(row.aic);
-            self.f(row.bic);
+            self.f(row.aic.unwrap_or(f64::NAN));
+            self.f(row.bic.unwrap_or(f64::NAN));
         }
     }
 
@@ -268,13 +326,12 @@ impl Hasher {
 
 type Golden = Vec<(&'static str, u64)>;
 
-fn bootstrap(out: &mut Golden, input: &ModelInput) {
-    let options = BootstrapOptions::builder().iterations(25).seed(7).build();
-    let result = bootstrap_two_part(
-        &input.design_matrix,
-        &input.outcome,
-        FitOptions::default(),
-        options,
+fn bootstrap(out: &mut Golden, input: &Fixture) {
+    let result = two_part::bootstrap(
+        &input.data(),
+        &TwoPartOptions::default(),
+        Bootstrap::new(25, 7),
+        Some(50),
     )
     .expect("bootstrap");
     let mut h = Hasher::new();
@@ -286,63 +343,69 @@ fn bootstrap(out: &mut Golden, input: &ModelInput) {
 
     let mut h = Hasher::new();
     for betas in [&result.betas_logit, &result.betas_gamma] {
-        let summary = bootstrap_summary(betas, 0.05);
+        let summary = two_part::summary(betas, Level::alpha(0.05).expect("level"));
         h.mat(&summary.mean);
         h.mat(&summary.se);
-        h.intervals(&summary.ci);
-        h.intervals(&bootstrap_percentile_ci(betas, 0.1));
+        h.intervals(&summary.intervals);
+        h.intervals(&two_part::percentile_intervals(
+            betas,
+            Level::alpha(0.1).expect("level"),
+        ));
     }
     out.push(("bootstrap/summary", h.finish()));
 }
 
-fn two_part_variants(out: &mut Golden, input: &ModelInput) -> TwoPartWarmStart {
-    let robust = FitOptions::builder().robust_se(true).build();
-    let (model, report) = fit_two_part_clustered_input(input, robust).expect("clustered");
+fn two_part_variants(out: &mut Golden, input: &Fixture) -> TwoPartWarmStart {
+    let data = input.data();
+    let robust = TwoPartOptions {
+        robust_se: true,
+        ..TwoPartOptions::default()
+    };
+    let model = two_part::fit(&data, &robust, None).expect("clustered");
     let mut h = Hasher::new();
-    h.two_part(&model, &report);
-    let cov = report.cov_gamma.as_ref().expect("covariance");
-    h.intervals(&coefficient_confidence_intervals(
-        &model.beta_gamma,
-        cov,
-        0.05,
-    ));
+    h.two_part(&model);
+    let cov = model.report.cov_gamma.as_ref().expect("covariance");
+    h.intervals(
+        &two_part::wald_intervals(&model.beta_gamma, cov, Level::alpha(0.05).expect("level"))
+            .expect("intervals"),
+    );
     out.push(("two_part/clustered/robust", h.finish()));
 
-    let elastic = FitOptions::builder()
-        .regularization(Regularization::ElasticNet {
+    let elastic = TwoPartOptions {
+        regularization: Regularization::ElasticNet {
             lambda: 0.02,
             alpha: 0.5,
             exclude_intercept: true,
-        })
-        .build();
-    let (model, report) = fit_two_part_input(&unweighted(input), elastic).expect("elastic net");
+        },
+        ..TwoPartOptions::default()
+    };
+    let model = two_part::fit(&unweighted(input).data(), &elastic, None).expect("elastic net");
     let mut h = Hasher::new();
-    h.two_part(&model, &report);
+    h.two_part(&model);
     out.push(("two_part/elastic_net", h.finish()));
 
-    let stable = FitOptions::stable_defaults();
-    let (model, report) = fit_two_part_input(input, stable).expect("stable");
+    let stable = TwoPartOptions::stable_defaults();
+    let model = two_part::fit(&data, &stable, None).expect("stable");
+    let iterations_logit = model.report.iterations_logit;
     let warm = TwoPartWarmStart {
         beta_logit: model.beta_logit.clone(),
         beta_gamma: model.beta_gamma.clone(),
     };
-    let replicate = FitOptions {
+    let replicate = TwoPartOptions {
         compute_covariance: false,
         ..stable
     };
-    let (model, report2) =
-        fit_two_part_ref_warm_prevalidated(input.as_ref(), replicate, Some(&warm))
-            .expect("prevalidated");
+    let model = two_part::fit(&data, &replicate, Some(&warm)).expect("prevalidated");
     let mut h = Hasher::new();
-    h.n(report.iterations_logit);
-    h.two_part(&model, &report2);
+    h.n(iterations_logit);
+    h.two_part(&model);
     out.push(("two_part/prevalidated/warm", h.finish()));
     warm
 }
 
-fn compact(out: &mut Golden, input: &ModelInput, warm: &TwoPartWarmStart) {
-    let x = &input.design_matrix;
-    let y = input.outcome.col_as_slice(0);
+fn compact(out: &mut Golden, input: &Fixture, warm: &TwoPartWarmStart) {
+    let x = &input.x;
+    let y = &input.y;
     let mut stream = Stream(99);
     let weights: Vec<f64> = (0..N_ROWS)
         .map(|_| -stream.uniform().max(1e-12).ln())
@@ -350,52 +413,41 @@ fn compact(out: &mut Golden, input: &ModelInput, warm: &TwoPartWarmStart) {
     let mut scratch = PreparedScratch::default();
 
     let positive = positive_rows(input);
-    let gamma_options = TweedieOptions {
-        inner_parallel: false,
-        ..TweedieOptions::default()
-    };
-    let (gamma, _) = fit_tweedie_input(&positive, 2.0, gamma_options).expect("gamma");
-    let design = PreparedGammaDesign::new(
-        positive.design_matrix.as_ref(),
-        positive.outcome.col_as_slice(0),
-    )
-    .expect("gamma design");
-    let positive_weights = &weights[..positive.outcome.nrows()];
+    let gamma_options = TweedieOptions::default();
+    let positive_data = positive.data();
+    let gamma = tweedie::fit(&positive_data, 2.0, &gamma_options, None, None).expect("gamma");
+    let design = PreparedGammaDesign::new(positive.x.as_ref(), &positive.y).expect("gamma design");
+    let positive_weights = &weights[..positive.y.len()];
     let fit = design
-        .fit(positive_weights, &gamma.beta, gamma_options, &mut scratch)
+        .fit(positive_weights, &gamma.beta, &gamma_options, &mut scratch)
         .expect("compact gamma");
     let mut h = Hasher::new();
     h.mat(&fit.beta);
     h.n(fit.iterations);
     let mut tweedie_scratch = TweedieScratch::default();
-    let weighted =
-        positive
-            .clone()
-            .with_sample_weights(Mat::from_fn(positive_weights.len(), 1, |i, _| {
-                positive_weights[i]
-            }));
-    let (dense, _) = fit_tweedie_ref_warm_prevalidated_with_scratch(
-        weighted.as_ref(),
+    let weighted = positive_data
+        .with_weights(positive_weights)
+        .expect("weights");
+    let dense = tweedie::fit(
+        &weighted,
         2.0,
-        gamma_options,
+        &gamma_options,
         Some(&gamma.beta),
-        &mut tweedie_scratch,
+        Some(&mut tweedie_scratch),
     )
     .expect("dense gamma");
     h.mat(&dense.beta);
-    let prediction =
-        PreparedPredictionDesign::new(positive.design_matrix.as_ref()).expect("prediction design");
+    let prediction = PreparedPredictionDesign::new(positive.x.as_ref()).expect("prediction design");
     h.f(prediction.mean_gamma(&fit.beta, positive_weights));
     out.push(("compact/gamma", h.finish()));
 
-    let options = FitOptions {
+    let options = TwoPartOptions {
         compute_covariance: false,
-        inner_parallel: false,
-        ..FitOptions::default()
+        ..TwoPartOptions::default()
     };
     let design = PreparedTwoPartDesign::new(x.as_ref(), y).expect("two-part design");
     let fit = design
-        .fit(&weights, warm, options, &mut scratch)
+        .fit(&weights, warm, &options, &mut scratch)
         .expect("compact two-part");
     let mut h = Hasher::new();
     h.mat(&fit.beta_logit);
@@ -405,35 +457,36 @@ fn compact(out: &mut Golden, input: &ModelInput, warm: &TwoPartWarmStart) {
     out.push(("compact/two_part", h.finish()));
 }
 
-fn selection(out: &mut Golden, input: &ModelInput) {
+fn selection(out: &mut Golden, input: &Fixture) {
     let plain = unweighted(input);
-    let comparison =
-        compare_models_input(&plain, &ModelComparisonOptions::default()).expect("comparison");
+    let plain = plain.data();
+    let comparison = compare::compare(&plain, &CompareOptions::new(42)).expect("comparison");
     let mut h = Hasher::new();
     h.comparison(&comparison);
     out.push(("comparison/default", h.finish()));
 
-    let options = ModelComparisonOptions {
-        two_part_elastic_net_options: Some(
-            FitOptions::builder()
-                .regularization(Regularization::ElasticNet {
-                    lambda: 0.01,
-                    alpha: 0.8,
-                    exclude_intercept: true,
-                })
-                .build(),
-        ),
-        ..ModelComparisonOptions::default()
+    let options = CompareOptions {
+        two_part_elastic_net: Some(TwoPartOptions {
+            regularization: Regularization::ElasticNet {
+                lambda: 0.01,
+                alpha: 0.8,
+                exclude_intercept: true,
+            },
+            ..TwoPartOptions::default()
+        }),
+        ..CompareOptions::new(42)
     };
-    let comparison = compare_models_input(&plain, &options).expect("comparison");
+    let comparison = compare::compare(&plain, &options).expect("comparison");
     let mut h = Hasher::new();
     h.comparison(&comparison);
     out.push(("comparison/elastic_net", h.finish()));
 
-    let selected = select_models_input(&plain, &[1.2, 1.5, 1.8]);
+    let selected = compare::select(&plain, &[1.2, 1.5, 1.8]).expect("selection");
     let mut h = Hasher::new();
-    h.f(selected.park_test.intercept);
-    h.f(selected.park_test.slope);
+    // A Park test that fails hashes as intercept 0 and slope 2, the values it
+    // was replaced by before it was undefined.
+    h.f(selected.park_test.map_or(0.0, |park| park.intercept));
+    h.f(selected.park_test.map_or(2.0, |park| park.slope));
     for candidate in &selected.tweedie_candidates {
         h.mat(&candidate.model.beta);
         h.metrics(&candidate.metrics);
@@ -448,8 +501,12 @@ fn selection(out: &mut Golden, input: &ModelInput) {
     }
     out.push(("selection", h.finish()));
 
-    let (model, report) =
-        fit_lognormal_smearing_input(input, LogNormalOptions::default()).expect("ln");
+    let model = lognormal::fit(
+        &input.data().without_weights(),
+        &LogNormalOptions::default(),
+    )
+    .expect("ln");
+    let report = &model.report;
     let mut h = Hasher::new();
     h.mat(&model.beta);
     h.f(model.smearing_factor);
@@ -458,25 +515,21 @@ fn selection(out: &mut Golden, input: &ModelInput) {
 }
 
 fn mtp(out: &mut Golden) {
-    let input = panel(80, 4, 42);
-    let config = MtpSamplerConfig {
-        fit_options: MtpFitOptions::builder()
-            .iterations(800)
-            .burn_in(200)
-            .thin(2)
-            .seed(11)
-            .build(),
+    let panel = panel(80, 4, 42);
+    let input = panel.data();
+    let options = MtpOptions {
+        iterations: 800,
+        burn_in: 200,
+        thin: 2,
         family_random_effects: FamilyRandomEffects::Disabled,
-        ..MtpSamplerConfig::default()
+        chains: 3,
+        keep_draws: true,
+        ..MtpOptions::new(11)
     };
-    let (_model, report, chains) = fit_mtp_input_multi_chain_with_posterior_config(
-        &input,
-        config,
-        MtpMultiChainOptions { chains: 3 },
-    )
-    .expect("mtp");
+    let model = mtp::fit(&input, &options).expect("mtp");
+    let chains = model.draws.as_ref().expect("draws");
     let mut h = Hasher::new();
-    for chain in &chains {
+    for chain in chains {
         h.n(chain.draws.len());
         for draw in &chain.draws {
             for &value in draw.alpha.iter().chain(&draw.beta) {
@@ -489,7 +542,7 @@ fn mtp(out: &mut Golden) {
     out.push(("mtp/draws", h.finish()));
 
     let mut h = Hasher::new();
-    let convergence = &report.convergence;
+    let convergence = model.convergence.as_ref().expect("convergence");
     h.n(convergence.chain_count);
     h.n(convergence.draws_per_chain_used);
     for &value in convergence
@@ -502,8 +555,8 @@ fn mtp(out: &mut Golden) {
     h.of(convergence.kappa_split_rhat);
     h.of(convergence.omega_sq_split_rhat);
     h.of(convergence.max_split_rhat);
-    h.posterior(report.pooled_posterior_summary.as_ref());
-    for chain in &report.chain_reports {
+    h.posterior(model.posterior_summary.as_ref());
+    for chain in &model.chains {
         h.n(chain.diagnostics.iterations_completed);
         h.n(chain.diagnostics.retained_draws);
         if let Some(rates) = chain.diagnostics.acceptance_rates {

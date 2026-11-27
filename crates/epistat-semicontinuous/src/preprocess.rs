@@ -1,8 +1,11 @@
-use epistat_linalg::Mat;
+//! Counts of an outcome's values and the removal of constant design columns.
+
+use epistat_linalg::{Mat, MatRef};
 
 use crate::utils::usize_to_f64;
 
 /// Counts of an outcome's values by sign and finiteness.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct OutcomeDiagnostics {
     /// Rows.
@@ -17,23 +20,24 @@ pub struct OutcomeDiagnostics {
     pub n_zero: usize,
     /// Positive values.
     pub n_positive: usize,
-    /// The share of the finite values that are positive.
-    pub positive_share: f64,
-    /// The share of the finite values that are zero.
-    pub zero_share: f64,
+    /// The share of the finite values that are positive, `None` when no
+    /// value is finite.
+    pub positive_share: Option<f64>,
+    /// The share of the finite values that are zero, `None` when no value is
+    /// finite.
+    pub zero_share: Option<f64>,
 }
 
-/// Counts of the first column of `outcome`.
+/// Counts of the values of `outcome`.
 #[must_use]
-pub fn outcome_diagnostics(outcome: &Mat<f64>) -> OutcomeDiagnostics {
-    let n_rows = outcome.nrows();
+pub fn outcome_diagnostics(outcome: &[f64]) -> OutcomeDiagnostics {
+    let n_rows = outcome.len();
     let mut n_finite = 0usize;
     let mut n_negative = 0usize;
     let mut n_zero = 0usize;
     let mut n_positive = 0usize;
 
-    for row in 0..n_rows {
-        let value = outcome[(row, 0)];
+    for &value in outcome {
         if !value.is_finite() {
             continue;
         }
@@ -48,16 +52,9 @@ pub fn outcome_diagnostics(outcome: &Mat<f64>) -> OutcomeDiagnostics {
     }
 
     let n_non_finite = n_rows.saturating_sub(n_finite);
-    let positive_share = if n_finite > 0 {
-        usize_to_f64(n_positive) / usize_to_f64(n_finite)
-    } else {
-        0.0
-    };
-    let zero_share = if n_finite > 0 {
-        usize_to_f64(n_zero) / usize_to_f64(n_finite)
-    } else {
-        0.0
-    };
+    let share = |count: usize| (n_finite > 0).then(|| usize_to_f64(count) / usize_to_f64(n_finite));
+    let positive_share = share(n_positive);
+    let zero_share = share(n_zero);
 
     OutcomeDiagnostics {
         n_rows,
@@ -73,7 +70,7 @@ pub fn outcome_diagnostics(outcome: &Mat<f64>) -> OutcomeDiagnostics {
 
 /// Whether the range of `column` exceeds `|tolerance|`. False for a column out of range or fewer than two rows.
 #[must_use]
-pub fn column_has_variation(x: &Mat<f64>, column: usize, tolerance: f64) -> bool {
+pub fn column_has_variation(x: MatRef<'_, f64>, column: usize, tolerance: f64) -> bool {
     if column >= x.ncols() || x.nrows() < 2 {
         return false;
     }
@@ -88,7 +85,11 @@ pub fn column_has_variation(x: &Mat<f64>, column: usize, tolerance: f64) -> bool
 }
 
 #[must_use]
-fn nonconstant_column_indices(x: &Mat<f64>, tolerance: f64, always_keep: &[usize]) -> Vec<usize> {
+fn nonconstant_column_indices(
+    x: MatRef<'_, f64>,
+    tolerance: f64,
+    always_keep: &[usize],
+) -> Vec<usize> {
     // `col` is always in `0..x.ncols()`, so any out-of-range `always_keep`
     // index can never match — a direct slice lookup needs no `HashSet` or bounds
     // filtering, and `always_keep` is tiny in practice.
@@ -102,14 +103,14 @@ fn nonconstant_column_indices(x: &Mat<f64>, tolerance: f64, always_keep: &[usize
 }
 
 #[must_use]
-fn select_columns(x: &Mat<f64>, columns: &[usize]) -> Mat<f64> {
+fn select_columns(x: MatRef<'_, f64>, columns: &[usize]) -> Mat<f64> {
     Mat::from_fn(x.nrows(), columns.len(), |row, col| x[(row, columns[col])])
 }
 
 /// The columns of `x` with variation above `tolerance`, and those in `always_keep`, with their indices.
 #[must_use]
 pub fn drop_constant_columns(
-    x: &Mat<f64>,
+    x: MatRef<'_, f64>,
     tolerance: f64,
     always_keep: &[usize],
 ) -> (Mat<f64>, Vec<usize>) {
@@ -123,13 +124,7 @@ mod tests {
 
     #[test]
     fn outcome_diagnostics_counts_values() {
-        let y = Mat::from_fn(5, 1, |row, _| match row {
-            0 => -1.0,
-            1 => 0.0,
-            2 => 2.0,
-            3 => 3.0,
-            _ => f64::NAN,
-        });
+        let y = [-1.0, 0.0, 2.0, 3.0, f64::NAN];
         let diag = outcome_diagnostics(&y);
         assert_eq!(diag.n_rows, 5);
         assert_eq!(diag.n_finite, 4);
@@ -137,8 +132,9 @@ mod tests {
         assert_eq!(diag.n_negative, 1);
         assert_eq!(diag.n_zero, 1);
         assert_eq!(diag.n_positive, 2);
-        assert!((diag.positive_share - 0.5).abs() < 1e-12);
-        assert!((diag.zero_share - 0.25).abs() < 1e-12);
+        assert_eq!(diag.positive_share, Some(0.5));
+        assert_eq!(diag.zero_share, Some(0.25));
+        assert_eq!(outcome_diagnostics(&[f64::NAN]).positive_share, None);
     }
 
     #[test]
@@ -156,7 +152,7 @@ mod tests {
             _ => usize_to_f64(row),
         });
 
-        let (trimmed, kept) = drop_constant_columns(&x, 1e-12, &[0, 1]);
+        let (trimmed, kept) = drop_constant_columns(x.as_ref(), 1e-12, &[0, 1]);
         assert_eq!(kept, vec![0, 1, 3]);
         assert_eq!(trimmed.ncols(), 3);
         assert!((trimmed[(3, 2)] - 3.0).abs() < 1e-12);

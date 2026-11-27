@@ -2,80 +2,43 @@
 
 //! Models for semicontinuous outcomes, non-negative with a mass at zero, such as
 //! costs: the two-part model, the Tweedie GLM, log-normal regression with smearing,
-//! and the marginalised two-part model for panels ([`models::mtp`]), with model
-//! comparison and selection. The [`models`] modules explain each method.
+//! and the marginalised two-part model for panels, with model comparison and
+//! selection.
+//!
+//! | method | entry point | data | result |
+//! |---|---|---|---|
+//! | two-part model | [`two_part::fit`] | [`CostData`] | [`two_part::TwoPartModel`] |
+//! | Tweedie GLM | [`tweedie::fit`] | [`CostData`] | [`tweedie::TweedieModel`] |
+//! | log-normal with smearing | [`lognormal::fit`] | [`CostData`] | [`lognormal::LogNormalModel`] |
+//! | marginalised two-part model | [`mtp::fit`] | [`LongitudinalData`] | [`mtp::MtpModel`] |
+//! | comparison, cross-validation, selection | [`compare::compare`], [`compare::cross_validate`], [`compare::select`] | [`CostData`] | [`compare::ModelComparison`], [`compare::CrossValidation`], [`compare::Selection`] |
+//!
+//! Each module explains its method. The data views check their columns once
+//! ([`data`]); a bootstrap builds the view of the full sample once and refits it
+//! under many weight columns with [`CostData::with_weights`], or, for designs of
+//! indicator columns, with the compact designs of [`prepared`]. Every function
+//! returns the one [`Error`].
+//!
+//! The fits use their own IRLS with fused multiply-add, so results are the same
+//! on any number of threads but can differ between platforms in the last bits.
 
-/// Model inputs and their validation.
-pub mod input;
-/// The models, their fits, comparison and selection.
-pub mod models;
-/// Outcome counts and the removal of constant design columns.
+pub mod compare;
+pub mod counterfactual;
+pub mod data;
+mod error;
+mod fit;
+pub mod lognormal;
+pub mod mtp;
+pub mod prepared;
 pub mod preprocess;
+pub mod tweedie;
+pub mod two_part;
+
+mod covariance;
+mod matrix_ops;
 pub(crate) mod utils;
 
-pub use input::{
-    CounterfactualInputBuildError, InputError, LongitudinalInputError, LongitudinalModelInput,
-    ModelInput, ModelInputRef, PreparedCounterfactualInput, TWO_PART_NOT_APPLICABLE_POSITIVE_SHARE,
-    build_counterfactual_input, sanitize_model_outcome, two_part_applicability,
-};
-pub use preprocess::{
-    OutcomeDiagnostics, column_has_variation, drop_constant_columns, outcome_diagnostics,
-};
-
-pub use crate::models::{FitMetadata, Model, SolverKind};
-
-pub use models::two_part::{
-    BootstrapOptions, BootstrapResult, BootstrapSummary, ConfidenceInterval, FitOptions,
-    Regularization, TwoPartError, TwoPartModel, TwoPartPrediction, TwoPartReport, TwoPartTrainer,
-    TwoPartWarmStart, bootstrap as bootstrap_two_part, bootstrap_percentile_ci, bootstrap_summary,
-    coefficient_confidence_intervals, fit_two_part_clustered_input, fit_two_part_input,
-    fit_two_part_input_warm, fit_two_part_ref_warm, fit_two_part_ref_warm_prevalidated,
-    fit_two_part_weighted_input, log_likelihood as two_part_log_likelihood,
-};
-
-pub use models::tweedie::{
-    TweedieError, TweedieModel, TweedieOptions, TweediePrediction, TweedieReport, TweedieScratch,
-    TweedieTrainer, deviance as tweedie_deviance, fit_tweedie_input, fit_tweedie_input_warm,
-    fit_tweedie_ref_warm, fit_tweedie_ref_warm_prevalidated,
-    fit_tweedie_ref_warm_prevalidated_with_scratch,
-    quasi_log_likelihood as tweedie_quasi_log_likelihood,
-};
-
-pub use models::prepared::{
-    PreparedFitError, PreparedGammaDesign, PreparedGammaFit, PreparedPredictionDesign,
-    PreparedScratch, PreparedTwoPartDesign, PreparedTwoPartFit,
-};
-
-pub use models::lognormal::{
-    LogNormalError, LogNormalModel, LogNormalOptions, LogNormalPrediction, LogNormalReport,
-    LogNormalTrainer, fit_lognormal_smearing_input, log_likelihood as lognormal_log_likelihood,
-};
-
-pub use models::selection::{
-    CrossValidationError, CrossValidationOptions, CrossValidationResult, InformationCriteria,
-    LogNormalCandidate, ModelFitMetrics, ParkTestResult, SelectionResult, TweedieCandidate,
-    TweedieCvCandidate, classic_park_test, compute_information_criteria, compute_model_fit_metrics,
-    cross_validate_models_input, fit_tweedie_candidates_input, recommend_from_cv,
-    select_models_input,
-};
-
-pub use models::comparison::{
-    FittedComparisonModels, ModelComparison, ModelComparisonError, ModelComparisonOptions,
-    ModelInformationCriteria, ModelScore, TweedieRankingRow, compare_models_input,
-    compare_models_input_with_fits,
-};
-
-pub use models::mtp::{
-    CalibrationBinSummary, CounterfactualEffects, CounterfactualEffectsSummary,
-    CounterfactualScenario, EffectIntervalSummary, FamilyRandomEffects, MtpAcceptanceRates,
-    MtpConvergenceSummary, MtpError, MtpFitOptions, MtpModel, MtpMultiChainOptions,
-    MtpMultiChainReport, MtpPosteriorDraw, MtpPosteriorSamples, MtpPosteriorSummary,
-    MtpPriorConfig, MtpProposalTuning, MtpReport, MtpSamplerConfig, MtpSamplerDiagnostics,
-    ParameterSummary, PeriodEffect, PeriodEffectSummary, PositivePartDistribution,
-    PosteriorPredictiveSummary, RandomEffectsStructure, autocorrelation,
-    compute_counterfactual_effects, compute_counterfactual_effects_summary, effective_sample_size,
-    fit_mtp_input, fit_mtp_input_multi_chain, fit_mtp_input_multi_chain_with_config,
-    fit_mtp_input_multi_chain_with_posterior, fit_mtp_input_multi_chain_with_posterior_config,
-    fit_mtp_input_with_config, fit_mtp_input_with_posterior, fit_mtp_input_with_posterior_config,
-    posterior_predictive_summary, summarize_multi_chain_convergence, summarize_posterior,
-};
+pub(crate) use data::check_columns;
+pub use data::{CostData, CostDataBuilder, LongitudinalData, LongitudinalDataBuilder};
+pub use error::Error;
+pub use fit::{AttemptDiagnostics, AttemptOutcome, FitMetadata, FitStrategy, Model, SolverKind};

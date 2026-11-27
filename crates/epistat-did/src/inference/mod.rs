@@ -3,11 +3,6 @@
 //! normal critical values.
 
 pub mod did_clusters;
-// Gated: the HonestDiD sensitivity machinery is the only consumer of the
-// `clarabel` conic solver. Off by default so the register pipeline does not
-// link it. Enable with `--features honest`.
-#[cfg(feature = "honest")]
-pub mod sensitivity;
 
 use epistat_core::{Estimate, Interval, Level, Scale};
 

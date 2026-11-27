@@ -655,7 +655,6 @@ name = "epistat-did"
 version = "0.1.0"
 dependencies = [
  "bon",
- "clarabel",
  "criterion",
  "epistat-core",
  "epistat-glm",
@@ -699,6 +698,29 @@ dependencies = [
  "epistat-testkit",
  "rayon",
  "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "epistat-honestdid"
+version = "0.1.0"
+dependencies = [
+ "clarabel",
+ "criterion",
+ "epistat-core",
+ "epistat-did",
+ "epistat-inference",
+ "epistat-linalg",
+ "epistat-optim",
+ "epistat-rng",
+ "epistat-stats",
+ "epistat-testkit",
+ "proptest",
+ "rand 0.10.4",
+ "rayon",
+ "rstest",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
@@ -833,7 +855,6 @@ name = "epistat-semicontinuous"
 version = "0.1.0"
 dependencies = [
  "approx",
- "bon",
  "criterion",
  "epistat-core",
  "epistat-glm",

@@ -5,14 +5,14 @@
 //! `1 + |dense value|`, and `LOGIT_AGREEMENT` for the logit part. The dense path with
 //! caller-held buffers is compared bit for bit with the dense path without them.
 
+use epistat_core::InputError;
 use epistat_linalg::Mat;
-use epistat_semicontinuous::models::FitStrategy;
-use epistat_semicontinuous::{
-    FitOptions, ModelInput, PreparedFitError, PreparedGammaDesign, PreparedPredictionDesign,
-    PreparedScratch, PreparedTwoPartDesign, Regularization, TweedieOptions, TweedieScratch,
-    TwoPartWarmStart, fit_tweedie_ref_warm_prevalidated,
-    fit_tweedie_ref_warm_prevalidated_with_scratch, fit_two_part_ref_warm_prevalidated,
+use epistat_semicontinuous::prepared::{
+    PreparedGammaDesign, PreparedPredictionDesign, PreparedScratch, PreparedTwoPartDesign,
 };
+use epistat_semicontinuous::tweedie::{TweedieOptions, TweedieScratch};
+use epistat_semicontinuous::two_part::{Regularization, TwoPartOptions, TwoPartWarmStart};
+use epistat_semicontinuous::{CostData, Error, FitStrategy, tweedie, two_part};
 
 /// Largest accepted move between the compact and the dense fit of one weight column.
 const AGREEMENT: f64 = 1e-8;
@@ -44,11 +44,11 @@ impl Stream {
 
 /// Shaped like a matched cost cohort: an intercept, a calendar year, an age with two
 /// spline-like terms, dummies from common to rare, and a heavy-tailed cost.
-fn design(n: usize, zero_share: f64, seed: u64) -> (Mat<f64>, Mat<f64>) {
+fn design(n: usize, zero_share: f64, seed: u64) -> (Mat<f64>, Vec<f64>) {
     let mut stream = Stream(seed);
     let p = 16;
     let mut x = Mat::<f64>::zeros(n, p);
-    let mut y = Mat::<f64>::zeros(n, 1);
+    let mut y = vec![0.0_f64; n];
     for i in 0..n {
         x[(i, 0)] = 1.0;
         let age = (stream.uniform() * stream.uniform() * 215.0).floor();
@@ -64,7 +64,7 @@ fn design(n: usize, zero_share: f64, seed: u64) -> (Mat<f64>, Mat<f64>) {
         let eta = 9.5 + 0.2 * x[(i, 5)] - 0.3 * x[(i, 6)] + 0.5 * x[(i, 12)] - 0.004 * age
             + 0.01 * (x[(i, 4)] - 2010.0);
         let noise = (1.2 * (stream.uniform() - 0.5) + 0.5 * (stream.exponential() - 1.0)).exp();
-        y[(i, 0)] = if stream.uniform() < zero_share {
+        y[i] = if stream.uniform() < zero_share {
             0.0
         } else {
             eta.exp() * noise
@@ -73,9 +73,9 @@ fn design(n: usize, zero_share: f64, seed: u64) -> (Mat<f64>, Mat<f64>) {
     (x, y)
 }
 
-fn replicate_weights(n: usize, seed: u64) -> Mat<f64> {
+fn replicate_weights(n: usize, seed: u64) -> Vec<f64> {
     let mut stream = Stream(seed);
-    Mat::from_fn(n, 1, |_, _| stream.exponential())
+    (0..n).map(|_| stream.exponential()).collect()
 }
 
 fn close(label: &str, compact: f64, dense: f64) {
@@ -117,32 +117,35 @@ fn close_predictors(
 }
 
 fn gamma_options() -> TweedieOptions {
-    TweedieOptions {
-        inner_parallel: false,
-        ..TweedieOptions::default()
-    }
+    TweedieOptions::default()
 }
 
-fn two_part_options() -> FitOptions {
-    FitOptions {
+fn two_part_options() -> TwoPartOptions {
+    TwoPartOptions {
         compute_covariance: false,
-        inner_parallel: false,
-        ..FitOptions::default()
+        ..TwoPartOptions::default()
     }
 }
 
-fn gamma_warm(x: &Mat<f64>, y: &Mat<f64>) -> Mat<f64> {
-    let input = ModelInput::new(x.clone(), y.clone());
-    fit_tweedie_ref_warm_prevalidated(input.as_ref(), 2.0, gamma_options(), None)
+fn data<'a>(x: &'a Mat<f64>, y: &'a [f64]) -> CostData<'a> {
+    CostData::builder(x.as_ref(), y).build().expect("data")
+}
+
+fn weighted<'a>(x: &'a Mat<f64>, y: &'a [f64], weights: &'a [f64]) -> CostData<'a> {
+    CostData::builder(x.as_ref(), y)
+        .weights(weights)
+        .build()
+        .expect("data")
+}
+
+fn gamma_warm(x: &Mat<f64>, y: &[f64]) -> Mat<f64> {
+    tweedie::fit(&data(x, y), 2.0, &gamma_options(), None, None)
         .expect("point fit")
-        .0
         .beta
 }
 
-fn two_part_warm(x: &Mat<f64>, y: &Mat<f64>) -> TwoPartWarmStart {
-    let input = ModelInput::new(x.clone(), y.clone());
-    let (model, _) = fit_two_part_ref_warm_prevalidated(input.as_ref(), two_part_options(), None)
-        .expect("point");
+fn two_part_warm(x: &Mat<f64>, y: &[f64]) -> TwoPartWarmStart {
+    let model = two_part::fit(&data(x, y), &two_part_options(), None).expect("point");
     TwoPartWarmStart {
         beta_logit: model.beta_logit,
         beta_gamma: model.beta_gamma,
@@ -153,25 +156,24 @@ fn two_part_warm(x: &Mat<f64>, y: &Mat<f64>) -> TwoPartWarmStart {
 fn a_gamma_fit_agrees_with_the_dense_fit() {
     let (x, y) = design(20_000, 0.0, 1);
     let warm = gamma_warm(&x, &y);
-    let prepared = PreparedGammaDesign::new(x.as_ref(), y.col_as_slice(0)).expect("design");
+    let prepared = PreparedGammaDesign::new(x.as_ref(), &y).expect("design");
     assert_eq!((prepared.nrows(), prepared.ncols()), (20_000, 16));
     let mut scratch = PreparedScratch::default();
     for seed in 0..12 {
         let weights = replicate_weights(20_000, 100 + seed);
-        let input = ModelInput::new(x.clone(), y.clone()).with_sample_weights(weights.clone());
-        let (dense, report) =
-            fit_tweedie_ref_warm_prevalidated(input.as_ref(), 2.0, gamma_options(), Some(&warm))
-                .expect("dense");
+        let dense = tweedie::fit(
+            &weighted(&x, &y, &weights),
+            2.0,
+            &gamma_options(),
+            Some(&warm),
+            None,
+        )
+        .expect("dense");
         let compact = prepared
-            .fit(
-                weights.col_as_slice(0),
-                &warm,
-                gamma_options(),
-                &mut scratch,
-            )
+            .fit(&weights, &warm, &gamma_options(), &mut scratch)
             .expect("compact");
         close_columns("beta", &compact.beta, &dense.beta);
-        assert!(compact.iterations.abs_diff(report.meta.iterations) <= 1);
+        assert!(compact.iterations.abs_diff(dense.report.meta.iterations) <= 1);
     }
 }
 
@@ -183,18 +185,18 @@ fn a_ridge_gamma_fit_agrees_with_the_dense_fit() {
         l2_penalty: 1e-2,
         ..gamma_options()
     };
-    let prepared = PreparedGammaDesign::new(x.as_ref(), y.col_as_slice(0)).expect("design");
+    let prepared = PreparedGammaDesign::new(x.as_ref(), &y).expect("design");
     let weights = replicate_weights(8_000, 7);
-    let input = ModelInput::new(x.clone(), y.clone()).with_sample_weights(weights.clone());
-    let (dense, _) = fit_tweedie_ref_warm_prevalidated(input.as_ref(), 2.0, options, Some(&warm))
-        .expect("dense");
+    let dense = tweedie::fit(
+        &weighted(&x, &y, &weights),
+        2.0,
+        &options,
+        Some(&warm),
+        None,
+    )
+    .expect("dense");
     let compact = prepared
-        .fit(
-            weights.col_as_slice(0),
-            &warm,
-            options,
-            &mut PreparedScratch::default(),
-        )
+        .fit(&weights, &warm, &options, &mut PreparedScratch::default())
         .expect("compact");
     close_columns("beta", &compact.beta, &dense.beta);
 }
@@ -204,23 +206,21 @@ fn a_two_part_fit_agrees_with_the_dense_fit() {
     for (zero_share, n) in [(0.35, 20_000), (0.02, 20_000)] {
         let (x, y) = design(n, zero_share, 3);
         let warm = two_part_warm(&x, &y);
-        let prepared = PreparedTwoPartDesign::new(x.as_ref(), y.col_as_slice(0)).expect("design");
+        let prepared = PreparedTwoPartDesign::new(x.as_ref(), &y).expect("design");
         assert_eq!(prepared.nrows(), n);
         assert!(prepared.positive_nrows() < n);
         let mut scratch = PreparedScratch::default();
         for seed in 0..8 {
             let weights = replicate_weights(n, 200 + seed);
-            let input = ModelInput::new(x.clone(), y.clone()).with_sample_weights(weights.clone());
-            let (dense, report) =
-                fit_two_part_ref_warm_prevalidated(input.as_ref(), two_part_options(), Some(&warm))
-                    .expect("dense");
+            let dense = two_part::fit(
+                &weighted(&x, &y, &weights),
+                &two_part_options(),
+                Some(&warm),
+            )
+            .expect("dense");
+            let report = &dense.report;
             let compact = prepared
-                .fit(
-                    weights.col_as_slice(0),
-                    &warm,
-                    two_part_options(),
-                    &mut scratch,
-                )
+                .fit(&weights, &warm, &two_part_options(), &mut scratch)
                 .expect("compact");
             close_predictors(
                 "logit",
@@ -247,20 +247,22 @@ fn a_rare_outcome_class_gives_the_intercept_only_logit_of_the_dense_fit() {
     let (x, mut y) = design(6_000, 0.0, 4);
     // Fewer zeros than columns, so the dense logit takes the prevalence model.
     for i in 0..5 {
-        y[(i * 100, 0)] = 0.0;
+        y[i * 100] = 0.0;
     }
     let warm = two_part_warm(&x, &y);
-    let prepared = PreparedTwoPartDesign::new(x.as_ref(), y.col_as_slice(0)).expect("design");
+    let prepared = PreparedTwoPartDesign::new(x.as_ref(), &y).expect("design");
     let weights = replicate_weights(6_000, 9);
-    let input = ModelInput::new(x.clone(), y.clone()).with_sample_weights(weights.clone());
-    let (dense, _) =
-        fit_two_part_ref_warm_prevalidated(input.as_ref(), two_part_options(), Some(&warm))
-            .expect("dense");
+    let dense = two_part::fit(
+        &weighted(&x, &y, &weights),
+        &two_part_options(),
+        Some(&warm),
+    )
+    .expect("dense");
     let compact = prepared
         .fit(
-            weights.col_as_slice(0),
+            &weights,
             &warm,
-            two_part_options(),
+            &two_part_options(),
             &mut PreparedScratch::default(),
         )
         .expect("compact");
@@ -279,25 +281,18 @@ fn a_rare_outcome_class_gives_the_intercept_only_logit_of_the_dense_fit() {
 fn a_ridge_two_part_fit_agrees_with_the_dense_fit() {
     let (x, y) = design(8_000, 0.3, 5);
     let warm = two_part_warm(&x, &y);
-    let options = FitOptions {
+    let options = TwoPartOptions {
         regularization: Regularization::Ridge {
             lambda: 1e-2,
             exclude_intercept: true,
         },
         ..two_part_options()
     };
-    let prepared = PreparedTwoPartDesign::new(x.as_ref(), y.col_as_slice(0)).expect("design");
+    let prepared = PreparedTwoPartDesign::new(x.as_ref(), &y).expect("design");
     let weights = replicate_weights(8_000, 11);
-    let input = ModelInput::new(x.clone(), y.clone()).with_sample_weights(weights.clone());
-    let (dense, _) =
-        fit_two_part_ref_warm_prevalidated(input.as_ref(), options, Some(&warm)).expect("dense");
+    let dense = two_part::fit(&weighted(&x, &y, &weights), &options, Some(&warm)).expect("dense");
     let compact = prepared
-        .fit(
-            weights.col_as_slice(0),
-            &warm,
-            options,
-            &mut PreparedScratch::default(),
-        )
+        .fit(&weights, &warm, &options, &mut PreparedScratch::default())
         .expect("compact");
     close_predictors(
         "logit",
@@ -318,16 +313,17 @@ fn a_ridge_two_part_fit_agrees_with_the_dense_fit() {
 #[test]
 fn predictions_average_as_the_models_do() {
     let (x, y) = design(9_000, 0.25, 6);
-    let gamma_y = Mat::from_fn(9_000, 1, |i, _| y[(i, 0)].max(1.0));
+    let gamma_y: Vec<f64> = y.iter().map(|v| v.max(1.0)).collect();
     let beta = gamma_warm(&x, &gamma_y);
-    let input = ModelInput::new(x.clone(), gamma_y);
-    let (gamma_model, _) =
-        fit_tweedie_ref_warm_prevalidated(input.as_ref(), 2.0, gamma_options(), Some(&beta))
-            .expect("gamma");
-    let input = ModelInput::new(x.clone(), y);
-    let (two_part_model, _) =
-        fit_two_part_ref_warm_prevalidated(input.as_ref(), two_part_options(), None)
-            .expect("two-part");
+    let gamma_model = tweedie::fit(
+        &data(&x, &gamma_y),
+        2.0,
+        &gamma_options(),
+        Some(&beta),
+        None,
+    )
+    .expect("gamma");
+    let two_part_model = two_part::fit(&data(&x, &y), &two_part_options(), None).expect("two-part");
 
     let prediction = PreparedPredictionDesign::new(x.as_ref()).expect("design");
     assert_eq!(prediction.nrows(), 9_000);
@@ -344,7 +340,9 @@ fn predictions_average_as_the_models_do() {
     close(
         "gamma",
         prediction.mean_gamma(&gamma_model.beta, &weights),
-        gamma_model.predict_mean(&x, Some(&weights)),
+        gamma_model
+            .predict_mean(x.as_ref(), Some(&weights))
+            .expect("mean"),
     );
     close(
         "two-part",
@@ -353,35 +351,37 @@ fn predictions_average_as_the_models_do() {
             &two_part_model.beta_gamma,
             &weights,
         ),
-        two_part_model.predict_mean(&x, Some(&weights)),
+        two_part_model
+            .predict_mean(x.as_ref(), Some(&weights))
+            .expect("mean"),
     );
 }
 
 #[test]
 fn a_prediction_design_may_hold_a_constant_column() {
     let (mut x, y) = design(2_000, 0.0, 7);
-    let input = ModelInput::new(x.clone(), y.clone());
-    let (model, _) =
-        fit_tweedie_ref_warm_prevalidated(input.as_ref(), 2.0, gamma_options(), None).expect("fit");
+    let model = tweedie::fit(&data(&x, &y), 2.0, &gamma_options(), None, None).expect("fit");
     for i in 0..2_000 {
         x[(i, 5)] = 1.0;
     }
-    assert!(PreparedGammaDesign::new(x.as_ref(), y.col_as_slice(0)).is_none());
+    assert!(PreparedGammaDesign::new(x.as_ref(), &y).is_none());
     let weights = vec![1.0; 2_000];
     close(
         "mean",
         PreparedPredictionDesign::new(x.as_ref())
             .expect("design")
             .mean_gamma(&model.beta, &weights),
-        model.predict_mean(&x, Some(&weights)),
+        model
+            .predict_mean(x.as_ref(), Some(&weights))
+            .expect("mean"),
     );
 }
 
 #[test]
 fn a_design_the_compact_form_cannot_represent_is_refused() {
     let (x, y) = design(1_000, 0.2, 8);
-    let y_gamma: Vec<f64> = y.col_as_slice(0).iter().map(|v| v.max(1.0)).collect();
-    let y_two_part = y.col_as_slice(0);
+    let y_gamma: Vec<f64> = y.iter().map(|v| v.max(1.0)).collect();
+    let y_two_part = &y[..];
     let gamma = |x: &Mat<f64>| PreparedGammaDesign::new(x.as_ref(), &y_gamma).is_some();
     let two_part = |x: &Mat<f64>| PreparedTwoPartDesign::new(x.as_ref(), y_two_part).is_some();
     let prediction = |x: &Mat<f64>| PreparedPredictionDesign::new(x.as_ref()).is_some();
@@ -438,49 +438,61 @@ fn a_fit_refuses_what_it_cannot_answer_reliably() {
     let (x, y) = design(6_000, 0.0, 9);
     let warm = gamma_warm(&x, &y);
     let mut scratch = PreparedScratch::default();
-    let prepared = PreparedGammaDesign::new(x.as_ref(), y.col_as_slice(0)).expect("design");
+    let prepared = PreparedGammaDesign::new(x.as_ref(), &y).expect("design");
     let good = vec![1.0; 6_000];
 
     let mut bad = good.clone();
     bad[3] = 0.0;
-    let error = |result: Result<(), PreparedFitError>| result.unwrap_err();
+    let error = |result: Result<(), Error>| result.unwrap_err();
     assert_eq!(
         error(
             prepared
-                .fit(&bad, &warm, gamma_options(), &mut scratch)
+                .fit(&bad, &warm, &gamma_options(), &mut scratch)
                 .map(|_| ())
         ),
-        PreparedFitError::InvalidWeights
+        Error::Input(InputError::Domain {
+            what: "weights",
+            value: 0.0,
+            domain: "(0, inf)",
+        })
     );
     assert_eq!(
         error(
             prepared
-                .fit(&good[1..], &warm, gamma_options(), &mut scratch)
+                .fit(&good[1..], &warm, &gamma_options(), &mut scratch)
                 .map(|_| ())
         ),
-        PreparedFitError::InvalidWeights
+        Error::Input(InputError::Length {
+            what: "weights",
+            expected: 6_000,
+            found: 5_999,
+        })
     );
     assert_eq!(
         error(
             prepared
-                .fit(&good, &Mat::zeros(3, 1), gamma_options(), &mut scratch)
+                .fit(&good, &Mat::zeros(3, 1), &gamma_options(), &mut scratch)
                 .map(|_| ())
         ),
-        PreparedFitError::InvalidWarmStart
+        Error::Input(InputError::Length {
+            what: "warm",
+            expected: 16,
+            found: 3,
+        })
     );
 
     // No iterations allowed: the fit cannot have converged.
     let no_iterations = TweedieOptions {
-        max_iter: 0,
+        max_iterations: 0,
         ..gamma_options()
     };
     assert_eq!(
         error(
             prepared
-                .fit(&good, &warm, no_iterations, &mut scratch)
+                .fit(&good, &warm, &no_iterations, &mut scratch)
                 .map(|_| ())
         ),
-        PreparedFitError::NonConvergence
+        Error::NotConverged { iterations: 0 }
     );
 
     // Two identical columns: the pivot of the second is rounding only.
@@ -493,15 +505,14 @@ fn a_fit_refuses_what_it_cannot_answer_reliably() {
         beta[(0, 0)] = 9.0;
         beta
     };
-    let prepared_duplicated =
-        PreparedGammaDesign::new(duplicated.as_ref(), y.col_as_slice(0)).expect("design");
+    let prepared_duplicated = PreparedGammaDesign::new(duplicated.as_ref(), &y).expect("design");
     assert_eq!(
         error(
             prepared_duplicated
-                .fit(&good, &warm_zero, gamma_options(), &mut scratch)
+                .fit(&good, &warm_zero, &gamma_options(), &mut scratch)
                 .map(|_| ())
         ),
-        PreparedFitError::IllConditioned
+        Error::IllConditioned
     );
 
     // A dummy that holds a 1 on all but one row, whose weight then almost vanishes.
@@ -509,29 +520,28 @@ fn a_fit_refuses_what_it_cannot_answer_reliably() {
     for i in 0..6_000 {
         nearly_all[(i, 9)] = f64::from(i != 17);
     }
-    let prepared_nearly_all =
-        PreparedGammaDesign::new(nearly_all.as_ref(), y.col_as_slice(0)).expect("design");
+    let prepared_nearly_all = PreparedGammaDesign::new(nearly_all.as_ref(), &y).expect("design");
     let mut tiny = good.clone();
     tiny[17] = 1e-9;
     assert_eq!(
         error(
             prepared_nearly_all
-                .fit(&tiny, &warm_zero, gamma_options(), &mut scratch)
+                .fit(&tiny, &warm_zero, &gamma_options(), &mut scratch)
                 .map(|_| ())
         ),
-        PreparedFitError::IllConditioned
+        Error::IllConditioned
     );
 
     // An outcome far beyond the log-link bound.
-    let hot: Vec<f64> = y.col_as_slice(0).iter().map(|v| v * 1e20).collect();
+    let hot: Vec<f64> = y.iter().map(|v| v * 1e20).collect();
     let prepared_hot = PreparedGammaDesign::new(x.as_ref(), &hot).expect("design");
     assert_eq!(
         error(
             prepared_hot
-                .fit(&good, &warm_zero, gamma_options(), &mut scratch)
+                .fit(&good, &warm_zero, &gamma_options(), &mut scratch)
                 .map(|_| ())
         ),
-        PreparedFitError::Saturated
+        Error::Saturated
     );
 }
 
@@ -540,21 +550,21 @@ fn a_two_part_fit_refuses_what_it_cannot_answer_reliably() {
     let (x, y) = design(6_000, 0.3, 10);
     let warm = two_part_warm(&x, &y);
     let mut scratch = PreparedScratch::default();
-    let prepared = PreparedTwoPartDesign::new(x.as_ref(), y.col_as_slice(0)).expect("design");
+    let prepared = PreparedTwoPartDesign::new(x.as_ref(), &y).expect("design");
     let good = vec![1.0; 6_000];
-    let code = |options: FitOptions,
+    let code = |options: TwoPartOptions,
                 weights: &[f64],
                 warm: &TwoPartWarmStart,
                 scratch: &mut PreparedScratch| {
         prepared
-            .fit(weights, warm, options, scratch)
+            .fit(weights, warm, &options, scratch)
             .map(|_| ())
             .unwrap_err()
     };
 
     assert_eq!(
         code(
-            FitOptions {
+            TwoPartOptions {
                 regularization: Regularization::ElasticNet {
                     lambda: 1e-3,
                     alpha: 0.5,
@@ -566,11 +576,13 @@ fn a_two_part_fit_refuses_what_it_cannot_answer_reliably() {
             &warm,
             &mut scratch
         ),
-        PreparedFitError::UnsupportedRegularization
+        Error::Unsupported {
+            what: "an elastic net or a ridge on the intercept in a compact design"
+        }
     );
     assert_eq!(
         code(
-            FitOptions {
+            TwoPartOptions {
                 regularization: Regularization::Ridge {
                     lambda: 1e-3,
                     exclude_intercept: false
@@ -581,13 +593,18 @@ fn a_two_part_fit_refuses_what_it_cannot_answer_reliably() {
             &warm,
             &mut scratch
         ),
-        PreparedFitError::UnsupportedRegularization
+        Error::Unsupported {
+            what: "an elastic net or a ridge on the intercept in a compact design"
+        }
     );
     let mut bad = good.clone();
     bad[0] = f64::NAN;
     assert_eq!(
         code(two_part_options(), &bad, &warm, &mut scratch),
-        PreparedFitError::InvalidWeights
+        Error::Input(InputError::NotFinite {
+            what: "weights",
+            row: 0
+        })
     );
     assert_eq!(
         code(
@@ -599,19 +616,23 @@ fn a_two_part_fit_refuses_what_it_cannot_answer_reliably() {
             },
             &mut scratch
         ),
-        PreparedFitError::InvalidWarmStart
+        Error::Input(InputError::Length {
+            what: "warm",
+            expected: 16,
+            found: 2
+        })
     );
     assert_eq!(
         code(
-            FitOptions {
-                max_iter: 0,
+            TwoPartOptions {
+                max_iterations: 0,
                 ..two_part_options()
             },
             &good,
             &warm,
             &mut scratch
         ),
-        PreparedFitError::NonConvergence
+        Error::NotConverged { iterations: 0 }
     );
 }
 
@@ -621,24 +642,24 @@ fn a_compact_result_does_not_depend_on_what_the_scratch_held() {
     let (x_two, y_two) = design(7_000, 0.3, 12);
     let warm = gamma_warm(&x, &y);
     let warm_two = two_part_warm(&x_two, &y_two);
-    let gamma = PreparedGammaDesign::new(x.as_ref(), y.col_as_slice(0)).expect("gamma");
-    let two_part = PreparedTwoPartDesign::new(x_two.as_ref(), y_two.col_as_slice(0)).expect("two");
+    let gamma = PreparedGammaDesign::new(x.as_ref(), &y).expect("gamma");
+    let two_part = PreparedTwoPartDesign::new(x_two.as_ref(), &y_two).expect("two");
     let weights = replicate_weights(6_000, 300);
     let weights_two = replicate_weights(7_000, 301);
 
     let fresh_gamma = gamma
         .fit(
-            weights.col_as_slice(0),
+            &weights,
             &warm,
-            gamma_options(),
+            &gamma_options(),
             &mut PreparedScratch::default(),
         )
         .expect("gamma");
     let fresh_two = two_part
         .fit(
-            weights_two.col_as_slice(0),
+            &weights_two,
             &warm_two,
-            two_part_options(),
+            &two_part_options(),
             &mut PreparedScratch::default(),
         )
         .expect("two-part");
@@ -646,15 +667,10 @@ fn a_compact_result_does_not_depend_on_what_the_scratch_held() {
     let mut shared = PreparedScratch::default();
     for _ in 0..2 {
         let used_two = two_part
-            .fit(
-                weights_two.col_as_slice(0),
-                &warm_two,
-                two_part_options(),
-                &mut shared,
-            )
+            .fit(&weights_two, &warm_two, &two_part_options(), &mut shared)
             .expect("two-part");
         let used_gamma = gamma
-            .fit(weights.col_as_slice(0), &warm, gamma_options(), &mut shared)
+            .fit(&weights, &warm, &gamma_options(), &mut shared)
             .expect("gamma");
         for j in 0..16 {
             assert_eq!(
@@ -692,14 +708,12 @@ fn assert_same_bits(label: &str, a: &Mat<f64>, b: &Mat<f64>) {
 fn a_tweedie_fit_with_a_scratch_is_bit_identical_to_one_without() {
     let (x, y) = design(7_000, 0.2, 13);
     let (x_small, y_small) = design(1_500, 0.2, 14);
-    let positive = Mat::from_fn(7_000, 1, |i, _| y[(i, 0)].max(1.0));
+    let positive: Vec<f64> = y.iter().map(|v| v.max(1.0)).collect();
     let weights = replicate_weights(7_000, 400);
     let weights_small = replicate_weights(1_500, 401);
     let relaxed = FitStrategy::Relaxed {
         fallback_lambda: 1e-3,
         max_retries: 3,
-        warm_start: true,
-        time_budget: None,
     };
     let mut scratch = TweedieScratch::default();
     for power in [1.0_f64, 1.2, 1.5, 1.8, 2.0] {
@@ -726,52 +740,37 @@ fn a_tweedie_fit_with_a_scratch_is_bit_identical_to_one_without() {
                 },
             ),
         ] {
-            let input =
-                ModelInput::new(x.clone(), outcome.clone()).with_sample_weights(weights.clone());
-            let (plain, plain_report) =
-                fit_tweedie_ref_warm_prevalidated(input.as_ref(), power, options, None)
-                    .expect("plain");
-            let (held, held_report) = fit_tweedie_ref_warm_prevalidated_with_scratch(
-                input.as_ref(),
-                power,
-                options,
-                None,
-                &mut scratch,
-            )
-            .expect("held");
+            let input = weighted(&x, outcome, &weights);
+            let plain = tweedie::fit(&input, power, &options, None, None).expect("plain");
+            let held =
+                tweedie::fit(&input, power, &options, None, Some(&mut scratch)).expect("held");
             let name = format!("power {power} {label}");
             assert_same_bits(&name, &plain.beta, &held.beta);
             assert_eq!(
-                plain_report.meta.iterations, held_report.meta.iterations,
+                plain.report.meta.iterations, held.report.meta.iterations,
                 "{name}"
             );
-            match (&plain_report.cov, &held_report.cov) {
+            match (&plain.report.cov, &held.report.cov) {
                 (Some(a), Some(b)) => assert_same_bits(&name, a, b),
                 (None, None) => {}
                 _ => panic!("{name}: one fit has a covariance"),
             }
 
             // Another shape reallocates; the next fit is unaffected by it.
-            let outcome_small = Mat::from_fn(1_500, 1, |i, _| {
-                if (power - 2.0).abs() < 1e-12 {
-                    y_small[(i, 0)].max(1.0)
-                } else {
-                    y_small[(i, 0)]
-                }
-            });
-            let small = ModelInput::new(x_small.clone(), outcome_small)
-                .with_sample_weights(weights_small.clone());
-            let (plain_small, _) =
-                fit_tweedie_ref_warm_prevalidated(small.as_ref(), power, options, None)
-                    .expect("plain");
-            let (held_small, _) = fit_tweedie_ref_warm_prevalidated_with_scratch(
-                small.as_ref(),
-                power,
-                options,
-                None,
-                &mut scratch,
-            )
-            .expect("held");
+            let outcome_small: Vec<f64> = y_small
+                .iter()
+                .map(|&v| {
+                    if (power - 2.0).abs() < 1e-12 {
+                        v.max(1.0)
+                    } else {
+                        v
+                    }
+                })
+                .collect();
+            let small = weighted(&x_small, &outcome_small, &weights_small);
+            let plain_small = tweedie::fit(&small, power, &options, None, None).expect("plain");
+            let held_small =
+                tweedie::fit(&small, power, &options, None, Some(&mut scratch)).expect("held");
             assert_same_bits(&name, &plain_small.beta, &held_small.beta);
         }
     }
@@ -790,26 +789,19 @@ fn a_scratch_serves_an_uncentred_fit_after_a_centred_one() {
         }
     });
     let mut scratch = TweedieScratch::default();
-    let centred = ModelInput::new(x.clone(), y.clone());
-    fit_tweedie_ref_warm_prevalidated_with_scratch(
-        centred.as_ref(),
+    tweedie::fit(
+        &data(&x, &y),
         2.0,
-        gamma_options(),
+        &gamma_options(),
         None,
-        &mut scratch,
+        Some(&mut scratch),
     )
     .expect("centred");
-    let uncentred = ModelInput::new(shifted, y);
-    let plain = fit_tweedie_ref_warm_prevalidated(uncentred.as_ref(), 2.0, gamma_options(), None);
-    let held = fit_tweedie_ref_warm_prevalidated_with_scratch(
-        uncentred.as_ref(),
-        2.0,
-        gamma_options(),
-        None,
-        &mut scratch,
-    );
+    let uncentred = data(&shifted, &y);
+    let plain = tweedie::fit(&uncentred, 2.0, &gamma_options(), None, None);
+    let held = tweedie::fit(&uncentred, 2.0, &gamma_options(), None, Some(&mut scratch));
     match (plain, held) {
-        (Ok((a, _)), Ok((b, _))) => assert_same_bits("uncentred", &a.beta, &b.beta),
+        (Ok(a), Ok(b)) => assert_same_bits("uncentred", &a.beta, &b.beta),
         (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string()),
         (a, b) => panic!("one fit failed: {:?} {:?}", a.err(), b.err()),
     }

@@ -21,18 +21,7 @@ use epistat_did::did_cc::{self, Assumption, DidCc, DidCcOptions};
 use epistat_did::triple_did::{self, TripleDidData, TripleDidOptions};
 use epistat_did::two_period::nuisance::{self, Pruning};
 use epistat_did::two_period::{self, Estimator as E, TwoPeriod, TwoPeriodOptions};
-use epistat_did::{
-    Error, HonestEventStudyInput, HonestJointPathConfig, HonestJointPathMethod,
-    HonestMonotonicityDirection, HonestPostFunctional, HonestRelativeMagnitudeBound,
-    HonestSensitivity, InferenceConfig, LeastFavorableSimulation,
-    RelativeMagnitudeConfidenceSetConfig, SensitivitySummaryMethod, StaggeredPanel, TwoPeriodData,
-    assess_honest_event_study_directional_region_with_config,
-    assess_honest_event_study_joint_path_region_with_config, assess_honest_event_study_workflow,
-    compute_original_confidence_set, compute_relative_magnitude_confidence_set,
-    compute_relative_magnitude_identified_set, estimate_smoothness_upper_bound_from_pretrends,
-    summarize_relative_magnitude_sensitivity_many_with_simulation,
-    summarize_smoothness_sensitivity_with_simulation,
-};
+use epistat_did::{Error, StaggeredPanel, TwoPeriodData};
 use epistat_linalg::MatRef;
 use epistat_testkit::{Fingerprint, load_json, on_threads};
 use serde::Deserialize;
@@ -299,14 +288,6 @@ struct Mpdta {
 }
 
 #[derive(Deserialize)]
-struct HonestRef {
-    betahat: Vec<f64>,
-    sigma: Vec<Vec<f64>>,
-    pre_indices: Vec<usize>,
-    post_indices: Vec<usize>,
-}
-
-#[derive(Deserialize)]
 struct TripleRow {
     id: i32,
     partition: i32,
@@ -381,7 +362,6 @@ impl Repeated {
 
 struct Data {
     mpdta: Vec<MpdtaRow>,
-    honest: HonestEventStudyInput,
     triple: Triple,
     dose: Vec<f64>,
     dose_change: Vec<f64>,
@@ -390,15 +370,6 @@ struct Data {
 
 fn data() -> Data {
     let mpdta: Mpdta = load_json("tests/data/cs_panel_dr_universal_ref.json");
-    let honest: HonestRef = load_json("tests/data/honest_did_ref.json");
-    let pre_periods = honest
-        .pre_indices
-        .iter()
-        .map(|i| -i32::try_from(*i).expect("fits"))
-        .collect();
-    let post_periods = (0..honest.post_indices.len())
-        .map(|i| i32::try_from(i).expect("fits"))
-        .collect();
     let triple: TripleRef = load_json("tests/data/triple_did_ref.json");
     let pairs: Vec<&[TripleRow]> = triple.data.chunks(2).collect();
     for pair in &pairs {
@@ -433,12 +404,6 @@ fn data() -> Data {
     };
     Data {
         mpdta: mpdta.data_subset,
-        honest: HonestEventStudyInput {
-            betahat: honest.betahat,
-            covariance: honest.sigma,
-            pre_periods,
-            post_periods,
-        },
         triple,
         dose: continuous.dose,
         dose_change: continuous.delta_y,
@@ -665,7 +630,6 @@ impl Panel {
 )]
 fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     let mut out = Vec::new();
-    let inference = InferenceConfig::default();
     let level = Level::default();
     let panel_data = columns(&data.mpdta, Design::Panel);
     let rc_data = columns(&data.mpdta, Design::RepeatedCrossSection);
@@ -1061,170 +1025,6 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     ]);
     out.push(("did_cc_test", hash_numbers(&numbers)));
 
-    // HonestDiD, on the paths Study I calls.
-    let honest = &data.honest;
-    let first = [1.0, 0.0, 0.0, 0.0];
-    let average = [0.25, 0.25, 0.25, 0.25];
-    let simulation = LeastFavorableSimulation {
-        draws: 200,
-        seed: 3,
-    };
-    out.push((
-        "honest_original",
-        digest(&compute_original_confidence_set(honest, &first, inference)),
-    ));
-    out.push((
-        "honest_rm_identified",
-        digest(&compute_relative_magnitude_identified_set(
-            honest, &first, 1.0,
-        )),
-    ));
-    out.push((
-        "honest_rm_conditional",
-        digest(&compute_relative_magnitude_confidence_set(
-            honest, &average, 0.5, inference,
-        )),
-    ));
-    out.push((
-        "honest_smoothness_m",
-        digest(&estimate_smoothness_upper_bound_from_pretrends(
-            honest, 0.05,
-        )),
-    ));
-    out.push((
-        "honest_smoothness_summary",
-        digest(&summarize_smoothness_sensitivity_with_simulation(
-            honest,
-            inference,
-            &average,
-            None,
-            Some(&[0.0, 0.2, 0.5]),
-            None,
-            None,
-            simulation,
-        )),
-    ));
-    // The fixed-length interval of a contrast, whose weights have both signs,
-    // and the conditional-FLCI hybrid under a monotone restriction at an M the
-    // pre-period coefficients contradict and one they do not.
-    out.push((
-        "honest_smoothness_flci",
-        digest(&summarize_smoothness_sensitivity_with_simulation(
-            honest,
-            inference,
-            &[1.0, -1.0, 0.0, 0.0],
-            Some(SensitivitySummaryMethod::Flci),
-            Some(&[0.0, 0.05]),
-            None,
-            None,
-            simulation,
-        )),
-    ));
-    out.push((
-        "honest_smoothness_conditional",
-        digest(&summarize_smoothness_sensitivity_with_simulation(
-            honest,
-            inference,
-            &average,
-            None,
-            Some(&[0.05, 0.2]),
-            None,
-            Some(HonestMonotonicityDirection::Decreasing),
-            simulation,
-        )),
-    ));
-    out.push((
-        "honest_rm_summary_many",
-        digest(
-            &summarize_relative_magnitude_sensitivity_many_with_simulation(
-                honest,
-                inference,
-                &[&first, &average],
-                None,
-                Some(&[0.5, 1.0]),
-                Some(HonestRelativeMagnitudeBound::ParallelTrendsDeviation),
-                None,
-                None,
-                simulation,
-            ),
-        ),
-    ));
-    for (name, method) in [
-        ("honest_joint_bonferroni", HonestJointPathMethod::Bonferroni),
-        (
-            "honest_joint_gaussian",
-            HonestJointPathMethod::GaussianSimulated,
-        ),
-    ] {
-        out.push((
-            name,
-            digest(&assess_honest_event_study_joint_path_region_with_config(
-                honest,
-                HonestSensitivity::RelativeMagnitude(1.0),
-                inference,
-                0.0,
-                RelativeMagnitudeConfidenceSetConfig {
-                    least_favorable_draws: 200,
-                    least_favorable_seed: 0,
-                    ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
-                },
-                HonestJointPathConfig {
-                    method,
-                    simulation_draws: 500,
-                    simulation_seed: 11,
-                },
-            )),
-        ));
-    }
-    // The workflow's directional region adds random directions drawn by
-    // Box-Muller, whose sines and cosines differ in the last bit between debug
-    // and release builds on some targets, so it is checked on fixed directions.
-    let workflow = assess_honest_event_study_workflow(
-        honest,
-        &[
-            HonestPostFunctional::Period(0),
-            HonestPostFunctional::AverageWindow {
-                start_period: 0,
-                end_period: 3,
-            },
-        ],
-        HonestSensitivity::Smoothness(0.2),
-        inference,
-        0.0,
-    )
-    .map(|result| (result.functional_assessments, result.joint_path_region));
-    out.push(("honest_workflow", digest(&workflow)));
-    let mut directions = (0..4)
-        .map(|i| {
-            (0..4)
-                .map(|j| f64::from(u8::from(i == j)))
-                .collect::<Vec<_>>()
-        })
-        .collect::<Vec<_>>();
-    directions.push(vec![0.25; 4]);
-    directions.push(vec![1.0, -1.0, 0.0, 0.0]);
-    directions.push(vec![0.0, 0.5, 0.5, -1.0]);
-    out.push((
-        "honest_directional_gaussian",
-        digest(&assess_honest_event_study_directional_region_with_config(
-            honest,
-            &directions,
-            HonestSensitivity::RelativeMagnitude(1.0),
-            inference,
-            0.0,
-            RelativeMagnitudeConfidenceSetConfig {
-                least_favorable_draws: 200,
-                least_favorable_seed: 0,
-                ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
-            },
-            HonestJointPathConfig {
-                method: HonestJointPathMethod::GaussianSimulated,
-                simulation_draws: 500,
-                simulation_seed: 13,
-            },
-        )),
-    ));
-
     // The panel IPW and outcome-regression routes, the sample of the panel
     // route, and an unbalanced panel under the two rules that keep it.
     out.push((
@@ -1382,18 +1182,6 @@ const GOLDEN: &[(&str, u64)] = &[
     ("did_cc_robust", 0x4c06_ee7e_0a32_a429),
     ("did_cc_stationary", 0x21ff_0ebd_15c7_0221),
     ("did_cc_test", 0x4c05_eb0a_4dc3_ab4d),
-    ("honest_original", 0xa7ba_d0f9_4eb4_a945),
-    ("honest_rm_identified", 0xfb67_64de_8a7f_f5f5),
-    ("honest_rm_conditional", 0x045a_d121_20ee_75ac),
-    ("honest_smoothness_m", 0xefb8_e9c8_0987_2f59),
-    ("honest_smoothness_summary", 0x74cf_3a3e_4526_d589),
-    ("honest_smoothness_flci", 0x0a0d_3085_b508_3e3d),
-    ("honest_smoothness_conditional", 0x6807_6f48_f895_fb2b),
-    ("honest_rm_summary_many", 0x9b83_003d_f87a_07e8),
-    ("honest_joint_bonferroni", 0x3dac_f805_663e_d12e),
-    ("honest_joint_gaussian", 0xc186_649e_b5d3_2cfd),
-    ("honest_workflow", 0x5f2a_2dea_d42c_dd95),
-    ("honest_directional_gaussian", 0x5ac6_f9d4_2bfd_fd45),
     ("att_gt_ipw_panel", 0x1bdd_03b5_e8bb_b591),
     ("att_gt_or_panel", 0x896f_8af5_dfa0_267f),
     ("att_gt_dr_panel_sample", 0x8d2e_1d4c_fe74_6ac0),
