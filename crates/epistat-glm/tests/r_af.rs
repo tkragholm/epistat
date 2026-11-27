@@ -96,7 +96,7 @@ fn logistic_fractions_match_af_and_the_stacked_sandwich() {
             scale: IntervalScale::Identity,
         };
         let data = glm_data(x.as_ref(), &c.y, c.weights.as_deref(), None, None).unwrap();
-        let clusters = c.cluster.as_deref().map(Clusters::from_labels);
+        let clusters = c.cluster.as_deref().map(Clusters::from_labels_first_seen);
         let got =
             attributable_logistic(&fit, &data, x0.as_ref(), clusters.as_ref(), &opts).unwrap();
         let estimate = got.af.unwrap();

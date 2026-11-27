@@ -173,7 +173,7 @@ pub struct Attributable {
 /// design with the exposure removed, as the module documentation describes.
 /// `clusters`, when given, sum the influence within clusters for a
 /// cluster-robust variance; `AFglm` numbers them in order of first
-/// appearance, as [`Clusters::from_labels`] does. The fit must be binomial
+/// appearance, as [`Clusters::from_labels_first_seen`] does. The fit must be binomial
 /// with the logit link; the fitted means are checked against the linear
 /// predictor.
 ///

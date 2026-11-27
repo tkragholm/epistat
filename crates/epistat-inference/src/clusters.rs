@@ -10,7 +10,7 @@
 //! looks its clusters up by key ([`Clusters::for_keys`]), and only when it is
 //! keyed the same way ([`crate::KeyedBy`]).
 //!
-//! [`Clusters::from_labels`] numbers the distinct labels in the
+//! [`Clusters::from_labels_first_seen`] numbers the distinct labels in the
 //! order in which they first appear. A hash map looks the labels up, but the
 //! numbers come from a counter and never from the map's iteration order, so
 //! the numbering does not depend on the hasher or its random state.
@@ -32,7 +32,7 @@ use crate::{Error, KeyedBy};
 /// The cluster of each observation, numbered from 0.
 ///
 /// The numbering is the order of first appearance for
-/// [`Clusters::from_labels`] and increasing order of label or code
+/// [`Clusters::from_labels_first_seen`] and increasing order of label or code
 /// for the other constructors. Built by [`Clusters::per_unit`] or
 /// [`Clusters::per_row`], it also knows the key of each entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,8 +44,19 @@ pub struct Clusters {
 
 impl Clusters {
     /// Numbers the distinct labels in the order they first appear.
+    #[deprecated(
+        since = "0.4.0",
+        note = "use Clusters::from_labels_first_seen, the same numbering under a name that \
+                says its order, or Clusters::from_sorted_labels for the order of Codes::from_labels"
+    )]
     #[must_use]
     pub fn from_labels<L: Eq + Hash>(labels: &[L]) -> Self {
+        Self::from_labels_first_seen(labels)
+    }
+
+    /// Numbers the distinct labels in the order they first appear.
+    #[must_use]
+    pub fn from_labels_first_seen<L: Eq + Hash>(labels: &[L]) -> Self {
         let mut number: HashMap<&L, usize> = HashMap::new();
         let of = labels
             .iter()
@@ -237,7 +248,7 @@ mod tests {
 
     #[test]
     fn clusters_are_numbered_by_first_appearance() {
-        let clusters = Clusters::from_labels(&["b", "a", "b", "c", "a"]);
+        let clusters = Clusters::from_labels_first_seen(&["b", "a", "b", "c", "a"]);
         assert_eq!(clusters.of(), [0, 1, 0, 2, 1]);
         assert_eq!((clusters.count(), clusters.len()), (3, 5));
         assert_eq!(clusters.sums([1.0, 2.0, 3.0, 4.0, 5.0]), [4.0, 7.0, 4.0]);
@@ -278,6 +289,16 @@ mod tests {
             (&[1, 1, 0][..], Some(KeyedBy::Rows))
         );
         assert!(Clusters::per_row(&[]).is_err());
+    }
+
+    #[test]
+    #[expect(deprecated, reason = "the 0.3 name keeps its numbering")]
+    fn the_deprecated_name_numbers_by_first_appearance() {
+        let labels = ["b", "a", "b"];
+        assert_eq!(
+            Clusters::from_labels(&labels),
+            Clusters::from_labels_first_seen(&labels)
+        );
     }
 
     #[test]

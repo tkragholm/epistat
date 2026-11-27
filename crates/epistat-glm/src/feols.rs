@@ -631,7 +631,7 @@ impl FeolsFit {
 
     /// The codes of `codes` on the rows that enter, as clusters.
     /// The cluster of each row that enters and the number of clusters,
-    /// numbered in order of first appearance as [`Clusters::from_labels`]
+    /// numbered in order of first appearance as [`Clusters::from_labels_first_seen`]
     /// numbers them, through a table of the codes instead of a hash map.
     fn clusters_of(fe: &FixedEffects, codes: &[u32]) -> (Vec<u32>, usize) {
         let rows = fe.rows();
@@ -875,7 +875,7 @@ fn intersection(rows: &[usize], ways: &[&[u32]], members: &[usize]) -> Clusters 
             .iter()
             .map(|&i| u64::from(a[i]) << 32 | u64::from(b[i]))
             .collect();
-        return Clusters::from_labels(&labels);
+        return Clusters::from_labels_first_seen(&labels);
     }
     let mut number: HashMap<Vec<u32>, usize> = HashMap::new();
     let labels: Vec<usize> = rows
@@ -886,5 +886,5 @@ fn intersection(rows: &[usize], ways: &[&[u32]], members: &[usize]) -> Clusters 
             *number.entry(key).or_insert(next)
         })
         .collect();
-    Clusters::from_labels(&labels)
+    Clusters::from_labels_first_seen(&labels)
 }

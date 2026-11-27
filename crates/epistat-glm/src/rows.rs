@@ -85,7 +85,7 @@ pub struct Block<'a> {
     pub weight: &'a mut [f64],
     /// The cluster of each row, numbered from 0 in the order in which the
     /// clusters first appear among the rows, as
-    /// `epistat_inference::Clusters::from_labels` numbers labels. Read only by
+    /// `epistat_inference::Clusters::from_labels_first_seen` numbers labels. Read only by
     /// a clustered covariance.
     pub cluster: &'a mut [usize],
 }

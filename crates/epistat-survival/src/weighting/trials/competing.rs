@@ -142,7 +142,7 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
         person: input.person,
     })?;
 
-    let clusters = Clusters::from_labels(input.person);
+    let clusters = Clusters::from_labels_first_seen(input.person);
     let g = clusters.count();
     let of = clusters.of();
     let mut u = vec![0.0; g * p];

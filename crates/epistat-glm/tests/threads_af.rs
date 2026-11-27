@@ -39,7 +39,7 @@ fn attributable_fraction_does_not_depend_on_the_number_of_threads() {
             .unwrap();
         let mut out = vec![];
         let data = glm_data(x.as_ref(), &y, Some(&w), None, None).unwrap();
-        let clusters = Clusters::from_labels(&cluster);
+        let clusters = Clusters::from_labels_first_seen(&cluster);
         for design in [Design::CrossSectional, Design::CaseControl] {
             for cl in [None, Some(&clusters)] {
                 let a = attributable_logistic(

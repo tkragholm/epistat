@@ -949,7 +949,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!((variance - 4.0 / 3.0 * 5.5 / 16.0).abs() < 1e-15);
-        let one_cluster = Clusters::from_labels(&[7, 7]);
+        let one_cluster = Clusters::from_labels_first_seen(&[7, 7]);
         assert_eq!(clustered_variance(&psi[..2], &one_cluster), Ok(None));
         assert_eq!(clustered_standard_error(&psi[..2], &one_cluster), Ok(None));
         assert_eq!(
@@ -958,7 +958,7 @@ mod tests {
         );
         let a = [1.0, -2.0, 0.5, 0.5, 3.0];
         let b = [0.0, 1.0, -1.0, 2.0, 0.5];
-        let clusters = Clusters::from_labels(&[1, 1, 2, 3, 3]);
+        let clusters = Clusters::from_labels_first_seen(&[1, 1, 2, 3, 3]);
         let covariance = clustered_covariance(&[&a, &b], &clusters).unwrap().unwrap();
         assert_eq!(
             covariance[0].to_bits(),
