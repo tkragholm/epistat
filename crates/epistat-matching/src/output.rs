@@ -6,7 +6,7 @@
 //! into a data frame without looking at a hash map. They are built from a
 //! [`MatchOutcome`] and the units the match was run on, in input order, which
 //! the outcome does not keep: it holds the pairs and only the count of
-//! anchors that found no control.
+//! cases that found no control.
 //!
 //! The ordered views at the end of the module give the map-based outputs of
 //! the crate in the order of their keys.
@@ -14,10 +14,10 @@
 //! # Algorithm
 //!
 //! Units are numbered by their position in the data, and each output is built
-//! by one pass over the pairs. A row of the match matrix is an anchor, in the
+//! by one pass over the pairs. A row of the match matrix is an case, in the
 //! order of the units, with its controls in the order they were assigned. In
-//! the long shape an anchor row weighs 1 and a control row weighs the
-//! reciprocal of the number of controls its anchor got. Weights are rescaled to
+//! the long shape an case row weighs 1 and a control row weighs the
+//! reciprocal of the number of controls its case got. Weights are rescaled to
 //! a mean of 1 in each group when the options ask for it, as `normalize = TRUE`
 //! does in `matchit()`. No random number is drawn.
 //!
@@ -27,6 +27,7 @@
 //!    for parametric causal inference. Journal of Statistical Software
 //!    2011;42(8).
 
+use crate::Error;
 use crate::matching::to_f64;
 use crate::matching::{
     MatchWeightMethod, PropensityScoreEstimate, SubclassedUnits, SubclassificationOutcome,
@@ -34,12 +35,10 @@ use crate::matching::{
 };
 use crate::types::{Estimand, MatchOutcome};
 use std::collections::{HashMap, HashSet};
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 
 /// The units of a match in input order, with the group of each.
 ///
-/// The anchors are the focal group of the match, the treated units for the
+/// The cases are the focal group of the match, the treated units for the
 /// effect in the treated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Units {
@@ -49,23 +48,20 @@ pub struct Units {
 }
 
 impl Units {
-    /// The units, in the order of the data, and whether each is an anchor.
+    /// The units, in the order of the data, and whether each is an case.
     ///
     /// # Errors
     ///
-    /// [`OutputError::LengthMismatch`] when the two lists differ in length and
-    /// [`OutputError::DuplicateId`] when an id occurs twice.
-    pub fn new(ids: Vec<String>, anchor: Vec<bool>) -> Result<Self, OutputError> {
+    /// an [`Error::Input`] when the two lists differ in length and
+    /// [`Error::DuplicateId`] when an id occurs twice.
+    pub fn new(ids: Vec<String>, anchor: Vec<bool>) -> Result<Self, Error> {
         if ids.len() != anchor.len() {
-            return Err(OutputError::LengthMismatch {
-                ids: ids.len(),
-                anchor: anchor.len(),
-            });
+            return Err(Error::length("case flags", ids.len(), anchor.len()));
         }
         let mut seen: HashSet<&str> = HashSet::with_capacity(ids.len());
         for id in &ids {
             if !seen.insert(id.as_str()) {
-                return Err(OutputError::DuplicateId { id: id.clone() });
+                return Err(Error::DuplicateId { id: id.clone() });
             }
         }
         Ok(Self {
@@ -80,13 +76,13 @@ impl Units {
     ///
     /// Risk-set matching is one, since a future case is a control in the pairs
     /// of earlier cases. The role of a unit is read from each pair. Only
-    /// [`get_matches`] takes these units, and it cannot list the anchors that
+    /// [`get_matches`] takes these units, and it cannot list the cases that
     /// found no control, since the outcome does not name them.
     ///
     /// # Errors
     ///
-    /// [`OutputError::DuplicateId`] when an id occurs twice.
-    pub fn without_fixed_roles(ids: Vec<String>) -> Result<Self, OutputError> {
+    /// [`Error::DuplicateId`] when an id occurs twice.
+    pub fn without_fixed_roles(ids: Vec<String>) -> Result<Self, Error> {
         let anchor = vec![false; ids.len()];
         let mut units = Self::new(ids, anchor)?;
         units.fixed_roles = false;
@@ -94,18 +90,18 @@ impl Units {
     }
 
     /// Whether each unit has one group in every pair. False for units made
-    /// with [`Units::without_fixed_roles`], whose anchor flags are all false
+    /// with [`Units::without_fixed_roles`], whose case flags are all false
     /// and mean nothing.
     #[must_use]
     pub const fn has_fixed_roles(&self) -> bool {
         self.fixed_roles
     }
 
-    fn require_fixed_roles(&self, output: &'static str) -> Result<(), OutputError> {
+    fn require_fixed_roles(&self, output: &'static str) -> Result<(), Error> {
         if self.fixed_roles {
             Ok(())
         } else {
-            Err(OutputError::NoFixedRoles { output })
+            Err(Error::NoFixedRoles { output })
         }
     }
 
@@ -115,9 +111,9 @@ impl Units {
         &self.ids
     }
 
-    /// Whether each unit is an anchor, in input order.
+    /// Whether each unit is an case, in input order.
     #[must_use]
-    pub fn anchor_flags(&self) -> &[bool] {
+    pub fn case_flags(&self) -> &[bool] {
         &self.anchor
     }
 
@@ -133,13 +129,13 @@ impl Units {
         self.ids.is_empty()
     }
 
-    /// The anchors' ids in input order.
+    /// The cases' ids in input order.
     #[must_use]
-    pub fn anchor_ids(&self) -> Vec<&str> {
+    pub fn case_ids(&self) -> Vec<&str> {
         self.ids
             .iter()
             .zip(&self.anchor)
-            .filter(|(_, is_anchor)| **is_anchor)
+            .filter(|(_, is_case)| **is_case)
             .map(|(id, _)| id.as_str())
             .collect()
     }
@@ -153,119 +149,22 @@ impl Units {
     }
 }
 
-/// Why an output could not be built.
-#[derive(Debug, Clone, PartialEq)]
-pub enum OutputError {
-    /// The id list and the group list differ in length.
-    LengthMismatch {
-        /// Number of ids.
-        ids: usize,
-        /// Number of group flags.
-        anchor: usize,
-    },
-    /// An id occurs twice among the units.
-    DuplicateId {
-        /// The id.
-        id: String,
-    },
-    /// A pair names an anchor that is not among the anchors given.
-    UnknownAnchor {
-        /// The id.
-        id: String,
-    },
-    /// A pair names a candidate that is not among the candidates given.
-    UnknownCandidate {
-        /// The id.
-        id: String,
-    },
-    /// The units have no fixed group, and the output needs one.
-    NoFixedRoles {
-        /// The output that was asked for.
-        output: &'static str,
-    },
-    /// A per-unit column is not as long as the list of units.
-    ColumnLength {
-        /// The column.
-        column: &'static str,
-        /// Number of units.
-        units: usize,
-        /// Length of the column.
-        length: usize,
-    },
-    /// Pairs were asked for from a selection that was not paired.
-    NotPaired,
-    /// A weight is NaN, infinite or negative.
-    InvalidWeight {
-        /// The id of the unit.
-        id: String,
-        /// The weight.
-        weight: f64,
-    },
-}
-
-impl Display for OutputError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LengthMismatch { ids, anchor } => write!(
-                f,
-                "{ids} ids but {anchor} group flags; give one flag for every id"
-            ),
-            Self::DuplicateId { id } => write!(
-                f,
-                "the id {id} occurs more than once; the ids of the units must be unique"
-            ),
-            Self::UnknownAnchor { id } => write!(
-                f,
-                "a pair has the anchor {id}, which is not an anchor among the units given; \
-                 pass the units the match was run on"
-            ),
-            Self::UnknownCandidate { id } => write!(
-                f,
-                "a pair has the candidate {id}, which is not a candidate among the units given; \
-                 pass the units the match was run on"
-            ),
-            Self::NoFixedRoles { output } => write!(
-                f,
-                "{output} needs each unit to be an anchor or a candidate throughout; \
-                 these units have a role in each pair"
-            ),
-            Self::ColumnLength {
-                column,
-                units,
-                length,
-            } => write!(
-                f,
-                "{column} has {length} values for {units} units; give one for every unit"
-            ),
-            Self::InvalidWeight { id, weight } => write!(
-                f,
-                "the weight {weight} of {id} is not a finite number of at least 0"
-            ),
-            Self::NotPaired => {
-                f.write_str("the selection was not paired; give mahvars to pair the selected units")
-            }
-        }
-    }
-}
-
-impl Error for OutputError {}
-
-/// MatchIt's `match.matrix`: one row per anchor, in input order, holding its
+/// MatchIt's `match.matrix`: one row per case, in input order, holding its
 /// controls in the order they were assigned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchMatrix {
-    /// The anchor of each row.
-    pub anchor_id: Vec<String>,
-    /// Column `j` holds the `j`-th control of each anchor, `None` where the
-    /// anchor has fewer.
+    /// The case of each row.
+    pub case_id: Vec<String>,
+    /// Column `j` holds the `j`-th control of each case, `None` where the
+    /// case has fewer.
     pub columns: Vec<Vec<Option<String>>>,
 }
 
 impl MatchMatrix {
-    /// Number of rows, one per anchor.
+    /// Number of rows, one per case.
     #[must_use]
     pub fn nrow(&self) -> usize {
-        self.anchor_id.len()
+        self.case_id.len()
     }
 
     /// Number of columns.
@@ -286,22 +185,22 @@ impl MatchMatrix {
 
 /// The match matrix of an outcome.
 ///
-/// Every anchor has a row, in the order of `units`. An anchor that found no
+/// Every case has a row, in the order of `units`. An case that found no
 /// control has a row of `None`, as `match.matrix` has a row of `NA`. The
 /// matrix has `ratio` columns, as MatchIt's has, or as many as the most any
-/// anchor got when that is more.
+/// case got when that is more.
 ///
 /// # Errors
 ///
-/// [`OutputError::UnknownAnchor`] when a pair's anchor is not an anchor in
+/// [`Error::UnknownCase`] when a pair's case is not an case in
 /// `units`.
 pub fn match_matrix(
     outcome: &MatchOutcome,
     units: &Units,
     ratio: usize,
-) -> Result<MatchMatrix, OutputError> {
+) -> Result<MatchMatrix, Error> {
     units.require_fixed_roles("match_matrix")?;
-    let anchors = units.anchor_ids();
+    let anchors = units.case_ids();
     let row_of: HashMap<&str, usize> = anchors
         .iter()
         .enumerate()
@@ -310,11 +209,11 @@ pub fn match_matrix(
     let mut controls: Vec<Vec<&str>> = vec![Vec::new(); anchors.len()];
     for pair in &outcome.pairs {
         let row = *row_of
-            .get(pair.anchor_id())
-            .ok_or_else(|| OutputError::UnknownAnchor {
-                id: pair.anchor_id().to_string(),
+            .get(pair.case_id.as_str())
+            .ok_or_else(|| Error::UnknownCase {
+                id: pair.case_id.as_str().to_string(),
             })?;
-        controls[row].push(pair.comparator_id());
+        controls[row].push(pair.control_id.as_str());
     }
     let width = controls.iter().map(Vec::len).fold(ratio, usize::max);
     let columns = (0..width)
@@ -326,7 +225,7 @@ pub fn match_matrix(
         })
         .collect();
     Ok(MatchMatrix {
-        anchor_id: anchors.iter().map(|id| (*id).to_string()).collect(),
+        case_id: anchors.iter().map(|id| (*id).to_string()).collect(),
         columns,
     })
 }
@@ -336,10 +235,10 @@ pub fn match_matrix(
 pub struct LongMatches {
     /// The unit of each row.
     pub id: Vec<String>,
-    /// Whether the unit is the anchor or a control of its pair.
+    /// Whether the unit is the case or a control of its pair.
     pub role: Vec<UnitRole>,
-    /// The pair, numbered from 1 in the order of the anchors. `None` for an
-    /// anchor that found no control.
+    /// The pair, numbered from 1 in the order of the cases. `None` for an
+    /// case that found no control.
     pub pair_id: Vec<Option<usize>>,
     /// The weight of the unit in the pair.
     pub weight: Vec<f64>,
@@ -361,43 +260,43 @@ impl LongMatches {
 
 /// The long form of an outcome.
 ///
-/// Each anchor with controls is a pair, numbered from 1 in the order of
-/// `units`. A pair has one row for the anchor and one for each of its controls,
-/// the anchor first. Pairs follow in order of their number. With
-/// `include_unmatched`, an anchor without controls follows the pairs with no
+/// Each case with controls is a pair, numbered from 1 in the order of
+/// `units`. A pair has one row for the case and one for each of its controls,
+/// the case first. Pairs follow in order of their number. With
+/// `include_unmatched`, an case without controls follows the pairs with no
 /// pair number and weight 0, where MatchIt leaves it out.
 ///
 /// The controls of a pair are in the order MatchIt's `get_matches()` lists
-/// them. Going through the anchors in order and each anchor's controls in the
+/// them. Going through the cases in order and each case's controls in the
 /// order they were assigned, a control takes its place from the first time it
 /// is met. Without replacement that is the order of assignment. With
 /// replacement a control that an earlier pair used comes before one that is
 /// new to this pair.
 ///
-/// An anchor row weighs 1 and a control row its pair weight, the reciprocal of
-/// the number of controls its anchor got. These are the weights of
+/// An case row weighs 1 and a control row its pair weight, the reciprocal of
+/// the number of controls its case got. These are the weights of
 /// `get_matches()` without rescaling. With replacement a control has a row in
 /// each pair it is in.
 ///
 /// MatchIt's table puts the treated unit of a pair first, which is the
-/// control when the anchors are the controls. Here the anchor is always first.
+/// control when the cases are the controls. Here the case is always first.
 ///
 /// With units made by [`Units::without_fixed_roles`], as in risk-set matching,
-/// the anchors are the units that are the anchor of some pair, numbered in the
+/// the cases are the units that are the case of some pair, numbered in the
 /// order of `units`, and a unit that is a control in one pair can be the
-/// anchor of another. The `role` of each row says which it is in that pair.
+/// case of another. The `role` of each row says which it is in that pair.
 ///
 /// # Errors
 ///
-/// [`OutputError::UnknownAnchor`] or [`OutputError::UnknownCandidate`] when a
+/// [`Error::UnknownCase`] or [`Error::UnknownControl`] when a
 /// pair names a unit that is not in `units` in that role, and
-/// [`OutputError::NoFixedRoles`] when `include_unmatched` is set for units with
+/// [`Error::NoFixedRoles`] when `include_unmatched` is set for units with
 /// no fixed roles.
 pub fn get_matches(
     outcome: &MatchOutcome,
     units: &Units,
     include_unmatched: bool,
-) -> Result<LongMatches, OutputError> {
+) -> Result<LongMatches, Error> {
     if include_unmatched {
         units.require_fixed_roles("get_matches with include_unmatched")?;
     }
@@ -431,12 +330,12 @@ pub fn get_matches(
         controls.sort_by_key(|control| first_met[*control]);
         let weight = 1.0 / to_f64(layout.count[anchor]);
         out.id.push(units.ids[anchor].clone());
-        out.role.push(UnitRole::Anchor);
+        out.role.push(UnitRole::Case);
         out.pair_id.push(Some(next_pair));
         out.weight.push(1.0);
         for control in controls {
             out.id.push(units.ids[control].clone());
-            out.role.push(UnitRole::Candidate);
+            out.role.push(UnitRole::Control);
             out.pair_id.push(Some(next_pair));
             out.weight.push(weight);
         }
@@ -444,7 +343,7 @@ pub fn get_matches(
     if include_unmatched {
         for anchor in unmatched {
             out.id.push(units.ids[anchor].clone());
-            out.role.push(UnitRole::Anchor);
+            out.role.push(UnitRole::Case);
             out.pair_id.push(None);
             out.weight.push(0.0);
         }
@@ -453,14 +352,14 @@ pub fn get_matches(
 }
 
 /// The pairs of an outcome as positions in the units, with the controls of
-/// each anchor listed together.
+/// each case listed together.
 struct PairLayout {
-    /// The pairs as (anchor position, control position), in the order of the
+    /// The pairs as (case position, control position), in the order of the
     /// outcome.
     pairs: Vec<(usize, usize)>,
-    /// The number of pairs of each unit as an anchor.
+    /// The number of pairs of each unit as an case.
     count: Vec<usize>,
-    /// The controls of the anchor at position `p` are
+    /// The controls of the case at position `p` are
     /// `controls[start[p]..start[p + 1]]`, in the order of the pairs.
     start: Vec<usize>,
     controls: Vec<usize>,
@@ -469,23 +368,23 @@ struct PairLayout {
 impl PairLayout {
     /// The positions of the pairs of `outcome`, or the error for the first pair
     /// that names a unit that is not in `units` in its role.
-    fn new(outcome: &MatchOutcome, units: &Units) -> Result<Self, OutputError> {
+    fn new(outcome: &MatchOutcome, units: &Units) -> Result<Self, Error> {
         let position = units.positions();
         let mut pairs = Vec::with_capacity(outcome.pairs.len());
         for pair in &outcome.pairs {
             let anchor = position
-                .get(pair.anchor_id())
+                .get(pair.case_id.as_str())
                 .copied()
                 .filter(|at| !units.fixed_roles || units.anchor[*at])
-                .ok_or_else(|| OutputError::UnknownAnchor {
-                    id: pair.anchor_id().to_string(),
+                .ok_or_else(|| Error::UnknownCase {
+                    id: pair.case_id.as_str().to_string(),
                 })?;
             let control = position
-                .get(pair.comparator_id())
+                .get(pair.control_id.as_str())
                 .copied()
                 .filter(|at| !units.fixed_roles || !units.anchor[*at])
-                .ok_or_else(|| OutputError::UnknownCandidate {
-                    id: pair.comparator_id().to_string(),
+                .ok_or_else(|| Error::UnknownControl {
+                    id: pair.control_id.as_str().to_string(),
                 })?;
             pairs.push((anchor, control));
         }
@@ -515,7 +414,7 @@ impl PairLayout {
         &self.controls[self.start[anchor]..self.start[anchor + 1]]
     }
 
-    /// The order in which each control is first met going through `anchors` and
+    /// The order in which each control is first met going through `cases` and
     /// the controls of each in the order of the pairs.
     fn first_met(&self, anchors: &[usize]) -> Vec<usize> {
         let mut first_met = vec![usize::MAX; self.count.len()];
@@ -536,7 +435,7 @@ impl PairLayout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchDataOptions {
     /// The weighting. The default is the weighting of the effect in the
-    /// anchors, MatchIt's for `estimand = "ATT"`.
+    /// cases, MatchIt's for `estimand = "ATT"`.
     pub method: MatchWeightMethod,
     /// Rescale the weights of each group to a mean of 1, as `normalize = TRUE`
     /// does in `matchit()`. The default.
@@ -553,7 +452,7 @@ pub struct MatchDataOptions {
 impl Default for MatchDataOptions {
     fn default() -> Self {
         Self {
-            method: MatchWeightMethod::AnchorUnitCandidateFractional,
+            method: MatchWeightMethod::CaseUnitControlFractional,
             normalize: true,
             drop_unmatched: true,
             replacement: false,
@@ -567,11 +466,11 @@ impl Default for MatchDataOptions {
 pub struct MatchData {
     /// The unit of each row.
     pub id: Vec<String>,
-    /// Whether the unit is an anchor or a candidate.
+    /// Whether the unit is an case or a control.
     pub role: Vec<UnitRole>,
     /// The weight of the unit.
     pub weight: Vec<f64>,
-    /// The pair the unit is in, numbered from 1 in the order of the anchors,
+    /// The pair the unit is in, numbered from 1 in the order of the cases,
     /// as MatchIt's `subclass`. `None` for a unit with no pair and, with
     /// replacement, for every unit.
     pub subclass: Vec<Option<usize>>,
@@ -598,13 +497,13 @@ impl MatchData {
 ///
 /// # Errors
 ///
-/// [`OutputError::UnknownAnchor`] or [`OutputError::UnknownCandidate`] when a
+/// [`Error::UnknownCase`] or [`Error::UnknownControl`] when a
 /// pair names a unit that is not in `units` in that role.
 pub fn match_data(
     outcome: &MatchOutcome,
     units: &Units,
     options: MatchDataOptions,
-) -> Result<MatchData, OutputError> {
+) -> Result<MatchData, Error> {
     units.require_fixed_roles("match_data")?;
     let layout = PairLayout::new(outcome, units)?;
     let n = units.len();
@@ -634,16 +533,16 @@ pub fn match_data(
         weight: Vec::new(),
         subclass: Vec::new(),
     };
-    for (position, (id, is_anchor)) in units.ids.iter().zip(&units.anchor).enumerate() {
+    for (position, (id, is_case)) in units.ids.iter().zip(&units.anchor).enumerate() {
         let weight = weights[position];
         if weight.is_none() && options.drop_unmatched {
             continue;
         }
         out.id.push(id.clone());
-        out.role.push(if *is_anchor {
-            UnitRole::Anchor
+        out.role.push(if *is_case {
+            UnitRole::Case
         } else {
-            UnitRole::Candidate
+            UnitRole::Control
         });
         out.weight.push(weight.unwrap_or(0.0));
         out.subclass.push(if options.replacement {
@@ -666,13 +565,13 @@ impl PairLayout {
                     *weights[*control].get_or_insert(0.0) += 1.0;
                 }
             }
-            MatchWeightMethod::AnchorUnitCandidateFractional => {
+            MatchWeightMethod::CaseUnitControlFractional => {
                 for (anchor, control) in &self.pairs {
                     weights[*anchor] = Some(1.0);
                     *weights[*control].get_or_insert(0.0) += 1.0 / to_f64(self.count[*anchor]);
                 }
             }
-            MatchWeightMethod::CandidateUnitAnchorFractional => {
+            MatchWeightMethod::ControlUnitCaseFractional => {
                 let mut controls = vec![0_usize; self.count.len()];
                 for (_, control) in &self.pairs {
                     controls[*control] += 1;
@@ -711,15 +610,11 @@ pub(crate) fn normalize_columns(ids: &[String], anchor: &[bool], weights: &mut [
     }
 }
 
-fn check_column(column: &'static str, units: &Units, length: usize) -> Result<(), OutputError> {
+fn check_column(column: &'static str, units: &Units, length: usize) -> Result<(), Error> {
     if length == units.len() {
         Ok(())
     } else {
-        Err(OutputError::ColumnLength {
-            column,
-            units: units.len(),
-            length,
-        })
+        Err(Error::length(column, units.len(), length))
     }
 }
 
@@ -736,21 +631,21 @@ fn check_column(column: &'static str, units: &Units, length: usize) -> Result<()
 ///
 /// # Errors
 ///
-/// [`OutputError::ColumnLength`] when a column is not as long as `units`,
-/// [`OutputError::InvalidWeight`] for a weight that is NaN, infinite or
-/// negative, and [`OutputError::NoFixedRoles`] for units with no fixed group.
+/// [`Error::ColumnLength`] when a column is not as long as `units`,
+/// [`Error::InvalidWeight`] for a weight that is NaN, infinite or
+/// negative, and [`Error::NoFixedRoles`] for units with no fixed group.
 pub fn match_data_from_weights(
     weights: &[f64],
     pair: &[Option<usize>],
     units: &Units,
     options: MatchDataOptions,
-) -> Result<MatchData, OutputError> {
+) -> Result<MatchData, Error> {
     units.require_fixed_roles("match_data_from_weights")?;
     check_column("weights", units, weights.len())?;
     check_column("pair", units, pair.len())?;
     for (id, weight) in units.ids.iter().zip(weights) {
         if !weight.is_finite() || *weight < 0.0 {
-            return Err(OutputError::InvalidWeight {
+            return Err(Error::InvalidWeight {
                 id: id.clone(),
                 weight: *weight,
             });
@@ -766,12 +661,12 @@ pub fn match_data_from_weights(
         .map(|(rank, label)| (label, rank + 1))
         .collect();
     let mut set = UnitWeightSet::default();
-    for ((id, is_anchor), weight) in units.ids.iter().zip(&units.anchor).zip(weights) {
+    for ((id, is_case), weight) in units.ids.iter().zip(&units.anchor).zip(weights) {
         if *weight > 0.0 {
-            let group = if *is_anchor {
-                &mut set.anchor
+            let group = if *is_case {
+                &mut set.case
             } else {
-                &mut set.candidate
+                &mut set.control
             };
             group.insert(id.clone(), *weight);
         }
@@ -787,21 +682,17 @@ pub fn match_data_from_weights(
         weight: Vec::new(),
         subclass: Vec::new(),
     };
-    for ((id, is_anchor), pair) in units.ids.iter().zip(&units.anchor).zip(pair) {
-        let group = if *is_anchor {
-            &set.anchor
-        } else {
-            &set.candidate
-        };
+    for ((id, is_case), pair) in units.ids.iter().zip(&units.anchor).zip(pair) {
+        let group = if *is_case { &set.case } else { &set.control };
         let weight = group.get(id).copied();
         if weight.is_none() && options.drop_unmatched {
             continue;
         }
         out.id.push(id.clone());
-        out.role.push(if *is_anchor {
-            UnitRole::Anchor
+        out.role.push(if *is_case {
+            UnitRole::Case
         } else {
-            UnitRole::Candidate
+            UnitRole::Control
         });
         out.weight.push(weight.unwrap_or(0.0));
         out.subclass.push(pair.map(|label| numbers[&label]));
@@ -813,24 +704,24 @@ pub fn match_data_from_weights(
 ///
 /// `pair` holds the pair label of each unit of `units`, `None` for a unit that
 /// is not selected, and `weights` the weight of each unit. Labels may be of any
-/// size and have gaps. Each pair has one row per unit, the anchors first and
-/// then the candidates, each in the order of `units`. Pairs follow in
+/// size and have gaps. Each pair has one row per unit, the cases first and
+/// then the controls, each in the order of `units`. Pairs follow in
 /// increasing order of their label and are numbered from 1, as
-/// [`match_data_from_weights`] numbers them. With `include_unmatched`, the anchors that are not
+/// [`match_data_from_weights`] numbers them. With `include_unmatched`, the cases that are not
 /// selected follow the pairs with no pair number and weight 0.
 ///
 /// # Errors
 ///
-/// [`OutputError::ColumnLength`] when a column is not as long as `units`,
-/// [`OutputError::InvalidWeight`] for a selected unit whose weight is NaN,
-/// infinite or negative, and [`OutputError::NoFixedRoles`] for units with no
+/// [`Error::ColumnLength`] when a column is not as long as `units`,
+/// [`Error::InvalidWeight`] for a selected unit whose weight is NaN,
+/// infinite or negative, and [`Error::NoFixedRoles`] for units with no
 /// fixed group.
 pub fn get_matches_from_pairs(
     pair: &[Option<usize>],
     weights: &[f64],
     units: &Units,
     include_unmatched: bool,
-) -> Result<LongMatches, OutputError> {
+) -> Result<LongMatches, Error> {
     units.require_fixed_roles("get_matches_from_pairs")?;
     check_column("pair", units, pair.len())?;
     check_column("weights", units, weights.len())?;
@@ -840,7 +731,7 @@ pub fn get_matches_from_pairs(
         if let Some(pair) = pair {
             let weight = weights[position];
             if !weight.is_finite() || weight < 0.0 {
-                return Err(OutputError::InvalidWeight {
+                return Err(Error::InvalidWeight {
                     id: units.ids[position].clone(),
                     weight,
                 });
@@ -856,9 +747,9 @@ pub fn get_matches_from_pairs(
     };
     let role_of = |position: usize| {
         if units.anchor[position] {
-            UnitRole::Anchor
+            UnitRole::Case
         } else {
-            UnitRole::Candidate
+            UnitRole::Control
         }
     };
     for (number, positions) in members.values().enumerate() {
@@ -875,7 +766,7 @@ pub fn get_matches_from_pairs(
         for (position, pair) in pair.iter().enumerate() {
             if pair.is_none() && units.anchor[position] {
                 out.id.push(units.ids[position].clone());
-                out.role.push(UnitRole::Anchor);
+                out.role.push(UnitRole::Case);
                 out.pair_id.push(None);
                 out.weight.push(0.0);
             }
@@ -894,16 +785,16 @@ fn sorted_by_key<'a, V: Copy + 'a>(
 }
 
 impl UnitWeightSet {
-    /// The anchors' weights sorted by id, as parallel vectors.
+    /// The cases' weights sorted by id, as parallel vectors.
     #[must_use]
-    pub fn anchor_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        sorted_by_key(self.anchor.iter())
+    pub fn case_sorted(&self) -> (Vec<&str>, Vec<f64>) {
+        sorted_by_key(self.case.iter())
     }
 
-    /// The candidates' weights sorted by id, as parallel vectors.
+    /// The controls' weights sorted by id, as parallel vectors.
     #[must_use]
-    pub fn candidate_sorted(&self) -> (Vec<&str>, Vec<f64>) {
-        sorted_by_key(self.candidate.iter())
+    pub fn control_sorted(&self) -> (Vec<&str>, Vec<f64>) {
+        sorted_by_key(self.control.iter())
     }
 }
 
@@ -936,13 +827,13 @@ impl SubclassedUnits {
         )))
     }
 
-    /// The weights for the effect in the anchors, sorted by id.
+    /// The weights for the effect in the cases, sorted by id.
     #[must_use]
     pub fn att_weights_sorted(&self) -> (Vec<&str>, Vec<f64>) {
         self.weights_sorted(Estimand::Att).unwrap_or_default()
     }
 
-    /// The weights for the effect in the candidates, sorted by id.
+    /// The weights for the effect in the controls, sorted by id.
     #[must_use]
     pub fn atc_weights_sorted(&self) -> (Vec<&str>, Vec<f64>) {
         self.weights_sorted(Estimand::Atc).unwrap_or_default()
@@ -965,10 +856,10 @@ impl SubclassedUnits {
         let mut set = UnitWeightSet::default();
         for (position, id) in self.ids.iter().enumerate() {
             if self.subclass[position].is_some() {
-                let group = if self.is_anchor(position) {
-                    &mut set.anchor
+                let group = if self.is_case(position) {
+                    &mut set.case
                 } else {
-                    &mut set.candidate
+                    &mut set.control
                 };
                 group.insert(id.clone(), weights[position]);
             }
@@ -982,20 +873,20 @@ impl SubclassedUnits {
     ///
     /// # Errors
     ///
-    /// [`OutputError::DuplicateId`] when an id occurs twice, and
-    /// [`OutputError::InvalidWeight`] for a weight that is not finite and
+    /// [`Error::DuplicateId`] when an id occurs twice, and
+    /// [`Error::InvalidWeight`] for a weight that is not finite and
     /// non-negative.
     pub fn match_data(
         &self,
         estimand: Estimand,
         options: MatchDataOptions,
-    ) -> Result<Option<MatchData>, OutputError> {
+    ) -> Result<Option<MatchData>, Error> {
         let Some(weights) = self.weights(estimand) else {
             return Ok(None);
         };
         let units = Units::new(
             self.ids.clone(),
-            (0..self.len()).map(|p| self.is_anchor(p)).collect(),
+            (0..self.len()).map(|p| self.is_case(p)).collect(),
         )?;
         match_data_from_weights(&weights, &self.subclass, &units, options).map(Some)
     }
@@ -1044,16 +935,16 @@ impl SubclassedUnits {
             weight: Vec::new(),
             subclass: Vec::new(),
         };
-        for (row, (id, is_anchor)) in units.ids.iter().zip(&units.anchor).enumerate() {
+        for (row, (id, is_case)) in units.ids.iter().zip(&units.anchor).enumerate() {
             let weight = weights[row];
             if weight.is_none() && drop_unmatched {
                 continue;
             }
             out.id.push(id.clone());
-            out.role.push(if *is_anchor {
-                UnitRole::Anchor
+            out.role.push(if *is_case {
+                UnitRole::Case
             } else {
-                UnitRole::Candidate
+                UnitRole::Control
             });
             out.weight.push(weight.unwrap_or(0.0));
             out.subclass.push(
@@ -1138,7 +1029,7 @@ mod tests {
     #[test]
     fn matrix_has_a_row_per_anchor_in_input_order_with_controls_in_assignment_order() {
         let matrix = match_matrix(&outcome(), &units(), 3).expect("matrix");
-        assert_eq!(matrix.anchor_id, ["a1", "a2", "a3"]);
+        assert_eq!(matrix.case_id, ["a1", "a2", "a3"]);
         assert_eq!(matrix.ncol(), 3);
         assert_eq!(matrix.controls_of_row(0), ["c3", "c1"]);
         assert_eq!(matrix.controls_of_row(1), ["c2"]);
@@ -1159,8 +1050,8 @@ mod tests {
         assert_eq!(long.id, ["a1", "c3", "c1", "a2", "c2"]);
         assert_eq!(long.pair_id, [Some(1), Some(1), Some(1), Some(2), Some(2)]);
         assert_eq!(long.weight, [1.0, 0.5, 0.5, 1.0, 1.0]);
-        assert_eq!(long.role[0], UnitRole::Anchor);
-        assert_eq!(long.role[1], UnitRole::Candidate);
+        assert_eq!(long.role[0], UnitRole::Case);
+        assert_eq!(long.role[1], UnitRole::Control);
 
         let with_unmatched = get_matches(&outcome(), &units(), true).expect("long");
         assert_eq!(with_unmatched.len(), 6);
@@ -1218,22 +1109,22 @@ mod tests {
         assert_eq!(
             long.role,
             [
-                UnitRole::Anchor,
-                UnitRole::Candidate,
-                UnitRole::Candidate,
-                UnitRole::Anchor,
-                UnitRole::Candidate,
-                UnitRole::Candidate
+                UnitRole::Case,
+                UnitRole::Control,
+                UnitRole::Control,
+                UnitRole::Case,
+                UnitRole::Control,
+                UnitRole::Control
             ]
         );
         assert_eq!(long.weight, [1.0, 0.5, 0.5, 1.0, 0.5, 0.5]);
         assert!(matches!(
             get_matches(&outcome, &units, true),
-            Err(OutputError::NoFixedRoles { .. })
+            Err(Error::NoFixedRoles { .. })
         ));
         assert!(matches!(
             match_matrix(&outcome, &units, 2),
-            Err(OutputError::NoFixedRoles { .. })
+            Err(Error::NoFixedRoles { .. })
         ));
         assert!(
             match_data(&outcome, &units, MatchDataOptions::default())
@@ -1244,7 +1135,7 @@ mod tests {
         let stray = test_outcome(vec![MatchedPair::new("zz", "p1")], 1, 0);
         assert_eq!(
             get_matches(&stray, &units, false),
-            Err(OutputError::UnknownAnchor { id: "zz".into() })
+            Err(Error::UnknownCase { id: "zz".into() })
         );
     }
 
@@ -1285,12 +1176,12 @@ mod tests {
         let stray = test_outcome(vec![MatchedPair::new("zz", "c1")], 1, 0);
         assert_eq!(
             match_matrix(&stray, &units(), 1),
-            Err(OutputError::UnknownAnchor { id: "zz".into() })
+            Err(Error::UnknownCase { id: "zz".into() })
         );
         let stray = test_outcome(vec![MatchedPair::new("a1", "a2")], 1, 0);
         assert_eq!(
             get_matches(&stray, &units(), false),
-            Err(OutputError::UnknownCandidate { id: "a2".into() })
+            Err(Error::UnknownControl { id: "a2".into() })
         );
         assert!(
             Units::new(vec!["x".into(), "x".into()], vec![true, false])
@@ -1305,13 +1196,13 @@ mod tests {
     fn sorted_views_follow_the_key_order_whatever_the_map_order() {
         let mut set = UnitWeightSet::default();
         for (id, weight) in [("b", 2.0), ("c", 3.0), ("a", 1.0), ("d", 4.0)] {
-            set.anchor.insert(id.to_string(), weight);
+            set.case.insert(id.to_string(), weight);
         }
-        set.candidate.insert("z".into(), 9.0);
-        let (ids, weights) = set.anchor_sorted();
+        set.control.insert("z".into(), 9.0);
+        let (ids, weights) = set.case_sorted();
         assert_eq!(ids, ["a", "b", "c", "d"]);
         assert_eq!(weights, [1.0, 2.0, 3.0, 4.0]);
-        assert_eq!(set.candidate_sorted().0, ["z"]);
+        assert_eq!(set.control_sorted().0, ["z"]);
     }
 
     #[test]
@@ -1343,11 +1234,11 @@ mod tests {
             let weights = [1.0, bad];
             assert!(matches!(
                 match_data_from_weights(&weights, &pair, &units, MatchDataOptions::default()),
-                Err(OutputError::InvalidWeight { .. })
+                Err(Error::InvalidWeight { .. })
             ));
             assert!(matches!(
                 get_matches_from_pairs(&pair, &weights, &units, false),
-                Err(OutputError::InvalidWeight { .. })
+                Err(Error::InvalidWeight { .. })
             ));
         }
         // The weight of a unit that is not selected is not read.
@@ -1360,28 +1251,28 @@ mod tests {
             ids: ["a1", "a2", "a3", "c1", "c2", "c3", "c4"]
                 .map(String::from)
                 .to_vec(),
-            anchor_count: 3,
+            case_count: 3,
             // a3 and c4 are dropped.
             subclass: vec![Some(0), Some(0), None, Some(0), Some(0), Some(1), None],
             subclasses: vec![
                 crate::matching::SubclassSummary {
                     subclass: 0,
-                    anchor_count: 2,
-                    candidate_count: 2,
+                    case_count: 2,
+                    control_count: 2,
                     subclass_propensity: Some(0.5),
                 },
                 crate::matching::SubclassSummary {
                     subclass: 1,
-                    anchor_count: 1,
-                    candidate_count: 1,
+                    case_count: 1,
+                    control_count: 1,
                     subclass_propensity: Some(0.5),
                 },
             ],
             trimmed: crate::TrimmedUnits::default(),
         };
         let weights = units.unit_weights(Estimand::Att).unwrap();
-        assert_eq!(weights.anchor.len(), 2);
-        assert_eq!(weights.candidate.len(), 3);
+        assert_eq!(weights.case.len(), 2);
+        assert_eq!(weights.control.len(), 3);
         assert!(units.unit_weights(Estimand::Atm).is_none());
         let options = MatchDataOptions {
             normalize: false,
@@ -1403,22 +1294,21 @@ mod tests {
             outcome: &MatchOutcome,
             units: &Units,
             include_unmatched: bool,
-        ) -> Result<LongMatches, OutputError> {
+        ) -> Result<LongMatches, Error> {
             if include_unmatched {
                 units.require_fixed_roles("get_matches with include_unmatched")?;
             }
             let position = units.positions();
-            let pair_weights =
-                outcome.pair_weights(MatchWeightMethod::AnchorUnitCandidateFractional);
+            let pair_weights = outcome.pair_weights(MatchWeightMethod::CaseUnitControlFractional);
             let mut by_anchor: HashMap<&str, Vec<(&str, f64)>> = HashMap::new();
             for entry in &pair_weights.pairs {
-                let anchor = entry.pair.anchor_id();
-                let control = entry.pair.comparator_id();
+                let anchor = entry.pair.case_id.as_str();
+                let control = entry.pair.control_id.as_str();
                 let anchor_known = position
                     .get(anchor)
                     .is_some_and(|at| !units.fixed_roles || units.anchor[*at]);
                 if !anchor_known {
-                    return Err(OutputError::UnknownAnchor {
+                    return Err(Error::UnknownCase {
                         id: anchor.to_string(),
                     });
                 }
@@ -1426,7 +1316,7 @@ mod tests {
                     .get(control)
                     .is_some_and(|at| !units.fixed_roles || !units.anchor[*at]);
                 if !control_known {
-                    return Err(OutputError::UnknownCandidate {
+                    return Err(Error::UnknownControl {
                         id: control.to_string(),
                     });
                 }
@@ -1437,7 +1327,7 @@ mod tests {
             }
 
             let anchors: Vec<&str> = if units.fixed_roles {
-                units.anchor_ids()
+                units.case_ids()
             } else {
                 units
                     .ids
@@ -1470,12 +1360,12 @@ mod tests {
                 next_pair += 1;
                 controls.sort_by_key(|(control, _)| first_met[control]);
                 out.id.push(anchor.to_string());
-                out.role.push(UnitRole::Anchor);
+                out.role.push(UnitRole::Case);
                 out.pair_id.push(Some(next_pair));
                 out.weight.push(1.0);
                 for (control, weight) in controls {
                     out.id.push(control.to_string());
-                    out.role.push(UnitRole::Candidate);
+                    out.role.push(UnitRole::Control);
                     out.pair_id.push(Some(next_pair));
                     out.weight.push(weight);
                 }
@@ -1483,7 +1373,7 @@ mod tests {
             if include_unmatched {
                 for anchor in unmatched {
                     out.id.push(anchor.to_string());
-                    out.role.push(UnitRole::Anchor);
+                    out.role.push(UnitRole::Case);
                     out.pair_id.push(None);
                     out.weight.push(0.0);
                 }
@@ -1495,7 +1385,7 @@ mod tests {
             outcome: &MatchOutcome,
             units: &Units,
             options: MatchDataOptions,
-        ) -> Result<MatchData, OutputError> {
+        ) -> Result<MatchData, Error> {
             units.require_fixed_roles("match_data")?;
             let long = get_matches_by_maps(outcome, units, false)?;
             let mut subclass_of: HashMap<&str, usize> = HashMap::new();
@@ -1518,21 +1408,21 @@ mod tests {
                 weight: Vec::new(),
                 subclass: Vec::new(),
             };
-            for (id, is_anchor) in units.ids.iter().zip(&units.anchor) {
-                let group = if *is_anchor {
-                    &weights.anchor
+            for (id, is_case) in units.ids.iter().zip(&units.anchor) {
+                let group = if *is_case {
+                    &weights.case
                 } else {
-                    &weights.candidate
+                    &weights.control
                 };
                 let weight = group.get(id).copied();
                 if weight.is_none() && options.drop_unmatched {
                     continue;
                 }
                 out.id.push(id.clone());
-                out.role.push(if *is_anchor {
-                    UnitRole::Anchor
+                out.role.push(if *is_case {
+                    UnitRole::Case
                 } else {
-                    UnitRole::Candidate
+                    UnitRole::Control
                 });
                 out.weight.push(weight.unwrap_or(0.0));
                 out.subclass.push(if options.replacement {
@@ -1566,9 +1456,9 @@ mod tests {
             for i in (1..n).rev() {
                 order.swap(i, rng.below(i + 1));
             }
-            let anchor_flags: Vec<bool> = (0..n).map(|_| rng.below(3) == 0).collect();
+            let case_flags: Vec<bool> = (0..n).map(|_| rng.below(3) == 0).collect();
             let ids: Vec<String> = order.iter().map(|i| format!("u{i:03}")).collect();
-            let flags: Vec<bool> = order.iter().map(|i| anchor_flags[*i]).collect();
+            let flags: Vec<bool> = order.iter().map(|i| case_flags[*i]).collect();
             let units = Units::new(ids.clone(), flags.clone()).unwrap();
             let anchors: Vec<&String> = ids
                 .iter()
@@ -1602,7 +1492,7 @@ mod tests {
             }
             let matched = pairs
                 .iter()
-                .map(MatchedPair::anchor_id)
+                .map(|pair: &MatchedPair| pair.case_id.as_str())
                 .collect::<HashSet<_>>()
                 .len();
             let outcome = test_outcome(pairs, matched, anchors.len().saturating_sub(matched));
@@ -1615,8 +1505,8 @@ mod tests {
             }
             for method in [
                 MatchWeightMethod::PairCount,
-                MatchWeightMethod::AnchorUnitCandidateFractional,
-                MatchWeightMethod::CandidateUnitAnchorFractional,
+                MatchWeightMethod::CaseUnitControlFractional,
+                MatchWeightMethod::ControlUnitCaseFractional,
             ] {
                 for (normalize, drop_unmatched, replacement) in [
                     (true, true, false),

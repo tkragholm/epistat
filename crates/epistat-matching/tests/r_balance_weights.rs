@@ -45,6 +45,11 @@ mod r_reference;
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, BalanceReport, BalanceReportOptions, BalanceSummary, BalanceWeights,
+    CategoricalBalance, CovariateValue, Estimand, MatchDiagnostics, NumericBalance,
+    NumericBalanceTransform, SampleSizeTable, balance_improvement, balance_summary,
+};
 use epistat_testkit::{Tolerance, load_json, na_f64, na_f64_vec};
 use r_reference::{Versions, assert_r_version};
 use serde::Deserialize;
@@ -205,10 +210,11 @@ fn outcome(pairs: &[(String, String)], estimand: Estimand) -> MatchOutcome {
         used_controls: 0,
         matched_cases: 0,
         avg_controls_per_case: None,
-        diagnostics: MatchDiagnostics {
-            requested_estimand: estimand,
-            realized_estimand: estimand,
-            ..MatchDiagnostics::default()
+        diagnostics: {
+            let mut diagnostics = MatchDiagnostics::default();
+            diagnostics.requested_estimand = estimand;
+            diagnostics.realized_estimand = estimand;
+            diagnostics
         },
     }
 }
@@ -619,13 +625,14 @@ fn run_fit(set_name: &str, set: &Set, fit: &Fit, source: Source) {
         .collect::<Vec<_>>();
     let weights = weights_for(fit, &ids, &sample, source);
     let interactions = fit.int_std.is_some();
-    let options = BalanceReportOptions::builder()
-        .numeric_transforms(if interactions {
+    let options = BalanceReportOptions {
+        numeric_transforms: if interactions {
             NumericBalanceTransform::SquaresAndPairwiseInteractions
         } else {
             NumericBalanceTransform::None
-        })
-        .build();
+        },
+        ..BalanceReportOptions::default()
+    };
     let summary = balance_summary(&sample.cases, &sample.controls, &weights, &options).unwrap();
     let label = format!(
         "{set_name} {} ({})",

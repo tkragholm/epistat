@@ -9,7 +9,9 @@
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
-use epistat_matching::{FineBalance, RapidHashMap, match_fine_balance};
+use epistat_matching::{DistanceConfig, MatchingCriteria, OptimalRequest};
+use epistat_matching::{FineBalance, match_fine_balance};
+use rapidhash::RapidHashMap;
 
 struct Rng(u64);
 
@@ -90,7 +92,10 @@ fn matches_exhaustive_search() {
         }
         let (anchors, candidates) = records.split_at(na);
         let distance = DistanceConfig::propensity_score_map(scores, None);
-        let criteria = MatchingCriteria::builder().match_ratio(k).build();
+        let criteria = MatchingCriteria {
+            match_ratio: k,
+            ..MatchingCriteria::default()
+        };
         let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
         let balance = FineBalance {
             levels: vec![vec!["a".into()], vec!["b".into()]],

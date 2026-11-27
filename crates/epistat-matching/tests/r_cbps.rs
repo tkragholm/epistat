@@ -38,8 +38,13 @@
 mod r_reference;
 
 use chrono::NaiveDate;
-use epistat_matching::prelude::*;
-use epistat_matching::{CbpsConfig, CbpsEstimand, CbpsMethod};
+use epistat_matching::Error;
+use epistat_matching::{
+    BalanceRecord, CovariateEncodingConfig, CovariateValue, PropensityDistancePreparation,
+    PropensityEstimator, PropensityScoreConfig, PropensityScoreOutputScale,
+    prepare_propensity_distance_config,
+};
+use epistat_matching::{CbpsConfig, CbpsMethod, Estimand};
 
 use r_reference::{Versions, assert_r_version, reference as load_reference, unit_id as id};
 use serde::Deserialize;
@@ -117,23 +122,26 @@ fn fit_ours(
             candidates.push(record);
         }
     }
-    let cbps = CbpsConfig::builder()
-        .estimand(match fit.estimand.as_str() {
-            "att" => CbpsEstimand::Att,
-            "ate" => CbpsEstimand::Ate,
+    let cbps = CbpsConfig {
+        estimand: match fit.estimand.as_str() {
+            "att" => Estimand::Att,
+            "ate" => Estimand::Ate,
             other => panic!("unknown estimand {other}"),
-        })
-        .method(match fit.method.as_str() {
+        },
+        method: match fit.method.as_str() {
             "over" => CbpsMethod::Over,
             "exact" => CbpsMethod::Exact,
             other => panic!("unknown method {other}"),
-        })
-        .build();
-    let config = PropensityScoreConfig::builder()
-        .estimator(PropensityEstimator::Cbps(cbps))
-        .output_scale(scale)
-        .build();
-    prepare_propensity_distance_config(&anchors, &candidates, &config).expect("the fit succeeds")
+        },
+        ..CbpsConfig::default()
+    };
+    let config = PropensityScoreConfig {
+        estimator: PropensityEstimator::Cbps(cbps),
+        output_scale: scale,
+        ..PropensityScoreConfig::default()
+    };
+    prepare_propensity_distance_config(&anchors, &candidates, &config, None)
+        .expect("the fit succeeds")
 }
 
 /// The values of `column`, which is aligned with the ids of `estimate`, in the
@@ -463,12 +471,11 @@ fn equal_sampling_weights_change_nothing_and_bad_settings_are_errors() {
     let data = &reference.data[1];
     let (anchors, candidates) = records_of(data, &["x1", "x2", "x3"]);
     let fit = |config: PropensityScoreConfig| {
-        prepare_propensity_distance_config(&anchors, &candidates, &config)
+        prepare_propensity_distance_config(&anchors, &candidates, &config, None)
     };
-    let cbps = |config: CbpsConfig| {
-        PropensityScoreConfig::builder()
-            .estimator(PropensityEstimator::Cbps(config))
-            .build()
+    let cbps = |config: CbpsConfig| PropensityScoreConfig {
+        estimator: PropensityEstimator::Cbps(config),
+        ..PropensityScoreConfig::default()
     };
     let plain = fit(cbps(CbpsConfig::default())).expect("fits");
     // Weights are scaled to mean 1, so a constant weight is no weight. Both
@@ -489,22 +496,23 @@ fn equal_sampling_weights_change_nothing_and_bad_settings_are_errors() {
     }
 
     // A fit stopped by the iteration limit is reported, not repaired.
-    let stopped = fit(cbps(CbpsConfig::builder().max_iter(2).build())).expect("fits");
+    let stopped = fit(cbps(CbpsConfig {
+        max_iter: 2,
+        ..CbpsConfig::default()
+    }))
+    .expect("fits");
     assert!(!stopped.estimate.converged);
 
     // No intercept, and a collinear column, are errors.
-    let no_intercept = PropensityScoreConfig::builder()
-        .encoding(
-            CovariateEncodingConfig::builder()
-                .include_intercept(false)
-                .build(),
-        )
-        .estimator(PropensityEstimator::Cbps(CbpsConfig::default()))
-        .build();
-    assert!(matches!(
-        fit(no_intercept),
-        Err(EstimationError::CbpsNeedsIntercept)
-    ));
+    let no_intercept = PropensityScoreConfig {
+        encoding: CovariateEncodingConfig {
+            include_intercept: false,
+            ..CovariateEncodingConfig::default()
+        },
+        estimator: PropensityEstimator::Cbps(CbpsConfig::default()),
+        ..PropensityScoreConfig::default()
+    };
+    assert!(matches!(fit(no_intercept), Err(Error::CbpsNeedsIntercept)));
     let (mut anchors, mut candidates) = records_of(data, &["x1", "x2", "x3"]);
     for record in anchors.iter_mut().chain(candidates.iter_mut()) {
         let CovariateValue::Numeric(x1) = record.covariates["x1"] else {
@@ -515,7 +523,12 @@ fn equal_sampling_weights_change_nothing_and_bad_settings_are_errors() {
             .insert("twice".into(), CovariateValue::Numeric(2.0 * x1));
     }
     assert!(matches!(
-        prepare_propensity_distance_config(&anchors, &candidates, &cbps(CbpsConfig::default())),
-        Err(EstimationError::CbpsNotFullRank)
+        prepare_propensity_distance_config(
+            &anchors,
+            &candidates,
+            &cbps(CbpsConfig::default()),
+            None
+        ),
+        Err(Error::NotFullRank)
     ));
 }

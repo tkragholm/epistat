@@ -1,9 +1,15 @@
-use chrono::{Months, NaiveDate};
-use epistat_matching::{
+//! Properties of the matchers on random cohorts: no self-matches, no control
+//! used twice without replacement, and the same pairs from equal requests.
+
+use crate::constraints::Constraint;
+use crate::matching::{StandardMatchRequest, match_standard};
+use crate::role_transition::{TransitionMatchRequest, match_transition_ordered};
+use crate::{
     AgeLimitYears, BaseRecord, DefaultRiskSetPolicy, DeterministicSelection, MatchRatio,
     MatchingCriteria, MatchingRecord, RandomSelection, RoleTransitionOptions, RoleTransitionRecord,
-    StandardMatchRequest, TransitionMatchRequest, date, match_standard, match_transition,
+    date,
 };
+use chrono::{Months, NaiveDate};
 use std::collections::{HashMap, HashSet};
 
 fn base_record(id: &str, day_offset: i64) -> BaseRecord {
@@ -13,10 +19,11 @@ fn base_record(id: &str, day_offset: i64) -> BaseRecord {
 
 #[test]
 fn property_no_self_match_and_no_reuse_without_replacement() {
-    let criteria = MatchingCriteria::builder()
-        .birth_date_window_days(365)
-        .match_ratio(2)
-        .build();
+    let criteria = MatchingCriteria {
+        birth_date_window_days: 365,
+        match_ratio: 2,
+        ..MatchingCriteria::default()
+    };
 
     for seed in 0_u64..100 {
         let anchors = (0..20)
@@ -39,24 +46,25 @@ fn property_no_self_match_and_no_reuse_without_replacement() {
         );
 
         for pair in &outcome.pairs {
-            assert_ne!(pair.anchor_id(), pair.comparator_id());
+            assert_ne!(pair.case_id.as_str(), pair.control_id.as_str());
         }
 
         let unique_controls = outcome
             .pairs
             .iter()
-            .map(epistat_matching::MatchedPair::comparator_id)
+            .map(|pair: &crate::MatchedPair| pair.control_id.as_str())
             .collect::<HashSet<_>>();
         assert_eq!(unique_controls.len(), outcome.pairs.len());
-        assert_eq!(outcome.used_comparators(), outcome.pairs.len());
+        assert_eq!(outcome.used_controls, outcome.pairs.len());
     }
 }
 
 #[test]
 fn property_role_transition_respects_age_threshold() {
-    let criteria = MatchingCriteria::builder()
-        .birth_date_window_days(730)
-        .build();
+    let criteria = MatchingCriteria {
+        birth_date_window_days: 730,
+        ..MatchingCriteria::default()
+    };
     let options = RoleTransitionOptions {
         transition_age_limit_years: AgeLimitYears::new(6).expect("positive age limit"),
         ratio_fallback: vec![MatchRatio::new(1).expect("non-zero ratio")],
@@ -99,7 +107,7 @@ fn property_role_transition_respects_age_threshold() {
             })
             .collect::<HashSet<_>>();
 
-        let outcome = match_transition(
+        let outcome = match_transition_ordered(
             &cohort,
             TransitionMatchRequest {
                 criteria: &criteria,
@@ -109,11 +117,12 @@ fn property_role_transition_respects_age_threshold() {
                 distance_config: None,
                 risk_set_policy: &DefaultRiskSetPolicy,
             },
+            None,
         );
 
         for pair in &outcome.pairs {
-            assert!(eligible_ids.contains(pair.anchor_id()));
-            assert_ne!(pair.anchor_id(), pair.comparator_id());
+            assert!(eligible_ids.contains(pair.case_id.as_str()));
+            assert_ne!(pair.case_id.as_str(), pair.control_id.as_str());
         }
     }
 }
@@ -140,14 +149,19 @@ fn property_anchor_candidate_api_supports_multiple_record_shapes() {
             &self.strata
         }
 
+        fn stratum(&self, key: &str) -> Option<&str> {
+            self.strata.get(key).map(String::as_str)
+        }
+
         fn unique_key(&self) -> Option<&str> {
             None
         }
     }
 
-    let criteria = MatchingCriteria::builder()
-        .birth_date_window_days(365)
-        .build();
+    let criteria = MatchingCriteria {
+        birth_date_window_days: 365,
+        ..MatchingCriteria::default()
+    };
 
     let anchors_a = vec![base_record("a0", 0), base_record("a1", 1)];
     let candidates_a = vec![base_record("c0", 0), base_record("c1", 2)];
@@ -192,19 +206,21 @@ fn property_anchor_candidate_api_supports_multiple_record_shapes() {
 #[test]
 fn criteria_builder_validates() {
     assert!(
-        MatchingCriteria::builder()
-            .match_ratio(0)
-            .build()
-            .validate()
-            .is_err()
+        MatchingCriteria {
+            match_ratio: 0,
+            ..MatchingCriteria::default()
+        }
+        .validate()
+        .is_err()
     );
 
-    let validated = MatchingCriteria::builder()
-        .birth_date_window_days(30)
-        .match_ratio(1)
-        .build()
-        .validate()
-        .expect("valid criteria from builder");
+    let validated = MatchingCriteria {
+        birth_date_window_days: 30,
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    }
+    .validate()
+    .expect("valid criteria from builder");
     assert_eq!(validated.as_ref().match_ratio, 1);
 }
 
@@ -217,8 +233,7 @@ fn criteria_builder_validates() {
 /// rather than from code. Both entry points are pinned.
 #[test]
 fn requests_accept_an_owned_list_of_boxed_constraints() {
-    use epistat_matching::Constraint;
-    use epistat_matching::constraints::caliper_on_field;
+    use crate::constraints::caliper_on_field;
 
     fn rules_from_config<R: MatchingRecord + 'static>(
         config: &[(&str, f64)],
@@ -247,15 +262,22 @@ fn requests_accept_an_owned_list_of_boxed_constraints() {
             .with_numeric("mother_birth_year", 1981.0)
             .with_numeric("father_birth_year", 1978.0),
     ];
-    let criteria = MatchingCriteria::builder()
-        .birth_date_window_days(365)
-        .match_ratio(1)
-        .build();
+    let criteria = MatchingCriteria {
+        birth_date_window_days: 365,
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    };
     let constraints = rules_from_config::<BaseRecord>(&config);
     let outcome = match_standard(
         &anchors,
         &candidates,
-        StandardMatchRequest::new(&criteria, DeterministicSelection, &constraints),
+        StandardMatchRequest {
+            criteria: &criteria,
+            strategy: DeterministicSelection,
+            constraints: &constraints,
+            ratio_fallback: &[],
+            distance_config: None,
+        },
     );
     assert_eq!(outcome.pairs.len(), 1);
     assert_eq!(outcome.pairs[0].control_id, "near");
@@ -268,9 +290,17 @@ fn requests_accept_an_owned_list_of_boxed_constraints() {
     ];
     let options = RoleTransitionOptions::default();
     let constraints = rules_from_config::<RoleTransitionRecord<BaseRecord>>(&config);
-    let outcome = match_transition(
+    let outcome = match_transition_ordered(
         &records,
-        TransitionMatchRequest::new(&criteria, &options, DeterministicSelection, &constraints),
+        TransitionMatchRequest {
+            criteria: &criteria,
+            options: &options,
+            strategy: DeterministicSelection,
+            constraints: &constraints,
+            distance_config: None,
+            risk_set_policy: &DefaultRiskSetPolicy,
+        },
+        None,
     );
     assert_eq!(outcome.pairs.len(), 1);
     assert_eq!(outcome.pairs[0].control_id, "near");

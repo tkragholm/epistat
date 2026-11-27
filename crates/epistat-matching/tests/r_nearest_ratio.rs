@@ -34,9 +34,11 @@ mod r_reference;
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
-use epistat_matching::{MatchOrder, RapidHashMap, VariableRatio};
+use epistat_matching::{DistanceCaliper, DistanceConfig, Estimand, MatchWeightMethod};
+use epistat_matching::{MatchOrder, VariableRatio};
 use epistat_testkit::Tolerance;
 use r_reference::{Versions, assert_r_version, reference as load_reference};
+use rapidhash::RapidHashMap;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
@@ -204,16 +206,16 @@ fn run_ours(scenario: &Scenario, spec: &Spec) -> (Vec<usize>, MatchOutcome) {
     if scenario.kind == "mahvars" {
         job = job.with_mahvars(mahalanobis(scenario));
     }
-    (focal_rows, job.run())
+    (focal_rows, job.run().expect("a valid job"))
 }
 
 fn rows_of(outcome: &MatchOutcome, focal_rows: &[usize]) -> Vec<Vec<usize>> {
     let mut by_anchor: HashMap<usize, Vec<usize>> = HashMap::new();
     for pair in &outcome.pairs {
         by_anchor
-            .entry(pair.anchor_id().parse().expect("row number"))
+            .entry(pair.case_id.as_str().parse().expect("row number"))
             .or_default()
-            .push(pair.comparator_id().parse().expect("row number"));
+            .push(pair.control_id.as_str().parse().expect("row number"));
     }
     focal_rows
         .iter()
@@ -283,15 +285,16 @@ fn pairs_follow_the_loop_always_and_matchit_where_it_is_well_defined() {
         let (treat, weights) = (&scenario.treat, &run.matchit_weights);
         let focal = u8::from(run.spec.estimand != "ATC");
         let unit_weights = outcome
-            .match_weights(MatchWeightMethod::AnchorUnitCandidateFractional)
+            .match_weights(MatchWeightMethod::CaseUnitControlFractional)
             .normalized();
         for (unit, want) in weights.iter().enumerate() {
-            let set = if treat[unit] == focal {
-                &unit_weights.anchor
+            let id = (unit + 1).to_string();
+            let got = if treat[unit] == focal {
+                unit_weights.case_weight(&id)
             } else {
-                &unit_weights.candidate
-            };
-            let got = set.get(&(unit + 1).to_string()).copied().unwrap_or(0.0);
+                unit_weights.control_weight(&id)
+            }
+            .unwrap_or(0.0);
             assert!(
                 WEIGHT_TOLERANCE.accepts(got, *want),
                 "{label}: unit {} weight {got}, MatchIt {want}",

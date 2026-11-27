@@ -16,10 +16,10 @@
 //! the unit of the row. [`MatchedSample::from_match_data`] builds it from
 //! [`crate::output::match_data`], whose rows are units. [`MatchedSample::from_long_matches`]
 //! builds it from [`crate::output::get_matches`], whose rows are units within
-//! pairs, so a control that is matched to several anchors has a row in each.
+//! pairs, so a control that is matched to several cases has a row in each.
 //! Use that form after matching with replacement. The outcome, the treatment
 //! and the covariates come from a [`UnitData`] keyed by the id of the unit,
-//! so every matching method gives the same input. The anchors need not be the
+//! so every matching method gives the same input. The cases need not be the
 //! treated units: the treatment is read from the [`UnitData`], so a match for
 //! the effect in the controls works the same way.
 //!
@@ -32,8 +32,8 @@
 //! `w_i` as prior weights.
 //!
 //! The estimand is an average over the rows of a target population, the
-//! treated rows for [`Target::Att`], the controls for [`Target::Atc`] and all
-//! rows for [`Target::Ate`]. With `x_i(a)` the design row of unit `i` with the
+//! treated rows for [`Estimand::Att`], the controls for [`Estimand::Atc`] and all
+//! rows for [`Estimand::Ate`]. With `x_i(a)` the design row of unit `i` with the
 //! treatment set to `a`, `g` the inverse link, and weights `w_i` over the
 //! target rows,
 //!
@@ -114,12 +114,11 @@
     reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
 )]
 
+use crate::{Error, Estimand};
 use std::collections::HashMap;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 
 use epistat_core::{Interval, Level};
-use epistat_glm::{Family, Glm, GlmError, Link, expit};
+use epistat_glm::{Family, Glm, Link, expit};
 use epistat_inference::interval::{self, Percentile};
 use epistat_inference::sandwich::{meat, sandwich};
 use epistat_inference::{Clusters, Error as InferenceError};
@@ -136,17 +135,6 @@ pub enum OutcomeModel {
     Linear,
     /// Logistic regression for an outcome in `[0, 1]`.
     Logistic,
-}
-
-/// The rows the effect is averaged over.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Target {
-    /// The treated rows.
-    Att,
-    /// The control rows.
-    Atc,
-    /// All rows.
-    Ate,
 }
 
 /// What the cluster-robust variance clusters by.
@@ -166,7 +154,7 @@ pub struct EffectSpec {
     /// The outcome model.
     pub model: OutcomeModel,
     /// The rows the effect is averaged over.
-    pub target: Target,
+    pub target: Estimand,
     /// Whether the model has the products of the treatment and the
     /// covariates.
     pub interactions: bool,
@@ -181,141 +169,10 @@ impl EffectSpec {
     pub const fn new(model: OutcomeModel) -> Self {
         Self {
             model,
-            target: Target::Att,
+            target: Estimand::Att,
             interactions: false,
             clustering: Clustering::Pair,
         }
-    }
-}
-
-/// Why an effect could not be estimated.
-#[derive(Debug, Clone, PartialEq)]
-pub enum EffectError {
-    /// Two inputs differ in length.
-    Length {
-        /// The input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// A value is not finite, or a weight is negative.
-    Value {
-        /// The input.
-        what: &'static str,
-        /// The row.
-        row: usize,
-    },
-    /// A matched unit is not in the unit data.
-    UnknownUnit {
-        /// The id.
-        id: String,
-    },
-    /// An id occurs twice in the unit data.
-    DuplicateUnit {
-        /// The id.
-        id: String,
-    },
-    /// The clustering or the bootstrap needs a pair for every row, and a
-    /// row has none. A match with replacement has no pair in its
-    /// `match_data()`; give it the long form instead.
-    MissingPair {
-        /// The row.
-        row: usize,
-    },
-    /// The treated or the control rows of the target have no weight.
-    EmptyTarget,
-    /// A logistic outcome lies outside `[0, 1]`.
-    Outcome {
-        /// The row.
-        row: usize,
-    },
-    /// The model has fewer rows than coefficients.
-    TooFewRows,
-    /// A coefficient is aliased with the others.
-    Aliased,
-    /// The fit did not converge.
-    NotConverged,
-    /// The bootstrap needs at least two replicates, for a standard error, and at
-    /// least two pairs.
-    Bootstrap,
-    /// The model of a bootstrap replicate could not be fitted.
-    Replicate {
-        /// The replicate, from 0.
-        index: usize,
-        /// Why.
-        reason: String,
-    },
-    /// The model could not be fitted.
-    Glm(GlmError),
-    /// The covariance or an interval could not be formed.
-    Inference(InferenceError),
-}
-
-impl Display for EffectError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Length {
-                what,
-                expected,
-                found,
-            } => write!(
-                f,
-                "{what} has {found} entries where {expected} were expected"
-            ),
-            Self::Value { what, row } => {
-                write!(
-                    f,
-                    "{what} in row {row} is not finite or is a negative weight"
-                )
-            }
-            Self::UnknownUnit { id } => {
-                write!(f, "the matched unit {id} is not in the unit data")
-            }
-            Self::DuplicateUnit { id } => write!(f, "the id {id} occurs twice in the unit data"),
-            Self::MissingPair { row } => write!(
-                f,
-                "row {row} has no pair; after matching with replacement build the sample from \
-                 the long form of the matches"
-            ),
-            Self::EmptyTarget => write!(
-                f,
-                "the target has no weighted treated rows or no weighted control rows"
-            ),
-            Self::Outcome { row } => {
-                write!(
-                    f,
-                    "the outcome in row {row} is outside [0, 1] for a logistic model"
-                )
-            }
-            Self::TooFewRows => write!(f, "the model has more coefficients than rows"),
-            Self::Aliased => write!(f, "a coefficient of the model is aliased with the others"),
-            Self::NotConverged => write!(f, "the model did not converge"),
-            Self::Bootstrap => write!(
-                f,
-                "the bootstrap needs at least two replicates and at least two pairs"
-            ),
-            Self::Replicate { index, reason } => {
-                write!(f, "replicate {index} could not be fitted: {reason}")
-            }
-            Self::Glm(error) => write!(f, "{error}"),
-            Self::Inference(error) => write!(f, "{error}"),
-        }
-    }
-}
-
-impl Error for EffectError {}
-
-impl From<GlmError> for EffectError {
-    fn from(error: GlmError) -> Self {
-        Self::Glm(error)
-    }
-}
-
-impl From<InferenceError> for EffectError {
-    fn from(error: InferenceError) -> Self {
-        Self::Inference(error)
     }
 }
 
@@ -334,18 +191,14 @@ impl UnitData {
     ///
     /// # Errors
     ///
-    /// [`EffectError::Length`] when the lists differ in length,
-    /// [`EffectError::DuplicateUnit`] for a repeated id and
-    /// [`EffectError::Value`] for an outcome that is not finite.
-    pub fn new(
-        ids: Vec<String>,
-        treated: Vec<bool>,
-        outcome: Vec<f64>,
-    ) -> Result<Self, EffectError> {
+    /// [`Error::Input`] when the lists differ in length,
+    /// [`Error::DuplicateId`] for a repeated id and
+    /// [`Error::Value`] for an outcome that is not finite.
+    pub fn new(ids: Vec<String>, treated: Vec<bool>, outcome: Vec<f64>) -> Result<Self, Error> {
         check_length("treated", ids.len(), treated.len())?;
         check_length("outcome", ids.len(), outcome.len())?;
         if let Some(row) = outcome.iter().position(|v| !v.is_finite()) {
-            return Err(EffectError::Value {
+            return Err(Error::Value {
                 what: "outcome",
                 row,
             });
@@ -353,7 +206,7 @@ impl UnitData {
         let mut index = HashMap::with_capacity(ids.len());
         for (row, id) in ids.into_iter().enumerate() {
             if index.contains_key(&id) {
-                return Err(EffectError::DuplicateUnit { id });
+                return Err(Error::DuplicateId { id });
             }
             index.insert(id, row);
         }
@@ -370,15 +223,15 @@ impl UnitData {
     ///
     /// # Errors
     ///
-    /// [`EffectError::Length`] or [`EffectError::Value`].
+    /// [`Error::Input`] for a column of the wrong length or [`Error::Value`].
     pub fn with_covariate(
         mut self,
         name: impl Into<String>,
         values: Vec<f64>,
-    ) -> Result<Self, EffectError> {
+    ) -> Result<Self, Error> {
         check_length("covariate", self.treated.len(), values.len())?;
         if let Some(row) = values.iter().position(|v| !v.is_finite()) {
-            return Err(EffectError::Value {
+            return Err(Error::Value {
                 what: "covariate",
                 row,
             });
@@ -392,8 +245,8 @@ impl UnitData {
     ///
     /// # Errors
     ///
-    /// [`EffectError::UnknownUnit`] when there is no such unit.
-    pub fn treatment_and_outcome(&self, id: &str) -> Result<(bool, f64), EffectError> {
+    /// [`Error::UnknownUnit`] when there is no such unit.
+    pub fn treatment_and_outcome(&self, id: &str) -> Result<(bool, f64), Error> {
         let row = self.row_of(id)?;
         Ok((self.treated[row], self.outcome[row]))
     }
@@ -416,11 +269,11 @@ impl UnitData {
     }
 
     /// The row of a unit.
-    pub(crate) fn row_of(&self, id: &str) -> Result<usize, EffectError> {
+    pub(crate) fn row_of(&self, id: &str) -> Result<usize, Error> {
         self.index
             .get(id)
             .copied()
-            .ok_or_else(|| EffectError::UnknownUnit { id: id.to_string() })
+            .ok_or_else(|| Error::UnknownUnit { id: id.to_string() })
     }
 }
 
@@ -442,8 +295,8 @@ impl MatchedSample {
     ///
     /// # Errors
     ///
-    /// [`EffectError::Length`] for columns of different length and
-    /// [`EffectError::Value`] for a weight that is negative or not finite, or
+    /// [`Error::Input`] for columns of different length and
+    /// [`Error::Value`] for a weight that is negative or not finite, or
     /// an outcome or covariate that is not finite.
     pub fn new(
         treated: Vec<bool>,
@@ -452,7 +305,7 @@ impl MatchedSample {
         covariates: Vec<Vec<f64>>,
         pair: Vec<Option<usize>>,
         unit: Vec<usize>,
-    ) -> Result<Self, EffectError> {
+    ) -> Result<Self, Error> {
         let n = treated.len();
         check_length("weight", n, weight.len())?;
         check_length("outcome", n, outcome.len())?;
@@ -461,20 +314,20 @@ impl MatchedSample {
         for column in &covariates {
             check_length("covariate", n, column.len())?;
             if let Some(row) = column.iter().position(|v| !v.is_finite()) {
-                return Err(EffectError::Value {
+                return Err(Error::Value {
                     what: "covariate",
                     row,
                 });
             }
         }
         if let Some(row) = weight.iter().position(|w| !(w.is_finite() && *w >= 0.0)) {
-            return Err(EffectError::Value {
+            return Err(Error::Value {
                 what: "weight",
                 row,
             });
         }
         if let Some(row) = outcome.iter().position(|v| !v.is_finite()) {
-            return Err(EffectError::Value {
+            return Err(Error::Value {
                 what: "outcome",
                 row,
             });
@@ -495,9 +348,9 @@ impl MatchedSample {
     ///
     /// # Errors
     ///
-    /// [`EffectError::UnknownUnit`] for a unit not in `units`, and those of
+    /// [`Error::UnknownUnit`] for a unit not in `units`, and those of
     /// [`MatchedSample::new`].
-    pub fn from_match_data(data: &MatchData, units: &UnitData) -> Result<Self, EffectError> {
+    pub fn from_match_data(data: &MatchData, units: &UnitData) -> Result<Self, Error> {
         let keep: Vec<usize> = (0..data.len()).filter(|&i| data.weight[i] > 0.0).collect();
         let rows = keep
             .iter()
@@ -514,7 +367,7 @@ impl MatchedSample {
     /// # Errors
     ///
     /// As [`MatchedSample::from_match_data`].
-    pub fn from_long_matches(data: &LongMatches, units: &UnitData) -> Result<Self, EffectError> {
+    pub fn from_long_matches(data: &LongMatches, units: &UnitData) -> Result<Self, Error> {
         let keep: Vec<usize> = (0..data.len()).filter(|&i| data.weight[i] > 0.0).collect();
         let rows = keep
             .iter()
@@ -530,7 +383,7 @@ impl MatchedSample {
         weight: Vec<f64>,
         pair: Vec<Option<usize>>,
         units: &UnitData,
-    ) -> Result<Self, EffectError> {
+    ) -> Result<Self, Error> {
         Self::new(
             rows.iter().map(|&r| units.treated[r]).collect(),
             weight,
@@ -573,11 +426,11 @@ impl MatchedSample {
         }
     }
 
-    fn pair_labels(&self) -> Result<Vec<usize>, EffectError> {
+    fn pair_labels(&self) -> Result<Vec<usize>, Error> {
         self.pair
             .iter()
             .enumerate()
-            .map(|(row, p)| p.ok_or(EffectError::MissingPair { row }))
+            .map(|(row, p)| p.ok_or(Error::MissingPair { row }))
             .collect()
     }
 }
@@ -625,15 +478,11 @@ struct Fitted {
     design: Mat<f64>,
 }
 
-fn check_length(what: &'static str, expected: usize, found: usize) -> Result<(), EffectError> {
+fn check_length(what: &'static str, expected: usize, found: usize) -> Result<(), Error> {
     if expected == found {
         Ok(())
     } else {
-        Err(EffectError::Length {
-            what,
-            expected,
-            found,
-        })
+        Err(Error::length(what, expected, found))
     }
 }
 
@@ -670,7 +519,7 @@ fn design(
     })
 }
 
-fn fit_model(sample: &MatchedSample, spec: &EffectSpec) -> Result<Fitted, EffectError> {
+fn fit_model(sample: &MatchedSample, spec: &EffectSpec) -> Result<Fitted, Error> {
     let weighted = |treated: bool| {
         sample
             .treated
@@ -679,17 +528,17 @@ fn fit_model(sample: &MatchedSample, spec: &EffectSpec) -> Result<Fitted, Effect
             .any(|(t, w)| *t == treated && *w > 0.0)
     };
     if !weighted(true) || !weighted(false) {
-        return Err(EffectError::EmptyTarget);
+        return Err(Error::EmptyTarget);
     }
     let n = sample.len();
     let p = width(sample, spec.interactions);
     if n < p {
-        return Err(EffectError::TooFewRows);
+        return Err(Error::TooFewRows);
     }
     if spec.model == OutcomeModel::Logistic
         && let Some(row) = sample.outcome.iter().position(|y| !(0.0..=1.0).contains(y))
     {
-        return Err(EffectError::Outcome { row });
+        return Err(Error::Outcome { row });
     }
     let all: Vec<usize> = (0..n).collect();
     let x = design(sample, spec.interactions, &all, None);
@@ -711,12 +560,12 @@ fn fit_model(sample: &MatchedSample, spec: &EffectSpec) -> Result<Fitted, Effect
         None,
     )?;
     if !fit.converged {
-        return Err(EffectError::NotConverged);
+        return Err(Error::NotConverged);
     }
     let beta = fit
         .coefficients
         .iter()
-        .map(|c| c.ok_or(EffectError::Aliased))
+        .map(|c| c.ok_or(Error::Aliased))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Fitted {
         beta,
@@ -734,17 +583,23 @@ struct Means {
     g0: Vec<f64>,
 }
 
-fn means(sample: &MatchedSample, spec: &EffectSpec, beta: &[f64]) -> Result<Means, EffectError> {
+fn means(sample: &MatchedSample, spec: &EffectSpec, beta: &[f64]) -> Result<Means, Error> {
+    if spec.target == Estimand::Atm {
+        return Err(Error::UnsupportedEstimand {
+            estimand: spec.target.into(),
+            method: "the effect estimate",
+        });
+    }
     let rows: Vec<usize> = (0..sample.len())
         .filter(|&i| match spec.target {
-            Target::Att => sample.treated[i],
-            Target::Atc => !sample.treated[i],
-            Target::Ate => true,
+            Estimand::Att => sample.treated[i],
+            Estimand::Atc => !sample.treated[i],
+            Estimand::Ate | Estimand::Atm => true,
         })
         .collect();
     let total: f64 = rows.iter().map(|&i| sample.weight[i]).sum();
     if total <= 0.0 {
-        return Err(EffectError::EmptyTarget);
+        return Err(Error::EmptyTarget);
     }
     let p = beta.len();
     let one = |a: f64| -> (f64, Vec<f64>) {
@@ -834,7 +689,7 @@ fn covariance(
     sample: &MatchedSample,
     spec: &EffectSpec,
     fitted: &Fitted,
-) -> Result<Option<Mat<f64>>, EffectError> {
+) -> Result<Option<Mat<f64>>, Error> {
     let n = sample.len();
     let p = fitted.beta.len();
     let pairs = match spec.clustering {
@@ -873,7 +728,7 @@ fn covariance(
     let small_sample = match spec.model {
         OutcomeModel::Linear => {
             if n <= p {
-                return Err(EffectError::TooFewRows);
+                return Err(Error::TooFewRows);
             }
             (n as f64 - 1.0) / (n as f64 - p as f64)
         }
@@ -911,11 +766,11 @@ fn standard_error(gradient: &[f64], v: Option<&Mat<f64>>) -> Option<f64> {
 ///
 /// # Errors
 ///
-/// See [`EffectError`].
+/// See [`Error`].
 pub fn estimate_effects(
     sample: &MatchedSample,
     spec: &EffectSpec,
-) -> Result<EffectEstimates, EffectError> {
+) -> Result<EffectEstimates, Error> {
     let fitted = fit_model(sample, spec)?;
     let m = means(sample, spec, &fitted.beta)?;
     let c = contrasts(&m, spec.model);
@@ -1009,7 +864,7 @@ pub struct BootstrapEffects {
     pub odds_ratio: Option<BootstrapStatistic>,
 }
 
-fn point_contrasts(sample: &MatchedSample, spec: &EffectSpec) -> Result<Contrasts, EffectError> {
+fn point_contrasts(sample: &MatchedSample, spec: &EffectSpec) -> Result<Contrasts, Error> {
     let fitted = fit_model(sample, spec)?;
     let m = means(sample, spec, &fitted.beta)?;
     Ok(contrasts(&m, spec.model))
@@ -1023,19 +878,19 @@ fn point_contrasts(sample: &MatchedSample, spec: &EffectSpec) -> Result<Contrast
 ///
 /// # Errors
 ///
-/// [`EffectError::MissingPair`], [`EffectError::Bootstrap`] and the errors of
+/// [`Error::MissingPair`], [`Error::Bootstrap`] and the errors of
 /// the fit of the sample. A replicate that cannot be fitted is
-/// [`EffectError::Replicate`].
+/// [`Error::Replicate`].
 pub fn bootstrap(
     sample: &MatchedSample,
     spec: &EffectSpec,
     settings: &BootstrapSpec,
-) -> Result<BootstrapEffects, EffectError> {
+) -> Result<BootstrapEffects, Error> {
     let labels = sample.pair_labels()?;
     let clusters = Clusters::from_sorted_labels(&labels);
     let g = clusters.count();
     if settings.replicates < 2 || g < 2 {
-        return Err(EffectError::Bootstrap);
+        return Err(Error::Bootstrap);
     }
     let mut members: Vec<Vec<usize>> = vec![Vec::new(); g];
     for (row, &c) in clusters.of().iter().enumerate() {
@@ -1051,13 +906,13 @@ pub fn bootstrap(
                 .iter()
                 .flat_map(|&c| members[c].iter().copied())
                 .collect();
-            point_contrasts(&sample.select(&rows), spec).map_err(|e| EffectError::Replicate {
+            point_contrasts(&sample.select(&rows), spec).map_err(|e| Error::Replicate {
                 index,
                 reason: e.to_string(),
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let summarise = |estimate: f64, values: Vec<f64>| -> Result<BootstrapStatistic, EffectError> {
+    let summarise = |estimate: f64, values: Vec<f64>| -> Result<BootstrapStatistic, Error> {
         let n = values.len() as f64;
         let mean = values.iter().sum::<f64>() / n;
         let se = (values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / (n - 1.0)).sqrt();
@@ -1076,13 +931,14 @@ pub fn bootstrap(
             },
         })
     };
-    let optional = |pick: fn(&Contrasts) -> Option<&Contrast>| -> Result<Option<BootstrapStatistic>, EffectError> {
-        let Some(estimate) = pick(&observed) else {
-            return Ok(None);
+    let optional =
+        |pick: fn(&Contrasts) -> Option<&Contrast>| -> Result<Option<BootstrapStatistic>, Error> {
+            let Some(estimate) = pick(&observed) else {
+                return Ok(None);
+            };
+            let values: Option<Vec<f64>> = points.iter().map(|c| pick(c).map(|v| v.0)).collect();
+            values.map(|v| summarise(estimate.0, v)).transpose()
         };
-        let values: Option<Vec<f64>> = points.iter().map(|c| pick(c).map(|v| v.0)).collect();
-        values.map(|v| summarise(estimate.0, v)).transpose()
-    };
     Ok(BootstrapEffects {
         difference: summarise(
             observed.difference.0,
@@ -1121,7 +977,7 @@ mod tests {
         let spec = EffectSpec::new(OutcomeModel::Linear);
         assert_eq!(
             bootstrap(&sample, &spec, &BootstrapSpec::new(1, 7)).unwrap_err(),
-            EffectError::Bootstrap
+            Error::Bootstrap
         );
         let two = bootstrap(&sample, &spec, &BootstrapSpec::new(2, 7)).unwrap();
         assert!(two.difference.summary.se.is_finite());
@@ -1152,7 +1008,7 @@ mod tests {
         let mut sample = pairs_sample();
         sample.pair = vec![None; 16];
         let pair = estimate_effects(&sample, &EffectSpec::new(OutcomeModel::Linear));
-        assert_eq!(pair.unwrap_err(), EffectError::MissingPair { row: 0 });
+        assert_eq!(pair.unwrap_err(), Error::MissingPair { row: 0 });
         let mut spec = EffectSpec::new(OutcomeModel::Linear);
         spec.clustering = Clustering::Unit;
         assert!(
@@ -1163,7 +1019,7 @@ mod tests {
                 .is_some()
         );
         let boot = bootstrap(&sample, &spec, &BootstrapSpec::new(10, 1));
-        assert_eq!(boot.unwrap_err(), EffectError::MissingPair { row: 0 });
+        assert_eq!(boot.unwrap_err(), Error::MissingPair { row: 0 });
     }
 
     #[test]
@@ -1175,14 +1031,14 @@ mod tests {
             }
         }
         let out = estimate_effects(&sample, &EffectSpec::new(OutcomeModel::Linear));
-        assert_eq!(out.unwrap_err(), EffectError::EmptyTarget);
+        assert_eq!(out.unwrap_err(), Error::EmptyTarget);
     }
 
     #[test]
     fn a_logistic_outcome_outside_the_unit_interval_is_an_error() {
         let sample = pairs_sample();
         let out = estimate_effects(&sample, &EffectSpec::new(OutcomeModel::Logistic));
-        assert_eq!(out.unwrap_err(), EffectError::Outcome { row: 0 });
+        assert_eq!(out.unwrap_err(), Error::Outcome { row: 0 });
     }
 
     #[test]
@@ -1192,20 +1048,17 @@ mod tests {
             vec![true, false],
             vec![1.0, 2.0],
         );
-        assert_eq!(
-            dup.unwrap_err(),
-            EffectError::DuplicateUnit { id: "a".into() }
-        );
+        assert_eq!(dup.unwrap_err(), Error::DuplicateId { id: "a".into() });
         let units = UnitData::new(vec!["a".into()], vec![true], vec![1.0]).unwrap();
         let data = MatchData {
             id: vec!["b".into()],
-            role: vec![crate::UnitRole::Anchor],
+            role: vec![crate::UnitRole::Case],
             weight: vec![1.0],
             subclass: vec![Some(1)],
         };
         assert_eq!(
             MatchedSample::from_match_data(&data, &units).unwrap_err(),
-            EffectError::UnknownUnit { id: "b".into() }
+            Error::UnknownUnit { id: "b".into() }
         );
     }
 
@@ -1229,6 +1082,6 @@ mod tests {
         assert!(d.summary.normal.0 < d.summary.estimate && d.summary.estimate < d.summary.normal.1);
         assert!(out.ratio.is_none() && out.odds_ratio.is_none());
         let few = bootstrap(&sample, &spec, &BootstrapSpec::new(0, 11));
-        assert_eq!(few.unwrap_err(), EffectError::Bootstrap);
+        assert_eq!(few.unwrap_err(), Error::Bootstrap);
     }
 }

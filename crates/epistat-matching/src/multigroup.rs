@@ -69,119 +69,26 @@
     reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
 )]
 
+use crate::Error;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::error::Error;
-use std::fmt::{Display, Formatter};
 
 use chrono::NaiveDate;
-use epistat_glm::{Multinom, MultinomError};
+use epistat_glm::Multinom;
 use epistat_linalg::Mat;
-use epistat_stats::Error as KMeansError;
 use epistat_stats::cluster::{KMeansAlgorithm, kmeans};
 use rayon::prelude::*;
 
 use crate::matching::{
-    CovariateEncodingConfig, CovariateRecord, EstimationError, MatchingRecord, encode_covariates,
+    CovariateEncodingConfig, CovariateRecord, MatchingRecord, encode_covariates,
 };
 use crate::types::{
     BalanceRecord, DistanceCaliper, MatchDiagnostics, MatchOutcome, MatchRatio, MatchedPair,
 };
 use crate::{
-    BalanceInputError, BalanceReport, BalanceReportOptions, BalanceWeights, DistanceConfig,
-    Estimand, MatchJob, RapidHashMap, balance_report_on_weights,
+    BalanceReport, BalanceReportOptions, BalanceWeights, DistanceConfig, Estimand, MatchJob,
+    balance_summary,
 };
-
-/// Why a multi-group match could not be made.
-#[derive(Debug, Clone)]
-pub enum MultigroupError {
-    /// Fewer than two groups, a label outside them, or a focal group outside
-    /// them.
-    Groups {
-        /// The number of groups.
-        groups: usize,
-    },
-    /// An input list has the wrong length.
-    Length {
-        /// The input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// The caliper is not a positive finite number of standard deviations.
-    Caliper,
-    /// The number of clusters is zero.
-    Clusters,
-    /// A generalised propensity score is 0 or 1 to machine precision, so its
-    /// logit is not finite: the groups are separated by the covariates.
-    Separated,
-    /// No unit of the group is inside the common support.
-    EmptyGroup {
-        /// The group.
-        group: usize,
-    },
-    /// The covariates could not be encoded.
-    Estimation(EstimationError),
-    /// The multinomial model could not be fitted.
-    Fit(MultinomError),
-    /// The k-means clustering failed.
-    Cluster(KMeansError),
-}
-
-impl Display for MultigroupError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Groups { groups } => write!(
-                f,
-                "the group labels must lie in 0..{groups} with at least two groups, \
-                 and the focal group must be one of them"
-            ),
-            Self::Length {
-                what,
-                expected,
-                found,
-            } => write!(
-                f,
-                "{what} has {found} entries where {expected} were expected"
-            ),
-            Self::Caliper => {
-                f.write_str("the caliper must be a positive finite number of standard deviations")
-            }
-            Self::Clusters => f.write_str("the number of clusters must be at least 1"),
-            Self::Separated => f.write_str(
-                "a generalised propensity score is 0 or 1 to machine precision; \
-                 the groups are separated by the covariates",
-            ),
-            Self::EmptyGroup { group } => {
-                write!(f, "no unit of group {group} lies inside the common support")
-            }
-            Self::Estimation(e) => write!(f, "{e}"),
-            Self::Fit(e) => write!(f, "{e}"),
-            Self::Cluster(e) => write!(f, "{e}"),
-        }
-    }
-}
-
-impl Error for MultigroupError {}
-
-impl From<EstimationError> for MultigroupError {
-    fn from(e: EstimationError) -> Self {
-        Self::Estimation(e)
-    }
-}
-
-impl From<MultinomError> for MultigroupError {
-    fn from(e: MultinomError) -> Self {
-        Self::Fit(e)
-    }
-}
-
-impl From<KMeansError> for MultigroupError {
-    fn from(e: KMeansError) -> Self {
-        Self::Cluster(e)
-    }
-}
+use rapidhash::RapidHashMap;
 
 /// How the generalised propensity score is fitted.
 #[derive(Debug, Clone)]
@@ -195,9 +102,10 @@ pub struct GpsConfig {
 impl Default for GpsConfig {
     fn default() -> Self {
         Self {
-            encoding: CovariateEncodingConfig::builder()
-                .include_intercept(true)
-                .build(),
+            encoding: CovariateEncodingConfig {
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
             fit: Multinom::default(),
         }
     }
@@ -239,16 +147,12 @@ impl GeneralisedPropensityScore {
     }
 }
 
-fn check_groups(groups: &[usize], n_groups: usize, n: usize) -> Result<(), MultigroupError> {
+fn check_groups(groups: &[usize], n_groups: usize, n: usize) -> Result<(), Error> {
     if n_groups < 2 || groups.iter().any(|&g| g >= n_groups) {
-        return Err(MultigroupError::Groups { groups: n_groups });
+        return Err(Error::Groups { groups: n_groups });
     }
     if groups.len() != n {
-        return Err(MultigroupError::Length {
-            what: "groups",
-            expected: n,
-            found: groups.len(),
-        });
+        return Err(Error::length("groups", n, groups.len()));
     }
     Ok(())
 }
@@ -258,13 +162,13 @@ fn check_groups(groups: &[usize], n_groups: usize, n: usize) -> Result<(), Multi
 ///
 /// # Errors
 ///
-/// See [`MultigroupError`].
+/// See [`Error`].
 pub fn generalised_propensity_score<R: CovariateRecord>(
     records: &[R],
     groups: &[usize],
     n_groups: usize,
     config: &GpsConfig,
-) -> Result<GeneralisedPropensityScore, MultigroupError> {
+) -> Result<GeneralisedPropensityScore, Error> {
     check_groups(groups, n_groups, records.len())?;
     let matrix = encode_covariates(records, &config.encoding)?;
     let x = Mat::from_fn(matrix.n_rows, matrix.n_cols, |i, j| {
@@ -289,14 +193,14 @@ fn dummy_date() -> NaiveDate {
 /// Matches each focal unit to the nearest other unit in its cluster by score,
 /// with replacement, and returns the pairs.
 ///
-/// `is_focal` marks the units to match, the rest are the candidates. A focal
-/// unit is matched to the candidate of its cluster with the nearest `score`,
-/// the lowest position on a tie, unless that candidate is further than
+/// `is_focal` marks the units to match, the rest are the controls. A focal
+/// unit is matched to the control of its cluster with the nearest `score`,
+/// the lowest position on a tie, unless that control is further than
 /// `caliper` standard deviations away. The standard deviation, with divisor
 /// `n`, is that of the scores of all units in the cluster, as
 /// `Matching::Match()` takes it over the units it is given. (`matchit()`
 /// divides by `n - 1`.) A focal unit with
-/// no candidate in its cluster or within the caliper is not matched. Pairs are
+/// no control in its cluster or within the caliper is not matched. Pairs are
 /// listed by cluster, in order of the cluster label, then in the order the
 /// matching assigns them.
 ///
@@ -306,8 +210,8 @@ fn dummy_date() -> NaiveDate {
 ///
 /// # Errors
 ///
-/// [`MultigroupError::Length`] for lists of different lengths and
-/// [`MultigroupError::Caliper`] for a caliper that is not positive and finite.
+/// [`Error::Input`] for lists of different lengths and
+/// [`Error::InvalidCaliper`] for a caliper that is not positive and finite.
 ///
 /// # Panics
 ///
@@ -318,7 +222,7 @@ pub fn match_within_clusters(
     is_focal: &[bool],
     cluster: &[usize],
     caliper: Option<f64>,
-) -> Result<Vec<MatchedPair>, MultigroupError> {
+) -> Result<Vec<MatchedPair>, Error> {
     let n = ids.len();
     for (what, found) in [
         ("score", score.len()),
@@ -326,15 +230,11 @@ pub fn match_within_clusters(
         ("cluster", cluster.len()),
     ] {
         if found != n {
-            return Err(MultigroupError::Length {
-                what,
-                expected: n,
-                found,
-            });
+            return Err(Error::length(what, n, found));
         }
     }
     if caliper.is_some_and(|c| !(c.is_finite() && c > 0.0)) {
-        return Err(MultigroupError::Caliper);
+        return Err(Error::InvalidCaliper);
     }
     let mut by_cluster: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     for (i, &c) in cluster.iter().enumerate() {
@@ -357,7 +257,7 @@ pub fn match_within_clusters(
                 .map(|&i| BalanceRecord::new(ids[i].clone(), dummy_date()))
                 .collect();
             if anchors.is_empty() || candidates.is_empty() {
-                return Vec::new();
+                return Ok(Vec::new());
             }
             let scores: RapidHashMap<String, f64> = members
                 .iter()
@@ -379,9 +279,9 @@ pub fn match_within_clusters(
                 .with_replacement(true)
                 .with_distance_config(DistanceConfig::propensity_score_map(scores, width))
                 .run()
-                .pairs
+                .map(|outcome| outcome.pairs)
         })
-        .collect();
+        .collect::<Result<_, Error>>()?;
     let pairs: Vec<MatchedPair> = per_cluster.into_iter().flatten().collect();
     Ok(pairs)
 }
@@ -432,7 +332,7 @@ pub struct GroupMatch {
     /// order.
     pub cluster: Vec<usize>,
     /// The pairs of the final cohort, focal unit first. The match is with
-    /// replacement, so a candidate can be in several pairs.
+    /// replacement, so a control can be in several pairs.
     pub outcome: MatchOutcome,
 }
 
@@ -519,22 +419,22 @@ fn inside_support(gps: &GeneralisedPropensityScore, groups: &[usize]) -> Vec<boo
 ///
 /// # Errors
 ///
-/// See [`MultigroupError`].
+/// See [`Error`].
 pub fn vector_match<R: CovariateRecord>(
     records: &[R],
     groups: &[usize],
     n_groups: usize,
     spec: &VectorMatchSpec,
-) -> Result<VectorMatchOutcome, MultigroupError> {
+) -> Result<VectorMatchOutcome, Error> {
     check_groups(groups, n_groups, records.len())?;
     if spec.focal >= n_groups {
-        return Err(MultigroupError::Groups { groups: n_groups });
+        return Err(Error::Groups { groups: n_groups });
     }
     if spec.clusters == 0 {
-        return Err(MultigroupError::Clusters);
+        return Err(Error::Clusters);
     }
     if spec.caliper.is_some_and(|c| !(c.is_finite() && c > 0.0)) {
-        return Err(MultigroupError::Caliper);
+        return Err(Error::InvalidCaliper);
     }
     let mut gps = generalised_propensity_score(records, groups, n_groups, &spec.gps)?;
     let mut keep: Vec<usize> = (0..records.len()).collect();
@@ -543,7 +443,7 @@ pub fn vector_match<R: CovariateRecord>(
         keep = (0..records.len()).filter(|&i| inside[i]).collect();
         for group in 0..n_groups {
             if !keep.iter().any(|&i| groups[i] == group) {
-                return Err(MultigroupError::EmptyGroup { group });
+                return Err(Error::EmptySupport { group });
             }
         }
         if spec.refit && keep.len() < records.len() {
@@ -572,13 +472,13 @@ pub fn vector_match<R: CovariateRecord>(
         .collect();
     let kept_groups: Vec<usize> = keep.iter().map(|&i| groups[i]).collect();
     let n = keep.len();
-    let logit = |row: usize, group: usize| gps.logit(row, group).ok_or(MultigroupError::Separated);
+    let logit = |row: usize, group: usize| gps.logit(row, group).ok_or(Error::Separated);
 
     // The comparisons with the other groups are independent. They are gathered
     // in the order of the groups, and the first error in that order is the one
     // returned.
     let others: Vec<usize> = (0..n_groups).filter(|&g| g != spec.focal).collect();
-    let compare = |other: usize| -> Result<GroupMatch, MultigroupError> {
+    let compare = |other: usize| -> Result<GroupMatch, Error> {
         let dims: Vec<usize> = (0..n_groups)
             .filter(|&l| l != spec.focal && l != other)
             .collect();
@@ -620,7 +520,7 @@ pub fn vector_match<R: CovariateRecord>(
             outcome: outcome_of(pairs, 0),
         })
     };
-    let compared: Vec<Result<GroupMatch, MultigroupError>> =
+    let compared: Vec<Result<GroupMatch, Error>> =
         others.par_iter().map(|&other| compare(other)).collect();
     let mut comparisons = compared.into_iter().collect::<Result<Vec<_>, _>>()?;
 
@@ -631,7 +531,7 @@ pub fn vector_match<R: CovariateRecord>(
             .outcome
             .pairs
             .iter()
-            .map(MatchedPair::anchor_id)
+            .map(|pair: &MatchedPair| pair.case_id.as_str())
             .collect();
         for id in matched {
             *counts.entry(id).or_default() += 1;
@@ -649,7 +549,7 @@ pub fn vector_match<R: CovariateRecord>(
             .outcome
             .pairs
             .iter()
-            .filter(|p| final_set.contains(p.anchor_id()))
+            .filter(|p| final_set.contains(p.case_id.as_str()))
             .cloned()
             .collect();
         comparison.outcome = outcome_of(pairs, focal_total);
@@ -663,9 +563,12 @@ pub fn vector_match<R: CovariateRecord>(
     })
 }
 
-/// An outcome of with-replacement pairs of `focal_total` anchors, 1:1.
+/// An outcome of with-replacement pairs of `focal_total` cases, 1:1.
 fn outcome_of(pairs: Vec<MatchedPair>, focal_total: usize) -> MatchOutcome {
-    let matched: HashSet<&str> = pairs.iter().map(MatchedPair::anchor_id).collect();
+    let matched: HashSet<&str> = pairs
+        .iter()
+        .map(|pair: &MatchedPair| pair.case_id.as_str())
+        .collect();
     let matched_cases = matched.len();
     let diagnostics = MatchDiagnostics {
         realized_estimand: Estimand::Att,
@@ -685,20 +588,20 @@ fn outcome_of(pairs: Vec<MatchedPair>, focal_total: usize) -> MatchOutcome {
 /// cohort.
 ///
 /// For each comparison, the report is that of
-/// [`balance_report_on_weights`] for the focal units and the units of the
+/// [`balance_summary`] for the focal units and the units of the
 /// other group inside the common support, with the matching weights of the
 /// pairs of the final cohort. A unit outside the cohort has weight 0.
 ///
 /// # Errors
 ///
-/// [`BalanceInputError`] for a weight that is not valid.
+/// [`Error`] for a weight that is not valid.
 pub fn balance_by_group<R: CovariateRecord>(
     records: &[R],
     groups: &[usize],
     focal: usize,
     outcome: &VectorMatchOutcome,
     options: &BalanceReportOptions,
-) -> Result<Vec<(usize, BalanceReport)>, BalanceInputError> {
+) -> Result<Vec<(usize, BalanceReport)>, Error> {
     let kept: HashSet<&str> = outcome.kept.iter().map(String::as_str).collect();
     let focal_records: Vec<&R> = records
         .iter()
@@ -717,7 +620,8 @@ pub fn balance_by_group<R: CovariateRecord>(
                 .map(|(r, _)| r)
                 .collect();
             let weights = BalanceWeights::from_outcome(&comparison.outcome);
-            balance_report_on_weights(&focal_records, &others, &weights, options)
+            balance_summary(&focal_records, &others, &weights, options)
+                .map(|summary| summary.report)
                 .map(|report| (comparison.group, report))
         })
         .collect()

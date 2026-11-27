@@ -18,7 +18,11 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
-use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, CovariateValue, ElasticNetCvConfig, LambdaRule, PropensityDistancePreparation,
+    PropensityEstimator, PropensityScoreConfig, cross_validation_folds,
+    prepare_propensity_distance_config,
+};
 use epistat_testkit::load_json;
 use r_reference::{Versions, covariate_unit, split_by_group, unit_id as id};
 use serde::{Deserialize, Serialize};
@@ -99,15 +103,13 @@ fn fit_case(case: &Case, rule: LambdaRule) -> PropensityDistancePreparation {
         case.name
     );
     let config = PropensityScoreConfig {
-        estimator: PropensityEstimator::ElasticNetCv(
-            ElasticNetCvConfig::builder()
-                .seed(case.seed)
-                .alpha(case.alpha)
-                .nfolds(case.nfolds)
-                .standardize(case.standardize)
-                .rule(rule)
-                .build(),
-        ),
+        estimator: PropensityEstimator::ElasticNetCv(ElasticNetCvConfig {
+            alpha: case.alpha,
+            nfolds: case.nfolds,
+            standardize: case.standardize,
+            rule,
+            ..ElasticNetCvConfig::new(case.seed)
+        }),
         sampling_weights: case.weights.as_ref().map(|w| {
             w.iter()
                 .enumerate()
@@ -116,7 +118,7 @@ fn fit_case(case: &Case, rule: LambdaRule) -> PropensityDistancePreparation {
         }),
         ..PropensityScoreConfig::default()
     };
-    prepare_propensity_distance_config(&anchors, &candidates, &config)
+    prepare_propensity_distance_config(&anchors, &candidates, &config, None)
         .expect("cross-validation succeeds")
 }
 

@@ -7,36 +7,16 @@ use std::collections::HashMap;
 /// Cohort-level balance diagnostics from match results.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BalanceDiagnostics {
-    /// Proportion of anchors matched, `None` when there are no anchors.
+    /// Proportion of cases matched, `None` when there are no cases.
     pub match_rate: Option<f64>,
-    /// Number of matched anchors.
+    /// Number of matched cases.
     pub matched_cases: usize,
-    /// Number of unmatched anchors.
+    /// Number of unmatched cases.
     pub unmatched_cases: usize,
-    /// Average candidates per matched anchor, `None` when no anchor is matched.
+    /// Average controls per matched case, `None` when no case is matched.
     pub avg_controls_per_case: Option<f64>,
-    /// Counts by strata key (`anchor_count`, `candidate_count`).
+    /// Counts by strata key (`case_count`, `control_count`).
     pub strata_counts: HashMap<String, (usize, usize)>,
-}
-
-impl BalanceDiagnostics {
-    /// Neutral accessor for matched anchor count.
-    #[must_use]
-    pub const fn matched_anchors(&self) -> usize {
-        self.matched_cases
-    }
-
-    /// Neutral accessor for unmatched anchor count.
-    #[must_use]
-    pub const fn unmatched_anchors(&self) -> usize {
-        self.unmatched_cases
-    }
-
-    /// Neutral accessor for average comparators per matched anchor.
-    #[must_use]
-    pub const fn avg_comparators_per_anchor(&self) -> Option<f64> {
-        self.avg_controls_per_case
-    }
 }
 
 /// Numeric covariate balance summary.
@@ -57,9 +37,9 @@ impl BalanceDiagnostics {
 pub struct NumericBalance {
     /// Covariate name.
     pub name: String,
-    /// Pre-match anchor mean.
+    /// Pre-match case mean.
     pub mean_case_pre: Option<f64>,
-    /// Pre-match candidate mean.
+    /// Pre-match control mean.
     pub mean_control_pre: Option<f64>,
     /// Pre-match standardized mean difference.
     pub smd_pre: Option<f64>,
@@ -78,9 +58,9 @@ pub struct NumericBalance {
     /// Pre-match max absolute eQQ distance.
     #[serde(default)]
     pub eqq_max_diff_pre: Option<f64>,
-    /// Post-match anchor mean.
+    /// Post-match case mean.
     pub mean_case_post: Option<f64>,
-    /// Post-match candidate mean.
+    /// Post-match control mean.
     pub mean_control_post: Option<f64>,
     /// Post-match standardized mean difference.
     pub smd_post: Option<f64>,
@@ -106,15 +86,15 @@ pub struct NumericBalance {
 pub struct CategoricalLevelBalance {
     /// Level name.
     pub level: String,
-    /// Pre-match anchor proportion.
+    /// Pre-match case proportion.
     pub p_case_pre: Option<f64>,
-    /// Pre-match candidate proportion.
+    /// Pre-match control proportion.
     pub p_control_pre: Option<f64>,
     /// Pre-match standardized mean difference.
     pub smd_pre: Option<f64>,
-    /// Post-match anchor proportion.
+    /// Post-match case proportion.
     pub p_case_post: Option<f64>,
-    /// Post-match candidate proportion.
+    /// Post-match control proportion.
     pub p_control_post: Option<f64>,
     /// Post-match standardized mean difference.
     pub smd_post: Option<f64>,
@@ -168,9 +148,9 @@ pub struct GroupSampleSizes {
 /// The sample size table of a balance summary: one column per group.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SampleSizeTable {
-    /// The anchors (treated units).
+    /// The cases (treated units).
     pub cases: GroupSampleSizes,
-    /// The candidates (control units).
+    /// The controls (control units).
     pub controls: GroupSampleSizes,
 }
 
@@ -271,14 +251,12 @@ pub enum NumericBalanceTransform {
 }
 
 /// Configuration for balance reporting behavior.
-#[derive(bon::Builder, Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BalanceReportOptions {
     /// Which transformed numeric terms to include.
-    #[builder(default)]
     #[serde(default)]
     pub numeric_transforms: NumericBalanceTransform,
     /// Optional supplemental covariates for balance-only diagnostics.
-    #[builder(default)]
     #[serde(default)]
     pub supplemental_covariates: SupplementalBalanceCovariates,
 }
@@ -298,10 +276,10 @@ impl Default for BalanceReportOptions {
 /// variables not stored in the matching records.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SupplementalBalanceCovariates {
-    /// Supplemental covariates for anchor/case records keyed by record id.
+    /// Supplemental covariates for case/case records keyed by record id.
     #[serde(default)]
     pub cases: HashMap<String, HashMap<String, CovariateValue>>,
-    /// Supplemental covariates for candidate/control records keyed by record id.
+    /// Supplemental covariates for control/control records keyed by record id.
     #[serde(default)]
     pub controls: HashMap<String, HashMap<String, CovariateValue>>,
 }

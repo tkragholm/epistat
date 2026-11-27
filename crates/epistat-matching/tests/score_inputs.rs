@@ -4,7 +4,14 @@
 //! documentation requires: an undefined value is `None` and invalid input an error.
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, ElasticNetLogisticConfig, Estimand, MahalanobisPreparationConfig,
+    PropensityEstimator, PropensityScoreConfig, SubclassificationConfig, cross_validation_folds,
+    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
+    subclassify_by_propensity_score_map,
+};
 use epistat_matching::{
     GeneticFit, GeneticMatchOptions, GeneticProblem, GeneticSearch, QuickMatchOptions,
     quick_match_subclasses,
@@ -49,7 +56,7 @@ fn subclasses_zero_is_an_error_not_one() {
         min_n: 1,
     };
     let out = subclassify_by_propensity_score_map(&anchors, &cands, &scores, Estimand::Att, &cfg);
-    assert_eq!(out.err(), Some(SubclassificationError::NoSubclasses));
+    assert_eq!(out.err(), Some(Error::NoSubclasses));
 }
 
 /// A fold count of 0 is an error, not a division by zero.
@@ -64,15 +71,15 @@ fn folds_with_zero_folds_are_an_error() {
 fn elastic_net_rejects_alpha_above_one_and_negative_lambda() {
     let (a, c) = balance_records(60, |i| (i % 5) as f64 + 0.3 * ((i * 31) % 7) as f64);
     for (alpha, lambda) in [(2.0, 0.01), (0.5, -1.0), (-0.5, 0.01)] {
-        let cfg = PropensityScoreConfig::builder()
-            .estimator(PropensityEstimator::ElasticNetLogit(
-                ElasticNetLogisticConfig::builder()
-                    .alpha(alpha)
-                    .lambda(lambda)
-                    .build(),
-            ))
-            .build();
-        let r = prepare_propensity_distance_config(&a, &c, &cfg);
+        let cfg = PropensityScoreConfig {
+            estimator: PropensityEstimator::ElasticNetLogit(ElasticNetLogisticConfig {
+                alpha,
+                lambda,
+                ..ElasticNetLogisticConfig::default()
+            }),
+            ..PropensityScoreConfig::default()
+        };
+        let r = prepare_propensity_distance_config(&a, &c, &cfg, None);
         assert!(r.is_err(), "alpha {alpha}, lambda {lambda} accepted");
     }
 }
@@ -81,8 +88,8 @@ fn elastic_net_rejects_alpha_above_one_and_negative_lambda() {
 #[test]
 fn a_small_scale_covariate_is_not_dropped_silently() {
     let (a, c) = balance_records(40, |i| 1e-13 * ((i % 5) as f64));
-    let est =
-        prepare_propensity_distance_config(&a, &c, &PropensityScoreConfig::default()).unwrap();
+    let est = prepare_propensity_distance_config(&a, &c, &PropensityScoreConfig::default(), None)
+        .unwrap();
     assert!(
         est.estimate.column_names.iter().any(|n| n == "x"),
         "column x (range 4e-13, not constant) was dropped; columns: {:?}",
@@ -101,8 +108,8 @@ fn an_exactly_constant_covariate_is_dropped_and_reported() {
     };
     let a: Vec<_> = (0..20).filter(|i| i % 2 == 0).map(mk).collect();
     let c: Vec<_> = (0..20).filter(|i| i % 2 == 1).map(mk).collect();
-    let est =
-        prepare_propensity_distance_config(&a, &c, &PropensityScoreConfig::default()).unwrap();
+    let est = prepare_propensity_distance_config(&a, &c, &PropensityScoreConfig::default(), None)
+        .unwrap();
     assert_eq!(est.estimate.dropped_columns, vec!["flat".to_string()]);
     assert!(est.estimate.column_names.iter().any(|n| n == "x"));
 }

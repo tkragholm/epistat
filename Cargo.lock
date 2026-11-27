@@ -751,10 +751,9 @@ dependencies = [
 
 [[package]]
 name = "epistat-matching"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "arrow-array",
- "bon",
  "chrono",
  "criterion",
  "epistat-core",
@@ -777,6 +776,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
  "trybuild",
 ]
 

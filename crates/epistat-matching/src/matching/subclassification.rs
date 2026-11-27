@@ -17,14 +17,14 @@
 //!
 //! # Weights
 //!
-//! With `p` the share of anchors among the units of a subclass, an anchor
+//! With `p` the share of cases among the units of a subclass, an case
 //! weighs
 //!
 //! ```text
 //! ATT: 1        ATC: (1 - p) / p        ATE: 1 / p
 //! ```
 //!
-//! and a candidate weighs
+//! and a control weighs
 //!
 //! ```text
 //! ATT: p / (1 - p)        ATC: 1        ATE: 1 / (1 - p)
@@ -43,6 +43,7 @@
 
 use super::exact::unit_ids;
 use super::records::MatchingRecord;
+use crate::Error;
 use crate::types::Estimand;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -52,11 +53,11 @@ use std::hash::BuildHasher;
 /// Reference population used to derive subclass cutpoints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SubclassReferenceGroup {
-    /// Derive quantiles from anchor scores.
-    Anchors,
-    /// Derive quantiles from candidate scores.
-    Candidates,
-    /// Derive quantiles from pooled anchor + candidate scores.
+    /// Derive quantiles from case scores.
+    Cases,
+    /// Derive quantiles from control scores.
+    Controls,
+    /// Derive quantiles from pooled case + control scores.
     Pooled,
 }
 
@@ -72,8 +73,8 @@ pub struct SubclassificationConfig {
     /// Optional reference group used for cutpoints.
     ///
     /// Defaults by estimand:
-    /// - ATT: `Anchors`
-    /// - ATC: `Candidates`
+    /// - ATT: `Cases`
+    /// - ATC: `Controls`
     /// - ATE and ATM: `Pooled`
     pub reference_group: Option<SubclassReferenceGroup>,
     /// Smallest number of units of each group a subclass may hold.
@@ -104,20 +105,20 @@ impl Default for SubclassificationConfig {
 pub struct SubclassSummary {
     /// Subclass index.
     pub subclass: usize,
-    /// Number of anchor units in subclass.
-    pub anchor_count: usize,
-    /// Number of candidate units in subclass.
-    pub candidate_count: usize,
-    /// Anchor share in subclass (`anchor_count / total`) when total > 0.
+    /// Number of case units in subclass.
+    pub case_count: usize,
+    /// Number of control units in subclass.
+    pub control_count: usize,
+    /// Case share in subclass (`case_count / total`) when total > 0.
     pub subclass_propensity: Option<f64>,
 }
 
 /// Result of propensity-score subclassification.
 ///
-/// Units are numbered by position: the anchors in the order given, then the
-/// candidates in the order given. [`subclass`](Self::subclass) is indexed by
+/// Units are numbered by position: the cases in the order given, then the
+/// controls in the order given. [`subclass`](Self::subclass) is indexed by
 /// that position. A unit that is dropped has no subclass and no weight. The
-/// weights are not stored; each is derived from the anchor share of the unit's
+/// weights are not stored; each is derived from the case share of the unit's
 /// subclass in [`subclasses`](Self::subclasses) when asked for.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SubclassificationOutcome {
@@ -135,8 +136,8 @@ pub struct SubclassificationOutcome {
     pub quantile_cuts: Vec<f64>,
     /// The id of each unit.
     pub ids: Vec<String>,
-    /// Number of anchors. The units before this position are anchors.
-    pub anchor_count: usize,
+    /// Number of cases. The units before this position are cases.
+    pub case_count: usize,
     /// Subclass of each unit, `None` for a unit that is dropped because its
     /// score is missing or not finite or because its subclass lacks a group.
     /// Subclasses are numbered from 0 in order of score, skipping any that no
@@ -173,10 +174,10 @@ impl SubclassificationOutcome {
         &self.ids[position]
     }
 
-    /// Whether the unit at `position` is an anchor.
+    /// Whether the unit at `position` is an case.
     #[must_use]
-    pub const fn is_anchor(&self, position: usize) -> bool {
-        position < self.anchor_count
+    pub const fn is_case(&self, position: usize) -> bool {
+        position < self.case_count
     }
 
     /// Number of retained units.
@@ -216,7 +217,7 @@ impl SubclassificationOutcome {
         Some(subclass_weight_for_estimand(
             self.estimand,
             share,
-            self.is_anchor(position),
+            self.is_case(position),
         ))
     }
 
@@ -233,27 +234,10 @@ impl SubclassificationOutcome {
 /// One unit with a usable score.
 struct ScoredUnit {
     position: usize,
-    is_anchor: bool,
+    is_case: bool,
     score: f64,
     subclass: usize,
 }
-
-/// Settings for which subclassification cannot run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubclassificationError {
-    /// `subclasses` is 0.
-    NoSubclasses,
-}
-
-impl std::fmt::Display for SubclassificationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NoSubclasses => f.write_str("the number of subclasses must be at least 1"),
-        }
-    }
-}
-
-impl std::error::Error for SubclassificationError {}
 
 /// Build propensity-score subclasses and estimand-specific subclass weights.
 ///
@@ -275,7 +259,7 @@ impl std::error::Error for SubclassificationError {}
 ///
 /// # Errors
 ///
-/// Returns [`SubclassificationError::NoSubclasses`] when `config.subclasses`
+/// Returns [`Error::NoSubclasses`] when `config.subclasses`
 /// is 0.
 pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + Sync>(
     anchors: &[R],
@@ -283,7 +267,7 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + S
     propensity_scores: &HashMap<String, f64, H>,
     estimand: Estimand,
     config: &SubclassificationConfig,
-) -> Result<SubclassificationOutcome, SubclassificationError> {
+) -> Result<SubclassificationOutcome, Error> {
     subclassify_with_set_aside_scores(
         anchors,
         candidates,
@@ -300,7 +284,7 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + S
 /// group's quantiles.
 ///
 /// `set_aside_anchors` and `set_aside_candidates` are the finite scores of the
-/// trimmed anchors and candidates. They are not subclassified and get no
+/// trimmed cases and controls. They are not subclassified and get no
 /// weight. `matchit()` takes the cutpoints over every unit of the reference
 /// group, discarded ones included, and this reproduces that. Non-finite scores
 /// are ignored.
@@ -316,9 +300,9 @@ pub fn subclassify_with_set_aside_scores<R: MatchingRecord, H: BuildHasher + Syn
     config: &SubclassificationConfig,
     set_aside_anchors: &[f64],
     set_aside_candidates: &[f64],
-) -> Result<SubclassificationOutcome, SubclassificationError> {
+) -> Result<SubclassificationOutcome, Error> {
     if config.subclasses == 0 {
-        return Err(SubclassificationError::NoSubclasses);
+        return Err(Error::NoSubclasses);
     }
     let requested_subclasses = config.subclasses;
     let reference_group = resolve_reference_group(config.reference_group, estimand);
@@ -341,8 +325,8 @@ pub fn subclassify_with_set_aside_scores<R: MatchingRecord, H: BuildHasher + Syn
             .collect()
     };
     match reference_group {
-        SubclassReferenceGroup::Anchors => reference_scores.extend(extra(set_aside_anchors)),
-        SubclassReferenceGroup::Candidates => reference_scores.extend(extra(set_aside_candidates)),
+        SubclassReferenceGroup::Cases => reference_scores.extend(extra(set_aside_anchors)),
+        SubclassReferenceGroup::Controls => reference_scores.extend(extra(set_aside_candidates)),
         SubclassReferenceGroup::Pooled => {
             reference_scores.extend(extra(set_aside_anchors));
             reference_scores.extend(extra(set_aside_candidates));
@@ -367,7 +351,7 @@ pub fn subclassify_with_set_aside_scores<R: MatchingRecord, H: BuildHasher + Syn
         .filter_map(|(position, score)| {
             score.map(|score| ScoredUnit {
                 position,
-                is_anchor: position < anchors.len(),
+                is_case: position < anchors.len(),
                 score,
                 subclass: interior.partition_point(|cut| *cut <= score),
             })
@@ -386,7 +370,7 @@ pub fn subclassify_with_set_aside_scores<R: MatchingRecord, H: BuildHasher + Syn
     let mut anchor_counts = vec![0usize; subclass_count];
     let mut candidate_counts = vec![0usize; subclass_count];
     for unit in &units {
-        if unit.is_anchor {
+        if unit.is_case {
             anchor_counts[unit.subclass] += 1;
         } else {
             candidate_counts[unit.subclass] += 1;
@@ -414,7 +398,7 @@ pub fn subclassify_with_set_aside_scores<R: MatchingRecord, H: BuildHasher + Syn
         realized_subclasses,
         quantile_cuts,
         ids: unit_ids(anchors, candidates),
-        anchor_count: anchors.len(),
+        case_count: anchors.len(),
         subclass,
         subclasses,
         trimmed: crate::TrimmedUnits::default(),
@@ -426,24 +410,24 @@ fn resolve_reference_group(
     estimand: Estimand,
 ) -> SubclassReferenceGroup {
     reference_group.unwrap_or(match estimand {
-        Estimand::Att => SubclassReferenceGroup::Anchors,
-        Estimand::Atc => SubclassReferenceGroup::Candidates,
+        Estimand::Att => SubclassReferenceGroup::Cases,
+        Estimand::Atc => SubclassReferenceGroup::Controls,
         Estimand::Ate | Estimand::Atm => SubclassReferenceGroup::Pooled,
     })
 }
 
 /// The finite scores of the reference group, sorted. `scores` holds the score
 /// of every unit by position, with `None` for a score that is missing or not
-/// finite, and the first `anchor_count` units are the anchors.
+/// finite, and the first `case_count` units are the cases.
 fn sorted_reference_scores(
     scores: &[Option<f64>],
-    anchor_count: usize,
+    case_count: usize,
     reference_group: SubclassReferenceGroup,
 ) -> Vec<f64> {
-    let (anchors, candidates) = scores.split_at(anchor_count);
+    let (anchors, candidates) = scores.split_at(case_count);
     let mut scores: Vec<f64> = match reference_group {
-        SubclassReferenceGroup::Anchors => anchors.iter().flatten().copied().collect(),
-        SubclassReferenceGroup::Candidates => candidates.iter().flatten().copied().collect(),
+        SubclassReferenceGroup::Cases => anchors.iter().flatten().copied().collect(),
+        SubclassReferenceGroup::Controls => candidates.iter().flatten().copied().collect(),
         SubclassReferenceGroup::Pooled => scores.iter().flatten().copied().collect(),
     };
     // Scores equal under the total order are the same bits, so the order among
@@ -510,9 +494,9 @@ fn fill_deficient_subclasses(
     subclass_count: usize,
     min_n: usize,
 ) -> bool {
-    for is_anchor in [true, false] {
+    for is_case in [true, false] {
         let members: Vec<usize> = (0..units.len())
-            .filter(|idx| units[*idx].is_anchor == is_anchor)
+            .filter(|idx| units[*idx].is_case == is_case)
             .collect();
         if members.len() < subclass_count * min_n {
             return false;
@@ -592,7 +576,7 @@ fn valid_subclasses(anchor_counts: &[usize], candidate_counts: &[usize]) -> Vec<
     anchor_counts
         .iter()
         .zip(candidate_counts)
-        .map(|(anchor_count, candidate_count)| *anchor_count > 0 && *candidate_count > 0)
+        .map(|(case_count, control_count)| *case_count > 0 && *control_count > 0)
         .collect()
 }
 
@@ -604,18 +588,18 @@ pub(super) fn build_subclass_summaries(
         .iter()
         .zip(candidate_counts)
         .enumerate()
-        .map(|(subclass, (anchor_count, candidate_count))| {
-            let total = *anchor_count + *candidate_count;
+        .map(|(subclass, (case_count, control_count))| {
+            let total = *case_count + *control_count;
             let subclass_propensity = if total == 0 {
                 None
             } else {
-                Some(to_f64(*anchor_count) / to_f64(total))
+                Some(to_f64(*case_count) / to_f64(total))
             };
 
             SubclassSummary {
                 subclass,
-                anchor_count: *anchor_count,
-                candidate_count: *candidate_count,
+                case_count: *case_count,
+                control_count: *control_count,
                 subclass_propensity,
             }
         })
@@ -662,7 +646,7 @@ fn dropped_only_outcome<R: MatchingRecord>(
         estimand,
         requested_subclasses,
         ids: unit_ids(anchors, candidates),
-        anchor_count: anchors.len(),
+        case_count: anchors.len(),
         subclass: vec![None; anchors.len() + candidates.len()],
         ..SubclassificationOutcome::default()
     }
@@ -730,8 +714,8 @@ mod tests {
                     .collect()
             };
             let mut reference_scores = match reference_group {
-                SubclassReferenceGroup::Anchors => finite(anchors),
-                SubclassReferenceGroup::Candidates => finite(candidates),
+                SubclassReferenceGroup::Cases => finite(anchors),
+                SubclassReferenceGroup::Controls => finite(candidates),
                 SubclassReferenceGroup::Pooled => {
                     let mut pooled = finite(anchors);
                     pooled.extend(finite(candidates));
@@ -762,7 +746,7 @@ mod tests {
             let mut dropped_ids = Vec::new();
             let mut units = Vec::new();
             let mut ids = Vec::new();
-            for (rows, is_anchor) in [(anchors, true), (candidates, false)] {
+            for (rows, is_case) in [(anchors, true), (candidates, false)] {
                 for row in rows {
                     match scores
                         .get(row.id())
@@ -772,7 +756,7 @@ mod tests {
                         Some(score) => {
                             units.push(ScoredUnit {
                                 position: ids.len(),
-                                is_anchor,
+                                is_case,
                                 score,
                                 subclass: interior.partition_point(|cut| *cut <= score),
                             });
@@ -799,7 +783,7 @@ mod tests {
             let mut anchor_counts = vec![0usize; subclass_count];
             let mut candidate_counts = vec![0usize; subclass_count];
             for unit in &units {
-                if unit.is_anchor {
+                if unit.is_case {
                     anchor_counts[unit.subclass] += 1;
                 } else {
                     candidate_counts[unit.subclass] += 1;
@@ -817,7 +801,7 @@ mod tests {
                     Some(propensity) => {
                         weights.insert(
                             id.clone(),
-                            subclass_weight_for_estimand(estimand, propensity, unit.is_anchor),
+                            subclass_weight_for_estimand(estimand, propensity, unit.is_case),
                         );
                         assignments.insert(id, unit.subclass);
                     }
@@ -875,7 +859,7 @@ mod tests {
                     for min_n in [0, 1, 3] {
                         for reference_group in [
                             None,
-                            Some(SubclassReferenceGroup::Candidates),
+                            Some(SubclassReferenceGroup::Controls),
                             Some(SubclassReferenceGroup::Pooled),
                         ] {
                             let config = SubclassificationConfig {
@@ -1111,7 +1095,7 @@ mod tests {
         ]);
         let config = SubclassificationConfig {
             subclasses: 3,
-            reference_group: Some(SubclassReferenceGroup::Anchors),
+            reference_group: Some(SubclassReferenceGroup::Cases),
             min_n: 1,
         };
         let outcome = subclassify_by_propensity_score_map(

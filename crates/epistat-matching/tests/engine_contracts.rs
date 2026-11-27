@@ -2,8 +2,10 @@
 //! distance, typed exclusion reasons, control counts and fallback ratios.
 
 use chrono::NaiveDate;
+use epistat_matching::MatchOrder;
 use epistat_matching::prelude::*;
-use epistat_matching::{MatchOrder, RapidHashMap};
+use epistat_matching::{Assignment, DistanceConfig, ExclusionReason, InvalidCriteriaReason};
+use rapidhash::RapidHashMap;
 use std::collections::HashSet;
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -34,7 +36,8 @@ fn replacement_random_selection_draws_a_stream_per_anchor() {
     let out = MatchJob::new_standard(&anchors, &candidates, 7)
         .with_ratio(ratio(1))
         .with_replacement(true)
-        .run();
+        .run()
+        .expect("a valid job");
     let distinct: HashSet<_> = out.pairs.iter().map(|p| p.control_id.clone()).collect();
     assert!(
         distinct.len() > 5,
@@ -62,7 +65,8 @@ fn random_selection_differs_between_strata() {
     let out = MatchJob::new_standard(&anchors, &candidates, 7)
         .with_ratio(ratio(1))
         .with_exact_match("s")
-        .run();
+        .run()
+        .expect("a valid job");
     let positions: HashSet<_> = out
         .pairs
         .iter()
@@ -87,7 +91,8 @@ fn unique_key_not_reused_within_one_anchor_default_engine() {
     let out = MatchJob::new_standard(&anchors, &candidates, 1)
         .with_ratio(ratio(2))
         .with_unique_by_key(Some("family".into()))
-        .run();
+        .run()
+        .expect("a valid job");
     assert_eq!(out.pairs.len(), 1, "pairs: {:?}", out.pairs);
 }
 
@@ -104,7 +109,8 @@ fn unique_key_not_reused_within_one_anchor_nearest() {
         .with_assignment(Assignment::Sequential)
         .with_ratio(ratio(2))
         .with_unique_by_key(Some("family".into()))
-        .run();
+        .run()
+        .expect("a valid job");
     assert_eq!(out.pairs.len(), 1, "pairs: {:?}", out.pairs);
 }
 
@@ -125,7 +131,8 @@ fn unique_key_not_reused_across_exact_strata() {
         .with_ratio(ratio(1))
         .with_exact_match("sex")
         .with_unique_by_key(Some("family".into()))
-        .run();
+        .run()
+        .expect("a valid job");
     assert_eq!(out.pairs.len(), 1, "pairs: {:?}", out.pairs);
 }
 
@@ -148,7 +155,8 @@ fn unique_key_not_reused_in_closest_order() {
         .with_m_order(MatchOrder::Closest)
         .with_distance_config(cfg)
         .with_unique_by_key(Some("family".into()))
-        .run();
+        .run()
+        .expect("a valid job");
     assert_eq!(out.pairs.len(), 1, "pairs: {:?}", out.pairs);
 }
 
@@ -161,7 +169,8 @@ fn birth_window_applies_with_a_distance_config() {
     let out = MatchJob::new_standard(&anchors, &candidates, 1)
         .with_birth_window(BirthDateWindowDays::new(1).expect("ok"))
         .with_distance_config(DistanceConfig::propensity_score_map(sc, None))
-        .run();
+        .run()
+        .expect("a valid job");
     assert!(
         out.pairs.is_empty(),
         "matched across 5 years with window 1: {:?}",
@@ -186,7 +195,8 @@ fn unique_key_not_reused_within_one_case_risk_set() {
     let out = MatchJob::new_transition(&cohort, 1)
         .with_ratio(ratio(2))
         .with_unique_by_key(Some("family".into()))
-        .run();
+        .run()
+        .expect("a valid job");
     assert_eq!(out.pairs.len(), 1, "pairs: {:?}", out.pairs);
 }
 
@@ -198,7 +208,8 @@ fn exclusion_reasons_map_to_typed_variants() {
     let candidates = vec![rec("c1", d(2010, 1, 1))];
     let out = MatchJob::new_standard(&anchors, &candidates, 1)
         .with_ratio(ratio(1))
-        .run();
+        .run()
+        .expect("a valid job");
     let keys: Vec<_> = out.diagnostics.exclusion_counts.keys().collect();
     assert!(
         out.diagnostics
@@ -218,7 +229,8 @@ fn used_controls_with_replacement() {
     let out = MatchJob::new_standard(&anchors, &candidates, 1)
         .with_ratio(ratio(1))
         .with_replacement(true)
-        .run();
+        .run()
+        .expect("a valid job");
     assert_eq!(out.pairs.len(), 2);
     assert_eq!(out.used_controls, 1, "used_controls {}", out.used_controls);
 }
@@ -231,7 +243,8 @@ fn used_controls_with_replacement_nearest() {
         .with_nearest()
         .with_ratio(ratio(1))
         .with_replacement(true)
-        .run();
+        .run()
+        .expect("a valid job");
     assert_eq!(out.used_controls, 1, "used_controls {}", out.used_controls);
 }
 
@@ -246,13 +259,9 @@ fn fallback_ratio_above_primary_is_an_error() {
         .with_ratio(ratio(2))
         .with_ratio_fallback(vec![ratio(4)])
         .run();
-    assert_eq!(out.pairs, vec![]);
-    assert!(
-        out.diagnostics
-            .exclusion_counts
-            .contains_key(&ExclusionReason::InvalidCriteria(
-                InvalidCriteriaReason::FallbackRatioAbovePrimary
-            ))
+    assert_eq!(
+        out.unwrap_err(),
+        Error::InvalidCriteria(InvalidCriteriaReason::FallbackRatioAbovePrimary)
     );
 }
 
@@ -267,15 +276,16 @@ fn fallback_tier_below_primary_is_counted_apart_from_shortfall() {
     let out = MatchJob::new_standard(&anchors, &candidates, 1)
         .with_ratio(ratio(4))
         .with_ratio_fallback(vec![ratio(2)])
-        .run();
+        .run()
+        .expect("a valid job");
     assert_eq!(out.pairs.len(), 2);
     assert_eq!(
-        out.diagnostics.anchors_below_required_ratio, 0,
+        out.diagnostics.cases_below_required_ratio, 0,
         "{:?}",
         out.diagnostics
     );
     assert_eq!(
-        out.diagnostics.anchors_on_lower_tier, 1,
+        out.diagnostics.cases_on_lower_tier, 1,
         "{:?}",
         out.diagnostics
     );

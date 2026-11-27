@@ -25,7 +25,9 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
+use epistat_matching::{Estimand, SubclassedUnits, exact_match_subclasses};
 
 use r_reference::{Versions, reference as load_reference, unit_id as id};
 use serde::Deserialize;
@@ -58,7 +60,7 @@ fn reference() -> Reference {
     load_reference("matchit_exact.json")
 }
 
-fn ours(data: &Dataset) -> Result<ExactMatchOutcome, ExactMatchError> {
+fn ours(data: &Dataset) -> Result<SubclassedUnits, Error> {
     let birth = NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
     let mut anchors = Vec::new();
     let mut candidates = Vec::new();
@@ -148,12 +150,7 @@ fn subclasses_and_weights_match_matchit() {
     for data in &reference.datasets {
         let got = ours(data);
         if data.runs.iter().all(|run| run.error) {
-            assert_eq!(
-                got.unwrap_err(),
-                ExactMatchError::NoSharedStratum,
-                "{}",
-                data.name
-            );
+            assert_eq!(got.unwrap_err(), Error::NoSharedStratum, "{}", data.name);
             compared += 1;
             continue;
         }
@@ -236,7 +233,7 @@ fn subclass_counts_match_matchit() {
         assert_eq!(got.subclasses.len(), table.len(), "{}", data.name);
         for summary in &got.subclasses {
             assert_eq!(
-                [summary.anchor_count, summary.candidate_count],
+                [summary.case_count, summary.control_count],
                 table[&summary.subclass],
                 "{} subclass {}",
                 data.name,

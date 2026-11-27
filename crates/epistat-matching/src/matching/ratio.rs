@@ -59,7 +59,7 @@ impl RatioPolicy {
         }
     }
 
-    /// Whether the anchor with this many candidates is matched on a declared
+    /// Whether the case with this many controls is matched on a declared
     /// fallback tier below the primary ratio.
     #[must_use]
     pub fn is_lower_tier(&self, available_controls: usize) -> bool {

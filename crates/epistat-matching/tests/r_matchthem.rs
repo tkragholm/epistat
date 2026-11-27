@@ -28,12 +28,15 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+use epistat_matching::Error;
 use epistat_matching::effects::{Clustering, EffectEstimates, EffectSpec, OutcomeModel, UnitData};
 use epistat_matching::imputation::{
-    CompleteDataDf, ImputationApproach, ImputationError, ImputedSet, estimate_pooled,
-    match_imputed, pool_effects,
+    CompleteDataDf, ImputationApproach, ImputedSet, estimate_pooled, match_imputed, pool_effects,
 };
-use epistat_matching::prelude::*;
+use epistat_matching::output::MatchDataOptions;
+use epistat_matching::{
+    BalanceRecord, CovariateValue, MatchingCriteria, NearestSelection, PropensityScoreConfig,
+};
 
 use r_reference::{
     Versions, assert_r_version, covariate_unit, reference as load_reference, split_by_group,
@@ -119,8 +122,8 @@ fn matches_and_pooled_effects_agree_with_matchthem() {
     let sets: Vec<ImputedSet<'_, BalanceRecord>> = prepared
         .iter()
         .map(|(a, c)| ImputedSet {
-            anchors: a,
-            candidates: c,
+            cases: a,
+            controls: c,
         })
         .collect();
     let units: Vec<UnitData> = r
@@ -132,7 +135,10 @@ fn matches_and_pooled_effects_agree_with_matchthem() {
             UnitData::new(ids, treated, d["re78"].clone()).unwrap()
         })
         .collect();
-    let criteria = MatchingCriteria::builder().match_ratio(1).build();
+    let criteria = MatchingCriteria {
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    };
     let config = PropensityScoreConfig::default();
     let mut spec = EffectSpec::new(OutcomeModel::Linear);
     spec.clustering = Clustering::Pair;
@@ -161,8 +167,8 @@ fn matches_and_pooled_effects_agree_with_matchthem() {
                 .iter()
                 .map(|p| {
                     (
-                        p.anchor_id().parse().unwrap(),
-                        p.comparator_id().parse().unwrap(),
+                        p.case_id.as_str().parse().unwrap(),
+                        p.control_id.as_str().parse().unwrap(),
                     )
                 })
                 .collect();
@@ -287,7 +293,7 @@ fn check_given_degrees_of_freedom(per_set: &[EffectEstimates]) {
     assert_eq!(pooled.complete_data_df, Some(1.0));
     assert!(matches!(
         pool_effects(&tiny, CompleteDataDf::RowsLessCoefficients),
-        Err(ImputationError::Pooling(_))
+        Err(Error::Inference(_))
     ));
 }
 
@@ -298,11 +304,14 @@ fn input_errors_are_reported() {
     let sets: Vec<ImputedSet<'_, BalanceRecord>> = prepared
         .iter()
         .map(|(a, c)| ImputedSet {
-            anchors: a,
-            candidates: c,
+            cases: a,
+            controls: c,
         })
         .collect();
-    let criteria = MatchingCriteria::builder().match_ratio(1).build();
+    let criteria = MatchingCriteria {
+        match_ratio: 1,
+        ..MatchingCriteria::default()
+    };
     let run = |sets: &[ImputedSet<'_, BalanceRecord>], approach, config: &PropensityScoreConfig| {
         match_imputed(
             sets,
@@ -317,23 +326,26 @@ fn input_errors_are_reported() {
     let config = PropensityScoreConfig::default();
     assert!(matches!(
         run(&sets[..1], ImputationApproach::Within, &config),
-        Err(ImputationError::TooFewSets { found: 1 })
+        Err(Error::TooFewSets { found: 1 })
     ));
-    let reestimate = PropensityScoreConfig::builder().reestimate(true).build();
+    let reestimate = PropensityScoreConfig {
+        reestimate: true,
+        ..PropensityScoreConfig::default()
+    };
     assert!(matches!(
         run(&sets, ImputationApproach::Across, &reestimate),
-        Err(ImputationError::ReestimateAcross)
+        Err(Error::ReestimateAcross)
     ));
     // A unit missing from the second set.
     let short = [
         sets[0],
         ImputedSet {
-            anchors: &prepared[1].0[1..],
-            candidates: &prepared[1].1,
+            cases: &prepared[1].0[1..],
+            controls: &prepared[1].1,
         },
     ];
     assert!(matches!(
         run(&short, ImputationApproach::Across, &config),
-        Err(ImputationError::UnitsDiffer { set: 1, .. })
+        Err(Error::UnitsDiffer { set: 1, .. })
     ));
 }

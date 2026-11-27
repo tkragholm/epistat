@@ -10,14 +10,27 @@
 //! and are run on several seeds. After every entry point the cohort must not
 //! have built the per-row maps, which would cost what owned records cost.
 
+#[path = "common/trial_panel.rs"]
+mod trial_panel;
+use epistat_matching::output::{MatchDataOptions, Units, match_data};
+use epistat_matching::spec::{
+    BinningSpec, CemSpec, CemVariableSpec, CovarianceSpec, CovariatesSpec, DistanceSpec,
+    EstimatorSpec, LinkSpec, MatchMethod, MatchMode, MissingSpec, ScaleSpec, StdCaliperSpec,
+    SubclassSpec, TransformSpec,
+};
+use epistat_matching::{
+    BalanceRecord, BalanceReportOptions, BalanceWeights, CovariateValue, NumericBalanceTransform,
+    SpecOutput, balance_diagnostics, balance_report, balance_summary,
+};
 use std::collections::BTreeMap;
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows};
 
 use chrono::{Days, NaiveDate};
 use epistat_matching::effects::{
     Clustering, EffectSpec, MatchedSample, OutcomeModel, UnitData, estimate_effects,
 };
 use epistat_matching::prelude::*;
-use epistat_matching::{Cohort, CohortRow, TrialPeriod, TrialPerson};
+use epistat_matching::{Cohort, CohortRow};
 
 const SEEDS: [u64; 3] = [1, 2, 3];
 const COVARIATES: [&str; 3] = ["x1", "x2", "x3"];
@@ -499,15 +512,15 @@ fn standard_matching_is_the_same_on_rows() {
             let on_owned = run_spec(
                 &spec,
                 SpecInput::Standard {
-                    anchors: &g.anchors,
-                    candidates: &g.candidates,
+                    cases: &g.anchors,
+                    controls: &g.candidates,
                 },
             );
             let on_rows = run_spec(
                 &spec,
                 SpecInput::Standard {
-                    anchors: &g.anchor_rows,
-                    candidates: &g.candidate_rows,
+                    cases: &g.anchor_rows,
+                    controls: &g.candidate_rows,
                 },
             );
             assert!(on_owned.is_ok(), "{name}, seed {seed}: {on_owned:?}");
@@ -535,14 +548,16 @@ fn match_job_nearest_is_the_same_on_rows() {
             .with_exact_matches(["s"])
             .with_unique_by_key(Some("fam".to_string()))
             .with_gender_match()
-            .run();
+            .run()
+            .expect("a valid job");
         let on_rows = MatchJob::new_standard(&g.anchor_rows, &g.candidate_rows, seed)
             .with_ratio(ratio)
             .with_birth_window(window)
             .with_exact_matches(["s"])
             .with_unique_by_key(Some("fam".to_string()))
             .with_gender_match()
-            .run();
+            .run()
+            .expect("a valid job");
         assert!(on_owned.matched_cases > 0);
         assert_same(
             &format!("{on_owned:?}"),
@@ -655,7 +670,8 @@ fn match_job_transition_is_the_same_on_rows() {
             .with_constraints(vec![epistat_matching::constraints::caliper_on_field(
                 "x2", 1.0,
             )])
-            .run();
+            .run()
+            .expect("a valid job");
         let on_rows = MatchJob::new_transition(&rows, seed)
             .with_ratio(ratio)
             .with_ratio_fallback(fallback)
@@ -667,7 +683,8 @@ fn match_job_transition_is_the_same_on_rows() {
             .with_constraints(vec![epistat_matching::constraints::caliper_on_field(
                 "x2", 1.0,
             )])
-            .run();
+            .run()
+            .expect("a valid job");
         assert!(on_owned.matched_cases > 0);
         assert_same(
             &format!("{on_owned:?}"),
@@ -678,7 +695,7 @@ fn match_job_transition_is_the_same_on_rows() {
     }
 }
 
-fn panel<R>(units: &[Unit], record: impl Fn(usize) -> R) -> Vec<TrialPerson<R>> {
+fn panel<R>(units: &[Unit], record: impl Fn(usize) -> R) -> Vec<PanelPerson<R>> {
     units
         .iter()
         .enumerate()
@@ -687,10 +704,10 @@ fn panel<R>(units: &[Unit], record: impl Fn(usize) -> R) -> Vec<TrialPerson<R>> 
             let event_period = unit.event.map(|d| {
                 usize::try_from((d - origin()).num_days() / 500).expect("after the origin")
             });
-            TrialPerson {
+            PanelPerson {
                 record: record(i),
                 periods: (0..4)
-                    .map(|k| TrialPeriod {
+                    .map(|k| PanelPeriod {
                         period: i64::try_from(k).expect("small"),
                         date: day(500 * (k as u64 + 1)),
                         eligible: !unit.treated || k <= start,
@@ -725,10 +742,15 @@ fn sequential_trials_are_the_same_on_rows() {
             let on_owned = run_spec(
                 &spec,
                 SpecInput::Trials {
-                    panel: &owned_panel,
+                    panel: &PanelRows::of(&owned_panel).panel(),
                 },
             );
-            let on_rows = run_spec(&spec, SpecInput::Trials { panel: &row_panel });
+            let on_rows = run_spec(
+                &spec,
+                SpecInput::Trials {
+                    panel: &PanelRows::of(&row_panel).panel(),
+                },
+            );
             assert!(on_owned.is_ok(), "seed {seed}: {on_owned:?}");
             assert_same(
                 &format!("{on_owned:?}"),
@@ -750,8 +772,8 @@ fn balance_and_effects_are_the_same_on_rows() {
         let Ok(SpecOutput::Pairs { outcome, .. }) = run_spec(
             &spec,
             SpecInput::Standard {
-                anchors: &g.anchors,
-                candidates: &g.candidates,
+                cases: &g.anchors,
+                controls: &g.candidates,
             },
         ) else {
             panic!("pairs")
@@ -760,9 +782,8 @@ fn balance_and_effects_are_the_same_on_rows() {
             numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
             ..BalanceReportOptions::default()
         };
-        let on_owned = balance_report_with_options(&g.anchors, &g.candidates, &outcome, &options);
-        let on_rows =
-            balance_report_with_options(&g.anchor_rows, &g.candidate_rows, &outcome, &options);
+        let on_owned = balance_report(&g.anchors, &g.candidates, &outcome, &options);
+        let on_rows = balance_report(&g.anchor_rows, &g.candidate_rows, &outcome, &options);
         assert!(!on_owned.numeric.is_empty() && !on_owned.categorical.is_empty());
         assert_same(
             &format!("{on_owned:?}"),

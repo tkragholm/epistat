@@ -32,7 +32,7 @@ impl<'a> StrataValues<'a> {
     }
 }
 
-/// Candidate lookup index for strata/birthdate prefiltering.
+/// Control lookup index for strata/birthdate prefiltering.
 ///
 /// Strata values are interned to small integers when the index is built, so a
 /// stratum is identified by a short integer key and a lookup hashes integers

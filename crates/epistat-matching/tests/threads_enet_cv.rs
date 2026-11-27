@@ -8,7 +8,10 @@
 //! large mean and small spread and one that is nearly collinear with another.
 
 use chrono::NaiveDate;
-use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, CovariateValue, ElasticNetCvConfig, PropensityEstimator, PropensityScoreConfig,
+    prepare_propensity_distance_config,
+};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
 /// A small deterministic generator.
@@ -54,17 +57,15 @@ fn cohort(seed: u64, n: usize) -> (Vec<BalanceRecord>, Vec<BalanceRecord>) {
 fn fit(alpha: f64, standardize: bool) -> Vec<f64> {
     let (anchors, candidates) = cohort(11, 500);
     let config = PropensityScoreConfig {
-        estimator: PropensityEstimator::ElasticNetCv(
-            ElasticNetCvConfig::builder()
-                .seed(5)
-                .alpha(alpha)
-                .nfolds(10)
-                .standardize(standardize)
-                .build(),
-        ),
+        estimator: PropensityEstimator::ElasticNetCv(ElasticNetCvConfig {
+            alpha,
+            nfolds: 10,
+            standardize,
+            ..ElasticNetCvConfig::new(5)
+        }),
         ..PropensityScoreConfig::default()
     };
-    let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config)
+    let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config, None)
         .expect("cross-validation succeeds");
     let estimate = &prepared.estimate;
     let cv = estimate.cross_validation.as_ref().expect("ran");
