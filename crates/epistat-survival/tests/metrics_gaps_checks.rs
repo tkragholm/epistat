@@ -144,7 +144,7 @@ fn recalibration_refuses_what_it_cannot_use() {
     assert!(curve(&bad, 1.0, Bandwidth::Smooth).is_err());
     let opts = RecalibrationOptions::new(RecalibrationScale::Logit);
     let fit = slope_intercept(&data, &risk, 1.0, &opts).unwrap();
-    assert!(fit.converged && fit.std_err_slope() > 0.0 && fit.std_err_intercept() > 0.0);
+    assert!(fit.converged && fit.se_slope() > 0.0 && fit.se_intercept() > 0.0);
     // The link is infinite at 0 and 1.
     let mut edge = risk.clone();
     edge[0] = 0.0;

@@ -455,14 +455,28 @@ pub struct Recalibration {
 impl Recalibration {
     /// The standard error of the intercept.
     #[must_use]
-    pub fn std_err_intercept(&self) -> f64 {
+    pub fn se_intercept(&self) -> f64 {
         self.covariance[0].max(0.0).sqrt()
     }
 
     /// The standard error of the slope.
     #[must_use]
-    pub fn std_err_slope(&self) -> f64 {
+    pub fn se_slope(&self) -> f64 {
         self.covariance[3].max(0.0).sqrt()
+    }
+
+    /// The standard error of the intercept, under its name in 0.3.
+    #[deprecated(since = "0.4.0", note = "use `se_intercept`")]
+    #[must_use]
+    pub fn std_err_intercept(&self) -> f64 {
+        self.se_intercept()
+    }
+
+    /// The standard error of the slope, under its name in 0.3.
+    #[deprecated(since = "0.4.0", note = "use `se_slope`")]
+    #[must_use]
+    pub fn std_err_slope(&self) -> f64 {
+        self.se_slope()
     }
 }
 

@@ -100,27 +100,33 @@ pub struct ProbTrans {
 }
 
 impl ProbTrans {
-    /// The probability of being in state index `to` at time index `t` for a
-    /// subject in state index `from` at `predt`.
-    ///
-    /// # Panics
-    ///
-    /// When an index is out of range.
-    #[must_use]
-    pub fn probability_of(&self, t: usize, from: usize, to: usize) -> f64 {
+    /// The position of `(t, from, to)` in the row-major arrays, `None` for an
+    /// index out of range.
+    fn position(&self, t: usize, from: usize, to: usize) -> Option<usize> {
         let s = self.n_states;
-        self.probability[t * s * s + from * s + to]
+        (from < s && to < s && t < self.time.len()).then(|| t * s * s + from * s + to)
     }
 
-    /// The standard error of [`probability_of`](Self::probability_of).
-    ///
-    /// # Panics
-    ///
-    /// When an index is out of range.
+    /// The probability of being in state index `to` at time index `t` for a
+    /// subject in state index `from` at `predt`, `None` for an index out of
+    /// range.
+    #[must_use]
+    pub fn probability_of(&self, t: usize, from: usize, to: usize) -> Option<f64> {
+        self.position(t, from, to).map(|k| self.probability[k])
+    }
+
+    /// The standard error of [`probability_of`](Self::probability_of),
+    /// `None` for an index out of range or without standard errors.
+    #[must_use]
+    pub fn se_of(&self, t: usize, from: usize, to: usize) -> Option<f64> {
+        self.se.as_ref()?[self.position(t, from, to)?]
+    }
+
+    /// The standard error, under its name in 0.3.
+    #[deprecated(since = "0.4.0", note = "use `se_of`")]
     #[must_use]
     pub fn std_err_of(&self, t: usize, from: usize, to: usize) -> Option<f64> {
-        let s = self.n_states;
-        self.se.as_ref()?[t * s * s + from * s + to]
+        self.se_of(t, from, to)
     }
 
     /// The covariance at time index `t` of the probabilities `(from1, to1)` and

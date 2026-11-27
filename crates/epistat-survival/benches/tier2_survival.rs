@@ -243,7 +243,7 @@ fn main() {
             });
             lines.push("rows", m as f64);
             lines.push_all("coef", &msm.coefficients);
-            lines.push_all("se", &msm.std_err());
+            lines.push_all("se", &msm.se());
             times
         }
         "ccw" => {
@@ -305,7 +305,7 @@ fn main() {
             });
             lines.push("rows", rows as f64);
             lines.push_all("coef", &msm.coefficients);
-            lines.push_all("se", &msm.std_err());
+            lines.push_all("se", &msm.se());
             times
         }
         "trial_msm_rows" => {
@@ -369,7 +369,7 @@ fn main() {
             });
             lines.push("rows", m as f64);
             lines.push_all("coef", &msm.coefficients);
-            lines.push_all("se", &msm.std_err());
+            lines.push_all("se", &msm.se());
             times
         }
         "ccw_rows" => {
@@ -435,7 +435,7 @@ fn main() {
             });
             lines.push("rows", rows as f64);
             lines.push_all("coef", &msm.coefficients);
-            lines.push_all("se", &msm.std_err());
+            lines.push_all("se", &msm.se());
             times
         }
         other => panic!("unknown method {other}"),

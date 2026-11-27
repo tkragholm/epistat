@@ -356,10 +356,11 @@ fn predictions_match_mstate() {
                 for (ti, _) in pt.time.iter().enumerate() {
                     for to in 0..3 {
                         let e = prob.p[ti][to];
-                        worst[2] = worst[2].max((pt.probability_of(ti, s, to) - e).abs() / p_bound);
+                        worst[2] = worst[2]
+                            .max((pt.probability_of(ti, s, to).unwrap() - e).abs() / p_bound);
                         let es = prob.se[ti][to];
                         // Standard errors are compared as variances.
-                        let gs = pt.std_err_of(ti, s, to).unwrap();
+                        let gs = pt.se_of(ti, s, to).unwrap();
                         worst[3] = worst[3].max((gs * gs - es * es).abs() / var_bound);
                     }
                 }

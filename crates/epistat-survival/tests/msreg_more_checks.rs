@@ -92,8 +92,8 @@ fn fixed_horizon_is_the_product_from_the_other_end() {
         for from in 0..3 {
             for to in 0..3 {
                 close(
-                    fixed.probability_of(0, from, to),
-                    forward.probability_of(last, from, to),
+                    fixed.probability_of(0, from, to).unwrap(),
+                    forward.probability_of(last, from, to).unwrap(),
                 );
             }
         }
@@ -104,7 +104,7 @@ fn fixed_horizon_is_the_product_from_the_other_end() {
         for from in 0..3 {
             for to in 0..3 {
                 assert_eq!(
-                    fixed.probability_of(rows - 1, from, to).to_bits(),
+                    fixed.probability_of(rows - 1, from, to).unwrap().to_bits(),
                     f64::from(u8::from(from == to)).to_bits()
                 );
             }

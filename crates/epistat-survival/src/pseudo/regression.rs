@@ -185,11 +185,18 @@ impl PseudoRegression {
     /// The standard errors, the square roots of the diagonal of the
     /// covariance.
     #[must_use]
-    pub fn standard_errors(&self) -> Vec<f64> {
+    pub fn se(&self) -> Vec<f64> {
         let p = self.coefficients.len();
         (0..p)
             .map(|i| self.covariance[i * p + i].max(0.0).sqrt())
             .collect()
+    }
+
+    /// The standard errors, under their name in 0.3.
+    #[deprecated(since = "0.4.0", note = "use `se`")]
+    #[must_use]
+    pub fn standard_errors(&self) -> Vec<f64> {
+        self.se()
     }
 }
 

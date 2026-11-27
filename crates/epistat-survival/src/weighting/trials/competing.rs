@@ -221,11 +221,11 @@ pub struct CompetingIncidence {
     /// event.
     pub risk: Vec<f64>,
     /// The delta-method standard error of `risk`.
-    pub std_err: Vec<f64>,
+    pub se: Vec<f64>,
     /// The risk of the competing event by each time.
     pub competing_risk: Vec<f64>,
     /// The delta-method standard error of `competing_risk`.
-    pub competing_std_err: Vec<f64>,
+    pub competing_se: Vec<f64>,
 }
 
 /// The cumulative incidence under one treatment from the two models of
@@ -318,18 +318,17 @@ pub fn cumulative_incidence_competing(
     let nf = rows as f64;
     let mut out = CompetingIncidence {
         risk: Vec::with_capacity(times),
-        std_err: Vec::with_capacity(times),
+        se: Vec::with_capacity(times),
         competing_risk: Vec::with_capacity(times),
-        competing_std_err: Vec::with_capacity(times),
+        competing_se: Vec::with_capacity(times),
     };
     for t in 0..times {
         out.risk.push(f_sum[t] / nf);
         out.competing_risk.push(c_sum[t] / nf);
         let g: Vec<f64> = f_grad[t * k..(t + 1) * k].iter().map(|v| v / nf).collect();
-        out.std_err
-            .push(quadratic_form(&g, &covariance).max(0.0).sqrt());
+        out.se.push(quadratic_form(&g, &covariance).max(0.0).sqrt());
         let g: Vec<f64> = c_grad[t * k..(t + 1) * k].iter().map(|v| v / nf).collect();
-        out.competing_std_err
+        out.competing_se
             .push(quadratic_form(&g, &covariance).max(0.0).sqrt());
     }
     Ok(out)

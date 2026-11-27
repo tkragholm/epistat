@@ -558,7 +558,7 @@ pub struct Msm {
 impl Msm {
     /// The robust standard errors of the coefficients.
     #[must_use]
-    pub fn std_err(&self) -> Vec<f64> {
+    pub fn se(&self) -> Vec<f64> {
         let p = self.coefficients.len();
         (0..p)
             .map(|i| self.covariance[i * p + i].max(0.0).sqrt())
@@ -900,7 +900,7 @@ pub struct CumulativeIncidence {
     /// `1 - mean(prod over s <= t of (1 - p_s))` at each time.
     pub risk: Vec<f64>,
     /// The delta-method standard error at each time.
-    pub std_err: Vec<f64>,
+    pub se: Vec<f64>,
 }
 
 /// The cumulative incidence under one treatment from the model, for a
@@ -1002,7 +1002,7 @@ pub fn cumulative_incidence_rows(
         let g: Vec<f64> = grad[t * p..(t + 1) * p].iter().map(|v| v / nf).collect();
         std_err.push(quadratic_form(&g, &msm.covariance).max(0.0).sqrt());
     }
-    Ok(CumulativeIncidence { risk, std_err })
+    Ok(CumulativeIncidence { risk, se: std_err })
 }
 
 /// `g' V g` for a `p * p` matrix `V` in row order, summed as `a` then `b`.

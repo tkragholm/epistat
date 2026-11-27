@@ -42,8 +42,8 @@
 //! ```
 //!
 //! as `WeightIt` computes it, 0 if none qualifies. Candidates that differ from
-//! the previous by less than `1e-8` are skipped, as there. [`fit_atos`] takes an
-//! `alpha` of the caller instead.
+//! the previous by less than `1e-8` are skipped, as there.
+//! [`IptwOptions::alpha`] takes an `alpha` of the caller instead.
 //!
 //! The variance that accounts for the estimated propensity model (see
 //! [`weighting`](super)) takes the weights as functions of the coefficients and

@@ -356,9 +356,9 @@ fn check_profile(
                     let e = pt.p[s][ti][to];
                     worst.probability = worst
                         .probability
-                        .max((got.probability_of(ti, s, to) - e).abs() / p_bound);
+                        .max((got.probability_of(ti, s, to).unwrap() - e).abs() / p_bound);
                     let es = pt.se[s][ti][to];
-                    let gs = got.std_err_of(ti, s, to);
+                    let gs = got.se_of(ti, s, to);
                     // Standard errors are compared as variances, and an
                     // undefined one, a variance below zero, as zero.
                     let (gv, ev) = (gs.map_or(0.0, |v| v * v), es.map_or(0.0, |v| v * v));

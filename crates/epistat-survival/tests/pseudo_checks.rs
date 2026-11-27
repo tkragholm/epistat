@@ -322,7 +322,7 @@ fn a_binary_covariate_regression_is_the_difference_of_the_means() {
             .collect();
         v.iter().sum::<f64>() / (v.len() as f64).powi(2)
     };
-    let se = fit.standard_errors();
+    let se = fit.se();
     assert!((se[1] - (var(true) + var(false)).sqrt()).abs() < 1e-12);
 }
 

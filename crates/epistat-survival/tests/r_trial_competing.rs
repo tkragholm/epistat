@@ -122,10 +122,10 @@ fn the_two_models_and_the_risks_agree_with_r() {
         .expect("risks");
         assert!(worst(&got.risk, &want.risk, 1.0) < 1e-10, "arm {arm}");
         assert!(worst(&got.competing_risk, &want.competing_risk, 1.0) < 1e-10);
-        for (g, w) in got.std_err.iter().zip(&want.se) {
+        for (g, w) in got.se.iter().zip(&want.se) {
             assert!((g - w).abs() / w < 1e-7, "arm {arm}: {g} against {w}");
         }
-        for (g, w) in got.competing_std_err.iter().zip(&want.competing_se) {
+        for (g, w) in got.competing_se.iter().zip(&want.competing_se) {
             assert!((g - w).abs() / w < 1e-7, "arm {arm}: {g} against {w}");
         }
     }

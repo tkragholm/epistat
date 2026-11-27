@@ -139,8 +139,10 @@ fn the_model_without_covariates_is_the_aalen_johansen_estimate() {
     let mut worst = 0.0f64;
     for (t, _) in h.time.iter().enumerate() {
         for state in 0..3 {
-            worst = worst
-                .max((pt.probability_of(t + 1, 0, state) - aj.probabilities[t * 3 + state]).abs());
+            worst = worst.max(
+                (pt.probability_of(t + 1, 0, state).unwrap() - aj.probabilities[t * 3 + state])
+                    .abs(),
+            );
         }
     }
     eprintln!("probability against Aalen-Johansen: {worst:.2e}, bound {bound:.2e}");

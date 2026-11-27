@@ -194,7 +194,7 @@ pub fn run(a: &Analysis) -> Outputs {
         coefficients: msm.coefficients.clone(),
         covariance: msm.covariance.clone(),
         risk: [ci[0].risk.clone(), ci[1].risk.clone()],
-        std_err: [ci[0].std_err.clone(), ci[1].std_err.clone()],
+        std_err: [ci[0].se.clone(), ci[1].se.clone()],
         msm,
         designs,
     }
