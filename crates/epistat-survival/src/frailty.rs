@@ -136,7 +136,9 @@
 //!
 //! [`Theta::Profile`] maximises `c` over `ln theta`: it fits theta = 0, 1 and
 //! 1/4, steps by factors of 4 until the maximum is bracketed, and then runs
-//! Brent's method ([`epistat_optim::brent`]) on the bracket. When `c` still rises
+//! Brent's method ([`epistat_optim::brent`]) on the bracket. A fit that fails
+//! at a trial theta ends the search with [`Error::Frailty`], which names that
+//! theta and holds the failure. When `c` still rises
 //! towards 0 at the last power of 4 above `1e-6`, about `4e-6`, the estimate is
 //! 0 (`ThetaStatus::Boundary`), so a maximum below that is reported as 0; when it
 //! still rises at `1e4` the fit is at `1e4` and not an estimate
@@ -677,10 +679,19 @@ impl Search<'_, '_> {
 /// The maximum of the profile marginal log likelihood on `ln theta`. Returns
 /// the index of the chosen fit and its status.
 fn profile(search: &mut Search<'_, '_>, tolerance: f64) -> Result<(usize, ThetaStatus)> {
-    search.run(0.0)?;
+    let at = |theta: f64| {
+        move |source| Error::Frailty {
+            theta,
+            source: Box::new(source),
+        }
+    };
+    search.run(0.0).map_err(at(0.0))?;
     let step = 4.0_f64.ln();
     let (t_min, t_max) = (THETA_MIN.ln(), THETA_MAX.ln());
-    let f = |s: &mut Search<'_, '_>, t: f64| -> Result<f64> { Ok(-s.run(t.exp())?) };
+    let f = |s: &mut Search<'_, '_>, t: f64| -> Result<f64> {
+        let theta = t.exp();
+        Ok(-s.run(theta).map_err(at(theta))?)
+    };
     let (mut t0, mut f0) = (0.0, f(search, 0.0)?);
     let (mut t1, mut f1) = (-step, f(search, -step)?);
     let bracket = if f1 <= f0 {
@@ -710,22 +721,11 @@ fn profile(search: &mut Search<'_, '_>, tolerance: f64) -> Result<(usize, ThetaS
         }
     };
     let _ = (f0, f1);
-    let mut failed = None;
-    let found = brent::minimize(
-        |t| match f(search, t) {
-            Ok(v) => v,
-            Err(e) => {
-                failed.get_or_insert(e);
-                f64::NAN
-            }
-        },
-        bracket.0,
-        bracket.1,
+    let options = brent::Brent {
         tolerance,
-    )?;
-    if let Some(e) = failed {
-        return Err(e);
-    }
+        ..brent::Brent::default()
+    };
+    let found = brent::minimize(|t| f(search, t), bracket.0, bracket.1, &options)?;
     let best = search
         .fits
         .iter()
@@ -905,7 +905,9 @@ fn check_options(opts: &FrailtyOptions, data: &SurvData<'_>) -> Result<()> {
 /// ties are exact, when an option is out of its range, when theta is
 /// estimated or EM is asked for and a case weight is not 1, when EM is asked
 /// for with Efron ties, and when a fit meets a risk score that is not finite
-/// or an information that is not positive definite.
+/// or an information that is not positive definite. Under [`Theta::Profile`]
+/// such a failure at a trial theta is [`Error::Frailty`], which names the
+/// theta.
 ///
 /// # Panics
 ///
