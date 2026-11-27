@@ -109,6 +109,7 @@ pub use controls::{
     case_time_control_windows, sample_controls,
 };
 
+use epistat_core::day;
 use epistat_linalg::Mat;
 use rayon::prelude::*;
 
@@ -264,44 +265,21 @@ fn invalid(message: impl Into<String>) -> Error {
     Error::invalid(message)
 }
 
-/// Days since 1970-01-01 of a civil date.
-pub(crate) fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-/// The civil date `(year, month, day)` of a day count.
-pub(crate) fn civil_from_days(days: i64) -> (i64, i64, i64) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (yoe + era * 400 + i64::from(m <= 2), m, d)
-}
-
 /// The first day of the month `months` months after January of year `y`.
 fn first_of_month(y: i64, months: i64) -> i64 {
-    days_from_civil(y + months.div_euclid(12), months.rem_euclid(12) + 1, 1)
+    day::from_civil(y + months.div_euclid(12), months.rem_euclid(12) + 1, 1)
 }
 
 /// The first and last day of the stratum that holds `t`.
 fn stratum_of(t: i64, unit: StratumUnit) -> (i64, i64) {
-    let (y, m, _) = civil_from_days(t);
+    let (y, m, _) = day::to_civil(t);
     match unit {
         StratumUnit::Month => (first_of_month(y, m - 1), first_of_month(y, m) - 1),
         StratumUnit::Quarter => {
             let q = (m - 1) / 3;
             (first_of_month(y, 3 * q), first_of_month(y, 3 * q + 3) - 1)
         }
-        StratumUnit::Year => (days_from_civil(y, 1, 1), days_from_civil(y + 1, 1, 1) - 1),
+        StratumUnit::Year => (day::from_civil(y, 1, 1), day::from_civil(y + 1, 1, 1) - 1),
         StratumUnit::Fixed { origin, length } => {
             let first = origin + (t - origin).div_euclid(length) * length;
             (first, first + length - 1)
@@ -659,17 +637,17 @@ mod tests {
             18_322,
             2_932_896,
         ] {
-            let (y, m, d) = civil_from_days(days);
-            assert_eq!(days_from_civil(y, m, d), days);
+            let (y, m, d) = day::to_civil(days);
+            assert_eq!(day::from_civil(y, m, d), days);
         }
-        assert_eq!(civil_from_days(18_321), (2020, 2, 29));
-        assert_eq!(days_from_civil(1970, 1, 1), 0);
+        assert_eq!(day::to_civil(18_321), (2020, 2, 29));
+        assert_eq!(day::from_civil(1970, 1, 1), 0);
     }
 
     #[test]
     fn time_stratified_shifts_stay_in_the_month_and_keep_the_weekday() {
         // 2020-02-29 was a Saturday: the other Saturdays of February are the 1st, 8th, 15th, 22nd.
-        let t = days_from_civil(2020, 2, 29);
+        let t = day::from_civil(2020, 2, 29);
         let s = shifts(
             t,
             Referent::TimeStratified {
@@ -678,7 +656,7 @@ mod tests {
         );
         assert_eq!(s, vec![-28, -21, -14, -7]);
         // 2019-01-31: Thursdays of January 2019 are the 3rd, 10th, 17th, 24th.
-        let t = days_from_civil(2019, 1, 31);
+        let t = day::from_civil(2019, 1, 31);
         let s = shifts(
             t,
             Referent::TimeStratified {

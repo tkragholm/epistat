@@ -35,19 +35,9 @@ const YEAR_DAYS: f64 = 365.25;
 const AGE_BANDS: usize = 18;
 const INTERVALS: usize = 8;
 
-/// Days since 1970-01-01 of a civil date.
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
 fn year_starts(first: i64, last: i64) -> Vec<f64> {
     (first..=last)
-        .map(|y| days_from_civil(y, 1, 1) as f64)
+        .map(|y| epistat_core::day::from_civil(y, 1, 1) as f64)
         .collect()
 }
 
@@ -69,7 +59,8 @@ fn generate_pyr(n: usize) {
         // a cut point at the same instant, which R and this crate may order
         // differently.
         let age0 = (rng.uniform() * 80.0 * YEAR_DAYS).floor() + 0.37;
-        let date0 = days_from_civil(2000, 1, 1) as f64 + (rng.uniform() * 4747.0).floor();
+        let date0 =
+            epistat_core::day::from_civil(2000, 1, 1) as f64 + (rng.uniform() * 4747.0).floor();
         let dur = 30.0 + (rng.uniform() * 2800.0).floor();
         let ev = f64::from(u8::from(
             rng.bernoulli(0.05 + 0.1 * age0 / (80.0 * YEAR_DAYS)),
