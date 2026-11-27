@@ -84,9 +84,11 @@
 //! two clones of a person are two rows at each period, so the covariance is
 //! clustered by person. It treats the weights as known. [`fit_msm_clones`] fits
 //! the same model without building its design, from the clones and a function
-//! that forms the design of a clone row. [`bootstrap_persons`]
-//! gives the person bootstrap that refits everything, which is the variance to
-//! report.
+//! that forms the design of a clone row. The person bootstrap that refits
+//! everything, which is the variance to report, is
+//! [`trials::bootstrap_trials`](super::trials::bootstrap_trials) on the ids of
+//! the input, with [`Cloned::case_weights`] turning a resample into weights of
+//! the clone rows.
 //!
 //! # References
 //!
@@ -113,6 +115,7 @@ use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef, ROW_BLOCK};
 use rayon::prelude::*;
 
+use super::trials::PersonCounts;
 use crate::error::{Error, Result};
 
 /// Whether a person who has started treatment must stay on it.
@@ -233,8 +236,12 @@ pub struct Cloned {
     pub source: Vec<usize>,
     /// The strategy of each clone row, an index into the strategies.
     pub arm: Vec<usize>,
-    /// The person of each clone row, numbered from 0 in the order of the input.
+    /// The person of each clone row, numbered from 0 in the order of the input,
+    /// which is increasing id order.
     pub person: Vec<u32>,
+    /// The id of each person, in increasing order: `ids[person[k]]` is the id
+    /// of clone row `k`.
+    pub ids: Vec<u64>,
     /// Whether the row is the first deviation of its clone.
     pub deviation: Vec<bool>,
     /// Whether the row is in the model of the weights of its strategy.
@@ -259,6 +266,19 @@ impl Cloned {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.source.is_empty()
+    }
+
+    /// The case weight of each clone row in a resample of the persons: the
+    /// count of its person in `counts`, from
+    /// [`trials::bootstrap_trials`](super::trials::bootstrap_trials) or
+    /// [`PersonCounts::draw`] on the ids of the input.
+    ///
+    /// # Errors
+    ///
+    /// An input error for a person whose id was not among the ids resampled.
+    pub fn case_weights(&self, counts: &PersonCounts) -> Result<Vec<f64>> {
+        let by_person = counts.case_weights(&self.ids)?;
+        Ok(self.person.iter().map(|&p| by_person[p as usize]).collect())
     }
 }
 
@@ -287,6 +307,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
     }
     let mut n_persons = 0usize;
     let mut starts = Vec::new();
+    let mut ids = Vec::new();
     for i in 0..n {
         if i == 0 || input.id[i] != input.id[i - 1] {
             if input.period[i] != 0 {
@@ -301,6 +322,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
                 )));
             }
             starts.push(i);
+            ids.push(input.id[i]);
             n_persons += 1;
         } else if input.period[i] != input.period[i - 1] + 1 {
             return Err(Error::invalid(format!(
@@ -372,6 +394,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
         source: Vec::with_capacity(rows),
         arm: Vec::with_capacity(rows),
         person: Vec::with_capacity(rows),
+        ids,
         deviation: Vec::with_capacity(rows),
         at_risk: Vec::with_capacity(rows),
         outcome: Vec::with_capacity(rows),
@@ -1097,32 +1120,4 @@ impl super::trials::Clustered for CloneRows<'_> {
     fn n_clusters(&self) -> usize {
         self.clusters
     }
-}
-
-/// Apply `analysis` to resamples of the persons: for each seed the number of
-/// times each person is drawn in a resample of the same size with replacement,
-/// as case weights of the persons, which `analysis` turns into case weights of
-/// the clone rows and refits the weights and the outcome with.
-///
-/// The counts of a replicate depend on its seed only, so the results do not depend
-/// on the number of threads. The results are in the order of the seeds.
-pub fn bootstrap_persons<T: Send>(
-    n_persons: usize,
-    seeds: &[u64],
-    analysis: impl Fn(&[u32]) -> Result<T> + Sync,
-) -> Vec<Result<T>> {
-    seeds
-        .par_iter()
-        .map(|&seed| analysis(&epistat_rng::resample_counts(n_persons, seed)))
-        .collect()
-}
-
-/// The case weight of each clone row from the counts of the persons.
-#[must_use]
-pub fn row_counts(cloned: &Cloned, counts: &[u32]) -> Vec<f64> {
-    cloned
-        .person
-        .iter()
-        .map(|&p| f64::from(counts[p as usize]))
-        .collect()
 }

@@ -17,11 +17,12 @@
 
 mod ccw_run;
 
+use epistat_core::Bootstrap;
 use epistat_linalg::Mat;
 use epistat_survival::weighting::clone::{
-    Adherence, CloneInput, DeviationModel, Strategy, bootstrap_persons, clone_censor,
-    deviation_weights,
+    Adherence, CloneInput, DeviationModel, Strategy, clone_censor, deviation_weights,
 };
+use epistat_survival::weighting::trials::bootstrap_trials;
 
 fn worst(a: &[f64], b: &[f64]) -> f64 {
     assert_eq!(a.len(), b.len());
@@ -161,20 +162,20 @@ fn a_bootstrap_of_counts_of_one_is_the_data_and_depends_on_the_seed_only() {
     let r = ccw_run::load();
     let d = ccw_run::data(&r);
     let c = ccw_run::cloned(&r, &d);
-    let ones = vec![1_u32; c.n_persons];
+    let ones = vec![1.0; c.len()];
     let plain = ccw_run::analyse(&r, &c, None);
     let counted = ccw_run::analyse(&r, &c, Some(&ones));
     assert!(worst(&plain.weight, &counted.weight) < 1e-12);
     assert!(worst(&plain.msm.coefficients, &counted.msm.coefficients) < 1e-10);
-    let seeds = [11_u64, 12, 13];
+
     let run = |t: usize| {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(t)
             .build()
             .unwrap();
         pool.install(|| {
-            bootstrap_persons(c.n_persons, &seeds, |counts| {
-                Ok(ccw_run::analyse(&r, &c, Some(counts)).flatten())
+            bootstrap_trials(&r.input.id, Bootstrap::new(3, 11), |counts| {
+                Ok(ccw_run::analyse(&r, &c, Some(&c.case_weights(counts)?)).flatten())
             })
             .into_iter()
             .map(Result::unwrap)

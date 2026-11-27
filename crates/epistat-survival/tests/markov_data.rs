@@ -9,6 +9,7 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
+use epistat_core::Bootstrap;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::markov::{Options, test};
@@ -81,7 +82,7 @@ fn test_reports_its_rows_and_leaves_a_state_without_variance_untested() {
         .build()
         .unwrap();
     let grid = [0.3, 0.9, 1.6, 2.4, 3.5, 4.8, 6.1];
-    let seeds: Vec<u64> = (0..25).map(|r| 77 + r * 7919).collect();
+    let seeds = Bootstrap::new(25, 77);
     let opts = Options {
         timefix: epistat_survival::timefix::TimeFix::Exact,
     };
@@ -95,7 +96,7 @@ fn test_reports_its_rows_and_leaves_a_state_without_variance_untested() {
         (vec![2, 3], 3),
         (vec![3, 1], 2),
     ] {
-        let new = test(&data, &qualifying, target, &grid, &seeds, &opts).unwrap();
+        let new = test(&data, &qualifying, target, &grid, seeds, &opts).unwrap();
         let width = qualifying.len();
         assert_eq!(new.trace.len(), grid.len() * width);
         assert_eq!(new.variance.len(), grid.len() * width);
@@ -143,7 +144,7 @@ fn the_arguments_and_data_are_checked() {
     let cols = (&stop[..], &start[..], &status[..], &id[..]);
     let good = build(cols, None, Some(&istate));
     let run = |d: &SurvData<'_>, q: &[u32], t: u32, g: &[f64]| {
-        test(d, q, t, g, &[], &Options::default()).map(|_| ())
+        test(d, q, t, g, Bootstrap::new(0, 0), &Options::default()).map(|_| ())
     };
     assert!(run(&good, &[1, 2], 2, &[1.0]).is_ok());
     assert!(run(&good, &[], 2, &[1.0]).is_err());

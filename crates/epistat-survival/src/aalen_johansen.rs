@@ -138,6 +138,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use epistat_core::Bootstrap;
 use epistat_rng::{dirichlet_weights, replicate_seed};
 use rayon::prelude::*;
 
@@ -1040,11 +1041,9 @@ impl RowWindows {
 /// `(exposed, comparator, estimable)`, as [`bootstrap`] returns them.
 pub type ArmDraws = (Vec<f64>, Vec<f64>, Vec<bool>);
 
-/// What [`bootstrap`] does besides the data.
+/// What [`bootstrap`] does besides the data and the replicates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BootstrapOptions {
-    /// The number of replicates.
-    pub n_replicates: usize,
     /// How the cluster weights are drawn for the cells.
     pub draw: Draw,
     /// How near-equal times are treated. The default is `survival`'s rule,
@@ -1053,14 +1052,11 @@ pub struct BootstrapOptions {
 }
 
 impl BootstrapOptions {
-    /// Options with the given number of replicates and draw, and `survival`'s
-    /// tie rule. Neither the number of replicates nor the draw has a default:
-    /// the first sets the Monte Carlo error and the second what is resampled,
-    /// so the caller states both.
+    /// Options with the given draw and `survival`'s tie rule. The draw has no
+    /// default: it decides what is resampled, so the caller states it.
     #[must_use]
-    pub fn new(n_replicates: usize, draw: Draw) -> Self {
+    pub fn new(draw: Draw) -> Self {
         Self {
-            n_replicates,
             draw,
             timefix: TimeFix::default(),
         }
@@ -1072,12 +1068,15 @@ impl BootstrapOptions {
 /// The clusters are the cluster column of `data`, which is required, and the
 /// arm of each row is `exposed`. Cell `c` owns the rows `cells.get(c)`, indexed
 /// in `data`. A row may appear in several cells, for example when the cells
-/// are several partitions of the same cohort. The weights of replicate `r` of a
-/// cell are drawn from `replicate_seed(cell_seeds[c], r)`. The event is status
+/// are several partitions of the same cohort. `bootstrap` gives the number of
+/// replicates and the root seed: cell `c` has the seed
+/// `replicate_seed(bootstrap.seed, c)`, and the weights of its replicate `r`
+/// are drawn from `replicate_seed` of that seed and `r`. Under
+/// [`Draw::Shared`] every cell takes the seed of cell 0. The event is status
 /// `cause`, and every other nonzero status is a competing event.
 ///
 /// Returns `(exposed, comparator, estimable)`. The two arms are of shape
-/// `(cells, ages, n_replicates)`, row-major, with the ages sorted.
+/// `(cells, ages, replicates)`, row-major, with the ages sorted.
 /// `estimable[c]` is false for a cell with an empty arm, which has no draws:
 /// its block is zero and is not an estimate. `opts.draw` selects how the
 /// cluster weights are drawn; see [`Draw`].
@@ -1092,13 +1091,12 @@ impl BootstrapOptions {
 ///
 /// An input error when the tie rule fails, `data` has no cluster column or
 /// has a start column, `cause` is outside `1..=n_codes`, `exposed` does not
-/// have one value per row, `cell_seeds` does not hold one seed per cell, or
-/// `cells` was built for a frame of another size than `data`.
+/// have one value per row, or `cells` was built for a frame of another size than `data`.
 pub fn bootstrap(
     data: &SurvData<'_>,
     exposed: &[bool],
     cells: &RowWindows,
-    cell_seeds: &[u64],
+    bootstrap: Bootstrap,
     ages: &[f64],
     cause: u32,
     opts: &BootstrapOptions,
@@ -1129,10 +1127,10 @@ pub fn bootstrap(
         },
         data.n_clusters(),
         cells,
-        cell_seeds,
+        bootstrap.seed,
         ages.to_vec(),
         code,
-        opts.n_replicates,
+        bootstrap.replicates,
         opts.draw,
     )
 }
@@ -1152,7 +1150,7 @@ fn bootstrap_core(
     frame: &Frame<'_>,
     n_families: usize,
     cells: &RowWindows,
-    cell_seeds: &[u64],
+    root: u64,
     ages: Vec<f64>,
     cause: i32,
     n_replicates: usize,
@@ -1170,9 +1168,6 @@ fn bootstrap_core(
         return Err(Error::invalid(
             "the cell windows were built for a frame of another size than the columns",
         ));
-    }
-    if cell_seeds.len() != n_cells {
-        return Err(Error::invalid("cell_seeds must have one seed per cell"));
     }
     if n_cells == 0 {
         return Ok((Vec::new(), Vec::new(), Vec::new()));
@@ -1208,7 +1203,7 @@ fn bootstrap_core(
                 let Some(cell) = cell else {
                     return;
                 };
-                let seed = cell_seeds[c];
+                let seed = replicate_seed(root, c as u64);
                 let per_replicate: Vec<ArmLevels> = (0..n_replicates)
                     .into_par_iter()
                     .map_init(Scratch::default, |scratch, replicate| {
@@ -1236,7 +1231,7 @@ fn bootstrap_core(
         // holding one weight vector per replicate, which is `G` by
         // replicates and gigabytes at cohort scale.
         Draw::Shared => {
-            let seed = cell_seeds[0];
+            let seed = replicate_seed(root, 0);
             let per_replicate: Vec<Vec<Option<ArmLevels>>> = (0..n_replicates)
                 .into_par_iter()
                 .map_init(Scratch::default, |scratch, replicate| {
@@ -1468,6 +1463,7 @@ mod tests {
         BootstrapOptions, Cell, Draw, Error, RowWindows, Scratch, advance, bootstrap, scatter,
     };
     use crate::surv::SurvData;
+    use epistat_core::Bootstrap;
 
     #[test]
     fn advance_steps_the_survival_and_each_incidence() {
@@ -1655,10 +1651,10 @@ mod tests {
                 &data,
                 &exposed,
                 &cells,
-                &[7, 8],
+                Bootstrap::new(5, 7),
                 &[4.0, 2.0],
                 1,
-                &BootstrapOptions::new(5, Draw::PerCell),
+                &BootstrapOptions::new(Draw::PerCell),
             )
             .unwrap()
         };
@@ -1675,26 +1671,35 @@ mod tests {
     }
 
     #[test]
-    fn seeds_and_windows_that_do_not_fit_are_refused() {
+    fn windows_that_do_not_fit_are_refused() {
         let data = SurvData::builder(&[1.0], &[1])
             .cluster(&[0])
             .build()
             .unwrap();
         let exposed = [true];
-        let opts = BootstrapOptions::new(2, Draw::PerCell);
-        let cells = RowWindows::new(vec![0], vec![0, 1], 1, "cell").unwrap();
-        assert!(bootstrap(&data, &exposed, &cells, &[], &[1.0], 1, &opts).is_err());
+        let opts = BootstrapOptions::new(Draw::PerCell);
         let wide = RowWindows::new(vec![0], vec![0, 1], 2, "cell").unwrap();
-        assert!(bootstrap(&data, &exposed, &wide, &[1], &[1.0], 1, &opts).is_err());
+        assert!(
+            bootstrap(
+                &data,
+                &exposed,
+                &wide,
+                Bootstrap::new(2, 1),
+                &[1.0],
+                1,
+                &opts
+            )
+            .is_err()
+        );
         let none = RowWindows::new(vec![], vec![0], 1, "cell").unwrap();
         let (exposed, _, estimable) = bootstrap(
             &data,
             &exposed,
             &none,
-            &[],
+            Bootstrap::new(2, 1),
             &[1.0],
             1,
-            &BootstrapOptions::new(2, Draw::Shared),
+            &BootstrapOptions::new(Draw::Shared),
         )
         .unwrap();
         assert!(exposed.is_empty() && estimable.is_empty());
@@ -1708,6 +1713,7 @@ mod estimate_tests {
     };
     use crate::surv::SurvData;
     use crate::timefix::TimeFix;
+    use epistat_core::Bootstrap;
 
     const EXACT: AalenJohansenOptions = AalenJohansenOptions {
         timefix: TimeFix::Exact,
@@ -1877,7 +1883,7 @@ mod estimate_tests {
             exposed,
             cells,
         } = frame();
-        let seeds = [3, 5, 8];
+        let seeds = Bootstrap::new(7, 3);
         let ages = [0.5, 6.0, 3.0, 30.0];
         let data = SurvData::builder(&time, &event)
             .n_codes(2)
@@ -1888,12 +1894,11 @@ mod estimate_tests {
         let mut results = Vec::new();
         for draw in [Draw::PerCell, Draw::Shared] {
             let opts = BootstrapOptions {
-                n_replicates: 7,
                 draw,
                 timefix: TimeFix::Exact,
             };
-            let first = bootstrap(&data, &exposed, &cells, &seeds, &ages, 1, &opts).unwrap();
-            let second = bootstrap(&data, &exposed, &cells, &seeds, &ages, 1, &opts).unwrap();
+            let first = bootstrap(&data, &exposed, &cells, seeds, &ages, 1, &opts).unwrap();
+            let second = bootstrap(&data, &exposed, &cells, seeds, &ages, 1, &opts).unwrap();
             assert_eq!(bits(&first.0), bits(&second.0));
             assert_eq!(bits(&first.1), bits(&second.1));
             assert_eq!(first.2, second.2);
@@ -1918,11 +1923,19 @@ mod estimate_tests {
             .unwrap();
         let all = RowWindows::new((0..6).collect(), vec![0, 6], 6, "cell").unwrap();
         let opts = BootstrapOptions {
-            n_replicates: 5,
             draw: Draw::PerCell,
             timefix: TimeFix::Exact,
         };
-        let new = bootstrap(&data, &exposed, &all, &[9], &[2.0, 6.0], 1, &opts).unwrap();
+        let new = bootstrap(
+            &data,
+            &exposed,
+            &all,
+            Bootstrap::new(5, 9),
+            &[2.0, 6.0],
+            1,
+            &opts,
+        )
+        .unwrap();
         let first_five = SurvData::builder(&time[..5], &event[..5])
             .n_codes(2)
             .weight(&weight[..5])
@@ -1934,7 +1947,7 @@ mod estimate_tests {
             &first_five,
             &exposed[..5],
             &first,
-            &[9],
+            Bootstrap::new(5, 9),
             &[2.0, 6.0],
             1,
             &opts,
@@ -1959,10 +1972,10 @@ mod estimate_tests {
                 data,
                 exposed,
                 &cells,
-                &[1, 2, 3],
+                Bootstrap::new(10, 1),
                 &[1.0],
                 cause,
-                &BootstrapOptions::new(10, Draw::PerCell),
+                &BootstrapOptions::new(Draw::PerCell),
             )
         };
         let build = || SurvData::builder(&time, &event).n_codes(2);

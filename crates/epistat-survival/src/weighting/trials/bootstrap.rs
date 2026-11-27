@@ -1,5 +1,6 @@
 //! A bootstrap over persons for sequential trials.
 
+use epistat_core::Bootstrap;
 use rayon::prelude::*;
 
 use crate::error::{Error, Result};
@@ -72,11 +73,14 @@ fn distinct(ids: &[u64]) -> Vec<u64> {
     persons
 }
 
-/// Apply `analysis` to resamples of the persons of `ids`, one for each seed.
+/// Apply `analysis` to `bootstrap.replicates` resamples of the persons of
+/// `ids`.
 ///
 /// A resample draws as many persons as there are, with replacement, and gives
 /// each person a count ([`PersonCounts`]). The analysis turns the counts into
-/// case weights of its rows ([`PersonCounts::case_weights`]): of the rows of the
+/// case weights of its rows ([`PersonCounts::case_weights`], or
+/// [`Cloned::case_weights`](crate::weighting::clone::Cloned::case_weights)
+/// for the clones of a clone-censor-weight analysis): of the rows of the
 /// weight models through [`WeightRows::case_weight`](super::WeightRows), of the
 /// rows of the trials by multiplying their weights in [`fit_msm`](super::fit_msm),
 /// and of the population of the cumulative incidence by repeating or
@@ -85,22 +89,28 @@ fn distinct(ids: &[u64]) -> Vec<u64> {
 /// the bootstrap that expands, weights and fits again, with the person as the
 /// unit of resampling.
 ///
-/// The replicates run in parallel, each from its own seed, so the results do
-/// not depend on the number of threads; they are in the order of the seeds. A
-/// seed for replicate `b` of a run with seed `s` is
-/// `epistat_rng::replicate_seed(s, b)`.
+/// The persons are the distinct ids in increasing order. Replicate `r` draws
+/// its counts with `resample_counts(n, replicate_seed(bootstrap.seed, r))`,
+/// the draws of `epistat_inference::bootstrap::unit_counts`, one replicate at
+/// a time so that the counts of every replicate are not held at once. The
+/// replicates run in parallel and each depends on its seed only, so the
+/// results do not depend on the number of threads; they are in replicate
+/// order.
 pub fn bootstrap_trials<T: Send>(
     ids: &[u64],
-    seeds: &[u64],
+    bootstrap: Bootstrap,
     analysis: impl Fn(&PersonCounts) -> Result<T> + Sync,
 ) -> Vec<Result<T>> {
     let persons = distinct(ids);
-    seeds
-        .par_iter()
-        .map(|&seed| {
+    (0..bootstrap.replicates as u64)
+        .into_par_iter()
+        .map(|r| {
             let counts = PersonCounts {
                 persons: persons.clone(),
-                counts: epistat_rng::resample_counts(persons.len(), seed),
+                counts: epistat_rng::resample_counts(
+                    persons.len(),
+                    epistat_rng::replicate_seed(bootstrap.seed, r),
+                ),
             };
             analysis(&counts)
         })
@@ -121,7 +131,8 @@ mod tests {
         let w = a.case_weights(&ids).expect("known ids");
         assert_eq!(w[0], f64::from(a.count(9).expect("drawn from")));
         assert!(a.case_weights(&[4]).is_err());
-        let runs = bootstrap_trials(&ids, &[5, 6], |c| Ok(c.counts().to_vec()));
-        assert_eq!(runs[0].as_ref().expect("runs"), a.counts());
+        let runs = bootstrap_trials(&ids, Bootstrap::new(2, 5), |c| Ok(c.counts().to_vec()));
+        let first = PersonCounts::draw(&ids, epistat_rng::replicate_seed(5, 0));
+        assert_eq!(runs[0].as_ref().expect("runs"), first.counts());
     }
 }

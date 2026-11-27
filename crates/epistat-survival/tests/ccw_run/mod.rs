@@ -7,7 +7,6 @@
 use epistat_linalg::Mat;
 use epistat_survival::weighting::clone::{
     Adherence, CloneInput, Cloned, DeviationModel, Strategy, clone_censor, deviation_weights,
-    row_counts,
 };
 use epistat_survival::weighting::trials::{Msm, MsmInput, cumulative_incidence, fit_msm};
 use epistat_testkit::load_json;
@@ -96,11 +95,11 @@ pub struct Outputs {
     pub risk: [Vec<f64>; 2],
 }
 
-/// The weights and the outcome model, with `counts` the draws of each person
-/// (all 1 for the data itself, given as `None`).
-pub fn analyse(r: &Reference, c: &Cloned, counts: Option<&[u32]>) -> Outputs {
+/// The weights and the outcome model, with `case` the case weight of each clone
+/// row, from the draws of its person (all 1 for the data itself, given as
+/// `None`).
+pub fn analyse(r: &Reference, c: &Cloned, case: Option<&[f64]>) -> Outputs {
     let m = c.len();
-    let case = counts.map(|k| row_counts(c, k));
     let den = Mat::from_fn(m, 5, |i, j| {
         let s = c.source[i];
         let p = r.input.period[s] as f64;
@@ -111,7 +110,7 @@ pub fn analyse(r: &Reference, c: &Cloned, counts: Option<&[u32]>) -> Outputs {
         denominator: den.as_ref(),
         numerator: Some(num.as_ref()),
     };
-    let w = deviation_weights(c, &[model, model], case.as_deref()).unwrap();
+    let w = deviation_weights(c, &[model, model], case).unwrap();
     let keep: Vec<usize> = (0..m).filter(|&i| !c.deviation[i]).collect();
     let design = Mat::from_fn(keep.len(), 5, |k, j| {
         let i = keep[k];
@@ -122,7 +121,7 @@ pub fn analyse(r: &Reference, c: &Cloned, counts: Option<&[u32]>) -> Outputs {
     let outcome: Vec<bool> = keep.iter().map(|&i| c.outcome[i]).collect();
     let weight: Vec<f64> = keep
         .iter()
-        .map(|&i| w.weight[i] * case.as_ref().map_or(1.0, |k| k[i]))
+        .map(|&i| w.weight[i] * case.map_or(1.0, |k| k[i]))
         .collect();
     let person: Vec<u64> = keep.iter().map(|&i| u64::from(c.person[i])).collect();
     let msm = fit_msm(&MsmInput {

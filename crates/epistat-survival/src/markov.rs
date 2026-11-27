@@ -120,7 +120,8 @@
 
 use std::collections::HashMap;
 
-use epistat_rng::Stream;
+use epistat_core::Bootstrap;
+use epistat_rng::{Stream, replicate_seed};
 use epistat_stats::sum::compensated;
 use rayon::prelude::*;
 
@@ -519,9 +520,9 @@ pub struct Test {
 /// `qualifying` lists the states a person may have occupied at a landmark, the
 /// origin of the transition first, as status codes in `1..=n_codes` without
 /// repeats. `target` is the status code that the transition ends in. `grid` holds
-/// the landmarks, and there is one wild-bootstrap replicate per entry of
-/// `seeds`, whose multipliers come from the seed. See [`Test`] for what comes
-/// back and the module documentation for the method and for what the data
+/// the landmarks, and `bootstrap` gives the wild-bootstrap replicates: the
+/// multipliers of replicate `r` come from `replicate_seed(bootstrap.seed, r)`.
+/// See [`Test`] for what comes back and the module documentation for the method and for what the data
 /// supply.
 ///
 /// A landmark and state whose variance is not positive adds 0 to the statistic
@@ -543,7 +544,7 @@ pub fn test(
     qualifying: &[u32],
     target: u32,
     grid: &[f64],
-    seeds: &[u64],
+    bootstrap: Bootstrap,
     opts: &Options,
 ) -> Result<Test> {
     let data = data.clone().with_timefix(opts.timefix)?;
@@ -625,7 +626,10 @@ pub fn test(
         state: &state,
         event: &event,
     };
-    let done = run(&stays, grid, qualifying.len(), seeds)?;
+    let seeds: Vec<u64> = (0..bootstrap.replicates as u64)
+        .map(|r| replicate_seed(bootstrap.seed, r))
+        .collect();
+    let done = run(&stays, grid, qualifying.len(), &seeds)?;
     let width = qualifying.len();
     let defined: Vec<bool> = (0..width)
         .map(|state| (0..grid.len()).any(|landmark| done.variance[landmark * width + state] > 0.0))

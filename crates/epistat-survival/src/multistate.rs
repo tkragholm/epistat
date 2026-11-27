@@ -154,7 +154,7 @@
 
 use std::borrow::Cow;
 
-use epistat_rng::dirichlet_weights;
+use epistat_rng::{dirichlet_weights, replicate_seed};
 use epistat_stats::sum::compensated;
 use rayon::prelude::*;
 
@@ -730,13 +730,13 @@ pub struct Estimate {
 
 /// The replicates of a clustered bootstrap, with the rows behind them.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Bootstrap {
-    /// The replicates concatenated in seed order. Without horizons each is
+pub struct Replicates {
+    /// The replicates concatenated in replicate order. Without horizons each is
     /// `time * state`, the occupation probabilities. With horizons each is
     /// `horizon * state`, the restricted expected time in each state from the
     /// origin to the horizon.
     pub values: Vec<f64>,
-    /// The number of replicates, one per seed.
+    /// The number of replicates.
     pub n_replicates: usize,
     /// The number of states, `n_codes` of the data.
     pub n_states: usize,
@@ -745,6 +745,10 @@ pub struct Bootstrap {
     /// The number of rows of positive weight, which are the rows used.
     pub n_used: usize,
 }
+
+/// The replicates of [`bootstrap`], under their name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `Replicates`")]
+pub type Bootstrap = Replicates;
 
 /// What the data give the shared code, once checked: the ranks of the states,
 /// the opening row of each subject and the clusters, for the rows used.
@@ -977,7 +981,9 @@ fn check_distribution(initial: &[f64], states: usize) -> Result<()> {
 /// The clustered bootstrap of the occupation probabilities or of the restricted
 /// expected times, for follow-up data with several states.
 ///
-/// Replicate `r` draws one weight per cluster from `seeds[r]`, multiplies the
+/// `bootstrap` gives the number of replicates and the root seed. Replicate `r`
+/// draws one weight per cluster from `replicate_seed(bootstrap.seed, r)`,
+/// multiplies the
 /// weight of each row used by the weight of its cluster, forms the opening
 /// distribution from the opening rows with those weights and repeats the
 /// estimate of [`estimate`]. The cluster column is required, and `n_clusters`
@@ -987,7 +993,7 @@ fn check_distribution(initial: &[f64], states: usize) -> Result<()> {
 ///
 /// `horizons` selects what comes back. Empty returns the occupation
 /// probabilities at `times`. Non-empty returns the restricted expected times
-/// from `origin` to each horizon. See [`Bootstrap::values`] for the layout.
+/// from `origin` to each horizon. See [`Replicates::values`] for the layout.
 ///
 /// # Errors
 ///
@@ -999,9 +1005,9 @@ pub fn bootstrap(
     times: &[f64],
     horizons: &[f64],
     origin: f64,
-    seeds: &[u64],
+    bootstrap: epistat_core::Bootstrap,
     opts: &Options,
-) -> Result<Bootstrap> {
+) -> Result<Replicates> {
     if opts.initial.is_some() {
         return Err(Error::invalid(
             "the bootstrap forms the initial distribution in each replicate, so none can be given",
@@ -1023,6 +1029,9 @@ pub fn bootstrap(
         .clusters
         .as_deref()
         .ok_or_else(|| Error::invalid("the bootstrap needs a cluster column"))?;
+    let seeds: Vec<u64> = (0..bootstrap.replicates as u64)
+        .map(|r| replicate_seed(bootstrap.seed, r))
+        .collect();
     let values = bootstrap_rows(
         rows,
         &weights,
@@ -1032,12 +1041,12 @@ pub fn bootstrap(
         times,
         horizons,
         origin,
-        seeds,
+        &seeds,
         prepared.data.n_clusters(),
         prepared.n_states,
         rate_tolerance(opts, rows.len(), prepared.n_states)?,
     )?;
-    Ok(Bootstrap {
+    Ok(Replicates {
         values,
         n_replicates: seeds.len(),
         n_states: prepared.n_states,

@@ -11,6 +11,7 @@
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 
+use epistat_core::Bootstrap;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::markov::{Options, test};
@@ -57,14 +58,14 @@ fn markov_test_does_not_depend_on_the_number_of_threads() {
         .build()
         .unwrap();
     let grid = [0.3, 0.9, 1.6, 2.4, 3.5, 4.8, 6.1];
-    let seeds: Vec<u64> = (0..33).map(|r| 77 + r * 7919).collect();
+    let seeds = Bootstrap::new(33, 77);
     // Exact ties: the times carry rounding noise, and the comparison is
     // between thread counts.
     let opts = Options {
         timefix: TimeFix::Exact,
     };
     assert_same_on_pools(&POOLS, || {
-        let t = test(&data, &[1, 2], 2, &grid, &seeds, &opts).unwrap();
+        let t = test(&data, &[1, 2], 2, &grid, seeds, &opts).unwrap();
         assert!(t.p_value.iter().all(Option::is_some));
         assert!(t.variance.iter().any(|&v| v > 0.0));
         let mut out = t.trace.clone();

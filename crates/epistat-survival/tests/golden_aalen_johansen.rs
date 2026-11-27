@@ -20,7 +20,8 @@
     reason = "the grid values and counts are far below the limits of the casts"
 )]
 
-use epistat_rng::{Stream, replicate_seed};
+use epistat_core::Bootstrap;
+use epistat_rng::Stream;
 use epistat_survival::aalen_johansen::{
     AalenJohansenOptions, BootstrapOptions, Draw, RowWindows, bootstrap, estimate,
 };
@@ -204,19 +205,21 @@ fn frame(n: usize) -> (SurvBuf, Vec<bool>, RowWindows) {
     )
 }
 
-fn options(n_replicates: usize, draw: Draw) -> BootstrapOptions {
+fn options(draw: Draw) -> BootstrapOptions {
     BootstrapOptions {
         timefix: TimeFix::Exact,
-        ..BootstrapOptions::new(n_replicates, draw)
+        ..BootstrapOptions::new(draw)
     }
+}
+
+/// `replicates` replicates from the root seed of the recorded draws.
+const fn root(replicates: usize) -> Bootstrap {
+    Bootstrap::new(replicates, 11)
 }
 
 fn bootstrap_cases(out: &mut Vec<(String, Vec<u64>)>) {
     let (buf, exposed, cells) = frame(400);
     let data = buf.as_data();
-    let seeds: Vec<u64> = (0..cells.len() as u64)
-        .map(|c| replicate_seed(11, c))
-        .collect();
     let ages = vec![2.5, 0.05, 1.0, 40.0, 4.0];
     for (name, draw) in [("per cell", Draw::PerCell), ("shared", Draw::Shared)] {
         for cause in [1, 3] {
@@ -224,10 +227,10 @@ fn bootstrap_cases(out: &mut Vec<(String, Vec<u64>)>) {
                 &data,
                 &exposed,
                 &cells,
-                &seeds,
+                root(9),
                 &ages,
                 cause,
-                &options(9, draw),
+                &options(draw),
             )
             .unwrap();
             out.push((format!("{name} cause {cause} exposed"), bits(&exposed)));
@@ -241,13 +244,13 @@ fn bootstrap_cases(out: &mut Vec<(String, Vec<u64>)>) {
             ));
         }
         let (e, c, ok) =
-            bootstrap(&data, &exposed, &cells, &seeds, &[], 1, &options(9, draw)).unwrap();
+            bootstrap(&data, &exposed, &cells, root(9), &[], 1, &options(draw)).unwrap();
         out.push((
             format!("{name} no ages"),
             vec![e.len() as u64, c.len() as u64, ok.len() as u64],
         ));
         let (e, c, ok) =
-            bootstrap(&data, &exposed, &cells, &seeds, &ages, 1, &options(0, draw)).unwrap();
+            bootstrap(&data, &exposed, &cells, root(0), &ages, 1, &options(draw)).unwrap();
         out.push((
             format!("{name} no replicates"),
             vec![e.len() as u64, c.len() as u64, ok.len() as u64],
@@ -258,10 +261,10 @@ fn bootstrap_cases(out: &mut Vec<(String, Vec<u64>)>) {
         &data,
         &exposed,
         &none,
-        &[],
+        root(3),
         &[1.0],
         1,
-        &options(3, Draw::PerCell),
+        &options(Draw::PerCell),
     )
     .unwrap();
     out.push(("no cells".into(), vec![r.0.len() as u64]));
@@ -273,10 +276,10 @@ fn bootstrap_cases(out: &mut Vec<(String, Vec<u64>)>) {
                     &data,
                     &exposed,
                     &cells,
-                    &seeds[..2],
+                    root(3),
                     &ages,
-                    1,
-                    &options(3, Draw::Shared),
+                    0,
+                    &options(Draw::Shared),
                 )
                 .is_err(),
             ),
@@ -285,10 +288,10 @@ fn bootstrap_cases(out: &mut Vec<(String, Vec<u64>)>) {
                     &data,
                     &exposed,
                     &RowWindows::new(vec![], vec![0], 7, "cell").unwrap(),
-                    &[],
+                    root(3),
                     &[],
                     1,
-                    &options(3, Draw::Shared),
+                    &options(Draw::Shared),
                 )
                 .is_err(),
             ),
@@ -297,10 +300,10 @@ fn bootstrap_cases(out: &mut Vec<(String, Vec<u64>)>) {
                     &data,
                     &exposed[1..],
                     &cells,
-                    &seeds,
+                    root(3),
                     &ages,
                     1,
-                    &options(3, Draw::Shared),
+                    &options(Draw::Shared),
                 )
                 .is_err(),
             ),

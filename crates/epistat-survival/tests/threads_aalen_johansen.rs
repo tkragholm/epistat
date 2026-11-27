@@ -11,6 +11,7 @@
     reason = "the grid values and counts are far below the limits of the casts"
 )]
 
+use epistat_core::Bootstrap;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::aalen_johansen::{
@@ -120,13 +121,20 @@ fn bootstrap_does_not_depend_on_the_number_of_threads() {
         offsets.push(rows.len() as u32);
     }
     let cells = RowWindows::new(rows, offsets, n, "cell").unwrap();
-    let seeds: Vec<u64> = (0..cells.len() as u64).map(|c| 1000 + 7919 * c).collect();
     let ages = [3.0, 0.5, 1.0, 2.2, 4.4, 6.0];
     for draw in [Draw::PerCell, Draw::Shared] {
-        let opts = BootstrapOptions::new(37, draw);
+        let opts = BootstrapOptions::new(draw);
         assert_same_on_pools(&POOLS, || {
-            let (a, b, estimable) =
-                bootstrap(&data, &exposed, &cells, &seeds, &ages, 1, &opts).unwrap();
+            let (a, b, estimable) = bootstrap(
+                &data,
+                &exposed,
+                &cells,
+                Bootstrap::new(37, 1000),
+                &ages,
+                1,
+                &opts,
+            )
+            .unwrap();
             assert!(estimable[0] && !estimable[5]);
             assert!(a.iter().any(|&v| v > 0.0));
             let mut out = a;

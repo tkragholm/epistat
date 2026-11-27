@@ -29,6 +29,7 @@
 
 #![expect(clippy::float_cmp, reason = "the event column holds exactly 0 and 1")]
 
+use epistat_core::Bootstrap;
 use epistat_survival::SurvData;
 use epistat_survival::markov::{Options, test};
 use epistat_testkit::load_json;
@@ -146,7 +147,7 @@ fn markov_test_matches_mstate() {
         "{} mstate {}",
         reference.versions.r, reference.versions.mstate
     );
-    let seeds: Vec<u64> = (0..RUST_DRAWS as u64).collect();
+    let seeds = Bootstrap::new(RUST_DRAWS, 0);
     for case in &reference.tests {
         let name = format!("transition {}", case.transition);
         let k = case.grid.len();
@@ -166,7 +167,7 @@ fn markov_test_matches_mstate() {
             &qualifying,
             f.target,
             &case.grid,
-            &seeds,
+            seeds,
             &Options::default(),
         )
         .unwrap();

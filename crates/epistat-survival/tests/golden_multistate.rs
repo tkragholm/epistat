@@ -23,7 +23,8 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
-use epistat_rng::{Stream, replicate_seed};
+use epistat_core::Bootstrap;
+use epistat_rng::Stream;
 use epistat_survival::multistate::{Options, bootstrap, estimate, integrate};
 use epistat_survival::timefix::TimeFix;
 use epistat_survival::{SurvBuf, SurvData};
@@ -484,9 +485,9 @@ fn bootstrap_case(
 ) {
     let buf = p.buf(weights, Some(clusters.to_vec()), states).unwrap();
     let data = buf.as_data();
-    let seeds: Vec<u64> = (0..6).map(|r| replicate_seed(500, r)).collect();
+    let seeds = Bootstrap::new(6, 500);
     for (label, horizons) in [("curves", vec![]), ("restricted", vec![2.0, 7.5, 30.0])] {
-        let out = bootstrap(&data, times, &horizons, 0.5, &seeds, &options(None)).unwrap();
+        let out = bootstrap(&data, times, &horizons, 0.5, seeds, &options(None)).unwrap();
         check(&format!("{name}/{label}"), &out.values);
     }
     // One seed, and no seeds.
@@ -495,12 +496,12 @@ fn bootstrap_case(
         times,
         &[4.0],
         0.0,
-        &[replicate_seed(77, 0)],
+        Bootstrap::new(1, 77),
         &options(None),
     )
     .unwrap();
     check(&format!("{name}/single seed"), &single.values);
-    let none = bootstrap(&data, times, &[], 0.0, &[], &options(None)).unwrap();
+    let none = bootstrap(&data, times, &[], 0.0, Bootstrap::new(0, 0), &options(None)).unwrap();
     check(&format!("{name}/no seeds"), &none.values);
 }
 
@@ -553,7 +554,7 @@ fn bootstrap_refusals() {
     let p = process(20, 13, false, false, false);
     let ones = ones_of(&p);
     let times = event_times(&p);
-    let seeds = [1, 2];
+    let seeds = Bootstrap::new(2, 1);
     let clustered = p.buf(&ones, Some(p.person.clone()), 3).unwrap();
     check_text(
         "refuse/initial given",
@@ -562,7 +563,7 @@ fn bootstrap_refusals() {
             &times,
             &[],
             0.0,
-            &seeds,
+            seeds,
             &options(Some(&[1.0, 0.0, 0.0])),
         )),
     );
@@ -574,7 +575,7 @@ fn bootstrap_refusals() {
             &times,
             &[],
             0.0,
-            &seeds,
+            seeds,
             &options(None),
         )),
     );
@@ -587,7 +588,7 @@ fn bootstrap_refusals() {
             &times,
             &[],
             0.0,
-            &seeds,
+            seeds,
             &options(None),
         )),
     );

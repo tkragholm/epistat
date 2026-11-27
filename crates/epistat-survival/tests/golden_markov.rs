@@ -21,7 +21,8 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
-use epistat_rng::{Stream, replicate_seed};
+use epistat_core::Bootstrap;
+use epistat_rng::Stream;
 use epistat_survival::markov::{Options, Test, test};
 use epistat_survival::timefix::TimeFix;
 use epistat_survival::{SurvBuf, SurvData};
@@ -219,7 +220,7 @@ fn run(
     c: &Columns,
     grid: &[f64],
     qualifying: &[u32],
-    seeds: &[u64],
+    seeds: Bootstrap,
 ) -> Result<Test, epistat_survival::Error> {
     let buf = c.buf()?;
     test(&buf.as_data(), qualifying, 2, grid, seeds, &OPTIONS)
@@ -276,41 +277,44 @@ const GRID: [f64; 7] = [0.3, 0.9, 1.6, 2.4, 3.5, 4.8, 6.1];
 
 #[test]
 fn tests_on_a_process() {
-    let seeds: Vec<u64> = (0..25).map(|r| replicate_seed(77, r)).collect();
+    let seeds = Bootstrap::new(25, 77);
     let dense = process(120, 41, false, |id| id as u32);
     for qualifying in 1..=3 {
         let codes: Vec<u32> = (1..=qualifying).collect();
-        let t = run(&dense, &GRID, &codes, &seeds).unwrap();
+        let t = run(&dense, &GRID, &codes, seeds).unwrap();
         check_test(&format!("dense q{qualifying}"), &t);
     }
-    check_test("dense no seeds", &run(&dense, &GRID, &[1, 2], &[]).unwrap());
+    check_test(
+        "dense no seeds",
+        &run(&dense, &GRID, &[1, 2], Bootstrap::new(0, 0)).unwrap(),
+    );
     check_test(
         "dense one seed",
-        &run(&dense, &GRID, &[1, 2], &[replicate_seed(5, 0)]).unwrap(),
+        &run(&dense, &GRID, &[1, 2], Bootstrap::new(1, 5)).unwrap(),
     );
     // Landmarks out of order, repeated, before the data and past it.
     let odd_grid = [4.8, 0.3, 0.3, 0.0, 99.0, 2.4, -1.0];
     check_test(
         "dense odd grid",
-        &run(&dense, &odd_grid, &[1, 2, 3], &seeds).unwrap(),
+        &run(&dense, &odd_grid, &[1, 2, 3], seeds).unwrap(),
     );
     check_test(
         "dense one landmark",
-        &run(&dense, &[1.6], &[1, 2], &seeds).unwrap(),
+        &run(&dense, &[1.6], &[1, 2], seeds).unwrap(),
     );
 
     // Delayed entry, sparse person codes.
     let sparse = process(90, 42, true, |id| 5 * id as u32 + 3);
-    check_test("sparse q2", &run(&sparse, &GRID, &[1, 2], &seeds).unwrap());
+    check_test("sparse q2", &run(&sparse, &GRID, &[1, 2], seeds).unwrap());
     check_test(
         "sparse q3",
-        &run(&sparse, &GRID, &[1, 2, 3], &seeds).unwrap(),
+        &run(&sparse, &GRID, &[1, 2, 3], seeds).unwrap(),
     );
 }
 
 #[test]
 fn tests_on_awkward_stays() {
-    let seeds: Vec<u64> = (0..15).map(|r| replicate_seed(0, r)).collect();
+    let seeds = Bootstrap::new(15, 0);
     let base = process(80, 43, false, |id| id as u32);
 
     // Stays in states that do not qualify: state 2 and some stays in state 1
@@ -333,7 +337,7 @@ fn tests_on_awkward_stays() {
             far.status[index]
         };
     }
-    check_test("far states", &run(&far, &GRID, &[1, 2], &seeds).unwrap());
+    check_test("far states", &run(&far, &GRID, &[1, 2], seeds).unwrap());
 
     // Stays of one person that overlap are refused: a second copy of every
     // fifth stay, later in the data and in another state, covers the same
@@ -348,13 +352,13 @@ fn tests_on_awkward_stays() {
     }
     check_text(
         "refuse/overlapping stays",
-        &message(run(&overlap, &GRID, &[1, 2, 3], &seeds)),
+        &message(run(&overlap, &GRID, &[1, 2, 3], seeds)),
     );
 
     // No event at all: nobody moves to code 2.
     let mut quiet = process(80, 43, false, |id| id as u32);
     quiet.n_codes = 4;
-    let t = run_target(&quiet, &GRID, &[1, 2, 3], 4, &seeds).unwrap();
+    let t = run_target(&quiet, &GRID, &[1, 2, 3], 4, seeds).unwrap();
     check_test("no events", &t);
 
     // Every stay at risk ends in the event: the person goes from state 0 to
@@ -369,7 +373,7 @@ fn tests_on_awkward_stays() {
     };
     check_test(
         "every stay an event",
-        &run(&all, &GRID, &[1, 2, 3], &seeds).unwrap(),
+        &run(&all, &GRID, &[1, 2, 3], seeds).unwrap(),
     );
 
     // A qualifying state that nobody occupies has zero variance at every
@@ -378,7 +382,7 @@ fn tests_on_awkward_stays() {
     wide.n_codes = 5;
     check_test(
         "empty qualifying state",
-        &run(&wide, &GRID, &[1, 2, 3, 4, 5], &seeds).unwrap(),
+        &run(&wide, &GRID, &[1, 2, 3, 4, 5], seeds).unwrap(),
     );
 
     // No stay in the origin state.
@@ -392,7 +396,7 @@ fn tests_on_awkward_stays() {
     };
     check_test(
         "nobody at risk",
-        &run(&none, &[1.0, 2.0], &[1, 2], &seeds).unwrap(),
+        &run(&none, &[1.0, 2.0], &[1, 2], seeds).unwrap(),
     );
     let nothing = Columns {
         person: vec![],
@@ -404,7 +408,7 @@ fn tests_on_awkward_stays() {
     };
     check_text(
         "refuse/no stays",
-        &message(run(&nothing, &[1.0], &[1], &seeds)),
+        &message(run(&nothing, &[1.0], &[1], seeds)),
     );
 
     // One stay.
@@ -416,7 +420,7 @@ fn tests_on_awkward_stays() {
         status: vec![2],
         n_codes: 2,
     };
-    check_test("one stay", &run(&one, &[1.0], &[1], &seeds).unwrap());
+    check_test("one stay", &run(&one, &[1.0], &[1], seeds).unwrap());
 }
 
 /// The test of the transition from the first qualifying code to `target`.
@@ -425,7 +429,7 @@ fn run_target(
     grid: &[f64],
     qualifying: &[u32],
     target: u32,
-    seeds: &[u64],
+    seeds: Bootstrap,
 ) -> Result<Test, epistat_survival::Error> {
     let buf = c.buf()?;
     test(&buf.as_data(), qualifying, target, grid, seeds, &OPTIONS)
@@ -441,8 +445,14 @@ fn message<T>(result: Result<T, epistat_survival::Error>) -> String {
 #[test]
 fn refusals() {
     let c = process(10, 44, false, |id| id as u32);
-    check_text("refuse/no states", &message(run(&c, &GRID, &[], &[])));
-    check_text("refuse/no landmark", &message(run(&c, &[], &[1], &[])));
+    check_text(
+        "refuse/no states",
+        &message(run(&c, &GRID, &[], Bootstrap::new(0, 0))),
+    );
+    check_text(
+        "refuse/no landmark",
+        &message(run(&c, &[], &[1], Bootstrap::new(0, 0))),
+    );
     let short = SurvBuf::builder(c.stop.clone(), c.status.clone())
         .start(c.start[1..].to_vec())
         .id(c.person.clone())

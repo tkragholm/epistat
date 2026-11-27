@@ -13,6 +13,7 @@
 
 mod ccw_run;
 
+use epistat_survival::weighting::trials::PersonCounts;
 use epistat_testkit::Fingerprint;
 
 /// `(name, length, digest)` of each recorded output.
@@ -26,7 +27,9 @@ fn bits_are_unchanged() {
     let r = ccw_run::load();
     let d = ccw_run::data(&r);
     let c = ccw_run::cloned(&r, &d);
-    let counts = epistat_rng::resample_counts(c.n_persons, 99);
+    let counts = c
+        .case_weights(&PersonCounts::draw(&r.input.id, 99))
+        .unwrap();
     let got: Vec<(String, usize, u64)> = [
         ("analysis", ccw_run::analyse(&r, &c, None).flatten()),
         (

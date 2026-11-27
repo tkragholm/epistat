@@ -38,6 +38,7 @@
     reason = "a benchmark program: the cohort has fewer than 2^32 rows, times are whole days, and the names follow the R script"
 )]
 
+use epistat_core::Bootstrap;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::aalen_johansen::{
@@ -327,11 +328,19 @@ fn run_aj_boot(c: &Cohort, reps: usize) -> Timed {
     let exposed: Vec<bool> = c.arm.iter().map(|&a| a == 1).collect();
     let cells =
         RowWindows::new((0..n as u32).collect(), vec![0, n as u32], n, "cell").expect("cells");
-    let opts = BootstrapOptions::new(boot, Draw::PerCell);
+    let opts = BootstrapOptions::new(Draw::PerCell);
     let ages = GRID.to_vec();
     let (times, (yes, no, ok)) = timed(reps, || {
-        aalen_johansen::bootstrap(&data, &exposed, &cells, &[SEED], &ages, 1, &opts)
-            .expect("bootstrap")
+        aalen_johansen::bootstrap(
+            &data,
+            &exposed,
+            &cells,
+            Bootstrap::new(boot, SEED),
+            &ages,
+            1,
+            &opts,
+        )
+        .expect("bootstrap")
     });
     assert!(ok[0]);
     let mut lines = String::new();
