@@ -25,9 +25,6 @@
 //! * `frailty_dense`: the same fit, against `coxph` with `sparse = FALSE`, whose
 //!   variance is the exact one compared here; R's dense information has a row
 //!   and a column per cluster, so it is run only at the smallest sizes.
-//! * `frailty_search`: theta chosen by `coxph`'s own search
-//!   ([`Theta::coxph`](epistat_survival::frailty::Theta::coxph)) against `coxph`'s
-//!   default `method = "em"`, compared on theta and the coefficients.
 //! * `frailty_profile`: theta at the maximum of the profile likelihood,
 //!   compared on the corrected log likelihood only (`coxph` has no such search,
 //!   and its own stops short of the maximum, so its theta is written as `info_`).
@@ -99,7 +96,6 @@ fn main() {
     let data = builder.build().expect("data");
     let theta = match method.as_str() {
         "frailty_fixed" | "frailty_dense" | "frailty_entry" => Theta::Fixed(THETA),
-        "frailty_search" => Theta::coxph(),
         "frailty_profile" => Theta::Profile,
         other => panic!("unknown method {other}"),
     };
@@ -134,9 +130,6 @@ fn main() {
         );
         lines.push("loglik", f.log_partial_likelihood);
         lines.push_opt("c_loglik", f.marginal_log_likelihood);
-        if method == "frailty_search" {
-            lines.push("theta", f.theta);
-        }
     }
     common::finish(&method, n, &times, &lines);
 }

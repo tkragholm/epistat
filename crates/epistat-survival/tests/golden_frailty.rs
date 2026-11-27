@@ -39,6 +39,12 @@ fn hash(f: &FrailtyFit) -> u64 {
     if let Some(t) = f.likelihood_ratio {
         h = h.f64(t.statistic).f64(t.p_value);
     }
+    if let Some(i) = f.theta_interval {
+        h = h.option_f64(i.lower).option_f64(i.upper);
+    }
+    if let Some(se) = f.ln_theta_se {
+        h = h.f64(se);
+    }
     for s in &f.history {
         h = h
             .f64(s.theta)
@@ -126,14 +132,13 @@ fn bits_are_pinned() {
             run(true, false, true, &FrailtyOptions::default()),
         ),
         (
-            "coxph search breslow",
+            "profile breslow",
             run(
                 false,
                 false,
                 false,
                 &FrailtyOptions {
                     ties: Ties::Breslow,
-                    theta: Theta::coxph(),
                     ..FrailtyOptions::default()
                 },
             ),
@@ -173,6 +178,6 @@ const EXPECTED: &[(&str, u64)] = &[
     ("fixed breslow entry weights strata", 0x474b_29b3_bc83_59aa),
     ("fixed efron entry weights strata", 0x2746_d7c1_be37_1f67),
     ("profile efron entry strata", 0x1e7e_1ed6_b4c2_a98e),
-    ("coxph search breslow", 0x4b6f_e8e0_eb4b_d424),
+    ("profile breslow", 0x0000_0000_0000_0000),
     ("em breslow", 0x3cc0_b0cf_ac3a_a56f),
 ];

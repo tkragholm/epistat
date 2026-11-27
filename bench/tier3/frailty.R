@@ -11,7 +11,7 @@
 # frailty_fixed, frailty_entry: coxph(... + frailty(cluster, theta = 0.5)), sparse.
 # frailty_dense: the same with sparse = FALSE, whose information is dense in the
 #   clusters; expect it to run out of time or memory above 10^4 rows.
-# frailty_search, frailty_profile: coxph(... + frailty(cluster)), method "em".
+# frailty_profile: coxph(... + frailty(cluster)), method "em".
 # Every fit runs with ties = "efron" and coxph.control(eps = 1e-12, iter.max = 500,
 # outer.max = 30), so that both sides solve the score equations to far below the
 # standard errors.
@@ -48,7 +48,7 @@ lhs <- if (method == "frailty_entry") "Surv(start, time, status)" else "Surv(tim
 frail <- switch(method,
   frailty_fixed = , frailty_entry = "frailty(cluster, theta = 0.5)",
   frailty_dense = "frailty(cluster, theta = 0.5, sparse = FALSE)",
-  frailty_search = , frailty_profile = "frailty(cluster)")
+  frailty_profile = "frailty(cluster)")
 fm <- as.formula(paste(lhs, "~ x1 + x2 +", frail))
 r <- timed(function() suppressWarnings(coxph(fm, data = d, ties = "efron", control = ctl)))
 f <- r$value
@@ -60,6 +60,5 @@ if (method == "frailty_profile") {
   v <- c(beta0 = coef(f)[[1]], beta1 = coef(f)[[2]],
          se0 = sqrt(f$var[1, 1]), se1 = sqrt(f$var[2, 2]),
          loglik = f$loglik[2], c_loglik = h$c.loglik)
-  if (method == "frailty_search") v <- c(v, theta = theta)
 }
 finish(method, r$times, v)
