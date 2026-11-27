@@ -111,7 +111,7 @@ pub enum ZphTransform {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ZphOptions<'a> {
     /// The options of the fit, which must be those it was made with.
-    pub cox: CoxOptions<'a>,
+    pub cox: CoxOptions,
     /// The transform of time. `Km`, as in `cox.zph`.
     pub transform: ZphTransform,
     /// The terms, each a set of columns of the design. `None` makes one term of

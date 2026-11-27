@@ -164,7 +164,7 @@ pub enum Collapse<'a> {
 /// What [`residuals`] takes besides the data, the design and the fit.
 ///
 /// The kind has no default, so the options are made with [`new`](Self::new).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ResidualOptions<'a> {
     /// Which residuals to compute.
     pub kind: ResidualKind,
@@ -175,15 +175,16 @@ pub struct ResidualOptions<'a> {
     /// The groups to sum the residuals over. The default is none.
     pub collapse: Collapse<'a>,
     /// The options of the fit, which must be those the fit was made with: the
-    /// tie rule, the rule for the times, the event code and the offset.
-    pub cox: CoxOptions<'a>,
+    /// tie rule, the rule for the times and the event code. The offset is that
+    /// of the data.
+    pub cox: CoxOptions,
 }
 
-impl<'a> ResidualOptions<'a> {
+impl ResidualOptions<'_> {
     /// The residuals of `kind` for a fit made with `cox`, with the defaults of
     /// `residuals.coxph` for `weighted` and `collapse`.
     #[must_use]
-    pub fn new(kind: ResidualKind, cox: CoxOptions<'a>) -> Self {
+    pub fn new(kind: ResidualKind, cox: CoxOptions) -> Self {
         Self {
             kind,
             weighted: None,
@@ -367,7 +368,7 @@ fn efron(ties: Ties) -> Result<bool> {
 pub(crate) fn prepare(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
-    opts: &CoxOptions<'_>,
+    opts: &CoxOptions,
     coefficients: &[Option<f64>],
 ) -> Result<Prepared> {
     let efron = efron(opts.ties)?;
@@ -382,12 +383,6 @@ pub(crate) fn prepare(
     refuse_non_finite_matrix(x, "x")?;
     if coefficients.iter().flatten().any(|c| !c.is_finite()) {
         return Err(Error::invalid("coefficients: a value is not finite"));
-    }
-    if let Some(offset) = opts.offset {
-        check_lengths(&[("data", data.n_rows()), ("offset", offset.len())])?;
-        if offset.iter().any(|o| !o.is_finite()) {
-            return Err(Error::invalid("offset: a value is not finite"));
-        }
     }
     let keep: Vec<usize> = (0..x.ncols())
         .filter(|&j| coefficients[j].is_some())
@@ -438,7 +433,7 @@ pub(crate) fn prepare(
         for (b, &j) in beta.iter().zip(&keep) {
             value += x[(i, j)] * b;
         }
-        if let Some(offset) = opts.offset {
+        if let Some(offset) = data.offset() {
             value += offset[i];
         }
         value

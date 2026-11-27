@@ -156,21 +156,18 @@ fn data_of<'a>(s: &'a Sim, w: &'a [f64], cfg: Cfg, n_codes: u32) -> SurvData<'a>
     if cfg.entry {
         builder = builder.start(&s.start);
     }
+    if cfg.offset {
+        builder = builder.offset(&s.offset);
+    }
     builder.build().unwrap()
 }
 
-/// The offset of the configuration.
-fn off(s: &Sim, cfg: Cfg) -> Option<&[f64]> {
-    cfg.offset.then_some(s.offset.as_slice())
-}
-
-fn precise(cause: Option<u32>, offset: Option<&[f64]>) -> CoxOptions<'_> {
+fn precise(cause: Option<u32>) -> CoxOptions {
     CoxOptions {
         ties: Ties::Breslow,
         cause,
-        offset,
-        eps: 1e-14,
-        iter_max: 100,
+        tolerance: 1e-14,
+        max_iterations: 100,
         ..CoxOptions::default()
     }
 }
@@ -262,7 +259,7 @@ fn levels() -> [Level<'static>; 2] {
 
 fn cox_run(s: &Sim, w: &[f64], cfg: Cfg, times: &[f64], std_err: bool) -> Standardised {
     let data = data_of(s, w, cfg, 1);
-    let options = precise(None, cfg.offset.then_some(s.offset.as_slice()));
+    let options = precise(None);
     let fit = cox::fit(&data, s.design.as_ref(), &options).unwrap();
     standardise_cox(
         &data,
@@ -318,7 +315,7 @@ fn csc_run(
     let x2 = Mat::from_fn(s.design.nrows(), 2, |i, j| s.design[(i, j)]);
     let designs = [s.design.as_ref(), x2.as_ref()];
     let fits: Vec<CoxModelFit> = (0..2)
-        .map(|m| cox::fit(&data, designs[m], &precise(Some(m as u32 + 1), off(s, cfg))).unwrap())
+        .map(|m| cox::fit(&data, designs[m], &precise(Some(m as u32 + 1))).unwrap())
         .collect();
     let level = |set: &'static [(usize, f64)]| Level {
         designs: vec![Counterfactual::Columns(set), Counterfactual::Columns(set)],
@@ -330,7 +327,6 @@ fn csc_run(
         cause,
         &CscOptions {
             ties: Ties::Breslow,
-            offset: off(s, cfg),
             ..CscOptions::default()
         },
         &[level(&SET0), level(&SET1)],
@@ -442,15 +438,12 @@ fn predict_run(
     let designs = [s.design.as_ref(), x2.as_ref()];
     let opts = CscOptions {
         ties: Ties::Breslow,
-        offset: off(s, cfg),
         surv_type,
         ..CscOptions::default()
     };
     let fits: Vec<CoxModelFit> = match surv_type {
         SurvType::Hazard => (0..2)
-            .map(|m| {
-                cox::fit(&data, designs[m], &precise(Some(m as u32 + 1), off(s, cfg))).unwrap()
-            })
+            .map(|m| cox::fit(&data, designs[m], &precise(Some(m as u32 + 1))).unwrap())
             .collect(),
         SurvType::Survival { cause } => {
             let any = {
@@ -461,11 +454,14 @@ fn predict_run(
                 if cfg.entry {
                     builder = builder.start(&s.start);
                 }
+                if cfg.offset {
+                    builder = builder.offset(&s.offset);
+                }
                 let d = builder.build().unwrap();
-                cox::fit(&d, designs[1], &precise(None, off(s, cfg))).unwrap()
+                cox::fit(&d, designs[1], &precise(None)).unwrap()
             };
             vec![
-                cox::fit(&data, designs[0], &precise(Some(cause), off(s, cfg))).unwrap(),
+                cox::fit(&data, designs[0], &precise(Some(cause))).unwrap(),
                 any,
             ]
         }
@@ -620,12 +616,15 @@ fn survival_type_run(
     if cfg.entry {
         builder = builder.start(&s.start);
     }
+    if cfg.offset {
+        builder = builder.offset(&s.offset);
+    }
     let any = builder.build().unwrap();
     let x2 = Mat::from_fn(n, 2, |i, j| s.design[(i, j)]);
     let designs = [s.design.as_ref(), x2.as_ref()];
     let fits = vec![
-        cox::fit(&data, designs[0], &precise(Some(1), off(s, cfg))).unwrap(),
-        cox::fit(&any, designs[1], &precise(None, off(s, cfg))).unwrap(),
+        cox::fit(&data, designs[0], &precise(Some(1))).unwrap(),
+        cox::fit(&any, designs[1], &precise(None)).unwrap(),
     ];
     let level = |set: &'static [(usize, f64)]| Level {
         designs: vec![Counterfactual::Columns(set), Counterfactual::Columns(set)],
@@ -637,7 +636,6 @@ fn survival_type_run(
         1,
         &CscOptions {
             ties: Ties::Breslow,
-            offset: off(s, cfg),
             surv_type: SurvType::Survival { cause: 1 },
             ..CscOptions::default()
         },

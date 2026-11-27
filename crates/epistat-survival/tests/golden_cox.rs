@@ -46,7 +46,7 @@ fn hash_fit(fit: &CoxModelFit) -> Fingerprint {
         .f64(fit.n_events)
         .u64(fit.n_used as u64)
         .u64(fit.rank as u64)
-        .u64(u64::from(fit.iterations))
+        .u64(u64::try_from(fit.iterations).unwrap())
         .u64(u64::from(fit.converged));
     for &c in &fit.monotone_columns {
         h = h.u64(c as u64);
@@ -125,7 +125,7 @@ struct Case {
 }
 
 /// The options of every fit here: exact times, the tie rule of the case.
-fn options(ties: Ties) -> CoxOptions<'static> {
+fn options(ties: Ties) -> CoxOptions {
     CoxOptions {
         ties,
         timefix: TimeFix::Exact,

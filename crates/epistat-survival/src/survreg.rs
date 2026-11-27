@@ -117,7 +117,7 @@
 //!
 //! # Offsets
 //!
-//! [`SurvregOptions::offset`] gives each row a term added to its linear
+//! The offset of the data gives each row a term added to its linear
 //! predictor, `eta = x'beta + o`, on the scale of the model, as `offset()` in
 //! a `survreg` formula does. The null model, the starting values, the
 //! iteration, the linear predictors of the fit and with them every residual
@@ -184,8 +184,7 @@
 //! # Results that are errors
 //!
 //! A design with other than one row per data row, without columns, or with a
-//! value that is not finite; an offset that is not finite or has another
-//! length than the data; degrees of freedom missing or not above 2 for the t
+//! value that is not finite; degrees of freedom missing or not above 2 for the t
 //! distribution, or given for another; no row of positive weight; a fixed scale that is
 //! not positive, or given with a distribution that has its own, or with more
 //! than one stratum; a time that does not suit a transformed distribution;
@@ -297,7 +296,7 @@ impl Distribution {
 
 /// The settings of [`fit`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SurvregOptions<'a> {
+pub struct SurvregOptions {
     /// The distribution. Weibull.
     pub distribution: Distribution,
     /// The degrees of freedom of the t distribution, `parms` of `survreg`.
@@ -305,11 +304,6 @@ pub struct SurvregOptions<'a> {
     /// allowed with another distribution. `survreg` defaults to 4, which has
     /// no more reason than any other value, so there is no default here.
     pub df: Option<f64>,
-    /// An offset for each row of the data, added to the linear predictor
-    /// `x'beta` as the `offset()` term of `survreg` does, on the scale of the
-    /// model (the log of the time for a transformed distribution). `None` is
-    /// no offset.
-    pub offset: Option<&'a [f64]>,
     /// Whether to compute the robust variance, `robust = TRUE` of `survreg`.
     /// It is computed too when the data have clusters, as `survreg` does for
     /// a `cluster()` term, and then sums by cluster. See
@@ -320,25 +314,24 @@ pub struct SurvregOptions<'a> {
     /// distributions, which fix their own, nor with more than one stratum.
     pub scale: Option<f64>,
     /// Largest number of trial points, `maxiter` of `survreg.control`. 30.
-    pub max_iterations: u32,
+    pub max_iterations: usize,
     /// Convergence threshold on the change of the log likelihood,
     /// `rel.tolerance` of `survreg.control`. 1e-9.
-    pub rel_tolerance: f64,
+    pub tolerance: f64,
     /// Relative size below which a pivot of the information matrix is zero,
     /// `toler.chol` of `survreg.control`. 1e-10.
     pub toler_chol: f64,
 }
 
-impl Default for SurvregOptions<'_> {
+impl Default for SurvregOptions {
     fn default() -> Self {
         Self {
             distribution: Distribution::Weibull,
             df: None,
-            offset: None,
             robust: false,
             scale: None,
             max_iterations: 30,
-            rel_tolerance: 1e-9,
+            tolerance: 1e-9,
             toler_chol: 1e-10,
         }
     }
@@ -378,7 +371,7 @@ pub struct SurvregFit {
     /// distribution and scale structure.
     pub loglik_null: f64,
     /// The trial points computed.
-    pub iterations: u32,
+    pub iterations: usize,
     /// Whether the log likelihood stopped changing within the iteration limit.
     pub converged: bool,
     /// The Newton steps taken from the outer product of the row scores.
@@ -599,7 +592,7 @@ fn design_of(x: MatRef<'_, f64>, used: &[usize]) -> Design {
 pub fn fit(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
-    options: &SurvregOptions<'_>,
+    options: &SurvregOptions,
 ) -> Result<SurvregFit> {
     let dist = options.distribution;
     match (dist, options.df) {
@@ -640,22 +633,11 @@ pub fn fit(
             )));
         }
     }
-    if let Some(offset) = options.offset {
-        if offset.len() != n_all {
-            return Err(Error::invalid(format!(
-                "the offset has {} values against {n_all} rows of data",
-                offset.len()
-            )));
-        }
-        if offset.iter().any(|v| !v.is_finite()) {
-            return Err(Error::invalid("an offset is not finite".to_owned()));
-        }
-    }
     if options.max_iterations == 0 {
         return Err(Error::invalid("max_iterations is 0".to_owned()));
     }
     for (name, value) in [
-        ("rel_tolerance", options.rel_tolerance),
+        ("tolerance", options.tolerance),
         ("toler_chol", options.toler_chol),
     ] {
         if !(value.is_finite() && value > 0.0) {
@@ -702,8 +684,8 @@ pub fn fit(
     let y1: Vec<f64> = used.iter().map(|&row| times.y1[row]).collect();
     let y2: Vec<f64> = used.iter().map(|&row| times.y2[row]).collect();
     let status: Vec<u8> = used.iter().map(|&row| times.status[row]).collect();
-    let offset: Option<Vec<f64>> = options
-        .offset
+    let offset: Option<Vec<f64>> = data
+        .offset()
         .map(|o| used.iter().map(|&row| o[row]).collect());
     let weight: Vec<f64> = match data.weight() {
         Some(w) => used.iter().map(|&row| w[row]).collect(),
@@ -738,7 +720,7 @@ pub fn fit(
     let design = design_of(x, &used);
     let control = Control {
         max_iterations: options.max_iterations,
-        rel_tolerance: options.rel_tolerance,
+        tolerance: options.tolerance,
         toler_chol: options.toler_chol,
     };
     let ones = vec![1.0_f64; n];
@@ -937,7 +919,7 @@ pub fn fit(
                 };
                 eta += fitted.beta[j] * value;
             }
-            if let Some(offset) = options.offset {
+            if let Some(offset) = data.offset() {
                 eta += offset[row];
             }
             eta

@@ -71,7 +71,7 @@ pub enum ClogitMethod {
 }
 
 /// What [`clogit`] takes besides the data.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ClogitOptions<'a> {
     /// The treatment of sets with more than one case. `Exact`, as in `clogit`.
     pub method: ClogitMethod,
@@ -82,12 +82,12 @@ pub struct ClogitOptions<'a> {
     /// Cluster codes for a robust variance. An error with `Exact`.
     pub cluster: Option<&'a [u32]>,
     /// Starting coefficients, as `init` of `coxph`.
-    pub init: Option<&'a [f64]>,
+    pub start: Option<Vec<f64>>,
     /// The largest number of trial points, `iter.max` of `coxph.control`.
-    pub iter_max: u32,
+    pub max_iterations: usize,
     /// The relative change of the log likelihood at convergence, `eps` of
     /// `coxph.control`.
-    pub eps: f64,
+    pub tolerance: f64,
 }
 
 impl Default for ClogitOptions<'_> {
@@ -98,9 +98,9 @@ impl Default for ClogitOptions<'_> {
             offset: None,
             weight: None,
             cluster: None,
-            init: None,
-            iter_max: base.iter_max,
-            eps: base.eps,
+            start: None,
+            max_iterations: base.max_iterations,
+            tolerance: base.tolerance,
         }
     }
 }
@@ -117,7 +117,7 @@ impl Default for ClogitOptions<'_> {
 ///
 /// An input error when the columns differ in length,
 /// when `x` has no column or a value that is not finite, for the invalid
-/// weights, offset, starting values and `eps` that [`cox::fit`](crate::cox::fit)
+/// weights, offset, starting values and `tolerance` that [`cox::fit`](crate::cox::fit)
 /// refuses, and with the exact method when case weights or clusters are given.
 pub fn clogit(
     case: &[bool],
@@ -135,6 +135,9 @@ pub fn clogit(
     if let Some(cluster) = opts.cluster {
         builder = builder.cluster(cluster);
     }
+    if let Some(offset) = opts.offset {
+        builder = builder.offset(offset);
+    }
     let data = builder.build()?;
     let cox = CoxOptions {
         ties: match opts.method {
@@ -142,10 +145,9 @@ pub fn clogit(
             ClogitMethod::Approximate | ClogitMethod::Breslow => Ties::Breslow,
             ClogitMethod::Efron => Ties::Efron,
         },
-        offset: opts.offset,
-        init: opts.init,
-        iter_max: opts.iter_max,
-        eps: opts.eps,
+        start: opts.start.clone(),
+        max_iterations: opts.max_iterations,
+        tolerance: opts.tolerance,
         ..CoxOptions::default()
     };
     fit(&data, x, &cox)

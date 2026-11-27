@@ -204,7 +204,7 @@ use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
 /// How the censoring distribution is obtained.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub enum Censoring<'a> {
     /// The Kaplan-Meier estimate of the censoring times, `cens.model = "km"`.
     #[default]
@@ -262,7 +262,7 @@ pub enum HorizonRule {
 }
 
 /// What the metrics take besides the data, the predictions and the times.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ScoreOptions<'a> {
     /// The rule that makes times equal when they differ by rounding error,
     /// applied to the data first. `Exact`: neither `Score` nor `timeROC`
@@ -380,9 +380,9 @@ impl<'a> Core<'a> {
         let km = CensoringKm::new(&sorted.time, &sorted.is_censored(), &w, true);
         let mut cox = None;
         let mut lam_times = Vec::new();
-        let (supplied, g_own) = match opts.censoring {
+        let (supplied, g_own) = match &opts.censoring {
             Censoring::Cox(spec) => {
-                let model = CoxCens::new(&sorted, &spec)?;
+                let model = CoxCens::new(&sorted, spec)?;
                 let g_own = (0..n)
                     .map(|pos| model.survival(pos, model.lambda_before(sorted.time[pos])))
                     .collect();
@@ -424,7 +424,7 @@ impl<'a> Core<'a> {
                         )));
                     }
                 }
-                (Some(s), g_own)
+                (Some(*s), g_own)
             }
         };
         Ok(Self {

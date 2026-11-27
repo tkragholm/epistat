@@ -137,7 +137,7 @@ pub fn anova(fits: &[&CoxModelFit]) -> Result<AnovaTable> {
         }
         if !f.converged {
             return Err(Error::NotConverged {
-                iterations: f.iterations as usize,
+                iterations: f.iterations,
             });
         }
     }
@@ -194,21 +194,21 @@ pub fn anova(fits: &[&CoxModelFit]) -> Result<AnovaTable> {
 /// # Errors
 ///
 /// An input error when there are no groups, a group is empty, a column is not
-/// in `x` or is in two groups, when `opts.init` is given (starting values of
+/// in `x` or is in two groups, when `opts.start` is given (starting values of
 /// the full model do not apply to its sub-models), when a fit has no log
 /// likelihood or has not converged, and as [`fit`] does.
 pub fn anova_terms(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
     groups: &[&[usize]],
-    opts: &CoxOptions<'_>,
+    opts: &CoxOptions,
 ) -> Result<AnovaTable> {
     if groups.is_empty() {
         return Err(Error::invalid("anova_terms needs at least one term"));
     }
-    if opts.init.is_some() {
+    if opts.start.is_some() {
         return Err(Error::invalid(
-            "init gives starting values for the full design and does not apply to its prefixes",
+            "start gives starting values for the full design and does not apply to its prefixes",
         ));
     }
     let mut seen = vec![false; x.ncols()];

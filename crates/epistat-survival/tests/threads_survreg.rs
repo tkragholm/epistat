@@ -70,7 +70,11 @@ fn survreg_fit_predict_residuals() {
                 .collect();
             out.extend(&f.log_scale);
             out.extend(f.variance.iter().map(|v| v.unwrap_or(f64::NAN)));
-            out.extend([f.loglik, f.loglik_null, f64::from(f.iterations)]);
+            out.extend([
+                f.loglik,
+                f.loglik_null,
+                f64::from(u32::try_from(f.iterations).unwrap()),
+            ]);
             out.extend(&f.linear_predictors);
             let p = f
                 .predict(

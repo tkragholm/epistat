@@ -301,7 +301,7 @@ pub enum Method {
     /// gamma integral rather than from the penalised fit.
     Em {
         /// Most EM steps at one theta.
-        max_iterations: u32,
+        max_iterations: usize,
         /// Relative change of the marginal log likelihood at which EM stops.
         tolerance: f64,
     },
@@ -309,15 +309,13 @@ pub enum Method {
 
 /// What [`fit`] takes besides the data and the design.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FrailtyOptions<'a> {
+pub struct FrailtyOptions {
     /// Breslow or Efron. Exact ties are refused. `Efron`, as in `coxph`.
     pub ties: Ties,
     /// The rule that makes nearly equal times equal, as in [`crate::cox::fit`].
     pub timefix: TimeFix,
     /// The event code to model, as in [`crate::cox::CoxOptions`].
     pub cause: Option<u32>,
-    /// A term added to the linear predictor of every row.
-    pub offset: Option<&'a [f64]>,
     /// How theta is chosen. [`Theta::Profile`] by default.
     pub theta: Theta,
     /// How the model is fitted at each theta.
@@ -326,19 +324,18 @@ pub struct FrailtyOptions<'a> {
     /// `U' H^-1 U` is at most this. It must be positive; `1e-10` by default.
     pub tolerance: f64,
     /// Most Newton trial points at one theta, 50 by default.
-    pub max_iterations: u32,
+    pub max_iterations: usize,
     /// The tolerance of Brent's method on `ln theta` for
     /// [`Theta::Profile`], `1e-6` by default.
     pub theta_tolerance: f64,
 }
 
-impl Default for FrailtyOptions<'_> {
+impl Default for FrailtyOptions {
     fn default() -> Self {
         Self {
             ties: Ties::Efron,
             timefix: TimeFix::default(),
             cause: None,
-            offset: None,
             theta: Theta::Profile,
             method: Method::Penalised,
             tolerance: 1e-10,
@@ -442,7 +439,7 @@ pub struct FrailtyFit {
     /// Every theta fitted, in order.
     pub history: Vec<ThetaStep>,
     /// Trial points (Newton) or EM steps of the final fit.
-    pub iterations: u32,
+    pub iterations: usize,
     /// Whether the final fit converged.
     pub converged: bool,
     /// The summed weight of the events.
@@ -540,14 +537,14 @@ struct AtTheta {
     state: State,
     eval: Eval,
     marginal: Option<f64>,
-    iterations: u32,
+    iterations: usize,
     converged: bool,
 }
 
 struct Problem<'a> {
     layout: Layout,
     tolerance: f64,
-    max_iterations: u32,
+    max_iterations: usize,
     method: Method,
     em: Option<EmInput<'a>>,
 }
@@ -838,7 +835,7 @@ fn coxph_search(
     Ok((search.fits.len() - 1, ThetaStatus::SearchLimit))
 }
 
-fn check_options(opts: &FrailtyOptions<'_>, rows: usize) -> Result<()> {
+fn check_options(opts: &FrailtyOptions, data: &SurvData<'_>) -> Result<()> {
     if opts.ties == Ties::Exact {
         return Err(Error::unsupported(
             "ties: the frailty model supports Breslow and Efron ties only",
@@ -884,16 +881,14 @@ fn check_options(opts: &FrailtyOptions<'_>, rows: usize) -> Result<()> {
             ));
         }
     }
-    if let Some(offset) = opts.offset {
-        check_lengths(&[("data", rows), ("offset", offset.len())])?;
-        if offset
+    if let Some(offset) = data.offset()
+        && offset
             .iter()
             .any(|o| !o.is_finite() || !o.exp().is_finite())
-        {
-            return Err(Error::invalid(
-                "offset: a value is not finite or gives a risk score that is not finite",
-            ));
-        }
+    {
+        return Err(Error::invalid(
+            "offset: a value is not finite or gives a risk score that is not finite",
+        ));
     }
     Ok(())
 }
@@ -917,14 +912,10 @@ fn check_options(opts: &FrailtyOptions<'_>, rows: usize) -> Result<()> {
     clippy::too_many_lines,
     reason = "the checks, the search and the assembly of the result in order"
 )]
-pub fn fit(
-    data: &SurvData<'_>,
-    x: MatRef<'_, f64>,
-    opts: &FrailtyOptions<'_>,
-) -> Result<FrailtyFit> {
+pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Result<FrailtyFit> {
     check_lengths(&[("data", data.n_rows()), ("x", x.nrows())])?;
     refuse_non_finite_matrix(x, "x")?;
-    check_options(opts, data.n_rows())?;
+    check_options(opts, data)?;
     if data.cluster().is_none() {
         return Err(Error::invalid(
             "cluster: the frailty model needs a cluster column",
@@ -997,7 +988,7 @@ pub fn fit(
         n_strata: data.n_strata(),
         cluster: &cluster,
         g: g as usize,
-        offset: opts.offset,
+        offset: data.offset(),
         efron: opts.ties == Ties::Efron,
     });
     let estimated = !matches!(opts.theta, Theta::Fixed(_));
@@ -1028,7 +1019,7 @@ pub fn fit(
             data: &data,
             x: x_kept.as_ref(),
             cause: opts.cause,
-            offset: opts.offset.unwrap_or(&zero_offset),
+            offset: data.offset().unwrap_or(&zero_offset),
             cluster: &cluster,
             max_iterations,
             tolerance,

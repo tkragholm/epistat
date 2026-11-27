@@ -86,7 +86,7 @@ struct RMulti {
     vcov_robust: Vec<Vec<f64>>,
     loglik: f64,
     loglik_null: f64,
-    iterations: u32,
+    iterations: usize,
     wald_model: f64,
     wald: f64,
     score: f64,
@@ -120,7 +120,7 @@ struct RFit {
     coefficient: f64,
     se: f64,
     robust_se: Option<f64>,
-    iterations: u32,
+    iterations: usize,
     n_events: f64,
 }
 
@@ -593,7 +593,7 @@ fn coefficients_match_crr_when_no_failure_ties_with_a_censoring() {
                     column.as_ref(),
                     &FineGrayOptions {
                         ties: Ties::Breslow,
-                        eps: 1e-13,
+                        tolerance: 1e-13,
                         ..FineGrayOptions::new(cause_code(result))
                     },
                 )
@@ -955,7 +955,7 @@ fn several_coefficients_match_crr_when_no_failure_ties_with_a_censoring() {
                 x.as_ref(),
                 &FineGrayOptions {
                     ties: Ties::Breslow,
-                    eps: 1e-13,
+                    tolerance: 1e-13,
                     ..FineGrayOptions::new(cause_code(result))
                 },
             )
@@ -1168,7 +1168,7 @@ fn censoring_strata_match_crr_with_censoring_groups() {
                 x.as_ref(),
                 &FineGrayOptions {
                     ties: Ties::Breslow,
-                    eps: 1e-13,
+                    tolerance: 1e-13,
                     ..FineGrayOptions::new(cause_code_of(result.cause))
                 },
             )

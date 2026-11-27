@@ -120,6 +120,9 @@ fn main() {
         );
     }
     lines.push_opt("loglik", f.log_partial_likelihood);
-    lines.push("iterations", f64::from(f.iterations));
+    lines.push(
+        "iterations",
+        f64::from(u32::try_from(f.iterations).unwrap()),
+    );
     common::finish(&method, n, &times, &lines);
 }

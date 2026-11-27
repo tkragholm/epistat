@@ -656,9 +656,9 @@ pub struct FineGrayOptions {
     pub timefix: TimeFix,
     /// The relative change of the log partial likelihood at which the
     /// iteration stops, `eps` of `coxph.control`. It must be positive.
-    pub eps: f64,
+    pub tolerance: f64,
     /// The largest number of trial points, `iter.max` of `coxph.control`.
-    pub iter_max: u32,
+    pub max_iterations: usize,
 }
 
 impl FineGrayOptions {
@@ -672,8 +672,8 @@ impl FineGrayOptions {
             cause,
             ties: cox.ties,
             timefix: cox.timefix,
-            eps: cox.eps,
-            iter_max: cox.iter_max,
+            tolerance: cox.tolerance,
+            max_iterations: cox.max_iterations,
         }
     }
 }
@@ -790,7 +790,7 @@ pub fn risk_rows(
 /// # Errors
 ///
 /// An input error when `x` has no column, does not hold one row per row of
-/// `data` or has a value that is not finite, when `opts.eps` is not positive
+/// `data` or has a value that is not finite, when `opts.tolerance` is not positive
 /// and finite, for `Ties::Exact` with clusters, with case weights other than 1
 /// or with a censoring after a competing event in its stratum, and as for
 /// [`rows`].
@@ -802,8 +802,8 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FineGrayOptions) -> R
     if (0..x.ncols()).any(|j| (0..x.nrows()).any(|i| !x[(i, j)].is_finite())) {
         return Err(Error::invalid("x: a value is not finite"));
     }
-    if !(opts.eps.is_finite() && opts.eps > 0.0) {
-        return Err(Error::invalid("eps: must be finite and positive"));
+    if !(opts.tolerance.is_finite() && opts.tolerance > 0.0) {
+        return Err(Error::invalid("tolerance: must be finite and positive"));
     }
     if opts.ties == Ties::Exact && data.cluster().is_some() {
         return Err(Error::unsupported(
@@ -839,8 +839,8 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FineGrayOptions) -> R
                 p,
                 factor: &factor,
                 init: None,
-                iter_max: opts.iter_max,
-                eps: opts.eps,
+                max_iterations: opts.max_iterations,
+                tolerance: opts.tolerance,
                 stepping: Stepping::Counting,
                 ties: opts.ties,
                 n_events,
@@ -911,8 +911,8 @@ fn exact(
         &CoxOptions {
             ties: Ties::Exact,
             timefix: TimeFix::Exact,
-            eps: opts.eps,
-            iter_max: opts.iter_max,
+            tolerance: opts.tolerance,
+            max_iterations: opts.max_iterations,
             ..CoxOptions::default()
         },
     )
@@ -1140,8 +1140,8 @@ mod tests {
                 &CoxOptions {
                     ties: opts.ties,
                     timefix: TimeFix::Exact,
-                    eps: opts.eps,
-                    iter_max: opts.iter_max,
+                    tolerance: opts.tolerance,
+                    max_iterations: opts.max_iterations,
                     ..CoxOptions::default()
                 },
             )
@@ -1481,7 +1481,7 @@ mod tests {
         nan[3] = f64::NAN;
         assert!(fit(&d, column(&nan).as_ref(), &options(1, Ties::Breslow)).is_err());
         let loose = FineGrayOptions {
-            eps: 0.0,
+            tolerance: 0.0,
             ..options(1, Ties::Breslow)
         };
         assert!(fit(&d, column(&x).as_ref(), &loose).is_err());

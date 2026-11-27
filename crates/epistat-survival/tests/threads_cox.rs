@@ -78,7 +78,7 @@ fn cox_fit_and_residuals() {
                 model.n_rows as f64,
                 model.n_used as f64,
                 model.rank as f64,
-                f64::from(model.iterations),
+                f64::from(u32::try_from(model.iterations).unwrap()),
                 f64::from(u8::from(model.converged)),
             ]);
             out.extend(model.monotone_columns.iter().map(|&c| c as f64));

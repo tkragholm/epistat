@@ -151,7 +151,7 @@ fn fit_record(fit: Result<CoxModelFit, epistat_survival::Error>) -> Vec<u64> {
             opt_bits(fit.se[0]),
             fit.n_events.to_bits(),
             fit.n_rows as u64,
-            u64::from(fit.iterations),
+            u64::try_from(fit.iterations).unwrap(),
             u64::from(fit.converged),
             opt_bits(fit.robust_se.and_then(|v| v[0])),
         ],

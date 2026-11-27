@@ -86,7 +86,7 @@ struct RFit {
     vcov_model: Vec<Vec<f64>>,
     loglik: f64,
     loglik_null: f64,
-    iterations: u32,
+    iterations: usize,
     information_condition: f64,
     n_events: usize,
 }
@@ -285,8 +285,8 @@ fn predictions_match_mstate() {
             } else {
                 MsBaseline::Separate
             },
-            init: Some(&init),
-            iter_max: 0,
+            start: Some(init.clone()),
+            max_iterations: 0,
             ..MsOptions::default()
         };
         let model = fit(&data, x.as_ref(), &opts).unwrap();

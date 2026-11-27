@@ -335,8 +335,8 @@ fn cox_variances_match_finite_differences_of_refits() {
         });
         let data = SurvData::builder(&stop, &status).build().unwrap();
         let cox_opts = CoxOptions {
-            eps: 1e-13,
-            iter_max: 100,
+            tolerance: 1e-13,
+            max_iterations: 100,
             ..CoxOptions::default()
         };
         let fit = wcox::fit(

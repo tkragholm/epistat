@@ -66,9 +66,8 @@ fn terms_refuses_and_handles_aliased_groups() {
     assert!(anova_terms(&data, x.as_ref(), &[g0, &[]], &opts).is_err());
     assert!(anova_terms(&data, x.as_ref(), &[g0, &[3]], &opts).is_err());
     assert!(anova_terms(&data, x.as_ref(), &[g0, &[0, 1]], &opts).is_err());
-    let init = [0.0];
     let with_init = CoxOptions {
-        init: Some(&init),
+        start: Some(vec![0.0]),
         ..CoxOptions::default()
     };
     assert!(anova_terms(&data, x.as_ref(), &[g0], &with_init).is_err());

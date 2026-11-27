@@ -39,7 +39,7 @@ struct RFit {
     var: Vec<Vec<f64>>,
     phase2var: Vec<Vec<f64>>,
     model_var: Vec<Vec<f64>>,
-    iter: u32,
+    iter: usize,
     opt: Option<Vec<Vec<f64>>>,
     kappa: f64,
 }

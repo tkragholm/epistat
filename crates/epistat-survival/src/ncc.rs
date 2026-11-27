@@ -402,7 +402,7 @@ pub fn fit_weighted(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
     weights: &[f64],
-    opts: &CoxOptions<'_>,
+    opts: &CoxOptions,
 ) -> Result<CoxModelFit> {
     let clusters: Vec<u32> = (0..data.n_rows() as u32).collect();
     let weighted = weighted_data(data, weights, &clusters)?;
@@ -436,7 +436,7 @@ pub fn baseline(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
     weights: &[f64],
-    opts: &CoxOptions<'_>,
+    opts: &CoxOptions,
 ) -> Result<NccBaseline> {
     if data.stratum().is_some() {
         return Err(Error::invalid(

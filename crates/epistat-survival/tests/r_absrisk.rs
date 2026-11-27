@@ -651,12 +651,7 @@ fn absolute_risk_matches_r() {
 
 /// The options of the models, as the library builds them, for the direct
 /// evaluation. The event code is `None` for the model of any event.
-fn opts_for(
-    opts: &CscOptions,
-    n_codes: u32,
-    hazard_type: bool,
-    cause: u32,
-) -> Vec<CoxOptions<'static>> {
+fn opts_for(opts: &CscOptions, n_codes: u32, hazard_type: bool, cause: u32) -> Vec<CoxOptions> {
     let base = CoxOptions {
         ties: opts.ties,
         timefix: opts.timefix,
@@ -666,14 +661,14 @@ fn opts_for(
         (1..=n_codes)
             .map(|code| CoxOptions {
                 cause: Some(code),
-                ..base
+                ..base.clone()
             })
             .collect()
     } else {
         vec![
             CoxOptions {
                 cause: Some(cause),
-                ..base
+                ..base.clone()
             },
             base,
         ]

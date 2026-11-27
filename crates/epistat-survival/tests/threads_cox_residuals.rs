@@ -70,7 +70,7 @@ fn residuals_and_zph() {
             ] {
                 let opts = ResidualOptions {
                     collapse,
-                    ..ResidualOptions::new(kind, cox)
+                    ..ResidualOptions::new(kind, cox.clone())
                 };
                 let got = residuals(&data, x.as_ref(), &model, &opts).unwrap();
                 for column in got.columns.iter().flatten() {
@@ -86,7 +86,7 @@ fn residuals_and_zph() {
             ] {
                 let groups = [vec![0], vec![1, 2]];
                 let opts = ZphOptions {
-                    cox,
+                    cox: cox.clone(),
                     transform,
                     groups: Some(&groups),
                     singledf: false,

@@ -58,12 +58,12 @@ fn predictions_and_curves() {
         .start(&start)
         .weight(&weight)
         .stratum(&stratum)
+        .offset(&offset)
         .build()
         .unwrap();
     for ties in [Ties::Breslow, Ties::Efron] {
         let opts = CoxOptions {
             ties,
-            offset: Some(&offset),
             ..CoxOptions::default()
         };
         assert_same_on_pools(&POOLS, || {

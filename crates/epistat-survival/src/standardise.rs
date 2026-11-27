@@ -379,7 +379,7 @@ pub fn standardise_cox<'a>(
     data: &SurvData<'a>,
     design: MatRef<'a, f64>,
     fit: &'a CoxModelFit,
-    options: &CoxOptions<'a>,
+    options: &CoxOptions,
     levels: &[Level<'_>],
     times: &[f64],
     opts: &StandardiseOptions,
@@ -389,7 +389,7 @@ pub fn standardise_cox<'a>(
         data: fixed,
         x: design,
         fit,
-        options: *options,
+        options: options.clone(),
     }];
     run(&models, None, levels, times, opts)
 }
@@ -417,7 +417,7 @@ pub fn standardise_cause_specific<'a>(
     designs: &[MatRef<'a, f64>],
     fits: &'a [CoxModelFit],
     cause: u32,
-    csc: &CscOptions<'a>,
+    csc: &CscOptions,
     levels: &[Level<'_>],
     times: &[f64],
     opts: &StandardiseOptions,
@@ -434,13 +434,9 @@ pub fn standardise_cause_specific<'a>(
             "cause {cause} is outside 1..={n_codes}"
         )));
     }
-    if let Some(offset) = csc.offset {
-        check_lengths(&[("data", fixed.n_rows()), ("offset", offset.len())])?;
-    }
     let base = CoxOptions {
         ties: csc.ties,
         timefix: csc.timefix,
-        offset: csc.offset,
         ..CoxOptions::default()
     };
     match csc.surv_type {
@@ -457,7 +453,7 @@ pub fn standardise_cause_specific<'a>(
                     fit: &fits[code as usize - 1],
                     options: CoxOptions {
                         cause: Some(code),
-                        ..base
+                        ..base.clone()
                     },
                 })
                 .collect();
@@ -491,7 +487,7 @@ pub fn standardise_cause_specific<'a>(
                     fit: &fits[0],
                     options: CoxOptions {
                         cause: Some(fitted),
-                        ..base
+                        ..base.clone()
                     },
                 },
                 ModelInput {

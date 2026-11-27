@@ -47,7 +47,7 @@ fn hash(f: &FrailtyFit) -> u64 {
             .f64(s.marginal_log_likelihood)
             .u64(u64::from(s.converged));
     }
-    h.u64(u64::from(f.iterations))
+    h.u64(u64::try_from(f.iterations).unwrap())
         .u64(u64::from(f.converged))
         .f64(f.n_events)
         .u64(f.n_rows as u64)
@@ -56,7 +56,7 @@ fn hash(f: &FrailtyFit) -> u64 {
         .finish()
 }
 
-fn run(entry: bool, weights: bool, strata: bool, opts: &FrailtyOptions<'_>) -> u64 {
+fn run(entry: bool, weights: bool, strata: bool, opts: &FrailtyOptions) -> u64 {
     let n = 600;
     let mut rng = Stream::seeded(91);
     let (mut time, mut start, mut status, mut cluster, mut weight, mut stratum) = (

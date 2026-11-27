@@ -23,7 +23,7 @@ fn summary(model: &epistat_survival::cox::CoxModelFit) -> Vec<f64> {
         model.n_events,
         model.n_rows as f64,
         model.rank as f64,
-        f64::from(model.iterations),
+        f64::from(u32::try_from(model.iterations).unwrap()),
         f64::from(u8::from(model.converged)),
     ]);
     out.extend(model.tests.score.map(|t| t.statistic));
@@ -59,14 +59,15 @@ fn cox_exact() {
         }
     });
     for entry in [false, true] {
-        let mut builder = SurvData::builder(&stop, &status).stratum(&stratum);
+        let mut builder = SurvData::builder(&stop, &status)
+            .stratum(&stratum)
+            .offset(&offset);
         if entry {
             builder = builder.start(&start);
         }
         let data = builder.build().unwrap();
         let options = CoxOptions {
             ties: Ties::Exact,
-            offset: Some(&offset),
             ..CoxOptions::default()
         };
         assert_same_on_pools(&POOLS, || {

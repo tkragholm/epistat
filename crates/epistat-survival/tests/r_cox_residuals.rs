@@ -316,7 +316,7 @@ fn setup<'a>(reference: &'a Reference, r: &'a RFit) -> Setup<'a> {
 }
 
 impl Setup<'_> {
-    fn opts(&self) -> CoxOptions<'static> {
+    fn opts(&self) -> CoxOptions {
         CoxOptions {
             ties: self.ties,
             ..CoxOptions::default()

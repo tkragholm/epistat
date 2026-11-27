@@ -146,7 +146,7 @@ struct RFit {
     variance: NaMatrix,
     loglik: f64,
     loglik_null: f64,
-    iterations: u32,
+    iterations: usize,
     df: usize,
     linear_predictors: Vec<f64>,
     information_condition: f64,
@@ -257,6 +257,9 @@ fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit) -> SurvData<'a> {
         if r.robust == "cluster" {
             b = b.cluster(&c.cluster);
         }
+        if r.use_offset {
+            b = b.offset(&c.offset);
+        }
         b.build().unwrap()
     } else {
         let mut b = SurvData::interval_builder(&c.lower, &c.upper);
@@ -268,6 +271,9 @@ fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit) -> SurvData<'a> {
         }
         if r.robust == "cluster" {
             b = b.cluster(&c.cluster);
+        }
+        if r.use_offset {
+            b = b.offset(&c.offset);
         }
         b.build().unwrap()
     }
@@ -328,7 +334,6 @@ fn extra_options_match_r() {
             distribution: distribution(&r.distribution),
             df: is_t.then_some(r.parms),
             scale: (r.fixed_scale > 0.0).then_some(r.fixed_scale),
-            offset: r.use_offset.then_some(c.offset.as_slice()),
             robust: r.robust == "robust",
             ..SurvregOptions::default()
         };
@@ -345,6 +350,9 @@ fn extra_options_match_r() {
             }
             if r.robust == "cluster" {
                 b = b.cluster(&c.cluster);
+            }
+            if r.use_offset {
+                b = b.offset(&c.offset);
             }
             let by_status = fit(&b.build().unwrap(), x.as_ref(), &options).unwrap();
             assert_eq!(f, by_status, "{}: the two interval routes differ", r.name);

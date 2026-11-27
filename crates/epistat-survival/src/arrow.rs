@@ -14,7 +14,7 @@
 //!
 //! | column | Arrow type |
 //! |---|---|
-//! | start, stop, weight, lower, upper, time, time2 | `Float64` |
+//! | start, stop, weight, offset, lower, upper, time, time2 | `Float64` |
 //! | status | `Int32` |
 //! | stratum, cluster, id | `UInt32`, or a dictionary with `UInt32` keys |
 //! | initial state | `UInt32` |
@@ -200,6 +200,7 @@ pub struct ArrowSurv<'a> {
     start: Option<&'a dyn Array>,
     n_codes: u32,
     weight: Option<&'a dyn Array>,
+    offset: Option<&'a dyn Array>,
     stratum: Option<&'a dyn Array>,
     cluster: Option<&'a dyn Array>,
     id: Option<&'a dyn Array>,
@@ -215,6 +216,7 @@ pub fn follow_up<'a>(stop: &'a dyn Array, status: &'a dyn Array) -> ArrowSurv<'a
         start: None,
         n_codes: 1,
         weight: None,
+        offset: None,
         stratum: None,
         cluster: None,
         id: None,
@@ -238,6 +240,12 @@ impl<'a> ArrowSurv<'a> {
     /// Case weights, `Float64`.
     pub fn weight(mut self, weight: &'a dyn Array) -> Self {
         self.weight = Some(weight);
+        self
+    }
+
+    /// A term added to the linear predictor of every row, `Float64`.
+    pub fn offset(mut self, offset: &'a dyn Array) -> Self {
+        self.offset = Some(offset);
         self
     }
 
@@ -271,7 +279,7 @@ impl<'a> ArrowSurv<'a> {
     /// # Errors
     ///
     /// An input error for a column of the wrong type or with a null, in the
-    /// order stop, status, start, weight, stratum, cluster, id, istate, and
+    /// order stop, status, start, weight, offset, stratum, cluster, id, istate, and
     /// then for the first rule of [`SurvDataBuilder::build`] that fails.
     pub fn build(self) -> Result<SurvData<'a>> {
         self.builder()?.build()
@@ -292,6 +300,9 @@ impl<'a> ArrowSurv<'a> {
         }
         if let Some(array) = self.weight {
             builder = builder.weight(floats("weight", array)?);
+        }
+        if let Some(array) = self.offset {
+            builder = builder.offset(floats("offset", array)?);
         }
         if let Some(array) = self.stratum {
             builder = builder.stratum(codes("stratum", array)?);
@@ -329,6 +340,7 @@ enum Bounds<'a> {
 pub struct ArrowInterval<'a> {
     bounds: Bounds<'a>,
     weight: Option<&'a dyn Array>,
+    offset: Option<&'a dyn Array>,
     stratum: Option<&'a dyn Array>,
     cluster: Option<&'a dyn Array>,
     id: Option<&'a dyn Array>,
@@ -341,6 +353,7 @@ pub fn interval<'a>(lower: &'a dyn Array, upper: &'a dyn Array) -> ArrowInterval
     ArrowInterval {
         bounds: Bounds::Pair(lower, upper),
         weight: None,
+        offset: None,
         stratum: None,
         cluster: None,
         id: None,
@@ -358,6 +371,7 @@ pub fn interval_status<'a>(
     ArrowInterval {
         bounds: Bounds::Status(time, time2, status),
         weight: None,
+        offset: None,
         stratum: None,
         cluster: None,
         id: None,
@@ -368,6 +382,12 @@ impl<'a> ArrowInterval<'a> {
     /// Case weights, `Float64`.
     pub fn weight(mut self, weight: &'a dyn Array) -> Self {
         self.weight = Some(weight);
+        self
+    }
+
+    /// A term added to the linear predictor of every row, `Float64`.
+    pub fn offset(mut self, offset: &'a dyn Array) -> Self {
+        self.offset = Some(offset);
         self
     }
 
@@ -418,6 +438,9 @@ impl<'a> ArrowInterval<'a> {
         };
         if let Some(array) = self.weight {
             builder = builder.weight(floats("weight", array)?);
+        }
+        if let Some(array) = self.offset {
+            builder = builder.offset(floats("offset", array)?);
         }
         if let Some(array) = self.stratum {
             builder = builder.stratum(codes("stratum", array)?);

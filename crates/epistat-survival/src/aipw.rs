@@ -380,7 +380,7 @@ fn linear_predictor(x: MatRef<'_, f64>, cf: Counterfactual<'_>, beta: &[f64], ro
 fn coefficients(fit: &crate::cox::CoxModelFit, what: &str) -> Result<Vec<f64>> {
     if !fit.converged {
         return Err(Error::NotConverged {
-            iterations: fit.iterations as usize,
+            iterations: fit.iterations,
         });
     }
     fit.coefficients

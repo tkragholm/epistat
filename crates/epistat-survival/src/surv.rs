@@ -1,10 +1,10 @@
 //! The survival data every estimator takes: follow-up intervals with an
-//! event status, and optional weights, strata, clusters, subject ids and
-//! initial states.
+//! event status, and optional weights, offsets, strata, clusters, subject ids
+//! and initial states.
 //!
 //! [`SurvData`] is the Rust counterpart of R's `Surv()` object plus the
 //! columns a model formula adds around it (`strata()`, `cluster()`, `id`,
-//! case weights). It borrows its columns, so building one copies nothing
+//! `offset()`, case weights). It borrows its columns, so building one copies nothing
 //! unless a code column has to be recoded. [`SurvBuf`] owns the same columns
 //! for callers that keep data between calls.
 //!
@@ -44,7 +44,7 @@
 //! - Columns of different lengths, since rows would not line up.
 //! - More rows than `u32::MAX`, since row indices are `u32` downstream.
 //! - `n_codes` of 0, which leaves no code for an event.
-//! - A start, stop or weight that is NaN or infinite. An infinite stop has no
+//! - A start, stop, weight or offset that is NaN or infinite. An infinite stop has no
 //!   use in an estimator, and a missing start is expressed by leaving the
 //!   column out, so neither needs an infinity. Missing values must be dropped
 //!   or resolved by the caller.
@@ -228,6 +228,7 @@ pub enum Outcome<'a> {
 pub struct SurvData<'a> {
     outcome: Outcome<'a>,
     weight: Option<&'a [f64]>,
+    offset: Option<&'a [f64]>,
     stratum: Option<Dense<'a>>,
     cluster: Option<Dense<'a>>,
     id: Option<Dense<'a>>,
@@ -246,6 +247,7 @@ impl<'a> SurvData<'a> {
                 status,
                 n_codes: 1,
                 weight: None,
+                offset: None,
                 stratum: None,
                 cluster: None,
                 id: None,
@@ -296,6 +298,14 @@ impl<'a> SurvData<'a> {
     #[must_use]
     pub fn weight(&self) -> Option<&[f64]> {
         self.weight
+    }
+
+    /// A term added to the linear predictor of every row, or `None` for no
+    /// offset. A fit that has a linear predictor reads it as `offset()` in an
+    /// R formula: it has no coefficient.
+    #[must_use]
+    pub fn offset(&self) -> Option<&[f64]> {
+        self.offset
     }
 
     /// Dense stratum codes `0..n_strata`, in sorted order of the given codes.
@@ -417,6 +427,24 @@ impl<'a> SurvData<'a> {
         Ok(self)
     }
 
+    /// The same data with `offset` in place of its own, for a fit that
+    /// recomputes the offset between fits.
+    ///
+    /// # Errors
+    ///
+    /// An input error when `offset` has another length than the data or a
+    /// value that is not finite.
+    pub(crate) fn with_offset<'b>(&self, offset: &'b [f64]) -> Result<SurvData<'b>>
+    where
+        'a: 'b,
+    {
+        check_lengths(&[("data", self.n_rows), ("offset", offset.len())])?;
+        checks::check_finite(offset, "offset")?;
+        let mut data: SurvData<'b> = self.clone();
+        data.offset = Some(offset);
+        Ok(data)
+    }
+
     /// The tie policy applied so far, [`TimeFix::Exact`] when none.
     ///
     /// A result that depends on how ties were treated can report this, and a
@@ -481,6 +509,7 @@ struct Columns<'a> {
     status: &'a [i32],
     n_codes: u32,
     weight: Option<&'a [f64]>,
+    offset: Option<&'a [f64]>,
     stratum: Option<&'a [u32]>,
     cluster: Option<&'a [u32]>,
     id: Option<&'a [u32]>,
@@ -506,6 +535,7 @@ impl<'a> Columns<'a> {
         let optional = [
             ("start", self.start.map(<[f64]>::len)),
             ("weight", self.weight.map(<[f64]>::len)),
+            ("offset", self.offset.map(<[f64]>::len)),
             ("stratum", self.stratum.map(<[u32]>::len)),
             ("cluster", self.cluster.map(<[u32]>::len)),
             ("id", self.id.map(<[u32]>::len)),
@@ -526,6 +556,9 @@ impl<'a> Columns<'a> {
         if let Some(weight) = self.weight {
             checks::check_finite(weight, "weight")?;
             checks::check_weights(weight)?;
+        }
+        if let Some(offset) = self.offset {
+            checks::check_finite(offset, "offset")?;
         }
         checks::check_status(self.status, self.n_codes)?;
         if let Some(istate) = self.istate {
@@ -584,6 +617,13 @@ impl<'a> SurvDataBuilder<'a> {
         self
     }
 
+    /// A term added to the linear predictor of every row, as `offset()` in an
+    /// R formula. Leave it out for no offset.
+    pub fn offset(mut self, offset: &'a [f64]) -> Self {
+        self.columns.offset = Some(offset);
+        self
+    }
+
     /// Stratum codes, any `u32` values.
     pub fn stratum(mut self, stratum: &'a [u32]) -> Self {
         self.columns.stratum = Some(stratum);
@@ -626,6 +666,7 @@ impl<'a> SurvDataBuilder<'a> {
                 timefix: TimeFix::Exact,
             }),
             weight: c.weight,
+            offset: c.offset,
             stratum: checked.stratum,
             cluster: checked.cluster,
             id: checked.id,
@@ -648,6 +689,7 @@ pub struct SurvBuf {
     status: Vec<i32>,
     n_codes: u32,
     weight: Option<Vec<f64>>,
+    offset: Option<Vec<f64>>,
     stratum: Option<OwnedDense>,
     cluster: Option<OwnedDense>,
     id: Option<OwnedDense>,
@@ -664,6 +706,7 @@ impl SurvBuf {
             status,
             n_codes: 1,
             weight: None,
+            offset: None,
             stratum: None,
             cluster: None,
             id: None,
@@ -683,6 +726,7 @@ impl SurvBuf {
                 timefix: TimeFix::Exact,
             }),
             weight: self.weight.as_deref(),
+            offset: self.offset.as_deref(),
             stratum: borrow_dense(self.stratum.as_ref()),
             cluster: borrow_dense(self.cluster.as_ref()),
             id: borrow_dense(self.id.as_ref()),
@@ -720,6 +764,7 @@ pub struct SurvBufBuilder {
     status: Vec<i32>,
     n_codes: u32,
     weight: Option<Vec<f64>>,
+    offset: Option<Vec<f64>>,
     stratum: Option<Vec<u32>>,
     cluster: Option<Vec<u32>>,
     id: Option<Vec<u32>>,
@@ -742,6 +787,13 @@ impl SurvBufBuilder {
     /// Case weights. Leave them out for weight 1 on every row.
     pub fn weight(mut self, weight: Vec<f64>) -> Self {
         self.weight = Some(weight);
+        self
+    }
+
+    /// A term added to the linear predictor of every row, as `offset()` in an
+    /// R formula. Leave it out for no offset.
+    pub fn offset(mut self, offset: Vec<f64>) -> Self {
+        self.offset = Some(offset);
         self
     }
 
@@ -785,6 +837,7 @@ impl SurvBufBuilder {
             status: &self.status,
             n_codes: self.n_codes,
             weight: self.weight.as_deref(),
+            offset: self.offset.as_deref(),
             stratum: self.stratum.as_deref(),
             cluster: self.cluster.as_deref(),
             id: self.id.as_deref(),
@@ -819,6 +872,7 @@ impl SurvBufBuilder {
             status: self.status,
             n_codes: self.n_codes,
             weight: self.weight,
+            offset: self.offset,
             istate: self.istate,
             n_used,
         })

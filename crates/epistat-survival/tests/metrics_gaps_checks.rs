@@ -10,11 +10,9 @@ use epistat_survival::metrics::recalibration::{
     smoothed_curve,
 };
 use epistat_survival::metrics::rttright::{self, RttrightOptions};
-use epistat_survival::metrics::score::{
-    Censoring, CoxCensoring, ScoreOptions, auc, brier, null_brier,
-};
+use epistat_survival::metrics::score::{Censoring, CoxCensoring, ScoreOptions, auc, brier};
 
-fn make<'a>(x: &'a Mat<f64>, options: CoxOptions<'a>) -> ScoreOptions<'a> {
+fn make(x: &Mat<f64>, options: CoxOptions) -> ScoreOptions<'_> {
     ScoreOptions {
         censoring: Censoring::Cox(CoxCensoring {
             x: x.as_ref(),
@@ -71,13 +69,6 @@ fn the_cox_censoring_model_refuses_what_it_cannot_use() {
     };
     let e = brier(&data, risk.as_ref(), &[4.0], &make(&col, exact)).unwrap_err();
     assert!(e.to_string().contains("exact"), "{e}");
-    let offset = vec![0.0; n];
-    let with_offset = CoxOptions {
-        offset: Some(&offset),
-        ..CoxOptions::default()
-    };
-    let e = null_brier(&data, &[4.0], &make(&col, with_offset)).unwrap_err();
-    assert!(e.to_string().contains("offset"), "{e}");
     // No covariates is the Breslow estimate of the censoring hazard with no
     // coefficients: it works.
     let none = Mat::<f64>::zeros(n, 0);

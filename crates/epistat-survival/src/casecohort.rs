@@ -148,9 +148,9 @@ const OUT_OF_RISK_SETS: f64 = -100.0;
 /// Most trial points of the fits, as `cch` sets them: `coxph`'s 20 for the
 /// first fit and the rows of Self-Prentice and Lin-Ying, 35 for the variance
 /// fit of Prentice and 25 for Borgan's methods.
-const ITER_DEFAULT: u32 = 20;
-const ITER_PRENTICE_VARIANCE: u32 = 35;
-const ITER_BORGAN: u32 = 25;
+const ITER_DEFAULT: usize = 20;
+const ITER_PRENTICE_VARIANCE: usize = 35;
+const ITER_BORGAN: usize = 25;
 
 /// The method of the analysis, named as `method` of `cch`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -194,7 +194,7 @@ pub struct CaseCohortOptions<'a> {
     pub cause: Option<u32>,
     /// The relative change of the log partial likelihood at which the fits
     /// stop, `eps` of `coxph.control`.
-    pub eps: f64,
+    pub tolerance: f64,
 }
 
 impl<'a> CaseCohortOptions<'a> {
@@ -208,7 +208,7 @@ impl<'a> CaseCohortOptions<'a> {
             robust: false,
             ties: Ties::Efron,
             cause: None,
-            eps: 1e-9,
+            tolerance: 1e-9,
         }
     }
 }
@@ -246,7 +246,7 @@ pub struct CaseCohortFit {
     /// The number of cases outside the subcohort.
     pub n_cases_outside: usize,
     /// The trial points of the fit that gives the coefficients.
-    pub iterations: u32,
+    pub iterations: usize,
     /// Whether every fit stopped on the convergence limit.
     pub converged: bool,
 }
@@ -265,7 +265,7 @@ struct Stack {
 #[derive(Clone, Copy)]
 struct Control {
     ties: Ties,
-    eps: f64,
+    tolerance: f64,
 }
 
 impl Stack {
@@ -274,31 +274,33 @@ impl Stack {
         if let Some(weight) = &self.weight {
             builder = builder.weight(weight);
         }
+        if let Some(offset) = &self.offset {
+            builder = builder.offset(offset);
+        }
         builder.build()
     }
 
-    fn options<'a>(
-        &'a self,
-        control: Control,
-        init: Option<&'a [f64]>,
-        iter_max: u32,
-    ) -> CoxOptions<'a> {
+    fn options(control: Control, start: Option<&[f64]>, max_iterations: usize) -> CoxOptions {
         CoxOptions {
             ties: control.ties,
             timefix: TimeFix::Exact,
             cause: None,
-            offset: self.offset.as_deref(),
-            init,
-            iter_max,
-            eps: control.eps,
+            start: start.map(<[f64]>::to_vec),
+            max_iterations,
+            tolerance: control.tolerance,
         }
     }
 
-    fn fit(&self, control: Control, init: Option<&[f64]>, iter_max: u32) -> Result<CoxModelFit> {
+    fn fit(
+        &self,
+        control: Control,
+        start: Option<&[f64]>,
+        max_iterations: usize,
+    ) -> Result<CoxModelFit> {
         cox_fit(
             &self.data()?,
             self.x.as_ref(),
-            &self.options(control, init, iter_max),
+            &Self::options(control, start, max_iterations),
         )
     }
 
@@ -310,7 +312,7 @@ impl Stack {
         model: &CoxModelFit,
         kind: ResidualKind,
     ) -> Result<Vec<Option<Vec<f64>>>> {
-        let mut options = ResidualOptions::new(kind, self.options(control, None, ITER_DEFAULT));
+        let mut options = ResidualOptions::new(kind, Self::options(control, None, ITER_DEFAULT));
         options.weighted = Some(false);
         options.collapse = Collapse::None;
         Ok(residuals(&self.data()?, self.x.as_ref(), model, &options)?.columns)
@@ -475,7 +477,7 @@ struct Pieces {
     phase_two: Vec<Option<f64>>,
     covariance: Vec<Option<f64>>,
     optimal: Option<Vec<Option<f64>>>,
-    iterations: u32,
+    iterations: usize,
     converged: bool,
 }
 
@@ -498,7 +500,7 @@ fn pieces_from(
     naive: &[f64],
     phase_two: &[f64],
     optimal: Option<Vec<Option<f64>>>,
-    iterations: u32,
+    iterations: usize,
     converged: bool,
 ) -> Pieces {
     let p = coefficients.len();
@@ -591,7 +593,7 @@ pub fn fit(
     };
     let control = Control {
         ties: opts.ties,
-        eps: opts.eps,
+        tolerance: opts.tolerance,
     };
     let n_cases = sample.event.iter().filter(|&&e| e).count();
     let n_subcohort = subcohort.iter().filter(|&&s| s).count();
@@ -678,8 +680,8 @@ fn check_inputs(
     if opts.cohort_size.iter().any(|&n| n <= 0.0) {
         return Err(Error::invalid("cohort_size: every value must be positive"));
     }
-    if !(opts.eps.is_finite() && opts.eps > 0.0) {
-        return Err(Error::invalid("eps: must be finite and positive"));
+    if !(opts.tolerance.is_finite() && opts.tolerance > 0.0) {
+        return Err(Error::invalid("tolerance: must be finite and positive"));
     }
     match (opts.method.stratified(), stratum) {
         (false, Some(_)) => {

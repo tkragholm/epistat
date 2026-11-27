@@ -234,7 +234,7 @@ pub struct FittedModel<'a> {
     /// The result of [`fit`](super::fit).
     pub fit: &'a CoxModelFit,
     /// The options of the fit.
-    pub options: &'a CoxOptions<'a>,
+    pub options: &'a CoxOptions,
 }
 
 /// The point the covariates are measured from. See the module documentation.
@@ -661,9 +661,6 @@ impl<'a> Model<'a> {
             return Err(Error::invalid("fit: the covariance is not p by p"));
         }
         let variance: Vec<f64> = chosen.iter().map(|v| v.unwrap_or(0.0)).collect();
-        if let Some(offset) = m.options.offset {
-            check_lengths(&[("data", rows), ("offset", offset.len())])?;
-        }
         let data = m.data.clone().with_timefix(m.options.timefix)?;
         let surv = data.followup()?;
         let code = match (m.options.cause, surv.n_codes()) {
@@ -698,7 +695,7 @@ impl<'a> Model<'a> {
             stratum,
             n_strata,
             has_start,
-            offset: m.options.offset,
+            offset: m.data.offset(),
             ties: m.options.ties,
         })
     }
@@ -1756,7 +1753,7 @@ pub fn predict_expected_martingale(model: &FittedModel<'_>) -> Result<Vec<f64>> 
         model.data,
         model.x,
         model.fit,
-        &ResidualOptions::new(ResidualKind::Martingale, *model.options),
+        &ResidualOptions::new(ResidualKind::Martingale, model.options.clone()),
     )?;
     let data = model.data.clone().with_timefix(model.options.timefix)?;
     let code = match (model.options.cause, data.followup()?.n_codes()) {

@@ -135,6 +135,9 @@ fn null_cox_matches_r() {
         if r.cluster {
             builder = builder.cluster(&r.id);
         }
+        if r.offset {
+            builder = builder.offset(&r.offset_values);
+        }
         let data = builder.build().unwrap();
         let opts = CoxOptions {
             ties: if r.ties == "efron" {
@@ -142,7 +145,6 @@ fn null_cox_matches_r() {
             } else {
                 Ties::Breslow
             },
-            offset: r.offset.then_some(r.offset_values.as_slice()),
             ..CoxOptions::default()
         };
         let model = fit(&data, x.as_ref(), &opts).unwrap();

@@ -298,7 +298,7 @@ pub enum MsBaseline<'a> {
 }
 
 /// What [`fit`] takes besides the data and the covariates.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MsOptions<'a> {
     /// How tied events enter the partial likelihood, as in [`CoxOptions`].
     /// `Efron`, as in `coxph`.
@@ -318,17 +318,14 @@ pub struct MsOptions<'a> {
     /// cluster column of the data) as the cluster. True, as `coxph` does with
     /// an `id`.
     pub robust: bool,
-    /// An offset, one value per row of the data, added to the linear predictor
-    /// of every transition.
-    pub offset: Option<&'a [f64]>,
     /// The starting values of the coefficients, one per term, as in
     /// [`CoxOptions`].
-    pub init: Option<&'a [f64]>,
+    pub start: Option<Vec<f64>>,
     /// The largest number of trial points, as in [`CoxOptions`].
-    pub iter_max: u32,
+    pub max_iterations: usize,
     /// The relative change of the log partial likelihood at which the iteration
     /// stops, as in [`CoxOptions`].
-    pub eps: f64,
+    pub tolerance: f64,
 }
 
 impl Default for MsOptions<'_> {
@@ -341,10 +338,9 @@ impl Default for MsOptions<'_> {
             terms: MsTerms::Separate,
             baseline: MsBaseline::Separate,
             robust: true,
-            offset: None,
-            init: None,
-            iter_max: cox.iter_max,
-            eps: cox.eps,
+            start: None,
+            max_iterations: cox.max_iterations,
+            tolerance: cox.tolerance,
         }
     }
 }
@@ -373,7 +369,6 @@ pub struct MsModel {
     stacked: SurvBuf,
     design: Mat<f64>,
     n_covariates: usize,
-    offset: Option<Vec<f64>>,
     ties: Ties,
     last_time: f64,
 }
@@ -443,7 +438,7 @@ fn resolve<'a>(data: &SurvData<'a>, timefix: TimeFix) -> Result<(SurvData<'a>, V
 /// `data` or a value that is not finite, when a transition is out of range, a
 /// duplicate or leaves and enters one state, when a term names a column or a
 /// transition that does not exist or two terms give one covariate in one
-/// transition two coefficients, when `baseline` or `offset` or `init` have the
+/// transition two coefficients, when `baseline` or `start` have the
 /// wrong length, and as [`crate::cox::fit`] for its options.
 pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &MsOptions<'_>) -> Result<MsModel> {
     stack::fit(data, x, opts)

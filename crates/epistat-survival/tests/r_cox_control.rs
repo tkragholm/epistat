@@ -45,7 +45,7 @@ struct RFit {
     use_cluster: bool,
     offset: Vec<f64>,
     init: Vec<f64>,
-    iter_max: u32,
+    iter_max: usize,
     eps: f64,
     #[serde(deserialize_with = "na_f64_vec")]
     coefficients: Vec<f64>,
@@ -56,7 +56,7 @@ struct RFit {
     vcov: Vec<Vec<Option<f64>>>,
     loglik_init: f64,
     loglik: f64,
-    iterations: u32,
+    iterations: usize,
     rank: usize,
     ran_out: bool,
     monotone_columns: Vec<usize>,
@@ -147,6 +147,9 @@ fn fits_match_r() {
         if r.use_cluster {
             builder = builder.cluster(&reference.id);
         }
+        if !r.offset.is_empty() {
+            builder = builder.offset(&r.offset);
+        }
         let data = builder.build().unwrap();
         let opts = CoxOptions {
             ties: if r.ties == "efron" {
@@ -154,10 +157,9 @@ fn fits_match_r() {
             } else {
                 Ties::Breslow
             },
-            offset: (!r.offset.is_empty()).then_some(r.offset.as_slice()),
-            init: (!r.init.is_empty()).then_some(r.init.as_slice()),
-            iter_max: r.iter_max,
-            eps: r.eps,
+            start: (!r.init.is_empty()).then(|| r.init.clone()),
+            max_iterations: r.iter_max,
+            tolerance: r.eps,
             ..CoxOptions::default()
         };
         let model: CoxModelFit = fit(&data, x.as_ref(), &opts).unwrap();

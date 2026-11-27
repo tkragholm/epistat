@@ -203,8 +203,6 @@ pub struct FlexParOptions<'a> {
     pub knots: Option<&'a [f64]>,
     /// The time-varying effects.
     pub tvc: &'a [TimeVarying],
-    /// A term added to the linear predictor of each row, such as a log offset.
-    pub offset: Option<&'a [f64]>,
     /// The expected hazard of the reference population at the exit time of
     /// each row, for an excess hazard model (Nelson et al. 2007), or `None`
     /// for an ordinary model. Needs [`Scale::Hazard`]; the model is then for
@@ -224,7 +222,6 @@ impl Default for FlexParOptions<'_> {
             df: 3,
             knots: None,
             tvc: &[],
-            offset: None,
             bhazard: None,
             tolerance: 1e-12,
             max_iterations: 50,
@@ -287,7 +284,7 @@ pub struct FlexParFit {
     /// The scale of the model.
     pub scale: Scale,
     /// The Newton iterations used, with those after a BFGS run.
-    pub iterations: u32,
+    pub iterations: usize,
     /// Whether the Newton decrement fell below the tolerance.
     pub converged: bool,
     /// Not converged with a coefficient above 30 in absolute value, which is
@@ -359,13 +356,6 @@ fn check_inputs(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FlexParOptions<'
     if opts.tolerance.is_nan() || opts.tolerance <= 0.0 || opts.max_iterations == 0 {
         return Err(Error::invalid(
             "tolerance and max_iterations must be positive",
-        ));
-    }
-    if let Some(o) = opts.offset
-        && (o.len() != n || o.iter().any(|v| !v.is_finite()))
-    {
-        return Err(Error::invalid(
-            "the offset must be finite and have one value per row",
         ));
     }
     if let Some(h) = opts.bhazard {
@@ -524,7 +514,7 @@ pub fn fit(
         start,
         event,
         weight,
-        offset: opts.offset,
+        offset: data.offset(),
         bhazard: opts.bhazard,
     };
     let theta0 = start::starting_values(&design, opts.scale, stop, start, event, weight);
@@ -532,7 +522,7 @@ pub fn fit(
         Error::undefined("the model is undefined at the starting values: the derivative of the spline is not positive at every event")
     })?;
 
-    let null_log_likelihood = if opts.offset.is_some() {
+    let null_log_likelihood = if data.offset().is_some() {
         None
     } else if design.kept.is_empty() && design.tvc.is_empty() {
         Some(best.totals.ll)

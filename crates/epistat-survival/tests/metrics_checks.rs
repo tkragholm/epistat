@@ -203,7 +203,10 @@ fn score_refuses_what_it_cannot_score() {
         &data,
         m.as_ref(),
         &[2.0, 5.0],
-        &ScoreOptions { cause: 2, ..opts },
+        &ScoreOptions {
+            cause: 2,
+            ..opts.clone()
+        },
     )
     .unwrap_err();
     assert!(e.to_string().contains("cause 2 is outside 1..=1"));
@@ -214,7 +217,7 @@ fn score_refuses_what_it_cannot_score() {
         .unwrap();
     let free = ScoreOptions {
         predicted: Predicted::EventFreeProbability,
-        ..opts
+        ..opts.clone()
     };
     let e = score_brier(&competing, m.as_ref(), &[2.0, 5.0], &free).unwrap_err();
     assert!(
@@ -229,7 +232,7 @@ fn score_refuses_what_it_cannot_score() {
             before_own_time: &own,
             at_times: at.as_ref(),
         }),
-        ..opts
+        ..opts.clone()
     };
     let e = score_brier(&data, m.as_ref(), &[2.0, 5.0], &supplied).unwrap_err();
     assert!(

@@ -145,12 +145,11 @@ pub struct TtColumn<'a> {
 }
 
 /// What [`fit_tt`] takes besides the data, the design and the transforms.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct TtOptions<'a> {
+#[derive(Debug, Clone, Default)]
+pub struct TtOptions {
     /// The options of the fit of the expansion. `cox.timefix` is applied to
     /// the data before the expansion, and the expansion is not fixed again.
-    /// `cox.offset` has one value per row of the data.
-    pub cox: CoxOptions<'a>,
+    pub cox: CoxOptions,
     /// The largest number of rows of the expansion to build. `None` sets no
     /// limit but the `u32` row count and the memory of the machine, which
     /// the function cannot check. There is no principled default.
@@ -200,7 +199,7 @@ pub fn fit_tt(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
     transforms: &[TtColumn<'_>],
-    opts: &TtOptions<'_>,
+    opts: &TtOptions,
 ) -> Result<CoxTtFit> {
     check_lengths(&[("data", data.n_rows()), ("x", x.nrows())])?;
     if x.ncols() == 0 {
@@ -237,10 +236,6 @@ pub fn fit_tt(
             )));
         }
     }
-    if let Some(offset) = opts.cox.offset {
-        check_lengths(&[("data", data.n_rows()), ("offset", offset.len())])?;
-    }
-
     let data = data.clone().with_timefix(opts.cox.timefix)?;
     let surv = data.followup()?;
     let code = match (opts.cox.cause, surv.n_codes()) {
@@ -380,17 +375,15 @@ pub fn fit_tt(
     if let Some(c) = data.cluster() {
         builder = builder.cluster(source.iter().map(|&r| c[r as usize]).collect());
     }
+    if let Some(o) = data.offset() {
+        builder = builder.offset(source.iter().map(|&r| o[r as usize]).collect());
+    }
     let expanded = builder.build()?;
-    let offset: Option<Vec<f64>> = opts
-        .cox
-        .offset
-        .map(|o| source.iter().map(|&r| o[r as usize]).collect());
     drop(source);
     let options = CoxOptions {
         timefix: TimeFix::Exact,
         cause: None,
-        offset: offset.as_deref(),
-        ..opts.cox
+        ..opts.cox.clone()
     };
     let mut result = fit(&expanded.as_data(), design.as_ref(), &options)?;
     result.n_rows = data.n_rows();

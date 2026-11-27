@@ -82,8 +82,8 @@ fn the_attributable_fraction_function_matches_afcoxph() {
         let x0 = matrix(&c.design0);
         let options = CoxOptions {
             ties: Ties::Breslow,
-            eps: 1e-12,
-            iter_max: 100,
+            tolerance: 1e-12,
+            max_iterations: 100,
             ..CoxOptions::default()
         };
         let model = fit(&data, x.as_ref(), &options).unwrap();

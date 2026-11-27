@@ -55,12 +55,12 @@ fn survreg_extra_options() {
         .weight(&weight)
         .stratum(&stratum)
         .cluster(&cluster)
+        .offset(&offset)
         .build()
         .unwrap();
     let options = SurvregOptions {
         distribution: Distribution::StudentT,
         df: Some(5.0),
-        offset: Some(&offset),
         ..SurvregOptions::default()
     };
     assert_same_on_pools(&POOLS, || {
@@ -80,7 +80,11 @@ fn survreg_extra_options() {
                 .iter()
                 .map(|v| v.unwrap_or(f64::NAN)),
         );
-        out.extend([f.loglik, f.loglik_null, f64::from(f.iterations)]);
+        out.extend([
+            f.loglik,
+            f.loglik_null,
+            f64::from(u32::try_from(f.iterations).unwrap()),
+        ]);
         out.extend(&f.linear_predictors);
         out.extend(&f.column_means);
         for kind in [

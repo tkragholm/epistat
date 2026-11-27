@@ -78,7 +78,7 @@ fn case_cohort_methods() {
             if let Some(opt) = &model.optimal_allocation {
                 out.extend(opt.iter().copied().map(absent));
             }
-            out.push(f64::from(model.iterations));
+            out.push(f64::from(u32::try_from(model.iterations).unwrap()));
             out
         });
     }

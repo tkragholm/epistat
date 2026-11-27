@@ -63,7 +63,7 @@ fn influence_with_tied_censoring_times_against_numerical_derivatives() {
             x: x.as_ref(),
             options: CoxOptions {
                 ties: Ties::Breslow,
-                eps: 1e-14,
+                tolerance: 1e-14,
                 ..CoxOptions::default()
             },
         }),

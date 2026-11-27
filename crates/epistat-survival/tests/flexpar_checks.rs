@@ -260,29 +260,20 @@ fn an_offset_moves_the_intercept_and_leaves_no_null_likelihood() {
     assert!(base.null_log_likelihood.unwrap() < base.log_likelihood);
     // an offset of 0.7 on every row shifts the intercept by -0.7
     let off = vec![0.7; 250];
-    let shifted = fit(
-        &d,
-        s.x.as_ref(),
-        &FlexParOptions {
-            offset: Some(&off),
-            ..opts
-        },
-    )
-    .unwrap();
+    let shifted_data = SurvData::builder(&s.time, &s.status)
+        .offset(&off)
+        .build()
+        .unwrap();
+    let shifted = fit(&shifted_data, s.x.as_ref(), &opts).unwrap();
     assert!(shifted.null_log_likelihood.is_none());
     assert!((shifted.log_likelihood - base.log_likelihood).abs() < 1e-8);
     assert!((shifted.gamma[0] - (base.gamma[0] - 0.7)).abs() < 1e-6);
     let short = vec![0.0; 3];
     assert!(
-        fit(
-            &d,
-            s.x.as_ref(),
-            &FlexParOptions {
-                offset: Some(&short),
-                ..opts
-            }
-        )
-        .is_err()
+        SurvData::builder(&s.time, &s.status)
+            .offset(&short)
+            .build()
+            .is_err()
     );
 }
 

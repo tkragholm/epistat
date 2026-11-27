@@ -45,7 +45,7 @@ use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
 /// A Cox model for the censoring times, fitted by [`fit`](crate::cox::fit).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CoxCensoring<'a> {
     /// The covariates of the censoring model, one row per row of the data in
     /// the data's order. No intercept column.
@@ -54,10 +54,10 @@ pub struct CoxCensoring<'a> {
     /// `rms::cph`, which has `Efron` ties and stops at a relative change of
     /// the log partial likelihood below `1e-6`: that is `eps` here to reproduce
     /// its coefficients. The default is that of [`CoxOptions`]. The rule for
-    /// near-ties, `offset`, `cause` and `init` are not used: the times are those
+    /// near-ties, `cause` and `start` are not used: the times are those
     /// of the metric, already ordered by its own rule, and the status is
     /// censored or not.
-    pub options: CoxOptions<'a>,
+    pub options: CoxOptions,
 }
 
 /// The fitted censoring model at the used rows, in sorted order.
@@ -99,9 +99,6 @@ impl CoxCens {
                  are not available",
             ));
         }
-        if spec.options.offset.is_some() {
-            return Err(Error::invalid("the censoring model cannot have an offset"));
-        }
         let status: Vec<i32> = sorted
             .kind
             .iter()
@@ -112,14 +109,13 @@ impl CoxCens {
         let options = CoxOptions {
             timefix: TimeFix::Exact,
             cause: None,
-            offset: None,
-            init: None,
-            ..spec.options
+            start: None,
+            ..spec.options.clone()
         };
         let model = fit(&data, x.as_ref(), &options)?;
         if !model.converged {
             return Err(Error::NotConverged {
-                iterations: model.iterations as usize,
+                iterations: model.iterations,
             });
         }
         let beta: Vec<f64> = model
@@ -289,7 +285,7 @@ fn influence_of_coefficients(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
     model: &CoxModelFit,
-    options: &CoxOptions<'_>,
+    options: &CoxOptions,
     p: usize,
     n: usize,
 ) -> Result<Vec<f64>> {
@@ -298,7 +294,7 @@ fn influence_of_coefficients(
     }
     let breslow = CoxOptions {
         ties: Ties::Breslow,
-        ..*options
+        ..options.clone()
     };
     let scores = score_residuals(data, x, &model.coefficients, &breslow)?;
     let v: Vec<f64> = model

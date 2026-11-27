@@ -86,8 +86,8 @@ fn case_weights_act_as_repeated_rows() {
         .collect();
     let options = CoxOptions {
         ties: Ties::Breslow,
-        eps: 1e-14,
-        iter_max: 100,
+        tolerance: 1e-14,
+        max_iterations: 100,
         ..CoxOptions::default()
     };
     let weighted = SurvData::builder(&stop, &status)

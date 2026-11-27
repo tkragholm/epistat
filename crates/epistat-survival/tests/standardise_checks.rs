@@ -82,12 +82,12 @@ fn sim(n: usize, seed: u64, tied: bool, causes: i32) -> Sim {
 const SET0: [(usize, f64); 1] = [(0, 0.0)];
 const SET1: [(usize, f64); 1] = [(0, 1.0)];
 
-fn precise(cause: Option<u32>) -> CoxOptions<'static> {
+fn precise(cause: Option<u32>) -> CoxOptions {
     CoxOptions {
         ties: Ties::Breslow,
         cause,
-        eps: 1e-14,
-        iter_max: 100,
+        tolerance: 1e-14,
+        max_iterations: 100,
         ..CoxOptions::default()
     }
 }

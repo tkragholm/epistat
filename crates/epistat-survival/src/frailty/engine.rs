@@ -823,7 +823,7 @@ impl Layout {
 pub(super) struct Inner {
     pub(super) state: State,
     pub(super) eval: Eval,
-    pub(super) iterations: u32,
+    pub(super) iterations: usize,
     pub(super) converged: bool,
 }
 
@@ -865,7 +865,7 @@ impl Layout {
         start: &State,
         penalty: Penalty,
         tolerance: f64,
-        max_iterations: u32,
+        max_iterations: usize,
     ) -> Result<Inner, Failure> {
         let frail = !matches!(penalty, Penalty::None);
         let mut state = start.clone();

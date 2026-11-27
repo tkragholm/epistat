@@ -4,7 +4,7 @@
 use epistat_linalg::{Mat, MatRef};
 
 use super::{MsBaseline, MsModel, MsOptions, MsTerm, MsTerms, MsTransition, resolve};
-use crate::check::{check_lengths, check_row_count, refuse_non_finite, refuse_non_finite_matrix};
+use crate::check::{check_lengths, check_row_count, refuse_non_finite_matrix};
 use crate::cox::{self, CoxOptions};
 use crate::error::{Error, Result};
 use crate::surv::{SurvBuf, SurvData};
@@ -151,10 +151,6 @@ pub(super) fn fit(
     let rows = data.n_rows();
     check_lengths(&[("data", rows), ("x", x.nrows())])?;
     check_row_count(rows)?;
-    if let Some(offset) = opts.offset {
-        check_lengths(&[("data", rows), ("offset", offset.len())])?;
-        refuse_non_finite(offset, "offset")?;
-    }
     refuse_non_finite_matrix(x, "x")?;
 
     let (data, istate) = resolve(data, opts.timefix)?;
@@ -180,8 +176,8 @@ pub(super) fn fit(
     // Without a term the design has no column and the fit is the baseline
     // hazards only.
     let p = terms.len();
-    if p == 0 && opts.init.is_some() {
-        return Err(Error::invalid("init: the model has no coefficient"));
+    if p == 0 && opts.start.is_some() {
+        return Err(Error::invalid("start: the model has no coefficient"));
     }
     let mut design = Mat::<f64>::zeros(n_stacked, p);
     let mut stop = Vec::with_capacity(n_stacked);
@@ -189,7 +185,7 @@ pub(super) fn fit(
     let mut event = Vec::with_capacity(n_stacked);
     let mut weight = data.weight().map(|_| Vec::with_capacity(n_stacked));
     let mut stratum = Vec::with_capacity(n_stacked);
-    let mut offset = opts.offset.map(|_| Vec::with_capacity(n_stacked));
+    let mut offset = data.offset().map(|_| Vec::with_capacity(n_stacked));
     let clusters = data
         .cluster()
         .or_else(|| opts.robust.then(|| data.id()).flatten());
@@ -219,7 +215,7 @@ pub(super) fn fit(
                 weight.push(w[i]);
             }
             stratum.push(group);
-            if let (Some(offset), Some(o)) = (offset.as_mut(), opts.offset) {
+            if let (Some(offset), Some(o)) = (offset.as_mut(), data.offset()) {
                 offset.push(o[i]);
             }
             if let (Some(cluster), Some(c)) = (cluster.as_mut(), clusters) {
@@ -242,16 +238,18 @@ pub(super) fn fit(
     if let Some(cluster) = cluster {
         builder = builder.cluster(cluster);
     }
+    if let Some(offset) = offset {
+        builder = builder.offset(offset);
+    }
     let stacked = builder.build()?;
     let cox_options = CoxOptions {
         ties: opts.ties,
         // The tie rule has been applied to the rows before they were stacked.
         timefix: TimeFix::Exact,
         cause: None,
-        offset: offset.as_deref(),
-        init: opts.init,
-        iter_max: opts.iter_max,
-        eps: opts.eps,
+        start: opts.start.clone(),
+        max_iterations: opts.max_iterations,
+        tolerance: opts.tolerance,
     };
     let mut fit = cox::fit(&stacked.as_data(), design.as_ref(), &cox_options)?;
     fit.n_rows = data.n_rows();
@@ -277,7 +275,6 @@ pub(super) fn fit(
         stacked,
         design,
         n_covariates: x.ncols(),
-        offset,
         ties: opts.ties,
         last_time,
     })

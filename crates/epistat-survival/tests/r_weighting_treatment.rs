@@ -278,8 +278,8 @@ fn variances_match_the_jackknife_of_refits() {
             }
         });
         let opts = CoxOptions {
-            eps: FIT_TOLERANCE,
-            iter_max: 100,
+            tolerance: FIT_TOLERANCE,
+            max_iterations: 100,
             ..CoxOptions::default()
         };
         let estimated = Weights {

@@ -102,7 +102,7 @@ struct RCase {
     coefficients: Option<Vec<f64>>,
     vcov: Option<Vec<Vec<f64>>>,
     loglik: Option<f64>,
-    iterations: Option<u32>,
+    iterations: Option<usize>,
     information_condition: Option<f64>,
     n_events: Option<usize>,
     profiles: Vec<RProfile>,
@@ -254,8 +254,8 @@ fn build(reference: &Reference, case: &RCase) -> Built {
             _ => MsTerms::Separate,
         },
         baseline: MsBaseline::Separate,
-        init: (!init.is_empty()).then_some(&init),
-        iter_max: 0,
+        start: (!init.is_empty()).then(|| init.clone()),
+        max_iterations: 0,
         ..MsOptions::default()
     };
     let model = fit(&data, x.as_ref(), &opts).unwrap();
@@ -596,8 +596,8 @@ fn weighted_hazards_match_survfit() {
             x.as_ref(),
             &MsOptions {
                 ties: ties_of(&w.ties),
-                init: Some(&init),
-                iter_max: 0,
+                start: Some(init.clone()),
+                max_iterations: 0,
                 robust: false,
                 ..MsOptions::default()
             },

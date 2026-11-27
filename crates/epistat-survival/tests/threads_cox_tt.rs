@@ -84,7 +84,7 @@ fn fit_tt_is_the_same_on_every_pool() {
             out.extend(f.robust_se.unwrap().iter().map(|c| c.unwrap()));
             out.extend([
                 f.log_partial_likelihood.unwrap(),
-                f64::from(f.iterations),
+                f64::from(u32::try_from(f.iterations).unwrap()),
                 r.n_expanded as f64,
             ]);
             out

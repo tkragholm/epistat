@@ -345,7 +345,7 @@ pub fn from_fit(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
     fitted: &CoxModelFit,
-    cox: &CoxOptions<'_>,
+    cox: &CoxOptions,
     opts: &FitOptions,
 ) -> Result<Royston> {
     check_lengths(&[("data", data.n_rows()), ("x", x.nrows())])?;

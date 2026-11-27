@@ -311,8 +311,8 @@ fn run(reference: &Reference, c: &Case) -> Output {
             _ => c.l[i],
         });
         let opts = CoxOptions {
-            eps: FIT_TOLERANCE,
-            iter_max: 100,
+            tolerance: FIT_TOLERANCE,
+            max_iterations: 100,
             ..CoxOptions::default()
         };
         let fit = wcox::fit(&data, x.as_ref(), &opts, &estimated).unwrap();

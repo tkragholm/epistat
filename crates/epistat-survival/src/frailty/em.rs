@@ -23,7 +23,7 @@ pub(super) struct EmInput<'a> {
     /// Dense cluster index of each row of the data, `u32::MAX` for a row of
     /// weight zero.
     pub(super) cluster: &'a [u32],
-    pub(super) max_iterations: u32,
+    pub(super) max_iterations: usize,
     pub(super) tolerance: f64,
 }
 
@@ -32,7 +32,7 @@ pub(super) struct EmFit {
     pub(super) state: State,
     /// The marginal log likelihood at the solution.
     pub(super) marginal: f64,
-    pub(super) iterations: u32,
+    pub(super) iterations: usize,
     pub(super) converged: bool,
 }
 
@@ -88,12 +88,12 @@ pub(super) fn fit_em(
             ties: Ties::Breslow,
             timefix: TimeFix::Exact,
             cause: input.cause,
-            offset: Some(&offset),
-            init: Some(&state.beta),
-            iter_max: 100,
-            eps: 1e-14,
+            start: Some(state.beta.clone()),
+            max_iterations: 100,
+            tolerance: 1e-14,
         };
-        let fit = crate::cox::fit(input.data, input.x, &options)?;
+        let shifted = input.data.with_offset(&offset)?;
+        let fit = crate::cox::fit(&shifted, input.x, &options)?;
         let mut beta = Vec::with_capacity(layout.p);
         for c in &fit.coefficients {
             beta.push(c.ok_or_else(|| {

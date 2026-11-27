@@ -47,7 +47,7 @@ struct RFit {
     se: Vec<f64>,
     robust_se: Option<Vec<f64>>,
     loglik: Vec<f64>,
-    iterations: u32,
+    iterations: usize,
     n_expanded: usize,
     n_risk_sets: usize,
     nevent: f64,

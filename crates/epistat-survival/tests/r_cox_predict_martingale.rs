@@ -80,6 +80,9 @@ fn martingale_form_matches_r() {
         if r.weights {
             builder = builder.weight(&r.weight);
         }
+        if r.offset {
+            builder = builder.offset(&r.offset_values);
+        }
         let data = builder.build().unwrap();
         let opts = CoxOptions {
             ties: if r.ties == "efron" {
@@ -87,7 +90,6 @@ fn martingale_form_matches_r() {
             } else {
                 Ties::Breslow
             },
-            offset: r.offset.then_some(r.offset_values.as_slice()),
             ..CoxOptions::default()
         };
         let mut model = fit(&data, x.as_ref(), &opts).unwrap();

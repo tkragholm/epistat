@@ -88,8 +88,8 @@ fn loglik_equals_the_enumeration() {
     for beta in [[0.0, 0.0], [0.4, -0.3], [-1.2, 0.8]] {
         let options = CoxOptions {
             ties: Ties::Exact,
-            init: Some(&beta),
-            iter_max: 0,
+            start: Some(beta.to_vec()),
+            max_iterations: 0,
             ..CoxOptions::default()
         };
         let model = fit(&data, x.as_ref(), &options).unwrap();

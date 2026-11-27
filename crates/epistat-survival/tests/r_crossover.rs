@@ -224,8 +224,8 @@ fn the_analysis_equals_clogit_on_the_same_windows() {
         };
         let p = x.ncols();
         let opts = ClogitOptions {
-            eps: 1e-12,
-            iter_max: 100,
+            tolerance: 1e-12,
+            max_iterations: 100,
             ..ClogitOptions::default()
         };
         let exact = clogit(&w.is_case, &w.set, x.as_ref(), &opts).unwrap();

@@ -314,8 +314,8 @@ fn cox_case(reference: &Reference, c: &RCox) -> (f64, f64) {
     };
     if c.start.is_some() || c.kappa.is_none() {
         // The finite-difference references were fitted to a tight tolerance.
-        cox_opts.eps = 1e-13;
-        cox_opts.iter_max = 100;
+        cox_opts.tolerance = 1e-13;
+        cox_opts.max_iterations = 100;
     }
     let fit = wcox::fit(
         &data,

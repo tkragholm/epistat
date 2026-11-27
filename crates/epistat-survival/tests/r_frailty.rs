@@ -134,14 +134,15 @@ fn run(d: &Dataset, ties: Ties, theta: Theta, method: Method) -> FrailtyFit {
     if d.weight.iter().any(|&w| w - 1.0 != 0.0) {
         b = b.weight(d.weight.clone());
     }
+    if d.offset.iter().any(|&o| o != 0.0) {
+        b = b.offset(d.offset.clone());
+    }
     let buf = b.build().unwrap();
     let x = Mat::from_fn(n, 2, |i, j| [d.x1[i], d.x2[i]][j]);
-    let has_offset = d.offset.iter().any(|&o| o != 0.0);
     let opts = FrailtyOptions {
         ties,
         theta,
         method,
-        offset: has_offset.then_some(&d.offset[..]),
         theta_tolerance: 1e-9,
         ..FrailtyOptions::default()
     };

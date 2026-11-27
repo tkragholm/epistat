@@ -48,7 +48,7 @@ struct RFit {
     robust_se: Vec<f64>,
     loglik: f64,
     loglik_null: f64,
-    iterations: u32,
+    iterations: usize,
     rank: usize,
     monotone_columns: Vec<usize>,
     information_condition: f64,

@@ -69,7 +69,7 @@ struct RFit {
     variance: Vec<Vec<f64>>,
     loglik: f64,
     loglik_null: f64,
-    iterations: u32,
+    iterations: usize,
     df: usize,
     linear_predictors: Vec<f64>,
     information_condition: f64,

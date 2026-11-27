@@ -136,6 +136,7 @@ enum Source<'a> {
 pub struct IntervalDataBuilder<'a> {
     source: Source<'a>,
     weight: Option<&'a [f64]>,
+    offset: Option<&'a [f64]>,
     stratum: Option<&'a [u32]>,
     cluster: Option<&'a [u32]>,
     id: Option<&'a [u32]>,
@@ -150,6 +151,7 @@ impl<'a> SurvData<'a> {
         IntervalDataBuilder {
             source: Source::Bounds { lower, upper },
             weight: None,
+            offset: None,
             stratum: None,
             cluster: None,
             id: None,
@@ -174,6 +176,7 @@ impl<'a> SurvData<'a> {
                 status,
             },
             weight: None,
+            offset: None,
             stratum: None,
             cluster: None,
             id: None,
@@ -185,6 +188,13 @@ impl<'a> IntervalDataBuilder<'a> {
     /// Case weights. Leave them out for weight 1 on every row.
     pub fn weight(mut self, weight: &'a [f64]) -> Self {
         self.weight = Some(weight);
+        self
+    }
+
+    /// A term added to the linear predictor of every row, as `offset()` in an
+    /// R formula. Leave it out for no offset.
+    pub fn offset(mut self, offset: &'a [f64]) -> Self {
+        self.offset = Some(offset);
         self
     }
 
@@ -238,6 +248,7 @@ impl<'a> IntervalDataBuilder<'a> {
         };
         let optional = [
             ("weight", self.weight.map(<[f64]>::len)),
+            ("offset", self.offset.map(<[f64]>::len)),
             ("stratum", self.stratum.map(<[u32]>::len)),
             ("cluster", self.cluster.map(<[u32]>::len)),
             ("id", self.id.map(<[u32]>::len)),
@@ -280,6 +291,9 @@ impl<'a> IntervalDataBuilder<'a> {
             checks::check_finite(weight, "weight")?;
             checks::check_weights(weight)?;
         }
+        if let Some(offset) = self.offset {
+            checks::check_finite(offset, "offset")?;
+        }
         let kind = lower
             .iter()
             .zip(upper.iter())
@@ -291,6 +305,7 @@ impl<'a> IntervalDataBuilder<'a> {
         Ok(SurvData {
             outcome: Outcome::Interval(IntervalSurv { lower, upper, kind }),
             weight: self.weight,
+            offset: self.offset,
             stratum: self.stratum.map(Dense::new),
             cluster: self.cluster.map(Dense::new),
             id: self.id.map(Dense::new),

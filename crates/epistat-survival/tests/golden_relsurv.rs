@@ -125,7 +125,10 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
     let mut v = f.gamma.clone();
     v.extend(f.beta.iter().map(|b| b.unwrap_or(f64::NAN)));
     v.extend(f.covariance.iter().flatten().map(|x| x.unwrap_or(f64::NAN)));
-    v.extend([f.log_likelihood, f64::from(f.iterations)]);
+    v.extend([
+        f.log_likelihood,
+        f64::from(u32::try_from(f.iterations).unwrap()),
+    ]);
     out.push(("flexpar bhazard".to_string(), v));
     out
 }

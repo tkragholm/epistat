@@ -47,18 +47,12 @@ fn inputs_are_refused() {
     };
     assert!(message(fit(&d, x.as_ref(), &weibull_df)).contains("t distribution only"));
     let short = [0.0; 3];
-    let options = SurvregOptions {
-        offset: Some(&short),
-        ..SurvregOptions::default()
-    };
-    assert!(message(fit(&d, x.as_ref(), &options)).contains("offset"));
+    let refused = SurvData::builder(&time, &status).offset(&short).build();
+    assert!(message(refused).contains("offset"));
     let mut bad = vec![0.0; 40];
     bad[5] = f64::INFINITY;
-    let options = SurvregOptions {
-        offset: Some(&bad),
-        ..SurvregOptions::default()
-    };
-    assert!(message(fit(&d, x.as_ref(), &options)).contains("not finite"));
+    let refused = SurvData::builder(&time, &status).offset(&bad).build();
+    assert!(message(refused).contains("not finite"));
 }
 
 #[test]
@@ -67,15 +61,11 @@ fn a_constant_offset_moves_the_intercept_and_nothing_else() {
     let d = SurvData::builder(&time, &status).build().unwrap();
     let plain = fit(&d, x.as_ref(), &SurvregOptions::default()).unwrap();
     let shift = vec![0.7; 40];
-    let shifted = fit(
-        &d,
-        x.as_ref(),
-        &SurvregOptions {
-            offset: Some(&shift),
-            ..SurvregOptions::default()
-        },
-    )
-    .unwrap();
+    let shifted_data = SurvData::builder(&time, &status)
+        .offset(&shift)
+        .build()
+        .unwrap();
+    let shifted = fit(&shifted_data, x.as_ref(), &SurvregOptions::default()).unwrap();
     let (a, b) = (&plain.coefficients, &shifted.coefficients);
     assert!((a[0].unwrap() - 0.7 - b[0].unwrap()).abs() < 1e-7);
     assert!((a[1].unwrap() - b[1].unwrap()).abs() < 1e-7);

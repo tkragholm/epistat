@@ -140,7 +140,7 @@ fn condition(x: &Mat<f64>, data: &SurvData<'_>) -> f64 {
         data,
         x.as_ref(),
         &CoxOptions {
-            eps: 1e-6,
+            tolerance: 1e-6,
             ..CoxOptions::default()
         },
     )
@@ -209,7 +209,7 @@ fn cox_censoring_and_contrasts_against_riskregression() {
                 opts.censoring = Censoring::Cox(CoxCensoring {
                     x: x.as_ref(),
                     options: CoxOptions {
-                        eps: 1e-6,
+                        tolerance: 1e-6,
                         ..CoxOptions::default()
                     },
                 });

@@ -52,7 +52,7 @@ pub fn model_pieces(
     data: &SurvData<'_>,
     x: &Mat<f64>,
     fit: &CoxModelFit,
-    options: &CoxOptions<'_>,
+    options: &CoxOptions,
     grid: &[f64],
     n_strata: usize,
 ) -> (Vec<Vec<f64>>, Vec<Vec<f64>>, Vec<f64>) {
@@ -82,7 +82,7 @@ pub fn model_pieces(
     let coefficients: Vec<Option<f64>> = fit.coefficients.clone();
     let breslow = CoxOptions {
         ties: Ties::Breslow,
-        ..*options
+        ..options.clone()
     };
     let scores = score_residuals(data, x.as_ref(), &coefficients, &breslow).unwrap();
     let v: Vec<f64> = fit.covariance.iter().map(|v| v.unwrap()).collect();

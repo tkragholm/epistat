@@ -24,7 +24,7 @@ fn flat(f: &FlexParFit) -> Vec<f64> {
     out.extend([
         f.log_likelihood,
         f.null_log_likelihood.unwrap_or(f64::NAN),
-        f64::from(f.iterations),
+        f64::from(u32::try_from(f.iterations).unwrap()),
         f.n_events,
     ]);
     out

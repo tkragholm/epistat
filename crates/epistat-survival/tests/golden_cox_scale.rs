@@ -58,7 +58,7 @@ fn hash_fit(fit: &CoxModelFit) -> Fingerprint {
         .u64(fit.n_rows as u64)
         .u64(fit.n_used as u64)
         .u64(fit.rank as u64)
-        .u64(u64::from(fit.iterations))
+        .u64(u64::try_from(fit.iterations).unwrap())
         .u64(u64::from(fit.converged))
 }
 
@@ -145,13 +145,15 @@ fn run(s: &Sample, case: Case) -> u64 {
     if case.clusters {
         builder = builder.cluster(s.cluster.clone());
     }
+    if case.offset {
+        builder = builder.offset(s.offset.clone());
+    }
     let buf = builder.build().unwrap();
     let data = buf.as_data();
     let init: Vec<f64> = (0..s.x.ncols()).map(|j| 0.05 * j as f64).collect();
     let opts = CoxOptions {
         ties: case.ties,
-        offset: case.offset.then_some(s.offset.as_slice()),
-        init: case.init.then_some(init.as_slice()),
+        start: case.init.then_some(init),
         ..CoxOptions::default()
     };
     let fitted = fit(&data, s.x.as_ref(), &opts).unwrap();

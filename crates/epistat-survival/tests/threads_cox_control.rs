@@ -50,6 +50,7 @@ fn cox_control_and_tests() {
         .weight(&weight)
         .stratum(&stratum)
         .cluster(&cluster)
+        .offset(&offset)
         .build()
         .unwrap();
     let init = [0.4, -0.3, 0.2];
@@ -62,9 +63,8 @@ fn cox_control_and_tests() {
         for ties in [Ties::Breslow, Ties::Efron] {
             let options = CoxOptions {
                 ties,
-                offset: Some(&offset),
-                init,
-                iter_max,
+                start: init.map(<[f64]>::to_vec),
+                max_iterations: iter_max,
                 ..CoxOptions::default()
             };
             assert_same_on_pools(&POOLS, || {
@@ -75,7 +75,7 @@ fn cox_control_and_tests() {
                 out.extend([
                     absent(model.log_partial_likelihood),
                     absent(model.null_log_partial_likelihood),
-                    f64::from(model.iterations),
+                    f64::from(u32::try_from(model.iterations).unwrap()),
                 ]);
                 let t = model.tests;
                 for value in [

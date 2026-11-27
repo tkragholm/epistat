@@ -263,7 +263,7 @@ impl Model<'_> {
 pub(super) struct Maximum {
     pub theta: Vec<f64>,
     pub totals: Totals,
-    pub iterations: u32,
+    pub iterations: usize,
     pub converged: bool,
 }
 
@@ -280,7 +280,7 @@ pub(super) fn maximise(
     max_iterations: usize,
 ) -> Option<Maximum> {
     let mut theta = start.to_vec();
-    let mut used = 0_u32;
+    let mut used = 0_usize;
     let mut best = newton(model, &mut theta, tolerance, max_iterations, &mut used)?;
     if !best.converged {
         let q = theta.len();
@@ -313,7 +313,7 @@ fn newton(
     theta: &mut [f64],
     tolerance: f64,
     max_iterations: usize,
-    used: &mut u32,
+    used: &mut usize,
 ) -> Option<Maximum> {
     let q = theta.len();
     let mut current = model.evaluate(theta, true)?;

@@ -136,14 +136,14 @@
 //! The covariates are centred at their weighted mean and divided by their
 //! weighted mean absolute deviation, as `coxph` does, and the iteration runs on
 //! these. A column that is constant over the rows is set to zero. Starting at
-//! the coefficients `beta` of `CoxOptions::init`, zero by default, with `l_0`
+//! the coefficients `beta` of `CoxOptions::start`, zero by default, with `l_0`
 //! the log partial likelihood there:
 //!
 //! 1. The trial point is `beta + I^{-1} U`, with `I` and `U` taken at the last
 //!    accepted `beta`. The first trial is the first Newton step.
 //! 2. The log partial likelihood `l` at the trial point is computed. When
 //!    `|1 - l_prev / l| <= eps` the fit has converged at the trial point, with
-//!    `eps` of `CoxOptions::eps`, `1e-9` by default as in `coxph.control`.
+//!    `eps` of `CoxOptions::tolerance`, `1e-9` by default as in `coxph.control`.
 //! 3. Otherwise, when `l` is below the last accepted value, or is not finite,
 //!    the trial point moves back towards the last accepted `beta`, and step 2
 //!    is repeated. The `h`-th halving in a row sets the trial point to
@@ -151,11 +151,11 @@
 //!    two thirds of the way and so on. When `l` is not below the last accepted
 //!    value, the trial point is accepted, and the next trial is a Newton step
 //!    from it.
-//! 4. After `CoxOptions::iter_max` trial points without convergence, 20 by
+//! 4. After `CoxOptions::max_iterations` trial points without convergence, 20 by
 //!    default as `iter.max` of `coxph.control`, the fit stops, with
 //!    `converged` false. `iterations` counts the trial points.
 //!
-//! With `iter_max` 0 no trial point is computed: the model is the one at the
+//! With `max_iterations` 0 no trial point is computed: the model is the one at the
 //! starting coefficients, its coefficients are those, and its covariance and
 //! tests are taken there. `coxph` fits that way to get a score test.
 //!
@@ -253,7 +253,7 @@
 //!
 //! [`CoxTests`] in `CoxModelFit::tests` holds the three tests of
 //! `summary.coxph` that all coefficients equal their starting values, which are
-//! zero unless `CoxOptions::init` says otherwise. With `d` the distance of the
+//! zero unless `CoxOptions::start` says otherwise. With `d` the distance of the
 //! estimate from the starting values, `U_0` and `I_0` the score and information
 //! there, `l_0` and `l` the log partial likelihoods at the starting values and
 //! at the estimate, and `V` the covariance of the estimate:
@@ -401,7 +401,7 @@ use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
 /// Largest number of trial points, `iter.max` of `coxph.control`.
-const MAX_ITERATIONS: u32 = 20;
+const MAX_ITERATIONS: usize = 20;
 /// Relative change of the log partial likelihood at convergence, `eps`.
 const EPS: f64 = 1e-9;
 /// Smallest pivot of the information matrix relative to its largest diagonal
@@ -435,7 +435,7 @@ pub struct CoxModelFit {
     /// there are no events.
     pub null_log_partial_likelihood: Option<f64>,
     /// The tests that the coefficients equal the starting coefficients, zero
-    /// unless `CoxOptions::init` says otherwise.
+    /// unless `CoxOptions::start` says otherwise.
     pub tests: CoxTests,
     /// The summed weight of the events among the rows fitted.
     pub n_events: f64,
@@ -446,7 +446,7 @@ pub struct CoxModelFit {
     /// The columns that are not aliased, 0 when there is no estimate.
     pub rank: usize,
     /// The trial points computed, as `iter` in a `coxph` fit.
-    pub iterations: u32,
+    pub iterations: usize,
     /// Whether the log partial likelihood stopped changing within the
     /// iteration limit.
     pub converged: bool,
@@ -546,8 +546,8 @@ struct Input<'a> {
     offset: Option<&'a [f64]>,
     /// Starting coefficients on the scale of the columns given.
     init: Option<&'a [f64]>,
-    iter_max: u32,
-    eps: f64,
+    max_iterations: usize,
+    tolerance: f64,
     stepping: Stepping,
 }
 
@@ -597,8 +597,8 @@ pub(crate) enum Stepping {
 /// The offset, the starting coefficients and the two iteration limits are read
 /// by [`fit`] only. [`score_residuals`] reads the offset, which is part of the
 /// model, and takes its coefficients as an argument.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CoxOptions<'a> {
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoxOptions {
     /// How tied events enter the partial likelihood. `Efron`, as in `coxph`.
     pub ties: Ties,
     /// The rule that makes times equal when they differ by rounding error,
@@ -610,34 +610,29 @@ pub struct CoxOptions<'a> {
     /// cause-specific, and the code is required. With one status code it is
     /// `None` or `Some(1)`.
     pub cause: Option<u32>,
-    /// A term added to the linear predictor of every row, one value per row
-    /// of the data, as `offset()` in a `coxph` formula. It has no coefficient.
-    /// The default is no offset.
-    pub offset: Option<&'a [f64]>,
     /// The coefficients the iteration starts from, one per column of the
     /// design on the scale of the columns given, as `init` of `coxph`. A value
     /// for a column without variation is ignored. The default is zero.
-    pub init: Option<&'a [f64]>,
+    pub start: Option<Vec<f64>>,
     /// The largest number of trial points, `iter.max` of `coxph.control`. With
-    /// 0 the fit is the model at `init`: its coefficients are `init`, except
+    /// 0 the fit is the model at `start`: its coefficients are `start`, except
     /// that an aliased column is `None`, and its covariance and tests are those
     /// at that point.
-    pub iter_max: u32,
+    pub max_iterations: usize,
     /// The relative change of the log partial likelihood at which the
     /// iteration stops, `eps` of `coxph.control`. It must be positive.
-    pub eps: f64,
+    pub tolerance: f64,
 }
 
-impl Default for CoxOptions<'_> {
+impl Default for CoxOptions {
     fn default() -> Self {
         Self {
             ties: Ties::Efron,
             timefix: TimeFix::default(),
             cause: None,
-            offset: None,
-            init: None,
-            iter_max: MAX_ITERATIONS,
-            eps: EPS,
+            start: None,
+            max_iterations: MAX_ITERATIONS,
+            tolerance: EPS,
         }
     }
 }
@@ -647,12 +642,12 @@ impl Default for CoxOptions<'_> {
 fn with_input<R>(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
-    opts: &CoxOptions<'_>,
+    opts: &CoxOptions,
     f: impl FnOnce(&Input<'_>) -> R,
 ) -> Result<R> {
     check_lengths(&[("data", data.n_rows()), ("x", x.nrows())])?;
     refuse_non_finite_matrix(x, "x")?;
-    check_control(opts, data.n_rows(), x.ncols())?;
+    check_control(opts, data, x.ncols())?;
     if opts.ties == Ties::Exact {
         check_exact(data)?;
     }
@@ -677,10 +672,10 @@ fn with_input<R>(
         stratum: data.stratum(),
         ties: opts.ties,
         cluster: data.cluster(),
-        offset: opts.offset,
-        init: opts.init,
-        iter_max: opts.iter_max,
-        eps: opts.eps,
+        offset: data.offset(),
+        init: opts.start.as_deref(),
+        max_iterations: opts.max_iterations,
+        tolerance: opts.tolerance,
         stepping: match (surv.start().is_some(), opts.ties) {
             (true, Ties::Exact) => Stepping::AgExact,
             (false, Ties::Exact) => Stepping::ExactRight,
@@ -709,24 +704,22 @@ fn check_exact(data: &SurvData<'_>) -> Result<()> {
 }
 
 /// The checks on the offset, the starting values and the convergence limit.
-fn check_control(opts: &CoxOptions<'_>, rows: usize, columns: usize) -> Result<()> {
-    if !(opts.eps.is_finite() && opts.eps > 0.0) {
-        return Err(Error::invalid("eps: must be finite and positive"));
+fn check_control(opts: &CoxOptions, data: &SurvData<'_>, columns: usize) -> Result<()> {
+    if !(opts.tolerance.is_finite() && opts.tolerance > 0.0) {
+        return Err(Error::invalid("tolerance: must be finite and positive"));
     }
-    if let Some(offset) = opts.offset {
-        check_lengths(&[("data", rows), ("offset", offset.len())])?;
-        if offset
+    if let Some(offset) = data.offset()
+        && offset
             .iter()
             .any(|o| !o.is_finite() || !o.exp().is_finite())
-        {
-            return Err(Error::invalid(
-                "offset: a value is not finite or gives a risk score that is not finite",
-            ));
-        }
+    {
+        return Err(Error::invalid(
+            "offset: a value is not finite or gives a risk score that is not finite",
+        ));
     }
-    if let Some(init) = opts.init {
-        check_lengths(&[("x columns", columns), ("init", init.len())])?;
-        refuse_non_finite(init, "init")?;
+    if let Some(init) = &opts.start {
+        check_lengths(&[("x columns", columns), ("start", init.len())])?;
+        refuse_non_finite(init, "start")?;
     }
     Ok(())
 }
@@ -755,12 +748,11 @@ fn check_control(opts: &CoxOptions<'_>, rows: usize, columns: usize) -> Result<(
 /// An input error when `x` has a number of rows other than
 /// `data`, or holds a value that is not finite, when `opts.cause` is missing
 /// for a status with several codes or outside the codes, when the rule for
-/// the times finds an interval of length zero, when `opts.offset` has another
-/// length than `data` or a value whose exponential is not finite, when
-/// `opts.init` has another length than `x` has columns, has a value that is not
-/// finite or gives a risk score that is not finite, and when `opts.eps` is not
-/// positive and finite.
-pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &CoxOptions<'_>) -> Result<CoxModelFit> {
+/// the times finds an interval of length zero, when the offset of `data` has a
+/// value whose exponential is not finite, when `opts.start` has another length
+/// than `x` has columns, has a value that is not finite or gives a risk score
+/// that is not finite, and when `opts.tolerance` is not positive and finite.
+pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &CoxOptions) -> Result<CoxModelFit> {
     let mut fit = with_input(data, x, opts, fit_checked)??;
     fit.n_rows = data.n_rows();
     fit.n_used = data.n_used();
@@ -1835,8 +1827,8 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
             p,
             factor: &factor,
             init: input.init,
-            iter_max: input.iter_max,
-            eps: input.eps,
+            max_iterations: input.max_iterations,
+            tolerance: input.tolerance,
             stepping: input.stepping,
             ties: input.ties,
             n_events,
@@ -1855,8 +1847,8 @@ pub(crate) struct Newton<'a> {
     pub(crate) factor: &'a [f64],
     /// Starting coefficients on the scale of the columns given.
     pub(crate) init: Option<&'a [f64]>,
-    pub(crate) iter_max: u32,
-    pub(crate) eps: f64,
+    pub(crate) max_iterations: usize,
+    pub(crate) tolerance: f64,
     pub(crate) stepping: Stepping,
     pub(crate) ties: Ties,
     /// The summed weight of the events, and the rows fitted, as reported.
@@ -1875,8 +1867,8 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
         p,
         factor,
         init,
-        iter_max,
-        eps,
+        max_iterations,
+        tolerance,
         stepping,
         ties,
         n_events,
@@ -1956,15 +1948,15 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
     let mut trial: Vec<f64> = beta.iter().zip(&step).map(|(b, s)| b + s).collect();
 
     let mut halvings = 0u32;
-    let mut iterations = 0u32;
+    let mut iterations = 0usize;
     let mut converged = false;
     let mut last: Option<Evaluation> = None;
-    if iter_max == 0 {
+    if max_iterations == 0 {
         // The model at the starting coefficients.
         last = Some(start);
         trial.clone_from(&beta);
     }
-    for count in 1..=iter_max {
+    for count in 1..=max_iterations {
         iterations = count;
         let evaluation = model.evaluate(&trial);
         // Counting-process data also treat a change of the rank of the
@@ -1978,21 +1970,22 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
         if let Some(e) = &evaluation
             && !halving
             && !rank_changed
-            && (1.0 - accepted_loglik / e.loglik).abs() <= eps
+            && (1.0 - accepted_loglik / e.loglik).abs() <= tolerance
         {
             converged = true;
             last = evaluation;
             break;
         }
         let better = !rank_changed && matches!(&evaluation, Some(e) if e.loglik >= accepted_loglik);
-        if count == iter_max {
+        if count == max_iterations {
             // Out of iterations.
             let keep_trial = match (&evaluation, stepping) {
                 (None, _) => false,
                 (Some(_), Stepping::AgExact) => true,
-                (Some(_), Stepping::ExactRight) => iter_max == 1,
+                (Some(_), Stepping::ExactRight) => max_iterations == 1,
                 (Some(e), Stepping::Counting) => {
-                    iter_max == 1 || (e.loglik - accepted_loglik) / accepted_loglik.abs() >= -eps
+                    max_iterations == 1
+                        || (e.loglik - accepted_loglik) / accepted_loglik.abs() >= -tolerance
                 }
                 (Some(_), Stepping::RightCensored) => better,
             };
@@ -2064,12 +2057,15 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
         (0..p)
             .filter(|&a| {
                 let step = newton[a].abs();
-                iter_max > 1 && !aliased(a) && step > eps && step > eps.sqrt() * trial[a].abs()
+                max_iterations > 1
+                    && !aliased(a)
+                    && step > tolerance
+                    && step > tolerance.sqrt() * trial[a].abs()
             })
             .collect()
     } else if converged {
         (0..p)
-            .filter(|&a| !aliased(a) && newton[a].abs() > eps + eps.sqrt())
+            .filter(|&a| !aliased(a) && newton[a].abs() > tolerance + tolerance.sqrt())
             .collect()
     } else {
         Vec::new()
@@ -2208,7 +2204,7 @@ pub fn score_residuals(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
     coefficients: &[Option<f64>],
-    opts: &CoxOptions<'_>,
+    opts: &CoxOptions,
 ) -> Result<Vec<Option<Vec<f64>>>> {
     if opts.ties == Ties::Exact {
         return Err(Error::unsupported(
@@ -2284,7 +2280,7 @@ mod tests {
     const STOP: [f64; 8] = [1., 2., 2., 3., 4., 5., 6., 7.];
     const EVENT: [i32; 8] = [1, 1, 1, 0, 1, 1, 0, 1];
 
-    fn options(ties: Ties) -> CoxOptions<'static> {
+    fn options(ties: Ties) -> CoxOptions {
         CoxOptions {
             ties,
             timefix: TimeFix::Exact,

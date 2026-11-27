@@ -71,6 +71,7 @@ fn weights_entry_offset_and_survival_type_are_the_same_on_every_pool() {
         .stratum(&stratum)
         .weight(&weight)
         .start(&start)
+        .offset(&offset)
         .build()
         .unwrap();
     let levels = [
@@ -84,7 +85,6 @@ fn weights_entry_offset_and_survival_type_are_the_same_on_every_pool() {
     assert_same_on_pools(&POOLS, || {
         let options = CoxOptions {
             cause: Some(1),
-            offset: Some(&offset),
             ..CoxOptions::default()
         };
         let fit = cox::fit(&data, x.as_ref(), &options).unwrap();
@@ -99,7 +99,6 @@ fn weights_entry_offset_and_survival_type_are_the_same_on_every_pool() {
     let designs = [x.as_ref(), x.as_ref()];
     assert_same_on_pools(&POOLS, || {
         let csc = CscOptions {
-            offset: Some(&offset),
             ..CscOptions::default()
         };
         let model = CauseSpecificCox::fit(&data, &designs, &csc).unwrap();
@@ -119,7 +118,6 @@ fn weights_entry_offset_and_survival_type_are_the_same_on_every_pool() {
     assert_same_on_pools(&POOLS, || {
         let csc = CscOptions {
             surv_type: SurvType::Survival { cause: 1 },
-            offset: Some(&offset),
             ..CscOptions::default()
         };
         let model = CauseSpecificCox::fit(&data, &designs, &csc).unwrap();
@@ -138,7 +136,6 @@ fn weights_entry_offset_and_survival_type_are_the_same_on_every_pool() {
     });
     assert_same_on_pools(&POOLS, || {
         let csc = CscOptions {
-            offset: Some(&offset),
             ..CscOptions::default()
         };
         let model = CauseSpecificCox::fit(&data, &designs, &csc).unwrap();

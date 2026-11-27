@@ -33,7 +33,7 @@ fn hash_fit(f: &FlexParFit) -> Fingerprint {
     h.f64(f.log_likelihood)
         .option_f64(f.null_log_likelihood)
         .f64s(&f.knots)
-        .u64(u64::from(f.iterations))
+        .u64(u64::try_from(f.iterations).unwrap())
         .u64(u64::from(f.converged))
         .u64(u64::from(f.diverging))
         .u64(u64::from(f.monotone_on_data))

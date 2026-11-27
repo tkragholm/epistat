@@ -65,10 +65,9 @@ const NO_FIX: CoxOptions = CoxOptions {
     ties: Ties::Efron,
     timefix: TimeFix::Exact,
     cause: None,
-    offset: None,
-    init: None,
-    iter_max: 20,
-    eps: 1e-9,
+    start: None,
+    max_iterations: 20,
+    tolerance: 1e-9,
 };
 
 #[test]

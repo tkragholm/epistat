@@ -33,7 +33,7 @@ impl CoxEval<'_> {
         }
         // The person's own offset, measured from the mean offset the baseline
         // is at.
-        if let Some(offset) = self.model.options.offset {
+        if let Some(offset) = self.model.data.offset() {
             eta += offset[row] - self.base.models[0].offset_centre;
         }
         let value = f64::exp(eta);

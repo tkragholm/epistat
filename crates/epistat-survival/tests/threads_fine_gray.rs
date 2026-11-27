@@ -127,7 +127,7 @@ fn fit_bits(fit: &CoxModelFit) -> Vec<f64> {
         fit.n_rows as f64,
         fit.n_used as f64,
         fit.rank as f64,
-        f64::from(fit.iterations),
+        f64::from(u32::try_from(fit.iterations).unwrap()),
         f64::from(u8::from(fit.converged)),
     ]);
     out

@@ -124,8 +124,8 @@ pub(super) fn factorise(a: &mut [f64], q: usize, tolerance: f64) -> bool {
 /// The settings of the iteration.
 #[derive(Clone, Copy)]
 pub(super) struct Control {
-    pub max_iterations: u32,
-    pub rel_tolerance: f64,
+    pub max_iterations: usize,
+    pub tolerance: f64,
     pub toler_chol: f64,
 }
 
@@ -133,7 +133,7 @@ pub(super) struct Control {
 pub(super) struct Newton {
     pub beta: Vec<f64>,
     pub loglik: f64,
-    pub iterations: u32,
+    pub iterations: usize,
     pub converged: bool,
     /// The information matrix at `beta`.
     pub imat: Vec<f64>,
@@ -174,7 +174,7 @@ fn step(eval: &Eval, q: usize, toler: f64, outer: &mut u32) -> Result<Vec<f64>> 
 ///
 /// A trial point is the last accepted point plus `I^-1 u` from the last
 /// accepted point. After a trial the iteration stops when the log likelihood
-/// has changed by at most `rel_tolerance`, relatively or absolutely, since the
+/// has changed by at most `tolerance`, relatively or absolutely, since the
 /// last accepted point and the trial was not a halving. A trial whose log
 /// likelihood is lower, or that has a non-finite value or derivative, is moved
 /// a third of the way back to the last accepted point (the first time, a log
@@ -203,8 +203,8 @@ pub(super) fn newton(problem: &Problem<'_>, start: Vec<f64>, control: Control) -
         let newlk = current.loglik;
         if !bad
             && halving == 0
-            && ((1.0 - loglik / newlk).abs() <= control.rel_tolerance
-                || (loglik - newlk).abs() <= control.rel_tolerance)
+            && ((1.0 - loglik / newlk).abs() <= control.tolerance
+                || (loglik - newlk).abs() <= control.tolerance)
         {
             return Ok(Newton {
                 beta: newbeta,

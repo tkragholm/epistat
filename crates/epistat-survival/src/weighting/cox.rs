@@ -113,7 +113,7 @@ pub type WeightedCox = EstimatedCox;
 pub fn fit(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
-    opts: &CoxOptions<'_>,
+    opts: &CoxOptions,
     weights: &Weights<'_>,
 ) -> Result<EstimatedCox> {
     if weights.is_known() {
@@ -137,7 +137,7 @@ pub fn fit(
 pub fn fit_estimated(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
-    opts: &CoxOptions<'_>,
+    opts: &CoxOptions,
     weights: &Weights<'_>,
 ) -> Result<EstimatedCox> {
     fit_general(data, x, opts, weights)
@@ -148,7 +148,7 @@ pub fn fit_estimated(
 fn fit_iptw(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
-    opts: &CoxOptions<'_>,
+    opts: &CoxOptions,
     iptw: &Iptw,
     subject: Option<&[u32]>,
 ) -> Result<EstimatedCox> {
@@ -284,7 +284,7 @@ pub struct EstimatedCox {
 fn fit_general(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
-    opts: &CoxOptions<'_>,
+    opts: &CoxOptions,
     estimated: &Weights<'_>,
 ) -> Result<EstimatedCox> {
     let n = data.n_rows();

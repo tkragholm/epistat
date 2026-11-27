@@ -155,12 +155,16 @@ fn run_case(case: &Case, std_err: bool, influence: InfluenceForm) -> Standardise
     if let Some(stratum) = &case.stratum {
         builder = builder.stratum(stratum);
     }
+    if let Some(offset) = &case.offset {
+        builder = builder.offset(offset);
+    }
     let data = builder.build().unwrap();
     let any: Vec<i32> = case.status.iter().map(|&s| i32::from(s != 0)).collect();
-    let any_data = SurvData::builder(&case.time, &any)
-        .start(&case.start)
-        .build()
-        .unwrap();
+    let mut any_builder = SurvData::builder(&case.time, &any).start(&case.start);
+    if let Some(offset) = &case.offset {
+        any_builder = any_builder.offset(offset);
+    }
+    let any_data = any_builder.build().unwrap();
     let designs: Vec<Mat<f64>> = case.designs.iter().map(|d| matrix(d)).collect();
     let refs: Vec<_> = designs.iter().map(Mat::as_ref).collect();
     let survival_type = case.kind == "csc_survival";
@@ -168,7 +172,6 @@ fn run_case(case: &Case, std_err: bool, influence: InfluenceForm) -> Standardise
     for (m, design) in refs.iter().enumerate() {
         let options = CoxOptions {
             ties: Ties::Efron,
-            offset: case.offset.as_deref(),
             cause: match (case.kind.as_str(), m) {
                 ("csc", m) => Some(m as u32 + 1),
                 ("cox", _) | ("csc_survival", 0) => Some(1),
@@ -208,7 +211,6 @@ fn run_case(case: &Case, std_err: bool, influence: InfluenceForm) -> Standardise
     if case.kind == "cox" {
         let options = CoxOptions {
             cause: Some(1),
-            offset: case.offset.as_deref(),
             ..CoxOptions::default()
         };
         standardise_cox(
@@ -235,7 +237,6 @@ fn run_case(case: &Case, std_err: bool, influence: InfluenceForm) -> Standardise
                 } else {
                     SurvType::Hazard
                 },
-                offset: case.offset.as_deref(),
                 ..CscOptions::default()
             },
             &levels,

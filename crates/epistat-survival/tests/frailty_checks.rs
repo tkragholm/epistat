@@ -53,7 +53,7 @@ fn data(s: &Sim) -> SurvBuf {
         .unwrap()
 }
 
-fn fixed(theta: f64, ties: Ties) -> FrailtyOptions<'static> {
+fn fixed(theta: f64, ties: Ties) -> FrailtyOptions {
     FrailtyOptions {
         ties,
         theta: Theta::Fixed(theta),
@@ -109,7 +109,7 @@ fn theta_zero_is_the_cox_model() {
             s.x.as_ref(),
             &CoxOptions {
                 ties,
-                eps: 1e-14,
+                tolerance: 1e-14,
                 ..CoxOptions::default()
             },
         )

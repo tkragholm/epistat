@@ -77,7 +77,7 @@ struct RFit {
     use_strata: bool,
     use_offset: bool,
     init: Vec<f64>,
-    iter_max: u32,
+    iter_max: usize,
     eps: f64,
     #[serde(deserialize_with = "na_f64_vec")]
     coefficients: Vec<f64>,
@@ -86,7 +86,7 @@ struct RFit {
     vcov: Vec<Vec<Option<f64>>>,
     loglik_init: f64,
     loglik: f64,
-    iterations: u32,
+    iterations: usize,
     rank: usize,
     ran_out: bool,
     monotone_columns: Vec<usize>,
@@ -147,7 +147,7 @@ fn run(reference: &Reference, r: &RFit) -> CoxModelFit {
         .collect();
     let x = Mat::from_fn(rows, indices.len(), |i, j| dataset.columns[i][indices[j]]);
     let offset = r.use_offset.then_some(dataset.offset.as_slice());
-    let init = (!r.init.is_empty()).then_some(r.init.as_slice());
+    let start = (!r.init.is_empty()).then(|| r.init.clone());
     if r.kind == "clogit" {
         let case: Vec<bool> = dataset.event.iter().map(|&e| e == 1).collect();
         let opts = ClogitOptions {
@@ -159,9 +159,9 @@ fn run(reference: &Reference, r: &RFit) -> CoxModelFit {
                 other => panic!("unknown method {other}"),
             },
             offset,
-            init,
-            iter_max: r.iter_max,
-            eps: r.eps,
+            start: start.clone(),
+            max_iterations: r.iter_max,
+            tolerance: r.eps,
             ..ClogitOptions::default()
         };
         return clogit(&case, &dataset.stratum, x.as_ref(), &opts).unwrap();
@@ -174,6 +174,9 @@ fn run(reference: &Reference, r: &RFit) -> CoxModelFit {
     if r.use_strata {
         builder = builder.stratum(&dataset.stratum);
     }
+    if let Some(offset) = offset {
+        builder = builder.offset(offset);
+    }
     let data = builder.build().unwrap();
     let opts = CoxOptions {
         ties: match r.method.as_str() {
@@ -182,10 +185,9 @@ fn run(reference: &Reference, r: &RFit) -> CoxModelFit {
             "breslow" => Ties::Breslow,
             other => panic!("unknown method {other}"),
         },
-        offset,
-        init,
-        iter_max: r.iter_max,
-        eps: r.eps,
+        start,
+        max_iterations: r.iter_max,
+        tolerance: r.eps,
         ..CoxOptions::default()
     };
     fit(&data, x.as_ref(), &opts).unwrap()

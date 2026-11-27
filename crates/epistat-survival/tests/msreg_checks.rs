@@ -220,15 +220,15 @@ fn an_offset_in_the_model_is_a_change_of_reference() {
     let data = data_of(&d);
     let offset = vec![0.7; d.stop.len()];
     let plain = fit(&data, d.x.as_ref(), &MsOptions::default()).unwrap();
-    let shifted = fit(
-        &data,
-        d.x.as_ref(),
-        &MsOptions {
-            offset: Some(&offset),
-            ..MsOptions::default()
-        },
-    )
-    .unwrap();
+    let shifted_data = SurvData::builder(&d.stop, &d.status)
+        .start(&d.start)
+        .id(&d.id)
+        .istate(&d.istate)
+        .n_codes(3)
+        .offset(&offset)
+        .build()
+        .unwrap();
+    let shifted = fit(&shifted_data, d.x.as_ref(), &MsOptions::default()).unwrap();
     let h0 = plain.msfit(&[1.0, 1.0], &MsFitOptions::default()).unwrap();
     let h1 = shifted
         .msfit(
@@ -334,14 +334,7 @@ fn bad_input_is_refused_with_the_reason() {
         ));
         assert!(msg.contains(what), "{msg}");
     }
-    let msg = err(fit(
-        &data,
-        x.as_ref(),
-        &MsOptions {
-            offset: Some(&[0.0]),
-            ..MsOptions::default()
-        },
-    ));
+    let msg = err(SurvData::builder(&d.stop, &d.status).offset(&[0.0]).build());
     assert!(msg.contains("offset"), "{msg}");
     // Data without an id, with one status code, with an overlap.
     let status1: Vec<i32> = d.status.iter().map(|&s| i32::from(s > 0)).collect();

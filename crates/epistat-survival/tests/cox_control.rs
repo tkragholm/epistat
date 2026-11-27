@@ -27,43 +27,44 @@ fn is_input_error<T>(result: &Result<T, Error>) -> bool {
     matches!(result, Err(Error::Input(_) | Error::Invalid(_)))
 }
 
+fn with_offset(offset: &[f64]) -> epistat_survival::Result<SurvData<'_>> {
+    SurvData::builder(&STOP, &STATUS).offset(offset).build()
+}
+
 #[test]
 fn invalid_control_is_an_error() {
     let (x, d) = (design(), data());
-    let run = |opts: CoxOptions<'_>| fit(&d, x.as_ref(), &opts);
+    let run = |opts: CoxOptions| fit(&d, x.as_ref(), &opts);
     let short = [0.0; 9];
-    assert!(is_input_error(&run(CoxOptions {
-        offset: Some(&short),
-        ..CoxOptions::default()
-    })));
+    assert!(is_input_error(&with_offset(&short)));
     let mut bad = [0.0; 10];
     bad[3] = f64::NAN;
-    assert!(is_input_error(&run(CoxOptions {
-        offset: Some(&bad),
-        ..CoxOptions::default()
-    })));
+    assert!(is_input_error(&with_offset(&bad)));
+    // A finite offset whose exponential overflows is refused by the fit.
     bad[3] = 800.0;
-    assert!(is_input_error(&run(CoxOptions {
-        offset: Some(&bad),
-        ..CoxOptions::default()
-    })));
+    let overflowing = with_offset(&bad).unwrap();
+    assert!(is_input_error(&fit(
+        &overflowing,
+        x.as_ref(),
+        &CoxOptions::default()
+    )));
     for eps in [0.0, -1e-9, f64::NAN, f64::INFINITY] {
         assert!(is_input_error(&run(CoxOptions {
-            eps,
+            tolerance: eps,
             ..CoxOptions::default()
         })));
     }
     assert!(is_input_error(&run(CoxOptions {
-        init: Some(&[0.0]),
+        start: Some(vec![0.0]),
         ..CoxOptions::default()
     })));
     assert!(is_input_error(&run(CoxOptions {
-        init: Some(&[0.0, f64::NAN]),
+        start: Some(vec![0.0, f64::NAN]),
         ..CoxOptions::default()
     })));
     // A starting value whose risk score overflows.
     assert!(is_input_error(&run(CoxOptions {
-        init: Some(&[1e4, 0.0]),
+        start: Some(vec![1e4, 0.0]),
         ..CoxOptions::default()
     })));
 }
@@ -73,26 +74,18 @@ fn a_zero_offset_changes_nothing_and_a_shift_changes_nothing_in_value() {
     let (x, d) = (design(), data());
     let plain = fit(&d, x.as_ref(), &CoxOptions::default()).unwrap();
     let zeros = [0.0; 10];
-    let with_zero = fit(
-        &d,
-        x.as_ref(),
-        &CoxOptions {
-            offset: Some(&zeros),
-            ..CoxOptions::default()
-        },
-    )
-    .unwrap();
+    let zero_data = SurvData::builder(&STOP, &STATUS)
+        .offset(&zeros)
+        .build()
+        .unwrap();
+    let with_zero = fit(&zero_data, x.as_ref(), &CoxOptions::default()).unwrap();
     assert_eq!(format!("{plain:?}"), format!("{with_zero:?}"));
     let shifted: Vec<f64> = (0..10).map(|_| 3.0).collect();
-    let with_shift = fit(
-        &d,
-        x.as_ref(),
-        &CoxOptions {
-            offset: Some(&shifted),
-            ..CoxOptions::default()
-        },
-    )
-    .unwrap();
+    let shifted_data = SurvData::builder(&STOP, &STATUS)
+        .offset(&shifted)
+        .build()
+        .unwrap();
+    let with_shift = fit(&shifted_data, x.as_ref(), &CoxOptions::default()).unwrap();
     // A constant offset is absorbed by the baseline hazard.
     for (a, b) in plain.coefficients.iter().zip(&with_shift.coefficients) {
         assert!((a.unwrap() - b.unwrap()).abs() < 1e-12);
@@ -111,8 +104,8 @@ fn iteration_limit_zero_is_the_model_at_the_starting_values() {
         &d,
         x.as_ref(),
         &CoxOptions {
-            init: Some(&init),
-            iter_max: 0,
+            start: Some(init.to_vec()),
+            max_iterations: 0,
             ..CoxOptions::default()
         },
     )
@@ -133,7 +126,7 @@ fn iteration_limit_zero_is_the_model_at_the_starting_values() {
         &d,
         x.as_ref(),
         &CoxOptions {
-            iter_max: 0,
+            max_iterations: 0,
             ..CoxOptions::default()
         },
     )
@@ -153,7 +146,7 @@ fn the_null_likelihood_stays_at_zero_when_the_start_is_not() {
         &d,
         x.as_ref(),
         &CoxOptions {
-            init: Some(&[1.0, 1.0]),
+            start: Some(vec![1.0, 1.0]),
             ..CoxOptions::default()
         },
     )

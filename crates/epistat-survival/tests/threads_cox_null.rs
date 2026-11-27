@@ -47,12 +47,12 @@ fn model_without_covariates() {
         .weight(&weight)
         .stratum(&stratum)
         .cluster(&cluster)
+        .offset(&offset)
         .build()
         .unwrap();
     for ties in [Ties::Breslow, Ties::Efron] {
         let opts = CoxOptions {
             ties,
-            offset: Some(&offset),
             ..CoxOptions::default()
         };
         assert_same_on_pools(&POOLS, || {

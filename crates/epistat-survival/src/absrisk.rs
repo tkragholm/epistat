@@ -210,7 +210,7 @@ pub enum SurvType {
 
 /// The options of [`CauseSpecificCox::fit`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CscOptions<'a> {
+pub struct CscOptions {
     /// How tied events enter the partial likelihood, and which baseline
     /// hazard follows. `Efron`, as in `coxph`, which `CSC` calls.
     pub ties: Ties,
@@ -219,20 +219,14 @@ pub struct CscOptions<'a> {
     pub timefix: TimeFix,
     /// What the models are, `surv.type`. `Hazard`, as in `CSC`.
     pub surv_type: SurvType,
-    /// A term added to the linear predictor of every row of the data in every
-    /// model, as `offset()` in the formulas of `CSC`; one value per row of the
-    /// data. The default is no offset. A new row predicted for has the offset
-    /// of [`NewRows::offset`].
-    pub offset: Option<&'a [f64]>,
 }
 
-impl Default for CscOptions<'_> {
+impl Default for CscOptions {
     fn default() -> Self {
         Self {
             ties: Ties::Efron,
             timefix: TimeFix::default(),
             surv_type: SurvType::Hazard,
-            offset: None,
         }
     }
 }
@@ -249,7 +243,7 @@ pub struct CauseSpecificCox<'a> {
     overall: Option<SurvBuf>,
     designs: Vec<MatRef<'a, f64>>,
     fits: Vec<CoxModelFit>,
-    options: Vec<CoxOptions<'a>>,
+    options: Vec<CoxOptions>,
     surv_type: SurvType,
 }
 
@@ -340,7 +334,7 @@ impl<'a> CauseSpecificCox<'a> {
     pub fn fit(
         data: &SurvData<'a>,
         designs: &[MatRef<'a, f64>],
-        opts: &CscOptions<'a>,
+        opts: &CscOptions,
     ) -> Result<Self> {
         let plan = Plan::new(data, designs, opts)?;
         let mut fits = Vec::with_capacity(plan.options.len());
@@ -369,7 +363,7 @@ impl<'a> CauseSpecificCox<'a> {
         data: &SurvData<'a>,
         designs: &[MatRef<'a, f64>],
         fits: Vec<CoxModelFit>,
-        opts: &CscOptions<'a>,
+        opts: &CscOptions,
     ) -> Result<Self> {
         let plan = Plan::new(data, designs, opts)?;
         check_lengths(&[("designs", designs.len()), ("fits", fits.len())])?;
@@ -448,16 +442,12 @@ impl<'a> CauseSpecificCox<'a> {
 struct Plan<'a> {
     data: SurvData<'a>,
     overall: Option<SurvBuf>,
-    options: Vec<CoxOptions<'a>>,
+    options: Vec<CoxOptions>,
     surv_type: SurvType,
 }
 
 impl<'a> Plan<'a> {
-    fn new(
-        data: &SurvData<'a>,
-        designs: &[MatRef<'a, f64>],
-        opts: &CscOptions<'a>,
-    ) -> Result<Self> {
+    fn new(data: &SurvData<'a>, designs: &[MatRef<'a, f64>], opts: &CscOptions) -> Result<Self> {
         let fixed = data.clone().with_timefix(opts.timefix)?;
         let n_codes = fixed.followup()?.n_codes();
         if n_codes < 2 {
@@ -477,13 +467,9 @@ impl<'a> Plan<'a> {
             }
         };
         check_lengths(&[("models", expected), ("designs", designs.len())])?;
-        if let Some(offset) = opts.offset {
-            check_lengths(&[("data", fixed.n_rows()), ("offset", offset.len())])?;
-        }
         let base = CoxOptions {
             ties: opts.ties,
             timefix: opts.timefix,
-            offset: opts.offset,
             ..CoxOptions::default()
         };
         let (overall, options) = match opts.surv_type {
@@ -492,7 +478,7 @@ impl<'a> Plan<'a> {
                 (1..=n_codes)
                     .map(|code| CoxOptions {
                         cause: Some(code),
-                        ..base
+                        ..base.clone()
                     })
                     .collect(),
             ),
@@ -502,7 +488,7 @@ impl<'a> Plan<'a> {
                     cause: None,
                     // The times of the buffer are fixed already.
                     timefix: TimeFix::Exact,
-                    ..base
+                    ..base.clone()
                 };
                 (
                     Some(buf),
@@ -552,6 +538,9 @@ pub(crate) fn overall_data(data: &SurvData<'_>) -> Result<SurvBuf> {
     if let Some(weight) = data.weight() {
         builder = builder.weight(weight.to_vec());
     }
+    if let Some(offset) = data.offset() {
+        builder = builder.offset(offset.to_vec());
+    }
     if let Some(stratum) = data.stratum() {
         builder = builder.stratum(stratum.to_vec());
     }
@@ -596,7 +585,7 @@ impl CauseSpecificCox<'_> {
                 data: self.model_data(m),
                 x: self.designs[m],
                 fit: &self.fits[m],
-                options: self.options[m],
+                options: self.options[m].clone(),
             })
             .collect()
     }
@@ -680,7 +669,7 @@ impl CauseSpecificCox<'_> {
         if let Some(offset) = new.offset {
             check_lengths(&[("new designs", rows), ("new offset", offset.len())])?;
             refuse_non_finite(offset, "new offset")?;
-            if self.options[0].offset.is_none() {
+            if self.data.offset().is_none() {
                 return Err(Error::invalid(
                     "new offset: the models were fitted without an offset",
                 ));
@@ -693,7 +682,7 @@ impl CauseSpecificCox<'_> {
                 for (a, b) in model.beta.iter().enumerate() {
                     eta += new.designs[m][(r, a)] * b;
                 }
-                if self.options[0].offset.is_some() {
+                if self.data.offset().is_some() {
                     eta += new.offset.map_or(0.0, |o| o[r]) - model.offset_centre;
                 }
                 let value = eta.exp();

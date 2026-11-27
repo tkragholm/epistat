@@ -42,7 +42,7 @@ struct Set {
     var_robust: Vec<Vec<f64>>,
     loglik: f64,
     loglik_null: f64,
-    iter: u32,
+    iter: usize,
     kappa: f64,
     base_time: Vec<f64>,
     base_hazard: Vec<f64>,

@@ -249,7 +249,6 @@ impl MsModel {
             ties: self.ties,
             timefix: TimeFix::Exact,
             cause: None,
-            offset: self.offset.as_deref(),
             ..CoxOptions::default()
         };
         let data = self.stacked.as_data();

@@ -22,7 +22,7 @@ pub(crate) struct ModelInput<'a> {
     pub(crate) data: SurvData<'a>,
     pub(crate) x: MatRef<'a, f64>,
     pub(crate) fit: &'a CoxModelFit,
-    pub(crate) options: CoxOptions<'a>,
+    pub(crate) options: CoxOptions,
 }
 
 /// The baseline of one model in one stratum on the grid.
@@ -80,7 +80,7 @@ impl Baselines {
                 ..BaselineOptions::default()
             };
             bases.push(basehaz(&fitted, &opts)?);
-            offset_centres.push(if model.options.offset.is_some() {
+            offset_centres.push(if model.data.offset().is_some() {
                 reference_offset(&fitted)?
             } else {
                 0.0
@@ -272,7 +272,7 @@ fn train_model(
             for (a, b) in beta.iter().enumerate() {
                 eta += x[(i, a)] * b;
             }
-            if let Some(offset) = model.options.offset {
+            if let Some(offset) = model.data.offset() {
                 eta += offset[i] - mean_offset;
             }
             eta.exp()
@@ -287,7 +287,7 @@ fn train_model(
     let v = covariance(model, m)?;
     let options = CoxOptions {
         ties: Ties::Breslow,
-        ..model.options
+        ..model.options.clone()
     };
     let coefficients: Vec<Option<f64>> = beta.iter().copied().map(Some).collect();
     let scores = score_residuals(&model.data, x, &coefficients, &options)?;
