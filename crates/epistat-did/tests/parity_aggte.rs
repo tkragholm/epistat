@@ -4,17 +4,29 @@
 //!
 //! The fixture is written by `tests/data/generate_aggte_reference.R`. Every
 //! scenario carries the cells `att_gt` returned, with their influence functions
-//! in the order of the sorted unit ids, so the aggregation is the only thing
-//! compared. The influence functions of the aggregates are compared too: they
-//! are deterministic, and the bootstrap is a function of them.
+//! in the order of the sorted unit ids. The cells here are this crate's fit of
+//! the same `mpdta` panel, which agree with R's to `1e-10` in the estimates
+//! and `1e-7` in the influence values (`parity_cs_panel.rs`). The aggregates
+//! are weighted means of the cells with weights below one, plus the
+//! estimated-share correction, whose factor `w / p` is below 10 here, so the
+//! estimates and standard errors agree with R's to `1e-9` and the aggregate
+//! influence values to `1e-6`. The influence functions of the aggregates are
+//! compared too: they are deterministic, and the bootstrap is a function of
+//! them.
 
-use epistat_did::{
-    AggteBootstrap, AggteConfig, AggteError, AggteResult, AggteType, AttGtEstimate, PretestError,
-    UnitPanel, aggregate_att_gt, pretrend_wald_test,
+#[path = "common/att_gt_rows.rs"]
+#[expect(dead_code, reason = "the shared helpers serve several tests")]
+mod rows;
+
+use epistat_core::{Bootstrap as Draws, Classify};
+use epistat_did::Error;
+use epistat_did::att_gt::{
+    AggteOptions, AggteType, AttGt, AttGtOptions, Band, BasePeriod, Estimator,
 };
 use epistat_inference::Clusters;
 use epistat_rng::Stream;
 use epistat_testkit::{assert_same_on_threads, load_json};
+use rows::{Obs, Summary};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -26,18 +38,7 @@ struct Pretest {
 }
 
 #[derive(Deserialize)]
-struct Cells {
-    group: Vec<i32>,
-    t: Vec<i32>,
-    att: Vec<f64>,
-    /// One row per unit, one column per cell.
-    inffunc: Vec<Vec<f64>>,
-}
-
-#[derive(Deserialize)]
 struct Scenario {
-    #[serde(flatten)]
-    cells: Cells,
     #[serde(rename = "W")]
     w: f64,
     #[serde(rename = "Wpval")]
@@ -118,14 +119,12 @@ struct GapMaxE {
 #[derive(Deserialize)]
 struct Gap {
     unit_group: Vec<f64>,
-    cells: Cells,
     max_e: Vec<GapMaxE>,
 }
 
 #[derive(Deserialize)]
 struct Reference {
     unit_group: Vec<f64>,
-    unit_state: Vec<f64>,
     universal: Scenario,
     varying: Scenario,
     max_e: Vec<MaxE>,
@@ -138,52 +137,71 @@ fn reference() -> Reference {
     load_json("tests/data/aggte_ref.json")
 }
 
-fn estimates(cells: &Cells) -> Vec<AttGtEstimate> {
-    (0..cells.group.len())
-        .map(|k| AttGtEstimate {
-            group: cells.group[k],
-            time: cells.t[k],
-            event_time: cells.t[k] - cells.group[k],
-            att: cells.att[k],
-            ..AttGtEstimate::default()
+#[derive(Deserialize)]
+struct DataRow {
+    year: i32,
+    countyreal: i64,
+    lemp: f64,
+    #[serde(rename = "first.treat")]
+    first_treat: i32,
+    lpop: f64,
+}
+
+#[derive(Deserialize)]
+struct Data {
+    data_subset: Vec<DataRow>,
+}
+
+/// `mpdta` with log population as the covariate, and the state, the county
+/// number divided by 1000, as the cluster when asked, as the fixture's
+/// `att_gt(clustervars = "state")`.
+fn mpdta(clustered: bool, keep: impl Fn(&DataRow) -> bool) -> Vec<Obs> {
+    let data: Data = load_json("tests/data/cs_panel_dr_universal_ref.json");
+    data.data_subset
+        .iter()
+        .filter(|row| keep(row))
+        .map(|row| Obs {
+            covariates: vec![row.lpop],
+            cluster: clustered.then(|| u32::try_from(row.countyreal / 1000).expect("a state")),
+            ..Obs::new(
+                Some(row.countyreal),
+                (row.first_treat != 0).then_some(row.first_treat),
+                row.year,
+                row.lemp,
+            )
         })
         .collect()
 }
 
-/// One vector per cell (or path point), from the fixture's unit-by-column rows.
-fn columns(rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
-    (0..rows[0].len())
-        .map(|j| rows.iter().map(|row| row[j]).collect())
-        .collect()
-}
-
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "cohorts are small whole numbers written as doubles by R"
-)]
-fn panel(unit_group: &[f64]) -> UnitPanel {
-    UnitPanel::unweighted(
-        unit_group
-            .iter()
-            .map(|&g| (g != 0.0).then_some(g as i32))
-            .collect(),
+fn fit(rows: &[Obs], base_period: BasePeriod) -> AttGt {
+    rows::fit(
+        rows,
+        &AttGtOptions {
+            base_period,
+            ..AttGtOptions::default()
+        },
     )
+    .expect("ATT(g,t)")
 }
 
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "state codes are small whole numbers written as doubles by R"
-)]
-fn clustered_panel(r: &Reference) -> UnitPanel {
-    panel(&r.unit_group).clustered_by(r.unit_state.iter().map(|&s| s as i64).collect())
+fn universal(clustered: bool) -> AttGt {
+    fit(&mpdta(clustered, |_| true), BasePeriod::Universal)
 }
 
-fn config(aggregation: AggteType) -> AggteConfig {
-    AggteConfig {
+fn config(aggregation: AggteType) -> AggteOptions {
+    AggteOptions {
         aggregation,
-        ..AggteConfig::default()
+        ..AggteOptions::default()
     }
 }
+
+fn aggregate(fit: &AttGt, options: AggteOptions) -> Summary {
+    rows::summary(&fit.aggregate(&options).expect("aggregate"))
+}
+
+/// The tolerances of the module documentation.
+const ESTIMATE: f64 = 1e-9;
+const INFLUENCE: f64 = 1e-6;
 
 fn close(got: f64, want: f64, tolerance: f64, label: &str) {
     assert!(
@@ -199,25 +217,32 @@ fn assert_vectors_close(got: &[f64], want: &[f64], tolerance: f64, label: &str) 
     }
 }
 
-/// Estimates, standard errors and influence functions of the overall effect and
-/// the path, against R's.
-fn check(label: &str, got: &AggteResult, want: &Agg) {
+/// One vector per path point, from the fixture's unit-by-column rows.
+fn columns(rows: &[Vec<f64>]) -> Vec<Vec<f64>> {
+    (0..rows[0].len())
+        .map(|j| rows.iter().map(|row| row[j]).collect())
+        .collect()
+}
+
+/// Estimates, standard errors and influence functions of the overall effect
+/// and the path, against R's.
+fn check(label: &str, got: &Summary, want: &Agg) {
     close(
         got.overall_att,
         want.overall_att,
-        1e-9,
+        ESTIMATE,
         &format!("{label} att"),
     );
     close(
         got.overall_se,
         want.overall_se,
-        1e-9,
+        ESTIMATE,
         &format!("{label} se"),
     );
     assert_vectors_close(
         &got.overall_influence,
         &want.inf_overall,
-        1e-9,
+        INFLUENCE,
         &format!("{label} overall influence"),
     );
     let Some(keys) = &want.egt else {
@@ -233,45 +258,53 @@ fn check(label: &str, got: &AggteResult, want: &Agg) {
         close(
             point.att,
             atts[j],
-            1e-9,
+            ESTIMATE,
             &format!("{label} att at {}", keys[j]),
         );
         close(
             point.se,
             ses[j],
-            1e-9,
+            ESTIMATE,
             &format!("{label} se at {}", keys[j]),
         );
         assert_vectors_close(
             &point.influence,
             &influence[j],
-            1e-9,
+            INFLUENCE,
             &format!("{label} influence at {}", keys[j]),
         );
     }
 }
 
 #[test]
+fn the_units_and_cohorts_are_the_fixtures() {
+    let r = reference();
+    let fit = universal(false);
+    let groups: Vec<f64> = fit
+        .sample()
+        .groups
+        .iter()
+        .map(|g| g.map_or(0.0, |g| g as f64))
+        .collect();
+    assert_eq!(groups, r.unit_group);
+}
+
+#[test]
 fn max_e_applies_to_simple_and_group_as_in_did() {
     let r = reference();
-    let cells = estimates(&r.universal.cells);
-    let influence = columns(&r.universal.cells.inffunc);
-    let p = panel(&r.unit_group);
+    let fit = universal(false);
     for case in &r.max_e {
         let with = |aggregation, balance_e, min_e| {
-            aggregate_att_gt(
-                &cells,
-                &influence,
-                &p,
-                AggteConfig {
+            aggregate(
+                &fit,
+                AggteOptions {
                     aggregation,
                     balance_e,
                     min_e,
-                    max_e: Some(case.bound),
-                    ..AggteConfig::default()
+                    max_e: Some(i64::from(case.bound)),
+                    ..AggteOptions::default()
                 },
             )
-            .expect("aggregate")
         };
         let label = |name: &str| format!("{name} max_e={}", case.bound);
         check(
@@ -303,34 +336,36 @@ fn max_e_applies_to_simple_and_group_as_in_did() {
     }
     // The bound bites: max_e = 0 leaves one cell per cohort, so it differs from
     // the unrestricted summary.
-    let free = aggregate_att_gt(&cells, &influence, &p, config(AggteType::Simple)).unwrap();
+    let free = aggregate(&fit, config(AggteType::Simple));
     assert!((free.overall_att - r.max_e[0].simple.overall_att).abs() > 1e-4);
 }
 
-/// With a missing period did counts `max_e` for simple and group in steps of the
-/// sorted period list, so one step can span two years.
+/// With a missing period did counts `max_e` for simple and group in steps of
+/// the sorted period list, so one step can span two years.
 #[test]
 fn max_e_counts_periods_in_the_list_of_periods_as_in_did() {
     let r = reference();
-    let cells = estimates(&r.gap.cells);
-    let influence = columns(&r.gap.cells.inffunc);
-    let p = panel(&r.gap.unit_group);
+    let fit = fit(&mpdta(false, |row| row.year != 2005), BasePeriod::Universal);
+    let groups: Vec<f64> = fit
+        .sample()
+        .groups
+        .iter()
+        .map(|g| g.map_or(0.0, |g| g as f64))
+        .collect();
+    assert_eq!(groups, r.gap.unit_group);
     for case in &r.gap.max_e {
         for (aggregation, want) in [
             (AggteType::Simple, &case.simple),
             (AggteType::Group, &case.group),
         ] {
-            let got = aggregate_att_gt(
-                &cells,
-                &influence,
-                &p,
-                AggteConfig {
+            let got = aggregate(
+                &fit,
+                AggteOptions {
                     aggregation,
-                    max_e: Some(case.max_e),
-                    ..AggteConfig::default()
+                    max_e: Some(i64::from(case.max_e)),
+                    ..AggteOptions::default()
                 },
-            )
-            .expect("aggregate");
+            );
             check(
                 &format!("gap {aggregation:?} max_e={}", case.max_e),
                 &got,
@@ -342,41 +377,29 @@ fn max_e_counts_periods_in_the_list_of_periods_as_in_did() {
 
 #[test]
 fn a_max_e_below_zero_leaves_no_post_treatment_cell() {
-    let r = reference();
-    let cells = estimates(&r.universal.cells);
-    let influence = columns(&r.universal.cells.inffunc);
-    let got = aggregate_att_gt(
-        &cells,
-        &influence,
-        &panel(&r.unit_group),
-        AggteConfig {
-            aggregation: AggteType::Simple,
-            max_e: Some(-1),
-            ..AggteConfig::default()
-        },
-    );
-    assert_eq!(got.unwrap_err(), AggteError::NoPostTreatmentCells);
+    let got = universal(false).aggregate(&AggteOptions {
+        aggregation: AggteType::Simple,
+        max_e: Some(-1),
+        ..AggteOptions::default()
+    });
+    assert_eq!(got.unwrap_err(), Error::NoPostTreatmentCells);
 }
 
 #[test]
 fn clustered_aggregates_match_did() {
     let r = reference();
-    let cells = estimates(&r.universal.cells);
-    let influence = columns(&r.universal.cells.inffunc);
-    let clustered = clustered_panel(&r);
-    let plain = panel(&r.unit_group);
+    let clustered = universal(true);
+    let plain = universal(false);
     for (aggregation, want) in [
         (AggteType::Simple, &r.clustered.simple),
         (AggteType::Dynamic, &r.clustered.dynamic),
         (AggteType::Group, &r.clustered.group),
         (AggteType::Calendar, &r.clustered.calendar),
     ] {
-        let got = aggregate_att_gt(&cells, &influence, &clustered, config(aggregation))
-            .expect("aggregate");
+        let got = aggregate(&clustered, config(aggregation));
         check(&format!("clustered {aggregation:?}"), &got, want);
         // The clusters change the standard error by more than the tolerance.
-        let unclustered =
-            aggregate_att_gt(&cells, &influence, &plain, config(aggregation)).unwrap();
+        let unclustered = aggregate(&plain, config(aggregation));
         assert!(
             (unclustered.overall_se - got.overall_se).abs() > 1e-4 * got.overall_se,
             "{aggregation:?}: clustering did not move the standard error"
@@ -384,14 +407,20 @@ fn clustered_aggregates_match_did() {
     }
 }
 
+/// The statistic is a quadratic form in the pre-treatment cells, whose
+/// estimates agree with R's to `1e-10` and whose covariance agrees to the
+/// influence values' `1e-7` relative to values of order one, so `W` agrees to
+/// about `1e-6` relative.
 #[test]
 fn the_pre_test_matches_did() {
     let r = reference();
-    for (name, scenario) in [("universal", &r.universal), ("varying", &r.varying)] {
-        let cells = estimates(&scenario.cells);
-        let influence = columns(&scenario.cells.inffunc);
-        let got = pretrend_wald_test(&cells, &influence, &panel(&r.unit_group)).expect("test");
-        close(got.statistic, scenario.w, 1e-8, &format!("{name} W"));
+    for (name, scenario, base) in [
+        ("universal", &r.universal, BasePeriod::Universal),
+        ("varying", &r.varying, BasePeriod::Varying),
+    ] {
+        let fitted = fit(&mpdta(false, |_| true), base);
+        let got = fitted.pretest().expect("test");
+        close(got.statistic, scenario.w, 1e-6, &format!("{name} W"));
         // did rounds the p-value to five decimals.
         assert!(
             (got.p_value - scenario.p_value).abs() <= 5e-6,
@@ -399,15 +428,20 @@ fn the_pre_test_matches_did() {
             got.p_value,
             scenario.p_value
         );
-        let pre = cells.iter().filter(|c| c.time < c.group).count();
+        let pre = fitted
+            .cells()
+            .iter()
+            .filter(|c| c.estimate.is_some() && c.time < c.group)
+            .count();
         assert_eq!(got.df, pre, "{name} degrees of freedom");
 
-        let clustered =
-            pretrend_wald_test(&cells, &influence, &clustered_panel(&r)).expect("clustered test");
+        let clustered = fit(&mpdta(true, |_| true), base)
+            .pretest()
+            .expect("clustered test");
         close(
             clustered.statistic,
             scenario.clustered_pretest.w,
-            1e-8,
+            1e-6,
             &format!("{name} clustered W"),
         );
         assert!(
@@ -420,52 +454,23 @@ fn the_pre_test_matches_did() {
 
 #[test]
 fn the_pre_test_refuses_what_has_nothing_to_test() {
-    let r = reference();
-    let cells = estimates(&r.universal.cells);
-    let influence = columns(&r.universal.cells.inffunc);
-    let post = (0..cells.len())
-        .filter(|&i| cells[i].time >= cells[i].group)
-        .collect::<Vec<_>>();
-    let only_post = post.iter().map(|&i| cells[i]).collect::<Vec<_>>();
-    let only_post_influence = post
-        .iter()
-        .map(|&i| influence[i].clone())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        pretrend_wald_test(&only_post, &only_post_influence, &panel(&r.unit_group)),
-        Err(PretestError::NoPreTreatmentCells)
-    );
-
-    // Two pre-treatment cells with the same influence function: singular.
-    let pre = cells.iter().position(|c| c.time < c.group).unwrap();
-    let doubled = [cells[pre], cells[pre]];
-    let doubled_influence = [influence[pre].clone(), influence[pre].clone()];
-    assert_eq!(
-        pretrend_wald_test(&doubled, &doubled_influence, &panel(&r.unit_group)),
-        Err(PretestError::SingularCovariance)
-    );
-}
-
-fn bootstrap(
-    replicates: usize,
-    seed: u64,
-    standard_errors: bool,
-    uniform_band: bool,
-) -> AggteBootstrap {
-    AggteBootstrap {
-        replicates,
-        seed,
-        standard_errors,
-        uniform_band,
-    }
-}
-
-fn boot_config(aggregation: AggteType, replicates: usize, seed: u64) -> AggteConfig {
-    AggteConfig {
-        aggregation,
-        bootstrap: Some(bootstrap(replicates, seed, true, true)),
-        ..AggteConfig::default()
-    }
+    // The efficient estimator has no pre-treatment cells.
+    let plain: Vec<Obs> = mpdta(false, |_| true)
+        .into_iter()
+        .map(|row| Obs {
+            covariates: Vec::new(),
+            ..row
+        })
+        .collect();
+    let efficient = rows::fit(
+        &plain,
+        &AttGtOptions {
+            estimator: Estimator::Efficient,
+            ..AttGtOptions::default()
+        },
+    )
+    .expect("efficient");
+    assert_eq!(efficient.pretest().unwrap_err(), Error::NoPreTreatmentCells);
 }
 
 /// Bootstrap standard errors and the uniform critical value against `did`'s.
@@ -478,7 +483,7 @@ fn boot_config(aggregation: AggteType, replicates: usize, seed: u64) -> AggteCon
 /// also in the fixture. Both sides use `B = 100000`, so the difference has
 /// standard deviation `sqrt(2)` times the one-sided error, and the bound is four
 /// of those.
-fn check_bootstrap(label: &str, got: &AggteResult, want: &BootAgg, biters: usize) {
+fn check_bootstrap(label: &str, got: &Summary, want: &BootAgg, biters: usize) {
     let four = 4.0 * 2.0_f64.sqrt();
     assert!(
         got.uniform_band || want.crit_val.is_none(),
@@ -487,7 +492,7 @@ fn check_bootstrap(label: &str, got: &AggteResult, want: &BootAgg, biters: usize
     close(
         got.overall_att,
         want.agg.overall_att,
-        1e-9,
+        ESTIMATE,
         &format!("{label} overall att"),
     );
     let bound = four * want.overall_se_rel_mc * want.agg.overall_se;
@@ -526,12 +531,19 @@ fn check_bootstrap(label: &str, got: &AggteResult, want: &BootAgg, biters: usize
     );
 }
 
+fn boot_config(aggregation: AggteType, replicates: usize, seed: u64) -> AggteOptions {
+    AggteOptions {
+        aggregation,
+        bootstrap: Some(Draws::new(replicates, seed)),
+        band: Band::Uniform,
+        ..AggteOptions::default()
+    }
+}
+
 #[test]
 fn bootstrap_aggregates_agree_with_did_within_monte_carlo_error() {
     let r = reference();
-    let cells = estimates(&r.universal.cells);
-    let influence = columns(&r.universal.cells.inffunc);
-    let p = panel(&r.unit_group);
+    let fitted = universal(false);
     let b = r.bootstrap.biters;
     for (aggregation, want) in [
         (AggteType::Simple, &r.bootstrap.unclustered.simple),
@@ -539,28 +551,20 @@ fn bootstrap_aggregates_agree_with_did_within_monte_carlo_error() {
         (AggteType::Group, &r.bootstrap.unclustered.group),
         (AggteType::Calendar, &r.bootstrap.unclustered.calendar),
     ] {
-        let got = aggregate_att_gt(
-            &cells,
-            &influence,
-            &p,
-            boot_config(aggregation, b, 20_261_124),
-        )
-        .expect("aggregate");
+        let got = aggregate(&fitted, boot_config(aggregation, b, 20_261_124));
         check_bootstrap(&format!("{aggregation:?}"), &got, want, b);
-        // The influence functions that go into the bootstrap are R's.
-        let exact = aggregate_att_gt(&cells, &influence, &p, config(aggregation)).unwrap();
+        // The influence functions that go into the bootstrap are the
+        // analytic ones.
+        let exact = aggregate(&fitted, config(aggregation));
         for (point, analytic) in got.by_key.iter().zip(&exact.by_key) {
             assert_eq!(point.influence, analytic.influence);
         }
         assert_eq!(got.overall_influence, exact.overall_influence);
     }
-    let clustered = aggregate_att_gt(
-        &cells,
-        &influence,
-        &clustered_panel(&r),
+    let clustered = aggregate(
+        &universal(true),
         boot_config(AggteType::Dynamic, b, 20_261_124),
-    )
-    .expect("clustered");
+    );
     check_bootstrap(
         "clustered dynamic",
         &clustered,
@@ -571,18 +575,9 @@ fn bootstrap_aggregates_agree_with_did_within_monte_carlo_error() {
 
 #[test]
 fn bootstrap_results_do_not_depend_on_the_thread_count() {
-    let r = reference();
-    let cells = estimates(&r.universal.cells);
-    let influence = columns(&r.universal.cells.inffunc);
-    let p = clustered_panel(&r);
+    let fitted = universal(true);
     assert_same_on_threads(|| {
-        let got = aggregate_att_gt(
-            &cells,
-            &influence,
-            &p,
-            boot_config(AggteType::Dynamic, 3000, 7),
-        )
-        .unwrap();
+        let got = aggregate(&fitted, boot_config(AggteType::Dynamic, 3000, 7));
         let mut out = vec![got.critical_value, got.overall_se];
         out.extend(got.by_key.iter().map(|point| point.se));
         out
@@ -601,27 +596,12 @@ fn bootstrap_results_do_not_depend_on_the_thread_count() {
 #[test]
 fn the_uniform_critical_value_has_the_stated_coverage_on_fresh_draws() {
     let r = reference();
-    let cells = estimates(&r.universal.cells);
-    let influence = columns(&r.universal.cells.inffunc);
     let (b, m) = (20_000_usize, 40_000_usize);
     for clustered in [false, true] {
-        let p = if clustered {
-            clustered_panel(&r)
-        } else {
-            panel(&r.unit_group)
-        };
-        let got = aggregate_att_gt(
-            &cells,
-            &influence,
-            &p,
-            boot_config(AggteType::Dynamic, b, 99),
-        )
-        .unwrap();
-        let groups = p
-            .clusters
-            .as_ref()
-            .map(|labels| Clusters::from_sorted_labels(labels));
-        let n = p.groups.len();
+        let fitted = universal(clustered);
+        let got = aggregate(&fitted, boot_config(AggteType::Dynamic, b, 99));
+        let groups = fitted.clusters().map(Clusters::from_codes);
+        let n = fitted.sample().units.len();
         let g = groups.as_ref().map_or(n, Clusters::count);
         // Cluster sums of the path's influence functions, one row per cluster.
         let sums: Vec<Vec<f64>> = got
@@ -673,55 +653,21 @@ fn the_uniform_critical_value_has_the_stated_coverage_on_fresh_draws() {
 }
 
 #[test]
-fn the_flags_choose_what_the_bootstrap_replaces() {
-    let r = reference();
-    let cells = estimates(&r.universal.cells);
-    let influence = columns(&r.universal.cells.inffunc);
-    let p = panel(&r.unit_group);
-    let analytic = aggregate_att_gt(&cells, &influence, &p, config(AggteType::Dynamic)).unwrap();
-    let full = aggregate_att_gt(
-        &cells,
-        &influence,
-        &p,
-        boot_config(AggteType::Dynamic, 2000, 5),
-    )
-    .unwrap();
+fn the_options_choose_what_the_bootstrap_replaces() {
+    let fitted = universal(false);
+    let analytic = aggregate(&fitted, config(AggteType::Dynamic));
+    let full = aggregate(&fitted, boot_config(AggteType::Dynamic, 2000, 5));
+    assert!(full.uniform_band);
 
-    // cband only: analytic standard errors, uniform critical value.
-    let band_only = aggregate_att_gt(
-        &cells,
-        &influence,
-        &p,
-        AggteConfig {
-            bootstrap: Some(bootstrap(2000, 5, false, true)),
-            ..config(AggteType::Dynamic)
+    // The bootstrap without the band: bootstrap standard errors, pointwise
+    // critical value.
+    let se_only = aggregate(
+        &fitted,
+        AggteOptions {
+            band: Band::Pointwise,
+            ..boot_config(AggteType::Dynamic, 2000, 5)
         },
-    )
-    .unwrap();
-    assert!(band_only.uniform_band);
-    assert_eq!(
-        band_only.critical_value.to_bits(),
-        full.critical_value.to_bits()
     );
-    assert_eq!(
-        band_only.overall_se.to_bits(),
-        analytic.overall_se.to_bits()
-    );
-    for (a, b) in band_only.by_key.iter().zip(&analytic.by_key) {
-        assert_eq!(a.se.to_bits(), b.se.to_bits());
-    }
-
-    // bstrap only: bootstrap standard errors, pointwise critical value.
-    let se_only = aggregate_att_gt(
-        &cells,
-        &influence,
-        &p,
-        AggteConfig {
-            bootstrap: Some(bootstrap(2000, 5, true, false)),
-            ..config(AggteType::Dynamic)
-        },
-    )
-    .unwrap();
     assert!(!se_only.uniform_band);
     assert_eq!(
         se_only.critical_value.to_bits(),
@@ -730,16 +676,12 @@ fn the_flags_choose_what_the_bootstrap_replaces() {
     assert_eq!(se_only.overall_se.to_bits(), full.overall_se.to_bits());
     assert!((se_only.by_key[0].se - analytic.by_key[0].se).abs() > 1e-12);
 
-    for bad in [bootstrap(0, 1, true, true), bootstrap(10, 1, false, false)] {
-        let refused = aggregate_att_gt(
-            &cells,
-            &influence,
-            &p,
-            AggteConfig {
-                bootstrap: Some(bad),
-                ..config(AggteType::Dynamic)
-            },
-        );
-        assert_eq!(refused.unwrap_err(), AggteError::InvalidBootstrap);
-    }
+    // A band needs the bootstrap, and the bootstrap a replicate.
+    let band_only = fitted.aggregate(&AggteOptions {
+        band: Band::Uniform,
+        ..config(AggteType::Dynamic)
+    });
+    assert_eq!(band_only.unwrap_err().code(), "did.unsupported");
+    let none = fitted.aggregate(&boot_config(AggteType::Dynamic, 0, 1));
+    assert_eq!(none.unwrap_err().code(), "input.domain");
 }

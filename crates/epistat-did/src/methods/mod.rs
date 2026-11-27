@@ -4,7 +4,6 @@ pub mod continuous;
 pub mod dcdh;
 pub mod did_cc;
 pub mod drdid;
-pub mod efficient;
 pub mod etwfe;
 pub mod imputation;
 pub mod missing;

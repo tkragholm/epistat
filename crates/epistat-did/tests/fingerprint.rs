@@ -9,37 +9,31 @@
 
 use std::fmt::Debug;
 
+use epistat_core::{Bootstrap, Level};
+use epistat_did::att_gt::{
+    self, Aggte, AggteOptions, AggteType, AggteWeights, AttGt, AttGtOptions, BasePeriod,
+    ComparisonGroup, Design, Estimator, NuisanceOptions, UnbalancedPanel,
+};
 use epistat_did::{
-    AggteBootstrap, AggteConfig, AggteType, AttGtAggregationConfig, AttGtAggregationWeighting,
-    AttGtBandConfig, AttGtConfig, AttGtDrConfig, AttGtDrObservation, AttGtError,
-    AttGtInfluenceOutput, AttGtObservation, BasePeriod, ClusterIndex, ComparisonGroup,
     ContinuousObservation, DesignPruning, DidCcConfig, DidConfig, DrDidConfig, DrDidObservation,
-    DrDidRepeatedObservation, EfficientDidConfig, HonestEventStudyInput, HonestJointPathConfig,
-    HonestJointPathMethod, HonestMonotonicityDirection, HonestPostFunctional,
-    HonestRelativeMagnitudeBound, HonestSensitivity, InferenceConfig, LeastFavorableSimulation,
-    PanelFlatInput, PanelObservation, PolynomialBasis, RelativeMagnitudeConfidenceSetConfig,
-    SensitivitySummaryMethod, TripleDidObservation, UnbalancedPanel, aggregate_att_gt,
-    aggregate_att_gt_by_calendar_time, aggregate_att_gt_by_cohort,
-    aggregate_att_gt_event_time_with_influence, aggregate_att_gt_overall,
-    aggregate_efficient_att_gt_event_time,
-    assess_honest_event_study_directional_region_with_config,
+    DrDidRepeatedObservation, HonestEventStudyInput, HonestJointPathConfig, HonestJointPathMethod,
+    HonestMonotonicityDirection, HonestPostFunctional, HonestRelativeMagnitudeBound,
+    HonestSensitivity, InferenceConfig, LeastFavorableSimulation, PanelFlatInput, PanelObservation,
+    PolynomialBasis, RelativeMagnitudeConfidenceSetConfig, SensitivitySummaryMethod,
+    StaggeredPanel, TripleDidObservation, assess_honest_event_study_directional_region_with_config,
     assess_honest_event_study_joint_path_region_with_config, assess_honest_event_study_workflow,
-    att_gt_clustered_standard_errors, att_gt_mboot_bands, clustered_standard_error_from_index,
     compute_original_confidence_set, compute_relative_magnitude_confidence_set,
-    compute_relative_magnitude_identified_set, estimate_acrt_sieve, estimate_att_gt,
-    estimate_att_gt_dr_efficient_with_influence, estimate_att_gt_dr_panel_with_influence,
-    estimate_att_gt_dr_with_influence, estimate_att_gt_efficient, estimate_att_gt_efficient_dr,
-    estimate_att_gt_ipw_panel_with_influence, estimate_att_gt_ipw_with_influence,
-    estimate_att_gt_or_panel_with_influence, estimate_att_gt_or_with_influence,
-    estimate_att_two_by_two, estimate_did_cc_robust, estimate_did_cc_stationary, estimate_dr_ddd,
+    compute_relative_magnitude_identified_set, estimate_acrt_sieve, estimate_att_two_by_two,
+    estimate_did_cc_robust, estimate_did_cc_stationary, estimate_dr_ddd,
     estimate_drdid_improved_panel, estimate_drdid_improved_repeated_cross_section,
     estimate_drdid_panel, estimate_drdid_repeated_cross_section, estimate_drdid_repeated_efficient,
     estimate_ipw_did_panel, estimate_ipw_did_repeated_cross_section, estimate_or_did_panel,
     estimate_or_did_repeated_cross_section, estimate_smoothness_upper_bound_from_pretrends,
     fit_drdid_panel_nuisance, fit_drdid_panel_propensity_coefficients, independent_design_columns,
-    pretrend_wald_test, summarize_relative_magnitude_sensitivity_many_with_simulation,
-    summarize_smoothness_sensitivity_with_simulation, test_did_cc_stationarity, unit_panel,
+    summarize_relative_magnitude_sensitivity_many_with_simulation,
+    summarize_smoothness_sensitivity_with_simulation, test_did_cc_stationarity,
 };
+use epistat_linalg::MatRef;
 use epistat_testkit::{Fingerprint, load_json, on_threads};
 use serde::Deserialize;
 
@@ -98,20 +92,198 @@ fn digest(value: &impl Debug) -> u64 {
         .finish()
 }
 
-/// The digest of an ATT(g,t) route's cells, without the sample, which
-/// `att_gt_dr_panel_sample` pins on its own.
-fn attgt_digest(output: &Result<AttGtInfluenceOutput, AttGtError>) -> u64 {
-    digest(&output.as_ref().map(|out| {
-        (
-            &out.estimates,
-            &out.influence_functions,
-            &out.skipped,
-            &out.pruned,
-        )
-    }))
+/// The hash of numbers in the order the `Debug` form of a result printed
+/// them: a NaN as `NaN` prints it, so every NaN hashes alike.
+fn hash_numbers(values: &[f64]) -> u64 {
+    let values: Vec<f64> = values
+        .iter()
+        .map(|&v| if v.is_nan() { f64::NAN } else { v })
+        .collect();
+    Fingerprint::new().f64s(&values).finish()
 }
 
-#[derive(Deserialize)]
+/// A count or a period as the `Debug` form printed it.
+#[expect(clippy::cast_precision_loss, reason = "small integers")]
+fn int(value: impl Into<i128>) -> f64 {
+    value.into() as f64
+}
+
+/// An `f64` field that is `Option` here and was NaN when undefined.
+fn nan(value: Option<f64>) -> f64 {
+    value.unwrap_or(f64::NAN)
+}
+
+/// The numbers of a cell as `AttGtEstimate` printed them.
+fn cell_numbers(cell: &att_gt::AttGtCell, out: &mut Vec<f64>) {
+    let estimate = cell.estimate.expect("an estimated cell");
+    out.extend([
+        int(cell.group),
+        int(cell.time),
+        int(cell.event_time),
+        estimate.estimate,
+        nan(estimate.se),
+        nan(estimate.lower()),
+        nan(estimate.upper()),
+        int(cell.n_treated as u64),
+        int(cell.n_control as u64),
+        cell.total_weight,
+    ]);
+}
+
+fn estimated(fit: &AttGt) -> impl Iterator<Item = &att_gt::AttGtCell> {
+    fit.cells().iter().filter(|cell| cell.estimate.is_some())
+}
+
+/// The digest of an ATT(g,t) route's cells, their influence vectors, the
+/// skipped and the pruned cells, without the sample, which
+/// `att_gt_dr_panel_sample` pins on its own.
+fn attgt_digest(fit: &AttGt) -> u64 {
+    let mut out = Vec::new();
+    for cell in estimated(fit) {
+        cell_numbers(cell, &mut out);
+    }
+    let influence = fit.influence().expect("influence");
+    for j in 0..influence.n_columns() {
+        out.extend_from_slice(influence.column(j));
+    }
+    for cell in fit.cells().iter().filter(|cell| cell.skipped.is_some()) {
+        out.extend([int(cell.group), int(cell.time), int(cell.base)]);
+    }
+    for cell in estimated(fit).filter(|cell| cell.columns_dropped > 0) {
+        out.extend([
+            int(cell.group),
+            int(cell.time),
+            int(cell.base),
+            int(cell.columns_dropped as u64),
+        ]);
+    }
+    hash_numbers(&out)
+}
+
+/// The digest of efficient cells as `EfficientDidEstimate` printed them, with
+/// their baseline weights, influence vectors and diagnostics.
+fn efficient_digest(fit: &AttGt) -> u64 {
+    let mut out = Vec::new();
+    let influence = fit.influence().expect("influence");
+    for (j, cell) in estimated(fit).enumerate() {
+        cell_numbers(cell, &mut out);
+        let weights = cell.efficient.as_ref().expect("efficient weights");
+        for baseline in &weights.baselines {
+            out.extend([
+                int(baseline.base),
+                baseline.estimate,
+                baseline.weight,
+                int(baseline.n_treated as u64),
+                int(baseline.n_control as u64),
+            ]);
+        }
+        out.extend_from_slice(influence.column(j));
+        out.extend(weights.covariance.as_slice().iter().map(|v| nan(*v)));
+        out.extend_from_slice(&weights.precision_solution);
+        out.extend(weights.ridge);
+    }
+    hash_numbers(&out)
+}
+
+/// The numbers of an `AggteResult`: the overall effect with its influence
+/// function, each point with its own, the critical value and the band flag.
+fn aggte_digest(result: &Aggte) -> u64 {
+    let overall = result.overall.expect("an overall effect");
+    let influence = result.influence();
+    let mut out = vec![
+        overall.estimate.estimate,
+        nan(overall.estimate.se),
+        nan(overall.estimate.lower()),
+        nan(overall.estimate.upper()),
+    ];
+    out.extend_from_slice(influence.column(result.points.len()));
+    for (j, point) in result.points.iter().enumerate() {
+        out.extend([
+            int(point.key),
+            point.estimate.estimate,
+            nan(point.estimate.se),
+            nan(point.estimate.lower()),
+            nan(point.estimate.upper()),
+        ]);
+        out.extend_from_slice(influence.column(j));
+    }
+    out.push(result.critical_value);
+    out.push(f64::from(u8::from(result.uniform_band)));
+    hash_numbers(&out)
+}
+
+/// The numbers of a fixed-weight summary as `AttGtAggregatedEstimate`
+/// printed them.
+fn summary_numbers(
+    key: Option<i64>,
+    estimate: &epistat_core::Estimate,
+    n_cells: usize,
+    total_weight: f64,
+    out: &mut Vec<f64>,
+) {
+    out.extend(key.map(int));
+    out.extend([
+        estimate.estimate,
+        nan(estimate.se),
+        nan(estimate.lower()),
+        nan(estimate.upper()),
+        int(n_cells as u64),
+        total_weight,
+    ]);
+}
+
+/// The points of a summary by key, as the per-key aggregations printed them.
+fn keyed_digest(result: &Aggte) -> u64 {
+    let mut out = Vec::new();
+    for point in &result.points {
+        summary_numbers(
+            Some(point.key),
+            &point.estimate,
+            point.n_cells,
+            point.total_weight,
+            &mut out,
+        );
+    }
+    hash_numbers(&out)
+}
+
+/// The overall effect as `aggregate_att_gt_overall` printed it.
+fn overall_digest(result: &Aggte) -> u64 {
+    let overall = result.overall.expect("an overall effect");
+    let mut out = Vec::new();
+    summary_numbers(
+        None,
+        &overall.estimate,
+        overall.n_cells,
+        overall.total_weight,
+        &mut out,
+    );
+    hash_numbers(&out)
+}
+
+/// The event-time path with its influence vectors after it, as
+/// `AttGtEventTimeInfluenceOutput` printed it; without them for the
+/// efficient aggregation, which returned the path alone.
+fn event_time_digest(result: &Aggte, with_influence: bool) -> u64 {
+    let mut out = Vec::new();
+    for point in &result.points {
+        summary_numbers(
+            Some(point.key),
+            &point.estimate,
+            point.n_cells,
+            point.total_weight,
+            &mut out,
+        );
+    }
+    if with_influence {
+        for j in 0..result.points.len() {
+            out.extend_from_slice(result.influence().column(j));
+        }
+    }
+    hash_numbers(&out)
+}
+
+#[derive(Clone, Deserialize)]
 struct MpdtaRow {
     year: i32,
     countyreal: i64,
@@ -251,37 +423,87 @@ fn weight(county: i64) -> f64 {
     0.5 + f64::from(u32::try_from(county % 7).expect("small"))
 }
 
-fn dr_rows(rows: &[MpdtaRow], panel: bool, weighted: bool) -> Vec<AttGtDrObservation> {
-    rows.iter()
-        .map(|row| AttGtDrObservation {
-            unit_id: panel.then_some(row.countyreal),
-            first_treated_time: (row.first_treat != 0).then_some(row.first_treat),
-            time: row.year,
-            outcome: row.lemp,
-            weight: if weighted {
-                weight(row.countyreal)
-            } else {
-                1.0
-            },
-            covariates: vec![row.lpop],
-            comparison_cohort: None,
-        })
-        .collect()
+/// The `mpdta` rows as panel columns: counties as unit codes on a panel and
+/// row numbers on a repeated cross-section, the county weights, log
+/// population as the covariate, and county number modulo 37 as the cluster.
+struct Columns {
+    unit: Vec<u32>,
+    period: Vec<i64>,
+    cohort: Vec<Option<i64>>,
+    outcome: Vec<f64>,
+    weight: Vec<f64>,
+    lpop: Vec<f64>,
+    cluster: Vec<u32>,
 }
 
-fn dr_config(comparison_group: ComparisonGroup, base_period: BasePeriod) -> AttGtDrConfig {
-    AttGtDrConfig {
-        att_gt: AttGtConfig {
-            confidence_level: InferenceConfig::default(),
-            comparison_group,
-            base_period,
-            anticipation_periods: 0,
-            skip_incomplete_pairs: true,
-            unbalanced_panel: UnbalancedPanel::Balance,
-            refuse_small_never_treated: true,
-            refuse_poor_overlap: true,
+fn columns(rows: &[MpdtaRow], design: Design) -> Columns {
+    let code = |county: i64| u32::try_from(county).expect("a county number");
+    Columns {
+        unit: match design {
+            Design::RepeatedCrossSection => (0..rows.len())
+                .map(|i| u32::try_from(i).expect("rows"))
+                .collect(),
+            _ => rows.iter().map(|row| code(row.countyreal)).collect(),
         },
-        drdid: drdid_config(),
+        period: rows.iter().map(|row| i64::from(row.year)).collect(),
+        cohort: rows
+            .iter()
+            .map(|row| (row.first_treat != 0).then_some(i64::from(row.first_treat)))
+            .collect(),
+        outcome: rows.iter().map(|row| row.lemp).collect(),
+        weight: rows.iter().map(|row| weight(row.countyreal)).collect(),
+        lpop: rows.iter().map(|row| row.lpop).collect(),
+        cluster: rows.iter().map(|row| code(row.countyreal % 37)).collect(),
+    }
+}
+
+/// What the panel of a call carries.
+#[derive(Clone, Copy, PartialEq)]
+enum With {
+    /// Weights and the covariate.
+    Covariates,
+    /// Weights, the covariate and the clusters.
+    Clusters,
+    /// Neither weights nor covariates.
+    Plain,
+}
+
+fn fit(data: &Columns, with: With, options: AttGtOptions) -> AttGt {
+    let lpop = MatRef::from_column_major_slice(&data.lpop, data.unit.len(), 1);
+    let builder = StaggeredPanel::builder(&data.unit, &data.period, &data.cohort, &data.outcome);
+    let builder = match with {
+        With::Plain => builder,
+        With::Covariates => builder.weights(&data.weight).covariates(lpop),
+        With::Clusters => builder
+            .weights(&data.weight)
+            .covariates(lpop)
+            .clusters(&data.cluster),
+    };
+    let panel = builder.build().expect("panel");
+    att_gt::estimate(&panel, &options).expect("ATT(g,t)")
+}
+
+/// The ATT(g,t) settings of the hashes: `did`'s rules with the overlap check,
+/// the legacy repeated cross-section computation and a 999-replicate cell
+/// bootstrap, seeded as the estimator's former default.
+fn att_gt_options(comparison_group: ComparisonGroup, base_period: BasePeriod) -> AttGtOptions {
+    AttGtOptions {
+        comparison_group,
+        base_period,
+        nuisance: NuisanceOptions {
+            legacy_repeated_cross_section: true,
+            ..NuisanceOptions::default()
+        },
+        bootstrap: Some(Bootstrap::new(999, 17_431)),
+        ..AttGtOptions::default()
+    }
+}
+
+/// The same settings without the cell bootstrap, which clusters refuse.
+fn clustered_options(comparison_group: ComparisonGroup, base_period: BasePeriod) -> AttGtOptions {
+    AttGtOptions {
+        bootstrap: None,
+        ..att_gt_options(comparison_group, base_period)
     }
 }
 
@@ -339,39 +561,29 @@ fn cell(rows: &[MpdtaRow]) -> (Vec<DrDidObservation>, Vec<DrDidRepeatedObservati
     (panel, repeated)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "one list of cases in the order of the recorded hashes"
+)]
 fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     let mut out = Vec::new();
     let inference = InferenceConfig::default();
+    let level = Level::default();
+    let panel_data = columns(&data.mpdta, Design::Panel);
+    let rc_data = columns(&data.mpdta, Design::RepeatedCrossSection);
 
-    // ATT(g,t) without covariates, the AttGtObservation route.
-    let plain = data
-        .mpdta
-        .iter()
-        .map(|row| {
-            AttGtObservation::with_unit_id(
-                row.countyreal,
-                (row.first_treat != 0).then_some(row.first_treat),
-                row.year,
-                row.lemp,
-            )
-        })
-        .collect::<Vec<_>>();
-    out.push((
-        "att_gt",
-        digest(&estimate_att_gt(&plain, AttGtConfig::default())),
-    ));
-    out.push((
-        "att_gt_efficient",
-        digest(&estimate_att_gt_efficient(
-            &plain,
-            EfficientDidConfig {
-                confidence_level: inference,
-            },
-        )),
-    ));
+    // The efficient ATT(g,t) on the panel without covariates.
+    let efficient_panel = fit(
+        &panel_data,
+        With::Plain,
+        AttGtOptions {
+            estimator: Estimator::Efficient,
+            ..AttGtOptions::default()
+        },
+    );
+    out.push(("att_gt_efficient", efficient_digest(&efficient_panel)));
 
     // The panel route, as Study I runs it, and the aggregations.
-    let panel_rows = dr_rows(&data.mpdta, true, true);
     for (name, comparison, base) in [
         (
             "att_gt_dr_panel_universal_never",
@@ -386,15 +598,19 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     ] {
         out.push((
             name,
-            attgt_digest(&estimate_att_gt_dr_panel_with_influence(
-                &panel_rows,
-                dr_config(comparison, base),
+            attgt_digest(&fit(
+                &panel_data,
+                With::Covariates,
+                att_gt_options(comparison, base),
             )),
         ));
     }
-    let config = dr_config(ComparisonGroup::NeverTreated, BasePeriod::Universal);
-    let fitted = estimate_att_gt_dr_panel_with_influence(&panel_rows, config).expect("panel fit");
-    let panel = unit_panel(&panel_rows).expect("unit panel");
+    let fitted = fit(
+        &panel_data,
+        With::Covariates,
+        att_gt_options(ComparisonGroup::NeverTreated, BasePeriod::Universal),
+    );
+    let aggregate = |fit: &AttGt, options: AggteOptions| fit.aggregate(&options).expect("aggte");
     for (name, aggregation, balance_e) in [
         ("aggte_simple", AggteType::Simple, None),
         ("aggte_dynamic", AggteType::Dynamic, None),
@@ -404,22 +620,17 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     ] {
         out.push((
             name,
-            digest(&aggregate_att_gt(
-                &fitted.estimates,
-                &fitted.influence_functions,
-                &panel,
-                AggteConfig {
+            aggte_digest(&aggregate(
+                &fitted,
+                AggteOptions {
                     aggregation,
                     balance_e,
-                    min_e: None,
-                    max_e: None,
-                    confidence_level: inference,
-                    bootstrap: None,
+                    ..AggteOptions::default()
                 },
             )),
         ));
     }
-    for (names, weighting) in [
+    for (names, weights) in [
         (
             [
                 "event_time_equal",
@@ -427,7 +638,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
                 "calendar_equal",
                 "overall_equal",
             ],
-            AttGtAggregationWeighting::Equal,
+            AggteWeights::Equal,
         ),
         (
             [
@@ -436,7 +647,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
                 "calendar_count",
                 "overall_count",
             ],
-            AttGtAggregationWeighting::ByTreatedCount,
+            AggteWeights::TreatedCount,
         ),
         (
             [
@@ -445,91 +656,63 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
                 "calendar_weight",
                 "overall_weight",
             ],
-            AttGtAggregationWeighting::ByTotalWeight,
+            AggteWeights::TotalWeight,
         ),
     ] {
-        let aggregation = AttGtAggregationConfig {
-            confidence_level: inference,
-            weighting,
+        // The treated-count cohort, calendar and overall summaries were those
+        // of `did::aggte`, whose cohort shares are estimated.
+        let keyed_weights = if weights == AggteWeights::TreatedCount {
+            AggteWeights::Estimated
+        } else {
+            weights
+        };
+        let with = |aggregation, weights| AggteOptions {
+            aggregation,
+            weights,
+            ..AggteOptions::default()
         };
         out.push((
             names[0],
-            digest(&aggregate_att_gt_event_time_with_influence(
-                &fitted.estimates,
-                &fitted.influence_functions,
-                aggregation,
-            )),
+            event_time_digest(&aggregate(&fitted, with(AggteType::Dynamic, weights)), true),
         ));
         out.push((
             names[1],
-            digest(&aggregate_att_gt_by_cohort(
-                &fitted.estimates,
-                &fitted.influence_functions,
-                &panel,
-                aggregation,
-            )),
+            keyed_digest(&aggregate(&fitted, with(AggteType::Group, keyed_weights))),
         ));
         out.push((
             names[2],
-            digest(&aggregate_att_gt_by_calendar_time(
-                &fitted.estimates,
-                &fitted.influence_functions,
-                &panel,
-                aggregation,
+            keyed_digest(&aggregate(
+                &fitted,
+                with(AggteType::Calendar, keyed_weights),
             )),
         ));
         out.push((
             names[3],
-            digest(&aggregate_att_gt_overall(
-                &fitted.estimates,
-                &fitted.influence_functions,
-                &panel,
-                aggregation,
-            )),
+            overall_digest(&aggregate(&fitted, with(AggteType::Simple, keyed_weights))),
         ));
     }
-    // Clusters of units, indexed like the influence vectors: by sorted unit id.
-    let mut ids = panel_rows
-        .iter()
-        .map(|row| row.unit_id.expect("panel"))
-        .collect::<Vec<_>>();
-    ids.sort_unstable();
-    ids.dedup();
-    let units = ids.iter().map(|id| id % 37).collect::<Vec<_>>();
-    let mut clustered = panel.clone();
-    clustered.clusters = Some(units.clone());
+    // Clusters of units: county number modulo 37.
+    let clustered = fit(
+        &panel_data,
+        With::Clusters,
+        clustered_options(ComparisonGroup::NeverTreated, BasePeriod::Universal),
+    );
+    let dynamic = AggteOptions {
+        aggregation: AggteType::Dynamic,
+        ..AggteOptions::default()
+    };
     out.push((
         "aggte_dynamic_clustered",
-        digest(&aggregate_att_gt(
-            &fitted.estimates,
-            &fitted.influence_functions,
-            &clustered,
-            AggteConfig {
-                aggregation: AggteType::Dynamic,
-                balance_e: None,
-                min_e: None,
-                max_e: None,
-                confidence_level: inference,
-                bootstrap: None,
-            },
-        )),
+        aggte_digest(&aggregate(&clustered, dynamic)),
     ));
     out.push((
         "aggte_dynamic_bootstrap",
-        digest(&aggregate_att_gt(
-            &fitted.estimates,
-            &fitted.influence_functions,
+        aggte_digest(&aggregate(
             &clustered,
-            AggteConfig {
-                aggregation: AggteType::Dynamic,
-                confidence_level: inference,
-                bootstrap: Some(AggteBootstrap {
-                    replicates: 999,
-                    seed: 20_261_124,
-                    standard_errors: true,
-                    uniform_band: true,
-                }),
-                ..AggteConfig::default()
+            AggteOptions {
+                bootstrap: Some(Bootstrap::new(999, 20_261_124)),
+                band: att_gt::Band::Uniform,
+                ..dynamic
             },
         )),
     ));
@@ -539,121 +722,91 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     ] {
         out.push((
             name,
-            digest(&aggregate_att_gt(
-                &fitted.estimates,
-                &fitted.influence_functions,
-                &panel,
-                AggteConfig {
+            aggte_digest(&aggregate(
+                &fitted,
+                AggteOptions {
                     aggregation,
                     max_e: Some(1),
-                    confidence_level: inference,
-                    ..AggteConfig::default()
+                    ..AggteOptions::default()
                 },
             )),
         ));
     }
-    out.push((
-        "pretrend_wald",
-        digest(
-            &pretrend_wald_test(&fitted.estimates, &fitted.influence_functions, &panel)
-                .expect("pre-test"),
-        ),
-    ));
-    let bands = AttGtBandConfig {
-        confidence_level: inference,
-        reps: 999,
-        seed: 20_261_122,
-    };
-    out.push((
-        "mboot_bands",
-        digest(&att_gt_mboot_bands(
-            &fitted.estimates,
-            &fitted.influence_functions,
-            None,
-            bands,
-        )),
-    ));
-    out.push((
-        "mboot_bands_clustered",
-        digest(&att_gt_mboot_bands(
-            &fitted.estimates,
-            &fitted.influence_functions,
-            Some(&units),
-            bands,
-        )),
-    ));
-    out.push((
-        "clustered_standard_errors",
-        digest(&att_gt_clustered_standard_errors(
-            &fitted.estimates,
-            &fitted.influence_functions,
-            &clustered,
-            inference,
-        )),
-    ));
-    let mut seen = Vec::new();
-    let assignments = units
-        .iter()
-        .map(|code| {
-            seen.iter().position(|c| c == code).unwrap_or_else(|| {
-                seen.push(*code);
-                seen.len() - 1
-            })
-        })
-        .collect::<Vec<_>>();
-    let index = ClusterIndex {
-        n_groups: seen.len(),
-        group_assignments: assignments,
-    };
-    out.push((
-        "clustered_standard_error_from_index",
-        digest(
-            &fitted
-                .influence_functions
-                .iter()
-                .map(|psi| clustered_standard_error_from_index(psi, &index))
-                .collect::<Vec<_>>(),
-        ),
-    ));
+    let pretest = fitted.pretest().expect("pre-test");
+    let mut numbers = vec![pretest.statistic, int(pretest.df as u64), pretest.p_value];
+    for &(group, time) in &pretest.cells {
+        numbers.extend([int(group), int(time)]);
+    }
+    out.push(("pretrend_wald", hash_numbers(&numbers)));
+    let bands = Bootstrap::new(999, 20_261_122);
+    for (name, fit) in [
+        ("mboot_bands", &fitted),
+        ("mboot_bands_clustered", &clustered),
+    ] {
+        let bands = fit.bands(level, bands).expect("bands");
+        let mut numbers = Vec::new();
+        for band in &bands.cells {
+            numbers.extend([
+                int(band.group),
+                int(band.time),
+                int(band.event_time),
+                band.estimate,
+                nan(band.se),
+                nan(band.lower),
+                nan(band.upper),
+            ]);
+        }
+        out.push((name, hash_numbers(&numbers)));
+    }
+    let mut numbers = Vec::new();
+    for cell in estimated(&clustered) {
+        cell_numbers(cell, &mut numbers);
+    }
+    out.push(("clustered_standard_errors", hash_numbers(&numbers)));
 
     // The repeated cross-section route and the other pair estimators.
-    let rc_rows = dr_rows(&data.mpdta, false, true);
-    let rc_config = dr_config(ComparisonGroup::NotYetTreated, BasePeriod::Varying);
-    out.push((
-        "att_gt_dr_rc",
-        attgt_digest(&estimate_att_gt_dr_with_influence(&rc_rows, rc_config)),
-    ));
-    out.push((
-        "att_gt_dr_rc_efficient",
-        attgt_digest(&estimate_att_gt_dr_efficient_with_influence(
-            &rc_rows, rc_config,
-        )),
-    ));
-    out.push((
-        "att_gt_ipw_rc",
-        attgt_digest(&estimate_att_gt_ipw_with_influence(&rc_rows, rc_config)),
-    ));
-    out.push((
-        "att_gt_or_rc",
-        attgt_digest(&estimate_att_gt_or_with_influence(&rc_rows, rc_config)),
-    ));
-    let efficient = estimate_att_gt_efficient_dr(
-        &panel_rows,
-        dr_config(ComparisonGroup::NeverTreated, BasePeriod::Varying),
-    );
-    out.push(("att_gt_efficient_dr", digest(&efficient)));
-    if let Ok(efficient) = &efficient {
+    let rc_options = |estimator| AttGtOptions {
+        estimator,
+        design: Design::RepeatedCrossSection,
+        ..att_gt_options(ComparisonGroup::NotYetTreated, BasePeriod::Varying)
+    };
+    for (name, estimator) in [
+        ("att_gt_dr_rc", Estimator::TraditionalDoublyRobust),
+        ("att_gt_dr_rc_efficient", Estimator::DoublyRobust),
+        ("att_gt_ipw_rc", Estimator::InverseProbabilityWeighting),
+        ("att_gt_or_rc", Estimator::OutcomeRegression),
+    ] {
         out.push((
-            "aggregate_efficient_event_time",
-            digest(&aggregate_efficient_att_gt_event_time(
-                efficient,
-                AttGtAggregationConfig {
-                    confidence_level: inference,
-                    weighting: AttGtAggregationWeighting::ByTreatedCount,
-                },
-            )),
+            name,
+            attgt_digest(&fit(&rc_data, With::Covariates, rc_options(estimator))),
         ));
     }
+    // The efficient doubly robust estimator reads each row as its own
+    // observation.
+    let efficient = fit(
+        &rc_data,
+        With::Covariates,
+        AttGtOptions {
+            estimator: Estimator::Efficient,
+            design: Design::RepeatedCrossSection,
+            ..att_gt_options(ComparisonGroup::NeverTreated, BasePeriod::Varying)
+        },
+    );
+    out.push(("att_gt_efficient_dr", efficient_digest(&efficient)));
+    out.push((
+        "aggregate_efficient_event_time",
+        event_time_digest(
+            &aggregate(
+                &efficient,
+                AggteOptions {
+                    aggregation: AggteType::Dynamic,
+                    weights: AggteWeights::TreatedCount,
+                    ..AggteOptions::default()
+                },
+            ),
+            false,
+        ),
+    ));
 
     // Two-period estimators on one cell.
     let (panel_cell, rc_cell) = cell(&data.mpdta);
@@ -928,25 +1081,35 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     // route, and an unbalanced panel under the two rules that keep it.
     out.push((
         "att_gt_ipw_panel",
-        attgt_digest(&estimate_att_gt_ipw_panel_with_influence(
-            &panel_rows,
-            dr_config(ComparisonGroup::NeverTreated, BasePeriod::Universal),
+        attgt_digest(&fit(
+            &panel_data,
+            With::Covariates,
+            AttGtOptions {
+                estimator: Estimator::InverseProbabilityWeighting,
+                ..att_gt_options(ComparisonGroup::NeverTreated, BasePeriod::Universal)
+            },
         )),
     ));
     out.push((
         "att_gt_or_panel",
-        attgt_digest(&estimate_att_gt_or_panel_with_influence(
-            &panel_rows,
-            dr_config(ComparisonGroup::NotYetTreated, BasePeriod::Varying),
+        attgt_digest(&fit(
+            &panel_data,
+            With::Covariates,
+            AttGtOptions {
+                estimator: Estimator::OutcomeRegression,
+                ..att_gt_options(ComparisonGroup::NotYetTreated, BasePeriod::Varying)
+            },
         )),
     ));
-    out.push(("att_gt_dr_panel_sample", digest(&fitted.sample)));
-    let unbalanced_rows = panel_rows
+    out.push(("att_gt_dr_panel_sample", digest(fitted.sample())));
+    let unbalanced_rows: Vec<MpdtaRow> = data
+        .mpdta
         .iter()
-        .filter(|row| !(row.unit_id.is_some_and(|id| id % 7 == 0) && row.time == 2005))
+        .filter(|row| !(row.countyreal % 7 == 0 && row.year == 2005))
         .cloned()
-        .collect::<Vec<_>>();
-    for (name, unbalanced_panel) in [
+        .collect();
+    let unbalanced_data = columns(&unbalanced_rows, Design::Panel);
+    for (name, unbalanced) in [
         (
             "att_gt_dr_panel_unbalanced_rc",
             UnbalancedPanel::RepeatedCrossSection,
@@ -956,17 +1119,14 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
             UnbalancedPanel::PerCell,
         ),
     ] {
-        let base = dr_config(ComparisonGroup::NeverTreated, BasePeriod::Universal);
         out.push((
             name,
-            attgt_digest(&estimate_att_gt_dr_panel_with_influence(
-                &unbalanced_rows,
-                AttGtDrConfig {
-                    att_gt: AttGtConfig {
-                        unbalanced_panel,
-                        ..base.att_gt
-                    },
-                    ..base
+            attgt_digest(&fit(
+                &unbalanced_data,
+                With::Covariates,
+                AttGtOptions {
+                    unbalanced,
+                    ..att_gt_options(ComparisonGroup::NeverTreated, BasePeriod::Universal)
                 },
             )),
         ));
@@ -996,24 +1156,29 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
         "drdid_rc1",
         digest(&estimate_drdid_repeated_cross_section(&rc_cell, rc1)),
     ));
-    let rc_rows = dr_rows(&data.mpdta, false, true);
-    let rc_config = dr_config(ComparisonGroup::NotYetTreated, BasePeriod::Varying);
     out.push((
         "att_gt_dr_rc1",
-        attgt_digest(&estimate_att_gt_dr_with_influence(
-            &rc_rows,
-            AttGtDrConfig {
-                drdid: rc1,
-                ..rc_config
+        attgt_digest(&fit(
+            &rc_data,
+            With::Covariates,
+            AttGtOptions {
+                nuisance: NuisanceOptions::default(),
+                ..rc_options(Estimator::TraditionalDoublyRobust)
             },
         )),
     ));
-    out.push(("att_gt_dr_panel_overlap", digest(&fitted.overlap)));
+    let mut numbers = Vec::new();
+    for cell in fitted.cells() {
+        if let Some(overlap) = cell.overlap {
+            numbers.extend([int(cell.group), int(cell.time), int(cell.base)]);
+            numbers.extend(overlap.max_propensity);
+        }
+    }
+    out.push(("att_gt_dr_panel_overlap", hash_numbers(&numbers)));
     out
 }
 
 const GOLDEN: &[(&str, u64)] = &[
-    ("att_gt", 0x6772_d367_5b0d_fc97),
     ("att_gt_efficient", 0x201f_58e9_78ec_8f24),
     ("att_gt_dr_panel_universal_never", 0xcc70_fa0b_a55a_a346),
     ("att_gt_dr_panel_varying_notyet", 0xc9c4_06f6_5f4b_9158),
@@ -1042,7 +1207,6 @@ const GOLDEN: &[(&str, u64)] = &[
     ("mboot_bands", 0xb8ba_24d8_c5f3_60f0),
     ("mboot_bands_clustered", 0x9c23_7ed5_f361_ca27),
     ("clustered_standard_errors", 0x121c_5c2e_b2b8_f6f3),
-    ("clustered_standard_error_from_index", 0xc62a_1ff2_fb3a_07c3),
     ("att_gt_dr_rc", 0x37ef_b315_808d_1e84),
     ("att_gt_dr_rc_efficient", 0x4944_165b_8d88_f9b4),
     ("att_gt_ipw_rc", 0x56f7_d6ad_d427_e4d3),

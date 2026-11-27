@@ -1,50 +1,77 @@
-//! Aggregation of `ATT(g,t)` into the four summaries `did::aggte` produces.
+//! Aggregation of ATT(g,t) into the four summaries `did::aggte` produces.
 //!
-//! The cohort, calendar and overall summaries of [`super::aggregation`] are
-//! built on this module: under treated-count weighting they are its group,
-//! calendar and simple summaries, and under their other weightings they use its
-//! cell selection and standard error with fixed weights.
+//! [`AttGt::aggregate`] forms the summary [`AggteOptions::aggregation`]
+//! names, with the weights [`AggteOptions::weights`] names.
 //!
 //! # The weights are estimated, and that shows up in the standard error
 //!
-//! Three of the four summaries weight cells by cohort share `pg = P(G = g)`,
-//! which is estimated from the same sample. Treating it as fixed understates the
-//! variance: measured against `did` 2.5.1 on `mpdta` at event time 0, the
-//! fixed-weight standard error is 0.0114607 and the correct one is 0.0114942.
-//! [`weight_influence`] is the correction, ported from `did:::wif`.
+//! Under [`AggteWeights::Estimated`], `did::aggte`'s, three of the four
+//! summaries weight cells by cohort share `pg = P(G = g)`,
 //!
-//! The group summary is the exception: within a cohort the cells are averaged
-//! with equal weights, which are not estimated, so no correction applies.
+//! ```text
+//! pg = sum_i w_i 1(G_i = g) / n,
+//! ```
+//!
+//! which is estimated from the same sample. Treating it as fixed understates
+//! the variance: measured against `did` 2.5.1 on `mpdta` at event time 0, the
+//! fixed-weight standard error is 0.0114607 and the correct one is 0.0114942.
+//! The correction, ported from `did:::wif`, adds to the influence function of
+//! a combination `sum_k a_k ATT_k` with `a_k = pg_k / sum_l pg_l`
+//!
+//! ```text
+//! wif_ik = (w_i 1(G_i = g_k) - pg_k) / sum_l pg_l
+//!          - pg_k sum_l (w_i 1(G_i = g_l) - pg_l) / (sum_l pg_l)^2,
+//! psi_i  = sum_k a_k psi_ik + sum_k wif_ik ATT_k.
+//! ```
+//!
+//! The group summary averages a cohort's cells with equal weights, which are
+//! not estimated, so no correction applies within a cohort; the overall
+//! effect weights the cohorts by share and has it. The event-study overall is
+//! the mean of the non-negative event times, and the calendar overall the
+//! mean of the periods.
+//!
+//! The fixed weights, [`AggteWeights::Equal`], [`AggteWeights::TreatedCount`]
+//! and [`AggteWeights::TotalWeight`], normalise the cells' weights within a
+//! key and take them as known. The event-study summary then aggregates every
+//! cell of an event time, combined in one rounding per multiply-add; the
+//! cohort, calendar and simple summaries aggregate the post-treatment cells.
+//! Only the simple summary has an overall effect.
 //!
 //! # Standard errors and the bootstrap
 //!
-//! Every aggregate has an influence function `psi_i`, the weighted sum of the
-//! cells' influence functions plus the weight correction. Its analytic standard
+//! Every aggregate has an influence function `psi_i`. Its analytic standard
 //! error is `sqrt(sum_g s_g^2)` with `s_g` the sum of the centred `psi_i` in
-//! cluster `g`, divided by `n` ([`crate::inference::did_clusters`]).
+//! cluster `g`, divided by `n`, as `did` forms it, with each unit its own
+//! cluster when the panel has no clusters
+//! ([`crate::inference::did_clusters`]). The one exception is the
+//! fixed-weight event-study summary without clusters, whose standard error is
+//! `sqrt(mean((psi_i - mean(psi))^2) / n)`, the same quantity up to the order
+//! of the sums.
 //!
-//! With [`AggteBootstrap`] the standard errors come from the multiplier
-//! bootstrap of `did::mboot`. Replicate `b` draws a Rademacher weight `w_gb`
-//! per cluster (per unit without clusters) and forms
-//! `T_b = sqrt(G) * mean_g(w_gb * S_g)` with `S_g` the uncentred cluster sum of
-//! the influence function. For each point of a path, `sigma` is the
+//! With [`AggteOptions::bootstrap`] the standard errors come from the
+//! multiplier bootstrap of `did::mboot`. Replicate `b` draws a Rademacher
+//! weight `w_gb` per cluster (per unit without clusters) and forms
+//! `T_b = sqrt(G) * mean_g(w_gb * S_g)` with `S_g` the uncentred cluster sum
+//! of the influence function. For each point of a path, `sigma` is the
 //! interquartile range of its `T_b` divided by `qnorm(.75) - qnorm(.25)`, and
-//! its standard error is `sigma * sqrt(G) / n`. The uniform critical value is
-//! the type 1 quantile at `1 - alpha` of `max_j |T_bj| / sigma_j` over the
-//! points of the path, so the band `att_j +- crit * se_j` covers the whole path
-//! with probability about `1 - alpha`. The standard error of the overall effect
-//! has its own bootstrap on the overall influence function.
+//! its standard error is `sigma * sqrt(G) / n`. With [`Band::Uniform`] the
+//! critical value is the type 1 quantile at `1 - alpha` of
+//! `max_j |T_bj| / sigma_j` over the points of the path, so the band
+//! `att_j +- crit * se_j` covers the whole path with probability about
+//! `1 - alpha`. The overall effect has its own bootstrap on its influence
+//! function, from the same seed.
 //!
-//! The analytic and the bootstrap standard errors differ when the draws are not
-//! normal, since the interquartile range ignores the tails: for a cell with few
-//! units the bootstrap value can be several per cent above the analytic one.
-//! That is a property of `did::mboot`, which this reproduces.
+//! The analytic and the bootstrap standard errors differ when the draws are
+//! not normal, since the interquartile range ignores the tails: for a cell
+//! with few units the bootstrap value can be several per cent above the
+//! analytic one. That is a property of `did::mboot`, which this reproduces.
 //!
 //! # `max_e`, `min_e` and `balance_e`
 //!
 //! `did::aggte` applies `max_e` to the simple, group and dynamic summaries,
 //! `min_e` and `balance_e` to the dynamic one only, and none of them to the
-//! calendar one. See [`AggteConfig`] for the unit in which `max_e` is counted.
+//! calendar one; the fixed weights follow the same rule. See
+//! [`AggteOptions::max_e`] for the unit in which `max_e` is counted.
 //!
 //! # References
 //!
@@ -54,264 +81,315 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use epistat_core::{Bootstrap, Level};
-use epistat_inference::Clusters;
+use epistat_core::{Bootstrap, Covariance, Estimate, EventStudy, InputError, Level};
 use epistat_inference::simultaneous::multiplier_bands;
+use epistat_inference::{ClusterRule, Clusters, Influence};
 
-use crate::inference::did_clusters::standard_error;
-use crate::inference::{normal_interval, validate_confidence_level, z_score_for_confidence};
-use crate::types::{AttGtEstimate, InferenceConfig};
+use crate::error::Error;
+use crate::inference::did_clusters::{covariance, standard_error};
+use crate::inference::{normal_interval, z_score_for_confidence};
 use crate::util::usize_to_f64;
 
-/// Which summary to produce, matching `aggte(type = ...)`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use super::{AttGt, BasePeriod, aggregation, cell_estimate};
+
+/// Which summary to produce, `aggte(type = ...)`.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum AggteType {
-    /// One number: every post-treatment cell, weighted by cohort share.
+    /// One number: every post-treatment cell, `"simple"`.
     Simple,
-    /// By event time, then averaged over non-negative event times.
+    /// By event time, then averaged over the non-negative event times,
+    /// `"dynamic"`: the event study.
     Dynamic,
-    /// By cohort, then averaged over cohorts by share.
+    /// By cohort, then averaged over cohorts by share, `"group"`, `aggte`'s
+    /// default.
+    #[default]
     Group,
-    /// By calendar period, then averaged over periods.
+    /// By calendar period, then averaged over periods, `"calendar"`.
     Calendar,
 }
 
-/// Configuration for [`aggregate_att_gt`].
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct AggteConfig {
-    /// Which summary to produce.
+/// How the cells are weighted within a summary.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum AggteWeights {
+    /// By cohort share, estimated from the sample's weights, with the
+    /// influence of that estimate in the standard error: `did::aggte`.
+    #[default]
+    Estimated,
+    /// Equal weights within a key, taken as known.
+    Equal,
+    /// By each cell's number of treated units or rows, taken as known.
+    TreatedCount,
+    /// By each cell's sum of weights, taken as known.
+    TotalWeight,
+}
+
+/// Pointwise intervals or a band over the whole path, `aggte(cband = )`.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Band {
+    /// Pointwise normal intervals, `cband = FALSE`.
+    #[default]
+    Pointwise,
+    /// The uniform critical value of the path from the multiplier bootstrap,
+    /// `cband = TRUE`; needs [`AggteOptions::bootstrap`]. It is never below
+    /// the pointwise normal value. When no finite critical value exists the
+    /// intervals stay pointwise and [`Aggte::uniform_band`] is `false`.
+    Uniform,
+}
+
+/// The options of [`AttGt::aggregate`], with `did::aggte`'s defaults except
+/// that the bootstrap is off: it needs a seed, and none is chosen for the
+/// caller.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct AggteOptions {
+    /// Which summary to produce, `type`.
     pub aggregation: AggteType,
-    /// Restrict the dynamic path to a FIXED cohort composition: keep only
-    /// cohorts observed for at least this many post-treatment periods, and only
-    /// event times up to it. `did::aggte(balance_e = )`.
+    /// How the cells are weighted.
+    pub weights: AggteWeights,
+    /// Restrict the event study to a fixed composition of cohorts, those
+    /// observed for at least this many post-treatment periods, and to event
+    /// times up to it, `balance_e`. Without it the effect at a long horizon is
+    /// estimated from other cohorts than the effect at a short one. Dynamic
+    /// only, as in `did`.
+    pub balance_e: Option<i64>,
+    /// Drop event times below this inclusive bound, `min_e`, after
+    /// `balance_e`. It narrows the overall effect as well as the path, since
+    /// the event-study overall is the mean over the retained non-negative
+    /// event times. Dynamic only, as in `did`.
+    pub min_e: Option<i64>,
+    /// Drop event times above this inclusive bound, `max_e`.
     ///
-    /// This is the answer to "did the effect change with duration, or is the
-    /// long-horizon estimate simply made of different cohorts?" Without it the
-    /// two are not separable. Ignored for the other three types, as in R.
-    pub balance_e: Option<i32>,
-    /// Drop event times below this, inclusive bound. `did::aggte(min_e = )`.
-    ///
-    /// Applied AFTER `balance_e`, and it narrows the overall number as well as
-    /// the path: the dynamic overall is the mean over retained non-negative event
-    /// times, so trimming the path moves it. Dynamic only, as in R.
-    pub min_e: Option<i32>,
-    /// Drop event times above this, inclusive bound. `did::aggte(max_e = )`.
-    ///
-    /// For [`AggteType::Dynamic`] the bound is in the units of the period
-    /// variable. For [`AggteType::Simple`] and [`AggteType::Group`] only the
+    /// For [`AggteType::Dynamic`] the bound is in the units of the period.
+    /// For [`AggteType::Simple`] and [`AggteType::Group`] only the
     /// post-treatment cells at most `max_e` periods after the cohort's first
     /// treated period enter, as `did` 2.5.1 selects them, and the distance is
-    /// counted in steps of the sorted list of periods and cohorts that occur in
-    /// the estimates, where `did` counts in its own period list. The two agree
-    /// when the periods are consecutive. Ignored by [`AggteType::Calendar`], as
-    /// in `did`.
-    pub max_e: Option<i32>,
-    /// Confidence level settings for the intervals.
-    pub confidence_level: InferenceConfig,
-    /// Multiplier bootstrap for the standard errors and the uniform band, as
-    /// `did::aggte(bstrap = TRUE, cband = TRUE)`. `None` gives analytic
-    /// standard errors and pointwise intervals.
-    pub bootstrap: Option<AggteBootstrap>,
+    /// counted in steps of the sorted list of periods and cohorts that occur
+    /// in the cells, where `did` counts in its own period list. The two agree
+    /// when the periods are consecutive. Ignored by [`AggteType::Calendar`],
+    /// as in `did`.
+    pub max_e: Option<i64>,
+    /// The confidence level of the intervals, `1 - alp`.
+    pub level: Level,
+    /// The multiplier bootstrap for the standard errors, `bstrap = TRUE`,
+    /// with `biters` replicates; `None` gives analytic standard errors.
+    pub bootstrap: Option<Bootstrap>,
+    /// Pointwise intervals or a uniform band, `cband`.
+    pub band: Band,
 }
 
-/// Settings for the multiplier bootstrap of [`aggregate_att_gt`].
-///
-/// One Rademacher weight is drawn per unit, or per cluster when
-/// [`UnitPanel::clusters`] is set, and replicate `r` draws from
-/// `replicate_seed(seed, r)`, so the result depends on the seed and not on the
-/// number of threads. The path of an aggregate (event times, cohorts or
-/// periods) is bootstrapped jointly, and the overall effect separately from the
-/// same seed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AggteBootstrap {
-    /// Number of replicates, `biters` in `did`. At least 1.
-    pub replicates: usize,
-    /// Seed of the draws.
-    pub seed: u64,
-    /// Replace the analytic standard errors by the bootstrap ones, as
-    /// `bstrap = TRUE`.
-    pub standard_errors: bool,
-    /// Use the uniform critical value of the path for its intervals, as
-    /// `cband = TRUE`. It is never below the pointwise normal value. When no
-    /// finite critical value exists the intervals stay pointwise and
-    /// [`AggteResult::uniform_band`] is `false`.
-    pub uniform_band: bool,
+/// One point of a summary's path.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AggtePoint {
+    /// The event time, cohort or period, as the summary has it.
+    pub key: i64,
+    /// The estimate with its standard error and interval.
+    pub estimate: Estimate,
+    /// The number of cells that entered it.
+    pub n_cells: usize,
+    /// The sum of those cells' total weights.
+    pub total_weight: f64,
 }
 
-impl Default for AggteConfig {
-    fn default() -> Self {
-        Self {
-            aggregation: AggteType::Dynamic,
-            balance_e: None,
-            min_e: None,
-            max_e: None,
-            confidence_level: InferenceConfig::default(),
-            bootstrap: None,
-        }
-    }
+/// The overall effect of a summary.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AggteOverall {
+    /// The estimate with its standard error and pointwise interval.
+    pub estimate: Estimate,
+    /// The number of cells behind it.
+    pub n_cells: usize,
+    /// The sum of those cells' total weights.
+    pub total_weight: f64,
 }
 
-/// One aggregated point, plus the influence function behind it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AggteEstimate {
-    /// Event time, cohort or calendar period, depending on the type.
-    pub key: i32,
-    /// Estimated average treatment effect on the treated.
-    pub att: f64,
-    /// Standard error of the estimate.
-    pub se: f64,
-    /// Lower bound of the confidence interval.
-    pub ci_low: f64,
-    /// Upper bound of the confidence interval.
-    pub ci_high: f64,
-    /// Influence function of the aggregated estimate, one value per unit.
-    pub influence: Vec<f64>,
-}
-
-/// The result of an aggregation: the headline number and, where the type has
-/// one, the path behind it.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AggteResult {
-    /// Overall aggregated effect.
-    pub overall_att: f64,
-    /// Standard error of the overall effect.
-    pub overall_se: f64,
-    /// Lower bound of the overall confidence interval.
-    pub overall_ci_low: f64,
-    /// Upper bound of the overall confidence interval.
-    pub overall_ci_high: f64,
-    /// Influence function of the overall effect, one value per unit.
-    pub overall_influence: Vec<f64>,
-    /// Empty for [`AggteType::Simple`], which has no path.
-    pub by_key: Vec<AggteEstimate>,
-    /// The multiplier of a path point's standard error in its interval: the
+/// A summary of ATT(g,t): its path, its overall effect and their influence
+/// function.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct Aggte {
+    /// The summary.
+    pub aggregation: AggteType,
+    /// Its weights.
+    pub weights: AggteWeights,
+    /// The path by event time, cohort or period; empty for
+    /// [`AggteType::Simple`].
+    pub points: Vec<AggtePoint>,
+    /// The overall effect. Under fixed weights only the simple summary has
+    /// one.
+    pub overall: Option<AggteOverall>,
+    /// The multiplier of a point's standard error in its interval: the
     /// pointwise normal quantile, or the uniform critical value when
-    /// [`AggteResult::uniform_band`] is set.
+    /// [`Aggte::uniform_band`] is set.
     pub critical_value: f64,
     /// Whether the intervals of the path use a uniform critical value.
     pub uniform_band: bool,
+    influence: Influence,
+    clusters: Option<Vec<u32>>,
+    level: Level,
+    anticipation: i64,
+    base_period: BasePeriod,
 }
 
-/// Errors from aggregation.
-#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
-pub enum AggteError {
-    /// No ATT(g,t) estimates were given.
-    #[error("aggregation requires at least one ATT(g,t) estimate")]
-    EmptyInput,
-    /// The number of influence vectors differs from the number of estimates.
-    #[error("influence matrix has {influence} vectors for {estimates} estimates")]
-    ShapeMismatch {
-        /// Number of influence vectors.
-        influence: usize,
-        /// Number of ATT(g,t) estimates.
-        estimates: usize,
-    },
-    /// The influence vectors differ in length.
-    #[error("influence vectors must all have the unit count; got {actual}, expected {expected}")]
-    RaggedInfluence {
-        /// Number of units, taken from the first vector.
-        expected: usize,
-        /// Length of the offending vector.
-        actual: usize,
-    },
-    /// The number of `unit_groups` entries differs from the influence vector length.
-    #[error("unit_groups has {actual} entries but the influence vectors have {expected}")]
-    UnitGroupMismatch {
-        /// Length of the influence vectors.
-        expected: usize,
-        /// Number of entries in `unit_groups`.
-        actual: usize,
-    },
-    /// No post-treatment cells remain after the requested restrictions.
-    #[error("no post-treatment cells survive the requested aggregation")]
-    NoPostTreatmentCells,
-    /// The confidence level is not strictly between 0 and 1.
-    #[error("confidence_level must be finite and in (0, 1)")]
-    InvalidConfidenceLevel,
-    /// The bootstrap has no replicates, or asks for neither standard errors nor
-    /// a uniform band.
-    #[error("bootstrap needs at least one replicate and standard errors or a uniform band")]
-    InvalidBootstrap,
-    /// An aggregated influence function contains a value that is not finite.
-    #[error("an aggregated influence function is not finite")]
-    NonFiniteInfluence,
+impl Aggte {
+    /// The influence function of the points, in order, followed by that of
+    /// the overall effect when there is one, over the units of the
+    /// ATT(g,t)'s influence function.
+    #[must_use]
+    pub const fn influence(&self) -> &Influence {
+        &self.influence
+    }
+
+    /// The point of the path at `key`.
+    #[must_use]
+    pub fn point(&self, key: i64) -> Option<&AggtePoint> {
+        self.points.iter().find(|point| point.key == key)
+    }
+
+    /// The linear combination `sum w_k theta_k` of points of the path, each
+    /// given by its key and weight, with its standard error from the combined
+    /// influence function, clustered as the summary's, and a normal interval
+    /// at the summary's level. A window average of event times 2 and 3 is
+    /// `combine(&[(2, 0.5), (3, 0.5)])`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] for no weights, a weight that is not finite, or a key
+    /// the path does not have.
+    pub fn combine(&self, weights: &[(i64, f64)]) -> Result<Estimate, Error> {
+        epistat_core::check::non_empty("weights", weights.len())?;
+        let mut columns = vec![0.0; self.influence.n_columns()];
+        let mut estimate = 0.0;
+        for &(key, weight) in weights {
+            if !weight.is_finite() {
+                return Err(InputError::NotFinite {
+                    what: "weights",
+                    row: 0,
+                }
+                .into());
+            }
+            let index = self
+                .points
+                .iter()
+                .position(|point| point.key == key)
+                .ok_or(InputError::Domain {
+                    what: "key",
+                    value: key as f64,
+                    domain: "the keys of the path",
+                })?;
+            columns[index] += weight;
+            estimate += weight * self.points[index].estimate.estimate;
+        }
+        let combined = self.influence.combine(&columns)?;
+        let se = standard_error(combined.column(0), &self.numbered_clusters());
+        let ci = normal_interval(estimate, se, self.level.confidence_value());
+        Ok(cell_estimate(estimate, se, ci, self.level))
+    }
+
+    /// The event study of a dynamic summary under a universal base period:
+    /// the points' estimates by event time, their covariance clustered as
+    /// `did` clusters it, and the reference period `-1 - anticipation`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] for another summary or a varying base period,
+    /// and [`Error::Input`] when the path holds the reference period.
+    pub fn event_study(&self) -> Result<EventStudy, Error> {
+        if self.aggregation != AggteType::Dynamic {
+            return Err(Error::Unsupported {
+                what: "an event study of a summary other than the dynamic one",
+            });
+        }
+        if self.base_period != BasePeriod::Universal {
+            return Err(Error::Unsupported {
+                what: "an event study under a varying base period",
+            });
+        }
+        let k = self.points.len();
+        let columns: Vec<&[f64]> = (0..k).map(|j| self.influence.column(j)).collect();
+        let values = covariance(&columns, &self.numbered_clusters());
+        let covariance = Covariance::new(k, values.into_iter().map(Some).collect())?;
+        Ok(EventStudy::new(
+            self.points
+                .iter()
+                .map(|point| point.estimate.estimate)
+                .collect(),
+            covariance,
+            self.points.iter().map(|point| point.key).collect(),
+            -1 - self.anticipation,
+        )?)
+    }
+
+    fn numbered_clusters(&self) -> Clusters {
+        match &self.clusters {
+            Some(codes) => Clusters::from_codes(codes),
+            None => Clusters::singletons(self.influence.n_units()),
+        }
+    }
 }
 
-/// The per-unit inputs the weights are estimated from.
+/// A fitted cell as the aggregations read it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Cell {
+    pub group: i64,
+    pub time: i64,
+    pub event_time: i64,
+    pub att: f64,
+    pub treated_n: usize,
+    pub total_weight: f64,
+}
+
+/// One aggregated point before it becomes an [`AggtePoint`].
 #[derive(Debug, Clone)]
-pub struct UnitPanel {
-    /// Each unit's cohort, `None` for never-treated. Indexed like the influence
-    /// vectors: position in the sorted distinct unit ids.
-    pub groups: Vec<Option<i32>>,
-    /// Sampling weights, one per unit. `did` calls these `weights.ind` and
-    /// defaults them to 1.
-    pub weights: Vec<f64>,
-    /// Cluster label per unit, `None` to treat each unit as its own cluster.
-    ///
-    /// Set this when units are not independent. In a matched family design the
-    /// two parents of one child are two units sharing every shock to that
-    /// household, so the family is the cluster and the unit is not.
-    pub clusters: Option<Vec<i64>>,
+pub(super) struct Point {
+    pub key: i64,
+    pub att: f64,
+    pub se: f64,
+    pub ci_low: f64,
+    pub ci_high: f64,
+    pub influence: Vec<f64>,
+    pub n_cells: usize,
+    pub total_weight: f64,
 }
 
-impl UnitPanel {
-    /// Unweighted, unclustered panel.
-    #[must_use]
-    pub fn unweighted(groups: Vec<Option<i32>>) -> Self {
-        let weights = vec![1.0; groups.len()];
-        Self {
-            groups,
-            weights,
-            clusters: None,
-        }
-    }
+/// A summary before it becomes an [`Aggte`].
+struct Summary {
+    points: Vec<Point>,
+    overall: Option<Point>,
+    critical_value: f64,
+    uniform_band: bool,
+}
 
-    /// The same panel with a cluster label attached to each unit.
-    #[must_use]
-    pub fn clustered_by(mut self, clusters: Vec<i64>) -> Self {
-        self.clusters = Some(clusters);
-        self
-    }
-
-    /// The clusters of the units: the labels in increasing order, or one
-    /// cluster per unit without labels.
-    ///
-    /// One cluster per unit is the identity case: [`standard_error`] then
-    /// reduces to the unclustered formula, and
-    /// `clustering_by_unit_reproduces_the_unclustered_standard_error` pins that.
-    fn cluster_index(&self) -> Clusters {
-        match self.clusters {
-            None => Clusters::singletons(self.groups.len()),
-            Some(ref labels) => Clusters::from_sorted_labels(labels),
-        }
-    }
+/// The per-unit inputs the cohort shares are estimated from.
+struct Units<'a> {
+    groups: &'a [Option<i64>],
+    weights: &'a [f64],
 }
 
 /// Cohort share `pg = sum_i w_i * 1(G_i = g) / n`, as `did` computes it.
 ///
-/// Note the denominator is the FULL unit count, never-treated included. It
-/// cancels out of the normalised weights, but not out of [`weight_influence`],
-/// so it has to be the same `n` in both.
-fn cohort_share(panel: &UnitPanel, group: i32) -> f64 {
-    let n = usize_to_f64(panel.groups.len());
-    let total: f64 = panel
+/// The denominator is the full unit count, never-treated included. It cancels
+/// out of the normalised weights, but not out of [`weight_influence`], so it
+/// has to be the same `n` in both.
+fn cohort_share(units: &Units<'_>, group: i64) -> f64 {
+    let n = usize_to_f64(units.groups.len());
+    let total: f64 = units
         .groups
         .iter()
-        .zip(&panel.weights)
+        .zip(units.weights)
         .filter(|(unit_group, _)| **unit_group == Some(group))
         .map(|(_, weight)| *weight)
         .sum();
     total / n
 }
 
-/// The influence function of the estimated weights, ported from `did:::wif`.
-///
-/// Returns a `n_units x n_cells` matrix in row-major order. Without this term
-/// the standard error of any cohort-share-weighted summary is too small,
-/// because it treats a quantity estimated from the sample as if it were known.
-fn weight_influence(panel: &UnitPanel, groups: &[i32], shares: &[f64]) -> Vec<Vec<f64>> {
+/// The influence function of the estimated weights, ported from `did:::wif`,
+/// `n_units x n_cells`.
+fn weight_influence(units: &Units<'_>, groups: &[i64], shares: &[f64]) -> Vec<Vec<f64>> {
     let share_total: f64 = shares.iter().sum();
-    let n_units = panel.groups.len();
+    let n_units = units.groups.len();
 
     // `if2` needs the row sum of the centred indicators, so it is built once.
     let row_sums = (0..n_units)
@@ -319,7 +397,7 @@ fn weight_influence(panel: &UnitPanel, groups: &[i32], shares: &[f64]) -> Vec<Ve
             groups
                 .iter()
                 .zip(shares)
-                .map(|(group, share)| indicator(panel, unit, *group) - share)
+                .map(|(group, share)| indicator(units, unit, *group) - share)
                 .sum::<f64>()
         })
         .collect::<Vec<f64>>();
@@ -330,7 +408,7 @@ fn weight_influence(panel: &UnitPanel, groups: &[i32], shares: &[f64]) -> Vec<Ve
                 .iter()
                 .zip(shares)
                 .map(|(group, share)| {
-                    let if1 = (indicator(panel, unit, *group) - share) / share_total;
+                    let if1 = (indicator(units, unit, *group) - share) / share_total;
                     let if2 = row_sums[unit] * share / (share_total * share_total);
                     if1 - if2
                 })
@@ -339,9 +417,9 @@ fn weight_influence(panel: &UnitPanel, groups: &[i32], shares: &[f64]) -> Vec<Ve
         .collect()
 }
 
-fn indicator(panel: &UnitPanel, unit: usize, group: i32) -> f64 {
-    if panel.groups[unit] == Some(group) {
-        panel.weights[unit]
+fn indicator(units: &Units<'_>, unit: usize, group: i64) -> f64 {
+    if units.groups[unit] == Some(group) {
+        units.weights[unit]
     } else {
         0.0
     }
@@ -350,40 +428,37 @@ fn indicator(panel: &UnitPanel, unit: usize, group: i32) -> f64 {
 /// Combine selected cells with cohort-share weights, correcting for the fact
 /// that those weights were estimated.
 fn combine_by_share(
-    cells: &[usize],
-    estimates: &[AttGtEstimate],
-    influence: &[Vec<f64>],
-    panel: &UnitPanel,
+    selected: &[usize],
+    cells: &[Cell],
+    influence: &[&[f64]],
+    units: &Units<'_>,
 ) -> (f64, Vec<f64>) {
-    let groups = cells
-        .iter()
-        .map(|&c| estimates[c].group)
-        .collect::<Vec<_>>();
+    let groups = selected.iter().map(|&c| cells[c].group).collect::<Vec<_>>();
     let shares = groups
         .iter()
-        .map(|&g| cohort_share(panel, g))
+        .map(|&g| cohort_share(units, g))
         .collect::<Vec<_>>();
     let share_total: f64 = shares.iter().sum();
     let weights = shares.iter().map(|s| s / share_total).collect::<Vec<_>>();
 
-    let att = cells
+    let att = selected
         .iter()
         .zip(&weights)
-        .map(|(&c, w)| w * estimates[c].att)
+        .map(|(&c, w)| w * cells[c].att)
         .sum::<f64>();
 
-    let wif = weight_influence(panel, &groups, &shares);
-    let combined = (0..panel.groups.len())
+    let wif = weight_influence(units, &groups, &shares);
+    let combined = (0..units.groups.len())
         .map(|unit| {
-            let weighted = cells
+            let weighted = selected
                 .iter()
                 .zip(&weights)
                 .map(|(&c, w)| w * influence[c][unit])
                 .sum::<f64>();
             let correction = wif[unit]
                 .iter()
-                .zip(cells)
-                .map(|(w, &c)| w * estimates[c].att)
+                .zip(selected)
+                .map(|(w, &c)| w * cells[c].att)
                 .sum::<f64>();
             weighted + correction
         })
@@ -395,32 +470,33 @@ fn combine_by_share(
 /// Combine selected cells with equal weights. No correction: `1/k` is not
 /// estimated from the sample.
 fn combine_equally(
-    cells: &[usize],
-    estimates: &[AttGtEstimate],
-    influence: &[Vec<f64>],
+    selected: &[usize],
+    cells: &[Cell],
+    influence: &[&[f64]],
     n_units: usize,
 ) -> (f64, Vec<f64>) {
-    let weights = vec![1.0 / usize_to_f64(cells.len()); cells.len()];
-    combine_fixed(cells, &weights, estimates, influence, n_units)
+    let weights = vec![1.0 / usize_to_f64(selected.len()); selected.len()];
+    combine_fixed(selected, &weights, cells, influence, n_units)
 }
 
-/// Combine selected cells with the given weights, which are taken as known, so
-/// the influence function is the weighted sum of the cells' and nothing more.
+/// Combine selected cells with the given weights, which are taken as known,
+/// so the influence function is the weighted sum of the cells' and nothing
+/// more.
 pub(super) fn combine_fixed(
-    cells: &[usize],
+    selected: &[usize],
     weights: &[f64],
-    estimates: &[AttGtEstimate],
-    influence: &[Vec<f64>],
+    cells: &[Cell],
+    influence: &[&[f64]],
     n_units: usize,
 ) -> (f64, Vec<f64>) {
-    let att = cells
+    let att = selected
         .iter()
         .zip(weights)
-        .map(|(&c, w)| w * estimates[c].att)
+        .map(|(&c, w)| w * cells[c].att)
         .sum();
     let combined = (0..n_units)
         .map(|unit| {
-            cells
+            selected
                 .iter()
                 .zip(weights)
                 .map(|(&c, w)| w * influence[c][unit])
@@ -431,7 +507,7 @@ pub(super) fn combine_fixed(
 }
 
 /// Average already-aggregated points with equal weights.
-fn average_points(points: &[&AggteEstimate], n_units: usize) -> (f64, Vec<f64>) {
+fn average_points(points: &[&Point], n_units: usize) -> (f64, Vec<f64>) {
     let weight = 1.0 / usize_to_f64(points.len());
     let att = points.iter().map(|p| weight * p.att).sum();
     let influence = (0..n_units)
@@ -440,271 +516,206 @@ fn average_points(points: &[&AggteEstimate], n_units: usize) -> (f64, Vec<f64>) 
     (att, influence)
 }
 
+/// The point with its standard error and interval, from the cells
+/// `selected` that entered it.
 fn finish(
-    key: i32,
-    att: f64,
-    influence: Vec<f64>,
+    key: i64,
+    (att, influence): (f64, Vec<f64>),
+    selected: &[usize],
+    cells: &[Cell],
     confidence_level: f64,
     clusters: &Clusters,
-) -> AggteEstimate {
+) -> Point {
     let se = standard_error(&influence, clusters);
     let (ci_low, ci_high) = normal_interval(att, se, confidence_level);
-    AggteEstimate {
+    Point {
         key,
         att,
         se,
         ci_low,
         ci_high,
         influence,
+        n_cells: selected.len(),
+        total_weight: selected.iter().map(|&c| cells[c].total_weight).sum(),
     }
 }
 
-/// Checks that the estimates, their influence vectors and the panel agree in
-/// shape, and returns the panel's clusters.
-pub(super) fn checked_cluster_index(
-    estimates: &[AttGtEstimate],
-    influence: &[Vec<f64>],
-    panel: &UnitPanel,
-) -> Result<Clusters, AggteError> {
-    if estimates.is_empty() {
-        return Err(AggteError::EmptyInput);
-    }
-    if influence.len() != estimates.len() {
-        return Err(AggteError::ShapeMismatch {
-            influence: influence.len(),
-            estimates: estimates.len(),
-        });
-    }
-    let n_units = panel.groups.len();
-    if panel.weights.len() != n_units {
-        return Err(AggteError::UnitGroupMismatch {
-            expected: n_units,
-            actual: panel.weights.len(),
-        });
-    }
-    if let Some(bad) = influence.iter().find(|vector| vector.len() != n_units) {
-        return Err(AggteError::RaggedInfluence {
-            expected: n_units,
-            actual: bad.len(),
-        });
-    }
-    let clusters = panel.cluster_index();
-    if clusters.len() != n_units {
-        return Err(AggteError::UnitGroupMismatch {
-            expected: n_units,
-            actual: clusters.len(),
-        });
-    }
-    Ok(clusters)
-}
-
-/// Aggregate `ATT(g,t)` the way `did::aggte` does.
-///
-/// `influence` must be unit-indexed and on the full-sample scale, which is what
-/// [`super::panel_pairs::estimate_att_gt_dr_panel_with_influence`] returns.
-///
-/// Standard errors are analytic, from the combined influence function including
-/// the influence of the estimated cohort shares, unless
-/// [`AggteConfig::bootstrap`] asks for the multiplier bootstrap. With
-/// [`AggteBootstrap::standard_errors`] the standard error of every point and of
-/// the overall effect is the bootstrap one, which uses the interquartile range
-/// of the draws as `did::mboot` does and so differs from the analytic value
-/// where the draws are not normal. With [`AggteBootstrap::uniform_band`] the
-/// intervals of the path use the critical value of the maximum over the path.
-///
-/// # Errors
-/// See [`AggteError`].
-pub fn aggregate_att_gt(
-    estimates: &[AttGtEstimate],
-    influence: &[Vec<f64>],
-    panel: &UnitPanel,
-    config: AggteConfig,
-) -> Result<AggteResult, AggteError> {
-    let confidence_level = config.confidence_level.confidence_level;
-    if !validate_confidence_level(confidence_level) {
-        return Err(AggteError::InvalidConfidenceLevel);
-    }
-    if let Some(bootstrap) = config.bootstrap
-        && (bootstrap.replicates == 0 || !(bootstrap.standard_errors || bootstrap.uniform_band))
-    {
-        return Err(AggteError::InvalidBootstrap);
-    }
-    let result = aggregate_point_estimates(estimates, influence, panel, config)?;
-    match config.bootstrap {
-        None => Ok(result),
-        Some(bootstrap) => apply_bootstrap(result, panel, bootstrap, confidence_level),
-    }
-}
-
-/// Position of each period or cohort in the sorted list of those that occur in
-/// the estimates, which is how `did` measures `max_e` for the simple and group
+/// Position of each period or cohort in the sorted list of those that occur
+/// in the cells, which is how `did` measures `max_e` for the simple and group
 /// summaries.
-fn period_ranks(estimates: &[AttGtEstimate]) -> BTreeMap<i32, i32> {
-    let periods = estimates
+fn period_ranks(cells: &[Cell]) -> BTreeMap<i64, i64> {
+    let periods = cells
         .iter()
-        .flat_map(|estimate| [estimate.time, estimate.group])
-        .collect::<BTreeSet<i32>>();
+        .flat_map(|cell| [cell.time, cell.group])
+        .collect::<BTreeSet<i64>>();
     periods
         .into_iter()
         .enumerate()
-        .map(|(rank, period)| (period, i32::try_from(rank).unwrap_or(i32::MAX)))
+        .map(|(rank, period)| (period, i64::try_from(rank).unwrap_or(i64::MAX)))
         .collect()
 }
 
 /// The post-treatment cells that `max_e` leaves in the simple and group
 /// summaries.
-fn post_cells_within(estimates: &[AttGtEstimate], max_e: Option<i32>) -> Vec<usize> {
-    let ranks = max_e.map(|_| period_ranks(estimates));
-    (0..estimates.len())
-        .filter(|&i| estimates[i].time >= estimates[i].group)
+fn post_cells_within(cells: &[Cell], max_e: Option<i64>) -> Vec<usize> {
+    let ranks = max_e.map(|_| period_ranks(cells));
+    (0..cells.len())
+        .filter(|&i| cells[i].time >= cells[i].group)
         .filter(|&i| match (max_e, ranks.as_ref()) {
-            (Some(limit), Some(ranks)) => {
-                ranks[&estimates[i].time] - ranks[&estimates[i].group] <= limit
-            }
+            (Some(limit), Some(ranks)) => ranks[&cells[i].time] - ranks[&cells[i].group] <= limit,
             _ => true,
         })
         .collect()
 }
 
+/// The cells of the event study that `balance_e`, `min_e` and `max_e` leave,
+/// by event time.
+///
+/// `balance_e` keeps only cohorts with at least `b` post-treatment periods
+/// observed, and then shows event times up to `b`. Both halves are needed:
+/// without the first the composition still moves, without the second the
+/// path runs past where every kept cohort is present. The last period is taken
+/// over all cells, since it is the end of the data.
+fn dynamic_cells(cells: &[Cell], options: &AggteOptions) -> BTreeMap<i64, Vec<usize>> {
+    let max_time = cells.iter().map(|e| e.time).max().unwrap_or_default();
+    let kept_groups = options.balance_e.map(|b| {
+        cells
+            .iter()
+            .map(|e| e.group)
+            .filter(|g| max_time - g >= b)
+            .collect::<BTreeSet<i64>>()
+    });
+
+    let mut buckets = BTreeMap::<i64, Vec<usize>>::new();
+    for (index, cell) in cells.iter().enumerate() {
+        if kept_groups
+            .as_ref()
+            .is_some_and(|keep| !keep.contains(&cell.group))
+        {
+            continue;
+        }
+        if options.balance_e.is_some_and(|b| cell.event_time > b) {
+            continue;
+        }
+        if options.min_e.is_some_and(|e| cell.event_time < e)
+            || options.max_e.is_some_and(|e| cell.event_time > e)
+        {
+            continue;
+        }
+        buckets.entry(cell.event_time).or_default().push(index);
+    }
+    buckets
+}
+
+/// The post-treatment cells `post` by the key of the summary.
+fn post_buckets(
+    cells: &[Cell],
+    post: &[usize],
+    key: fn(&Cell) -> i64,
+) -> BTreeMap<i64, Vec<usize>> {
+    let mut buckets = BTreeMap::<i64, Vec<usize>>::new();
+    for &index in post {
+        buckets.entry(key(&cells[index])).or_default().push(index);
+    }
+    buckets
+}
+
+/// The summary under the estimated cohort shares, `did::aggte`.
 #[expect(
     clippy::too_many_lines,
     reason = "the four aggregation types differ in which cells they select and \
               how they weight them; splitting them apart hides the comparison"
 )]
-fn aggregate_point_estimates(
-    estimates: &[AttGtEstimate],
-    influence: &[Vec<f64>],
-    panel: &UnitPanel,
-    config: AggteConfig,
-) -> Result<AggteResult, AggteError> {
-    let clusters = checked_cluster_index(estimates, influence, panel)?;
-    let n_units = panel.groups.len();
-    let confidence_level = config.confidence_level.confidence_level;
+fn by_share(
+    cells: &[Cell],
+    influence: &[&[f64]],
+    units: &Units<'_>,
+    clusters: &Clusters,
+    options: &AggteOptions,
+) -> Result<Summary, Error> {
+    let n_units = units.groups.len();
+    let confidence_level = options.level.confidence_value();
     let critical_value = z_score_for_confidence(confidence_level);
-    let post = post_cells_within(estimates, config.max_e);
+    let post = post_cells_within(cells, options.max_e);
+    let summary = |points, overall| Summary {
+        points,
+        overall: Some(overall),
+        critical_value,
+        uniform_band: false,
+    };
 
-    match config.aggregation {
+    match options.aggregation {
         AggteType::Simple => {
             if post.is_empty() {
-                return Err(AggteError::NoPostTreatmentCells);
+                return Err(Error::NoPostTreatmentCells);
             }
-            let (att, influence_vector) = combine_by_share(&post, estimates, influence, panel);
-            let summary = finish(0, att, influence_vector, confidence_level, &clusters);
-            Ok(AggteResult {
-                overall_att: summary.att,
-                overall_se: summary.se,
-                overall_ci_low: summary.ci_low,
-                overall_ci_high: summary.ci_high,
-                overall_influence: summary.influence,
-                by_key: Vec::new(),
-                critical_value,
-                uniform_band: false,
-            })
+            let combined = combine_by_share(&post, cells, influence, units);
+            let overall = finish(0, combined, &post, cells, confidence_level, clusters);
+            Ok(summary(Vec::new(), overall))
         }
         AggteType::Dynamic => {
-            // balance_e keeps only cohorts with at least `b` post-treatment
-            // periods observed, and then shows event times up to `b`. Both halves
-            // are needed: without the first the composition still moves, without
-            // the second the path runs past where every kept cohort is present.
-            let max_time = estimates.iter().map(|e| e.time).max().unwrap_or_default();
-            let kept_groups = config.balance_e.map(|b| {
-                estimates
-                    .iter()
-                    .map(|e| e.group)
-                    .filter(|g| max_time - g >= b)
-                    .collect::<BTreeSet<i32>>()
-            });
-
-            let mut buckets = BTreeMap::<i32, Vec<usize>>::new();
-            for (index, estimate) in estimates.iter().enumerate() {
-                if kept_groups
-                    .as_ref()
-                    .is_some_and(|keep| !keep.contains(&estimate.group))
-                {
-                    continue;
-                }
-                if config.balance_e.is_some_and(|b| estimate.event_time > b) {
-                    continue;
-                }
-                if config.min_e.is_some_and(|e| estimate.event_time < e)
-                    || config.max_e.is_some_and(|e| estimate.event_time > e)
-                {
-                    continue;
-                }
-                buckets.entry(estimate.event_time).or_default().push(index);
-            }
-
-            let by_key = buckets
-                .into_iter()
-                .map(|(event_time, cells)| {
-                    let (att, vector) = combine_by_share(&cells, estimates, influence, panel);
-                    finish(event_time, att, vector, confidence_level, &clusters)
+            let buckets = dynamic_cells(cells, options);
+            let points = buckets
+                .iter()
+                .map(|(&event_time, selected)| {
+                    let combined = combine_by_share(selected, cells, influence, units);
+                    finish(
+                        event_time,
+                        combined,
+                        selected,
+                        cells,
+                        confidence_level,
+                        clusters,
+                    )
                 })
                 .collect::<Vec<_>>();
-
-            let positive = by_key.iter().filter(|p| p.key >= 0).collect::<Vec<_>>();
+            let positive = points.iter().filter(|p| p.key >= 0).collect::<Vec<_>>();
             if positive.is_empty() {
-                return Err(AggteError::NoPostTreatmentCells);
+                return Err(Error::NoPostTreatmentCells);
             }
-            let (overall_att, overall_influence) = average_points(&positive, n_units);
-            let overall = finish(
-                0,
-                overall_att,
-                overall_influence,
-                confidence_level,
-                &clusters,
-            );
-            Ok(AggteResult {
-                overall_att: overall.att,
-                overall_se: overall.se,
-                overall_ci_low: overall.ci_low,
-                overall_ci_high: overall.ci_high,
-                overall_influence: overall.influence,
-                by_key,
-                critical_value,
-                uniform_band: false,
-            })
+            let behind: Vec<usize> = buckets
+                .iter()
+                .filter(|(key, _)| **key >= 0)
+                .flat_map(|(_, selected)| selected.iter().copied())
+                .collect();
+            let combined = average_points(&positive, n_units);
+            let overall = finish(0, combined, &behind, cells, confidence_level, clusters);
+            Ok(summary(points, overall))
         }
         AggteType::Group => {
             if post.is_empty() {
-                return Err(AggteError::NoPostTreatmentCells);
+                return Err(Error::NoPostTreatmentCells);
             }
-            let mut buckets = BTreeMap::<i32, Vec<usize>>::new();
-            for &index in &post {
-                buckets
-                    .entry(estimates[index].group)
-                    .or_default()
-                    .push(index);
-            }
+            let buckets = post_buckets(cells, &post, |cell| cell.group);
             // Equal weights WITHIN a cohort: an ATT(g,t) for one cohort is
             // averaged over its own post periods, and 1/k is not estimated.
-            let by_key = buckets
-                .into_iter()
-                .map(|(group, cells)| {
-                    let (att, vector) = combine_equally(&cells, estimates, influence, n_units);
-                    finish(group, att, vector, confidence_level, &clusters)
+            let points = buckets
+                .iter()
+                .map(|(&group, selected)| {
+                    let combined = combine_equally(selected, cells, influence, n_units);
+                    finish(group, combined, selected, cells, confidence_level, clusters)
                 })
                 .collect::<Vec<_>>();
 
             // Cohort shares ACROSS cohorts, so the correction applies here.
-            let shares = by_key
+            let shares = points
                 .iter()
-                .map(|point| cohort_share(panel, point.key))
+                .map(|point| cohort_share(units, point.key))
                 .collect::<Vec<_>>();
             let share_total: f64 = shares.iter().sum();
             let weights = shares.iter().map(|s| s / share_total).collect::<Vec<_>>();
-            let groups = by_key.iter().map(|point| point.key).collect::<Vec<_>>();
-            let atts = by_key.iter().map(|point| point.att).collect::<Vec<_>>();
-            let wif = weight_influence(panel, &groups, &shares);
+            let groups = points.iter().map(|point| point.key).collect::<Vec<_>>();
+            let atts = points.iter().map(|point| point.att).collect::<Vec<_>>();
+            let wif = weight_influence(units, &groups, &shares);
 
-            let overall_att = by_key
+            let overall_att = points
                 .iter()
                 .zip(&weights)
                 .map(|(point, w)| w * point.att)
                 .sum::<f64>();
             let overall_influence = (0..n_units)
                 .map(|unit| {
-                    let weighted = by_key
+                    let weighted = points
                         .iter()
                         .zip(&weights)
                         .map(|(point, w)| w * point.influence[unit])
@@ -719,247 +730,296 @@ fn aggregate_point_estimates(
                 .collect();
             let overall = finish(
                 0,
-                overall_att,
-                overall_influence,
+                (overall_att, overall_influence),
+                &post,
+                cells,
                 confidence_level,
-                &clusters,
+                clusters,
             );
-            Ok(AggteResult {
-                overall_att: overall.att,
-                overall_se: overall.se,
-                overall_ci_low: overall.ci_low,
-                overall_ci_high: overall.ci_high,
-                overall_influence: overall.influence,
-                by_key,
-                critical_value,
-                uniform_band: false,
-            })
+            Ok(summary(points, overall))
         }
         AggteType::Calendar => {
-            let post = post_cells_within(estimates, None);
+            let post = post_cells_within(cells, None);
             if post.is_empty() {
-                return Err(AggteError::NoPostTreatmentCells);
+                return Err(Error::NoPostTreatmentCells);
             }
-            let mut buckets = BTreeMap::<i32, Vec<usize>>::new();
-            for &index in &post {
-                buckets
-                    .entry(estimates[index].time)
-                    .or_default()
-                    .push(index);
-            }
-            let by_key = buckets
-                .into_iter()
-                .map(|(time, cells)| {
-                    let (att, vector) = combine_by_share(&cells, estimates, influence, panel);
-                    finish(time, att, vector, confidence_level, &clusters)
+            let buckets = post_buckets(cells, &post, |cell| cell.time);
+            let points = buckets
+                .iter()
+                .map(|(&time, selected)| {
+                    let combined = combine_by_share(selected, cells, influence, units);
+                    finish(time, combined, selected, cells, confidence_level, clusters)
                 })
                 .collect::<Vec<_>>();
-
-            let all = by_key.iter().collect::<Vec<_>>();
-            let (overall_att, overall_influence) = average_points(&all, n_units);
-            let overall = finish(
-                0,
-                overall_att,
-                overall_influence,
-                confidence_level,
-                &clusters,
-            );
-            Ok(AggteResult {
-                overall_att: overall.att,
-                overall_se: overall.se,
-                overall_ci_low: overall.ci_low,
-                overall_ci_high: overall.ci_high,
-                overall_influence: overall.influence,
-                by_key,
-                critical_value,
-                uniform_band: false,
-            })
+            let all = points.iter().collect::<Vec<_>>();
+            let combined = average_points(&all, n_units);
+            let overall = finish(0, combined, &post, cells, confidence_level, clusters);
+            Ok(summary(points, overall))
         }
     }
 }
 
-/// Replaces the analytic standard errors and the pointwise critical value by the
-/// bootstrap ones, as `did::aggte` does for `bstrap = TRUE` and `cband = TRUE`.
+/// The summary under fixed weights.
+fn by_fixed_weights(
+    cells: &[Cell],
+    influence: &[&[f64]],
+    clusters: &Clusters,
+    has_clusters: bool,
+    options: &AggteOptions,
+) -> Result<Summary, Error> {
+    let confidence_level = options.level.confidence_value();
+    let critical_value = z_score_for_confidence(confidence_level);
+    let keyed = |buckets: BTreeMap<i64, Vec<usize>>| {
+        aggregation::by_key(
+            buckets,
+            cells,
+            influence,
+            options.weights,
+            clusters,
+            confidence_level,
+        )
+    };
+    let (points, overall) = match options.aggregation {
+        AggteType::Dynamic => {
+            let selected: Vec<usize> = dynamic_cells(cells, options)
+                .into_values()
+                .flatten()
+                .collect::<BTreeSet<usize>>()
+                .into_iter()
+                .collect();
+            let kept: Vec<Cell> = selected.iter().map(|&c| cells[c]).collect();
+            let columns: Vec<&[f64]> = selected.iter().map(|&c| influence[c]).collect();
+            let points = aggregation::by_event_time(
+                &kept,
+                &columns,
+                options.weights,
+                has_clusters.then_some(clusters),
+                confidence_level,
+            );
+            (points, None)
+        }
+        AggteType::Simple => {
+            let post = post_cells_within(cells, options.max_e);
+            if post.is_empty() {
+                return Err(Error::NoPostTreatmentCells);
+            }
+            let overall = keyed(BTreeMap::from([(0, post)])).pop();
+            (Vec::new(), overall)
+        }
+        AggteType::Group => {
+            let post = post_cells_within(cells, options.max_e);
+            if post.is_empty() {
+                return Err(Error::NoPostTreatmentCells);
+            }
+            (keyed(post_buckets(cells, &post, |cell| cell.group)), None)
+        }
+        AggteType::Calendar => {
+            let post = post_cells_within(cells, None);
+            if post.is_empty() {
+                return Err(Error::NoPostTreatmentCells);
+            }
+            (keyed(post_buckets(cells, &post, |cell| cell.time)), None)
+        }
+    };
+    Ok(Summary {
+        points,
+        overall,
+        critical_value,
+        uniform_band: false,
+    })
+}
+
+/// Replaces the analytic standard errors and the pointwise critical value by
+/// the bootstrap ones, as `did::aggte` does for `bstrap = TRUE` and
+/// `cband = TRUE`.
 ///
-/// The path is bootstrapped as one matrix, so its standard errors and critical
-/// value come from the same draws. The overall effect has a separate bootstrap
-/// from the same seed, so for a path whose overall effect is a fixed linear
-/// combination of its points the draw of the overall effect is that combination
-/// of the draws of the points.
+/// The path is bootstrapped as one matrix, so its standard errors and
+/// critical value come from the same draws. The overall effect has a separate
+/// bootstrap from the same seed, so for a path whose overall effect is a
+/// fixed linear combination of its points the draw of the overall effect is
+/// that combination of the draws of the points.
 fn apply_bootstrap(
-    mut result: AggteResult,
-    panel: &UnitPanel,
-    bootstrap: AggteBootstrap,
+    mut summary: Summary,
+    clusters: Option<&Clusters>,
+    bootstrap: Bootstrap,
+    uniform_band: bool,
     confidence_level: f64,
-) -> Result<AggteResult, AggteError> {
+) -> Result<Summary, Error> {
     let alpha = 1.0 - confidence_level;
     let pointwise = z_score_for_confidence(confidence_level);
-    let finite = result
-        .by_key
+    let finite = summary
+        .points
         .iter()
-        .map(|point| &point.influence)
-        .chain(std::iter::once(&result.overall_influence))
-        .all(|vector| vector.iter().all(|value| value.is_finite()));
+        .chain(summary.overall.as_ref())
+        .all(|point| point.influence.iter().all(|value| value.is_finite()));
     if !finite {
-        return Err(AggteError::NonFiniteInfluence);
+        return Err(Error::NotFinite);
     }
-    let clusters = panel.clusters.as_deref().map(Clusters::from_sorted_labels);
     // An alpha of 0 or 1 is an error of every band call below, as an invalid
     // level is.
     let level = Level::alpha(alpha).map_err(epistat_inference::Error::from);
 
-    if !result.by_key.is_empty() {
-        let columns = result
-            .by_key
+    if !summary.points.is_empty() {
+        let columns = summary
+            .points
             .iter()
             .map(|point| point.influence.as_slice())
             .collect::<Vec<_>>();
-        let bands = level.clone().and_then(|level| {
-            multiplier_bands(
-                &columns,
-                clusters.as_ref(),
-                level,
-                Bootstrap::new(bootstrap.replicates, bootstrap.seed),
-            )
-        });
-        // An error here means that no draw gave a finite studentised maximum, so
-        // there are no bootstrap standard errors either.
+        let bands = level
+            .clone()
+            .and_then(|level| multiplier_bands(&columns, clusters, level, bootstrap));
+        // An error here means that no draw gave a finite studentised maximum,
+        // so there are no bootstrap standard errors either.
         let standard_errors = bands.as_ref().ok().map(|bands| bands.se.clone());
-        if bootstrap.standard_errors {
-            for (index, point) in result.by_key.iter_mut().enumerate() {
-                point.se = standard_errors
-                    .as_ref()
-                    .and_then(|se| se[index])
-                    .unwrap_or(f64::NAN);
-            }
+        for (index, point) in summary.points.iter_mut().enumerate() {
+            point.se = standard_errors
+                .as_ref()
+                .and_then(|se| se[index])
+                .unwrap_or(f64::NAN);
         }
-        if let (true, Ok(bands)) = (bootstrap.uniform_band, bands.as_ref())
+        if let (true, Ok(bands)) = (uniform_band, bands.as_ref())
             && bands.critical.is_finite()
             && bands.critical >= pointwise
         {
-            result.critical_value = bands.critical;
-            result.uniform_band = true;
+            summary.critical_value = bands.critical;
+            summary.uniform_band = true;
         }
-        for point in &mut result.by_key {
-            let margin = result.critical_value * point.se;
+        for point in &mut summary.points {
+            let margin = summary.critical_value * point.se;
             point.ci_low = point.att - margin;
             point.ci_high = point.att + margin;
         }
     }
 
-    if bootstrap.standard_errors {
+    if let Some(overall) = summary.overall.as_mut() {
         let bands = level.and_then(|level| {
-            multiplier_bands(
-                &[result.overall_influence.as_slice()],
-                clusters.as_ref(),
-                level,
-                Bootstrap::new(bootstrap.replicates, bootstrap.seed),
-            )
+            multiplier_bands(&[overall.influence.as_slice()], clusters, level, bootstrap)
         });
-        result.overall_se = bands.ok().and_then(|bands| bands.se[0]).unwrap_or(f64::NAN);
-        let margin = pointwise * result.overall_se;
-        result.overall_ci_low = result.overall_att - margin;
-        result.overall_ci_high = result.overall_att + margin;
+        overall.se = bands.ok().and_then(|bands| bands.se[0]).unwrap_or(f64::NAN);
+        let margin = pointwise * overall.se;
+        overall.ci_low = overall.att - margin;
+        overall.ci_high = overall.att + margin;
     }
-    Ok(result)
+    Ok(summary)
 }
 
-/// Per-cell standard errors and intervals for `ATT(g,t)`, clustered.
-///
-/// # Why this exists
-///
-/// The `se` on an [`AttGtEstimate`] comes from the pair estimator, which sees
-/// one `(g, t)` cell and has no idea that two of its units are the two parents of
-/// one child. It is therefore an unclustered standard error, and in a design
-/// where units share a household it is the wrong one.
-///
-/// `did` reports the clustered version whenever `clustervars` is set, under both
-/// `bstrap = TRUE` and `bstrap = FALSE`. Under `FALSE` it is analytic, and this
-/// is that: measured against `did` 2.5.1 on mpdta with counties clustered into
-/// states, `sqrt(sum_c s_c^2) / n` where `s_c` is the cluster's summed influence.
-/// No `G / (G - 1)` correction, which is the same convention as the aggregation
-/// above and NOT the one
-/// [`crate::inference::clustered_variance_from_index`] uses.
-///
-/// The effect is not marginal. On that data the first cell goes from 0.0221
-/// unclustered to 0.0102 clustered, and another from 0.0312 to 0.0489. It moves
-/// in both directions, so there is no safe direction to round in.
-///
-/// Pass a [`UnitPanel`] whose `clusters` are set. With `clusters: None` every
-/// unit is its own cluster and the result reproduces the input `se`, which
-/// `clustered_per_cell_reduces_to_the_pair_estimator` pins.
-///
-/// # Errors
-/// [`AggteError::ShapeMismatch`] if the influence matrix does not match the
-/// estimates, [`AggteError::RaggedInfluence`] if the vectors are not all the unit
-/// count, [`AggteError::UnitGroupMismatch`] if the panel is a different size.
-pub fn att_gt_clustered_standard_errors(
-    estimates: &[AttGtEstimate],
-    influence: &[Vec<f64>],
-    panel: &UnitPanel,
-    inference: InferenceConfig,
-) -> Result<Vec<AttGtEstimate>, AggteError> {
-    if estimates.is_empty() {
-        return Err(AggteError::EmptyInput);
+/// [`AttGt::aggregate`].
+pub(super) fn aggregate(fit: &AttGt, options: &AggteOptions) -> Result<Aggte, Error> {
+    let influence = fit.kept_influence()?;
+    if let Some(bootstrap) = options.bootstrap
+        && bootstrap.replicates == 0
+    {
+        return Err(InputError::Domain {
+            what: "bootstrap replicates",
+            value: 0.0,
+            domain: "[1, inf)",
+        }
+        .into());
     }
-    if influence.len() != estimates.len() {
-        return Err(AggteError::ShapeMismatch {
-            influence: influence.len(),
-            estimates: estimates.len(),
+    if options.band == Band::Uniform && options.bootstrap.is_none() {
+        return Err(Error::Unsupported {
+            what: "a uniform band without a bootstrap",
         });
     }
-    let n_units = panel.groups.len();
-    if let Some(bad) = influence.iter().find(|vector| vector.len() != n_units) {
-        return Err(AggteError::RaggedInfluence {
-            expected: n_units,
-            actual: bad.len(),
-        });
-    }
-    let clusters = panel.cluster_index();
-    if clusters.len() != n_units {
-        return Err(AggteError::UnitGroupMismatch {
-            expected: n_units,
-            actual: clusters.len(),
-        });
-    }
-
-    Ok(estimates
-        .iter()
-        .zip(influence)
-        .map(|(estimate, vector)| {
-            let se = standard_error(vector, &clusters);
-            let (ci_low, ci_high) = normal_interval(estimate.att, se, inference.confidence_level);
-            AttGtEstimate {
-                se,
-                ci_low,
-                ci_high,
-                ..*estimate
-            }
+    let cells: Vec<Cell> = fit
+        .estimated()
+        .map(|(cell, estimate)| Cell {
+            group: cell.group,
+            time: cell.time,
+            event_time: cell.event_time,
+            att: estimate.estimate,
+            treated_n: cell.n_treated,
+            total_weight: cell.total_weight,
         })
-        .collect())
+        .collect();
+    let columns: Vec<&[f64]> = (0..influence.n_columns())
+        .map(|j| influence.column(j))
+        .collect();
+    let units = Units {
+        groups: &fit.sample.groups,
+        weights: &fit.sample.weights,
+    };
+    let codes = fit.clusters.as_deref();
+    let clusters = codes.map_or_else(
+        || Clusters::singletons(units.groups.len()),
+        Clusters::from_codes,
+    );
+
+    let summary = match options.weights {
+        AggteWeights::Estimated => by_share(&cells, &columns, &units, &clusters, options)?,
+        _ => by_fixed_weights(&cells, &columns, &clusters, codes.is_some(), options)?,
+    };
+    let confidence_level = options.level.confidence_value();
+    let summary = match options.bootstrap {
+        None => summary,
+        Some(bootstrap) => {
+            let bootstrap_clusters = codes.map(Clusters::from_codes);
+            apply_bootstrap(
+                summary,
+                bootstrap_clusters.as_ref(),
+                bootstrap,
+                options.band == Band::Uniform,
+                confidence_level,
+            )?
+        }
+    };
+    into_aggte(fit, options, &summary, influence)
 }
 
-/// A [`UnitPanel`] for the repeated-cross-section route, indexed by input ROW.
-///
-/// [`super::panel_pairs::unit_panel`] is indexed by unit, because the panel
-/// route's influence vectors are. The RC route's are indexed by input row, one
-/// entry per observation, so its panel has to be too. Passing the wrong one is
-/// caught by the length check in [`aggregate_att_gt`] rather than being absorbed
-/// silently, but the two are easy to confuse, hence two named constructors
-/// instead of one that guesses.
-///
-/// Cohort shares come out the same either way on a balanced panel, since every
-/// unit contributes the same number of rows. On an unbalanced one they do not,
-/// and the row-level share is the right one here: it is what `did` computes with
-/// `panel = FALSE`, where a row IS the observation.
-#[must_use]
-pub fn row_panel(observations: &[crate::types::AttGtDrObservation]) -> UnitPanel {
-    UnitPanel {
-        groups: observations
-            .iter()
-            .map(|row| row.first_treated_time)
-            .collect(),
-        weights: observations.iter().map(|row| row.weight).collect(),
-        clusters: None,
+/// The public summary, with the points' and the overall effect's influence
+/// functions in one [`Influence`].
+fn into_aggte(
+    fit: &AttGt,
+    options: &AggteOptions,
+    summary: &Summary,
+    cells_influence: &Influence,
+) -> Result<Aggte, Error> {
+    let level = options.level;
+    let estimate =
+        |point: &Point| cell_estimate(point.att, point.se, (point.ci_low, point.ci_high), level);
+    let points: Vec<AggtePoint> = summary
+        .points
+        .iter()
+        .map(|point| AggtePoint {
+            key: point.key,
+            estimate: estimate(point),
+            n_cells: point.n_cells,
+            total_weight: point.total_weight,
+        })
+        .collect();
+    let overall = summary.overall.as_ref().map(|point| AggteOverall {
+        estimate: estimate(point),
+        n_cells: point.n_cells,
+        total_weight: point.total_weight,
+    });
+    let n_columns = summary.points.len() + usize::from(summary.overall.is_some());
+    // Only a fixed-weight event study whose restrictions keep no cell gets here
+    // without a point.
+    if n_columns == 0 {
+        return Err(Error::NoPostTreatmentCells);
     }
+    let mut values = Vec::with_capacity(n_columns * cells_influence.n_units());
+    for point in summary.points.iter().chain(summary.overall.as_ref()) {
+        values.extend_from_slice(&point.influence);
+    }
+    let influence = Influence::new(
+        values,
+        cells_influence.units().to_vec(),
+        n_columns,
+        ClusterRule::NoSmallSample,
+    )
+    .map_err(|_| Error::NotFinite)?;
+    Ok(Aggte {
+        aggregation: options.aggregation,
+        weights: options.weights,
+        points,
+        overall,
+        critical_value: summary.critical_value,
+        uniform_band: summary.uniform_band,
+        influence,
+        clusters: fit.clusters.clone(),
+        level,
+        anticipation: fit.anticipation,
+        base_period: fit.base_period,
+    })
 }

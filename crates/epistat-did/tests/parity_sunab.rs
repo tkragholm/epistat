@@ -8,11 +8,10 @@
 mod feols_bound;
 
 use epistat_core::InputError;
+use epistat_did::att_gt;
 use epistat_did::{
-    AggteConfig, AggteType, AttGtConfig, AttGtDrConfig, AttGtDrObservation, BasePeriod,
-    ComparisonGroup, DrDidConfig, InferenceConfig, StaggeredPanel, SunabBins, SunabConfig,
-    SunabControl, SunabReference, SunabTerm, UnbalancedPanel, aggregate_att_gt, did_covariance,
-    estimate_att_gt_dr_panel_with_influence, estimate_sunab, unit_panel,
+    StaggeredPanel, SunabBins, SunabConfig, SunabControl, SunabReference, SunabTerm,
+    did_covariance, estimate_sunab,
 };
 use epistat_glm::{Absorb, Ssc};
 use epistat_inference::Clusters;
@@ -468,31 +467,14 @@ fn sunab_is_att_gt_aggregated_by_treated_counts() {
     )
     .unwrap();
 
-    let observations: Vec<AttGtDrObservation> = (0..unit.len())
-        .map(|i| AttGtDrObservation {
-            unit_id: Some(i64::from(unit[i])),
-            first_treated_time: first[i].map(|g| i32::try_from(g).unwrap()),
-            time: i32::try_from(time[i]).unwrap(),
-            outcome: outcome[i],
-            weight: 1.0,
-            covariates: Vec::new(),
-            comparison_cohort: None,
-        })
-        .collect();
-    let config = AttGtDrConfig {
-        att_gt: AttGtConfig {
-            confidence_level: InferenceConfig::default(),
-            comparison_group: ComparisonGroup::NeverTreated,
-            base_period: BasePeriod::Universal,
-            anticipation_periods: 0,
-            skip_incomplete_pairs: false,
-            unbalanced_panel: UnbalancedPanel::Balance,
-            refuse_small_never_treated: false,
-            refuse_poor_overlap: false,
-        },
-        drdid: DrDidConfig::default(),
+    let options = att_gt::AttGtOptions {
+        base_period: att_gt::BasePeriod::Universal,
+        skip_failed_cells: false,
+        refuse_small_never_treated: false,
+        refuse_poor_overlap: false,
+        ..att_gt::AttGtOptions::default()
     };
-    let fitted = estimate_att_gt_dr_panel_with_influence(&observations, config).unwrap();
+    let fitted = att_gt::estimate(&panel, &options).unwrap();
     // The tolerance: the regression's bound from its criterion (the
     // smallest positive eigenvalue of D'D for a balanced panel of N units and
     // T < N periods is T), and the rounding of the four means of ATT(g,t),
@@ -522,14 +504,12 @@ fn sunab_is_att_gt_aggregated_by_treated_counts() {
     let scale = bound.beta + 8.0 * n as f64 * EPS * y_max;
     for cell in &result.cells {
         let att = fitted
-            .estimates
+            .cells()
             .iter()
-            .find(|e| {
-                i64::from(e.group) == cell.cohort
-                    && i64::from(e.time) == cell.cohort + cell.relative_period
-            })
+            .find(|e| e.group == cell.cohort && e.time == cell.cohort + cell.relative_period)
+            .and_then(|e| e.estimate)
             .unwrap()
-            .att;
+            .estimate;
         assert!(
             (cell.estimate.unwrap() - att).abs() <= scale,
             "cell {} {}: {} {att}",
@@ -538,47 +518,39 @@ fn sunab_is_att_gt_aggregated_by_treated_counts() {
             cell.estimate.unwrap()
         );
     }
-    let unit_panel = unit_panel(&observations).unwrap();
     for (aggregation, term) in [
-        (AggteType::Dynamic, None),
-        (AggteType::Simple, Some(SunabTerm::Att)),
+        (att_gt::AggteType::Dynamic, None),
+        (att_gt::AggteType::Simple, Some(SunabTerm::Att)),
     ] {
-        let agg = aggregate_att_gt(
-            &fitted.estimates,
-            &fitted.influence_functions,
-            &unit_panel,
-            AggteConfig {
+        let agg = fitted
+            .aggregate(&att_gt::AggteOptions {
                 aggregation,
-                balance_e: None,
-                min_e: None,
-                max_e: None,
-                confidence_level: InferenceConfig::default(),
-                bootstrap: None,
-            },
-        )
-        .unwrap();
+                ..att_gt::AggteOptions::default()
+            })
+            .unwrap();
         match term {
             Some(t) => {
                 let mine = result.estimates.iter().find(|e| e.term == t).unwrap();
-                assert!((mine.estimate - agg.overall_att).abs() <= scale);
+                let overall = agg.overall.unwrap().estimate.estimate;
+                assert!((mine.estimate - overall).abs() <= scale);
             }
             None => {
-                for point in &agg.by_key {
+                for point in &agg.points {
                     let mine = result
                         .estimates
                         .iter()
-                        .find(|e| e.term == SunabTerm::Period(i64::from(point.key)));
+                        .find(|e| e.term == SunabTerm::Period(point.key));
                     if point.key == -1 {
                         assert!(mine.is_none());
                         continue;
                     }
                     let mine = mine.unwrap();
+                    let att = point.estimate.estimate;
                     assert!(
-                        (mine.estimate - point.att).abs() <= scale,
-                        "event {}: {} {}",
+                        (mine.estimate - att).abs() <= scale,
+                        "event {}: {} {att}",
                         point.key,
-                        mine.estimate,
-                        point.att
+                        mine.estimate
                     );
                 }
             }

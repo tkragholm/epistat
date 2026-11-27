@@ -6,22 +6,15 @@
 //! # The estimators
 //!
 //! - ATT(g,t), the average effect at time `t` on the cohort first treated at
-//!   `g` \[1\]: [`estimate_att_gt`] without covariates;
-//!   [`estimate_att_gt_dr_panel_with_influence`],
-//!   [`estimate_att_gt_ipw_panel_with_influence`] and
-//!   [`estimate_att_gt_or_panel_with_influence`] by the doubly robust
-//!   estimator, inverse probability weighting and outcome regression on a
-//!   panel; [`estimate_att_gt_dr_efficient_with_influence`],
-//!   [`estimate_att_gt_ipw_with_influence`] and
-//!   [`estimate_att_gt_or_with_influence`] on repeated cross-sections, with
-//!   [`estimate_att_gt_dr_with_influence`] for the traditional doubly robust
-//!   one. These apply `did::att_gt`'s pre-processing first ([`AttGtSample`]).
-//! - Their aggregations as `aggte` of R's `did`: [`aggregate_att_gt`] by
-//!   event time, cohort, calendar time or overall, with the influence of the
-//!   estimated cohort shares, with the multiplier bootstrap and uniform bands
-//!   of `aggte(bstrap, cband)` through [`AggteBootstrap`], and
-//!   [`att_gt_mboot_bands`] for simultaneous bands over the cells.
-//!   [`pretrend_wald_test`] is the Wald pre-test of `att_gt`.
+//!   `g` \[1\], in [`att_gt`]: [`att_gt::estimate`] on a [`StaggeredPanel`]
+//!   by the doubly robust estimator, inverse probability weighting or outcome
+//!   regression, on a panel or repeated cross-sections, after
+//!   `did::att_gt`'s pre-processing, and the efficient estimator over all
+//!   baseline periods \[3\]. The result aggregates by event time, cohort,
+//!   calendar time or overall as `did::aggte` does, with the multiplier
+//!   bootstrap and uniform bands ([`att_gt::AttGt::aggregate`]), and gives
+//!   simultaneous bands over the cells, the Wald pre-test of `att_gt` and the
+//!   event study HonestDiD takes.
 //! - The two-period estimators of `DRDID` \[2\]: [`estimate_drdid_panel`],
 //!   [`estimate_drdid_repeated_cross_section`], [`estimate_ipw_did_panel`],
 //!   [`estimate_or_did_panel`], [`estimate_ipw_did_repeated_cross_section`],
@@ -29,8 +22,6 @@
 //!   [`estimate_drdid_improved_panel`] and
 //!   [`estimate_drdid_improved_repeated_cross_section`], and the locally
 //!   efficient [`estimate_drdid_repeated_efficient`].
-//! - The efficient ATT(g,t) over all baseline periods \[3\]:
-//!   [`estimate_att_gt_efficient`] and [`estimate_att_gt_efficient_dr`].
 //! - Compositional changes in repeated cross-sections \[4\]:
 //!   [`estimate_did_cc_robust`], [`estimate_did_cc_stationary`] and
 //!   [`test_did_cc_stationarity`].
@@ -73,55 +64,20 @@
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
-//! # The estimate
-//!
-//! For the cohort `g`, a comparison group `C` (never treated, or not yet
-//! treated by `t`) and the base period `b` (the last period before
-//! `g - anticipation` for a universal base, and before treatment the period
-//! before `t` for a varying one), the doubly robust ATT(g,t) is
-//!
-//! ```text
-//! ATT(g,t) = E[ (w_g - w_C(X)) (Y_t - Y_b - m_C(X)) ],
-//! w_g      = G_g / E[G_g],
-//! w_C(X)   = (p(X) C / (1 - p(X))) / E[p(X) C / (1 - p(X))],
-//! ```
-//!
-//! with `p(X)` the logistic propensity of belonging to `g` among the units of
-//! `g` and `C`, fitted by maximum likelihood as R's `glm`, and `m_C(X)` the
-//! weighted least-squares regression of `Y_t - Y_b` on `X` among the units of
-//! `C` \[2\]. Outcome regression drops the weights `w_C` and inverse
-//! probability weighting drops `m_C`. On a repeated cross-section the
-//! outcome is not differenced within a unit, and the regressions are fitted
-//! by group and period.
-//!
-//! An aggregation is a weighted mean of the cells. By event time `e`,
-//!
-//! ```text
-//! theta(e) = sum over g of P(G = g | G + e <= T) ATT(g, g + e),
-//! ```
-//!
-//! and the cohort, calendar and overall summaries are formed as in `aggte`
-//! \[1\]. The cohort shares are estimated, so their influence function enters
-//! the variance of the aggregate, as `did:::wif` adds it.
-//!
 //! # Inference
 //!
 //! Each estimator returns the influence function `psi_i` of every unit, and
 //! the standard error is `sqrt(mean((psi_i - mean(psi))^2) / n)`. The intervals
 //! are `att +- z se`, or percentile intervals of a Rademacher multiplier
 //! bootstrap when [`DrDidConfig::bootstrap_reps`] is positive; those of the
-//! improved two-period estimators are `att +- 1.96 se`. In [`aggregate_att_gt`],
-//! [`att_gt_clustered_standard_errors`] and the bands, clusters replace the
-//! units by the sums of the centred `psi_i` within each cluster, divided by
-//! `n`, without the factor `G / (G - 1)`, as in `did`; [`did_standard_error`] and
-//! [`did_covariance`] are that variance. [`clustered_variance_from_index`] and
-//! its siblings are the cluster-robust variance with that factor. The
+//! improved two-period estimators are `att +- 1.96 se`. With clusters, the
+//! units are replaced by the sums of the centred `psi_i` within each cluster,
+//! divided by `n`, without the factor `G / (G - 1)`, as in `did`;
+//! [`did_standard_error`] and [`did_covariance`] are that variance. The
 //! multiplier bootstrap draws a Rademacher weight per unit or cluster and
-//! replicate, each replicate seeded from the caller's seed and its index, and
-//! a simultaneous band uses the `1 - alpha` quantile of the largest
-//! studentised deviation, with the bootstrap standard error from the
-//! interquartile range as `did::mboot` does. Sums run in a fixed order, so the
-//! results do not depend on the number of threads.
+//! replicate, each replicate seeded from the caller's seed and its index.
+//! Sums run in a fixed order, so the results do not depend on the number of
+//! threads.
 //!
 //! # References
 //!
@@ -226,21 +182,7 @@ pub use inference::sensitivity::{
     summarize_relative_magnitude_sensitivity_with_simulation, summarize_smoothness_sensitivity,
     summarize_smoothness_sensitivity_with_simulation,
 };
-pub use inference::{
-    ClusterIndex, ClusterSpec, InferenceError, clustered_ci_from_index,
-    clustered_standard_error_from_index, clustered_variance_from_index,
-};
-pub use methods::att_gt::{
-    AggteBootstrap, AggteConfig, AggteError, AggteEstimate, AggteResult, AggteType, PretestError,
-    PretrendWald, UnitPanel, aggregate_att_gt, aggregate_att_gt_by_calendar_time,
-    aggregate_att_gt_by_cohort, aggregate_att_gt_event_time_with_influence,
-    aggregate_att_gt_overall, att_gt_clustered_standard_errors, att_gt_mboot_bands,
-    estimate_att_gt, estimate_att_gt_dr_efficient_with_influence,
-    estimate_att_gt_dr_panel_with_influence, estimate_att_gt_dr_with_influence,
-    estimate_att_gt_ipw_panel_with_influence, estimate_att_gt_ipw_with_influence,
-    estimate_att_gt_or_panel_with_influence, estimate_att_gt_or_with_influence, pretrend_wald_test,
-    row_panel, unit_panel,
-};
+pub use methods::att_gt;
 pub use methods::bacon::{
     BaconComparison, BaconDecomposition, BaconError, BaconKind, BaconWithin, bacon_decomposition,
 };
@@ -269,11 +211,6 @@ pub use methods::drdid::panel::{
 pub use methods::drdid::repeated::estimate_drdid_repeated_cross_section;
 pub use methods::drdid::repeated_efficient::estimate_drdid_repeated_efficient;
 pub use methods::drdid::{DesignPruning, independent_design_columns};
-pub use methods::efficient::{
-    aggregate_efficient_att_gt_by_calendar_time, aggregate_efficient_att_gt_by_cohort,
-    aggregate_efficient_att_gt_event_time, aggregate_efficient_att_gt_event_time_with_influence,
-    aggregate_efficient_att_gt_overall, estimate_att_gt_efficient, estimate_att_gt_efficient_dr,
-};
 pub use methods::etwfe;
 pub use methods::etwfe::{
     EtwfeCoefficient, EtwfeConfig, EtwfeControl, EtwfeEffect, EtwfeEffects, EtwfeError,
