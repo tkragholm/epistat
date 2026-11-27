@@ -1,15 +1,17 @@
 //! Predictions and contrasts with delta-method intervals.
 
-use epistat_core::{Covariance, Level};
+use epistat_core::{Covariance, InputError, Level};
 use epistat_linalg::MatRef;
 use epistat_stats::dist::normal;
 
 use super::link;
 use super::{FlexParFit, FlexparScale};
+use crate::check::{refuse_non_finite, refuse_non_finite_matrix};
 use crate::error::{Error, Result};
 
 /// What [`predict`] returns for a covariate row at a time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Predict {
     /// The survivor function.
     Survival,
@@ -21,6 +23,7 @@ pub enum Predict {
 
 /// What [`contrast`] returns for a covariate row against a reference row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FlexparContrast {
     /// The ratio of the hazards, a function of time where the model has
     /// time-varying effects or is not on the hazard scale.
@@ -45,6 +48,7 @@ pub struct FlexparPredictOptions {
 
 /// An estimate at a time with its delta-method standard error and limits.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct FlexparPrediction {
     /// The time.
     pub time: f64,
@@ -68,7 +72,7 @@ struct Point {
 
 fn covariance<'a>(fit: &'a FlexParFit, opts: &FlexparPredictOptions) -> Result<&'a [Option<f64>]> {
     if !fit.monotone_on_data && !opts.allow_non_monotone {
-        return Err(Error::invalid(
+        return Err(Error::fit(
             "the fitted spline is not increasing on the data, so its curves are not survivor functions: set allow_non_monotone to predict anyway",
         ));
     }
@@ -78,7 +82,7 @@ fn covariance<'a>(fit: &'a FlexParFit, opts: &FlexparPredictOptions) -> Result<&
         fit.covariance.as_ref()
     };
     c.map(Covariance::as_slice).ok_or_else(|| {
-        Error::invalid(if opts.robust {
+        Error::fit(if opts.robust {
             "the fit has no robust covariance: it needs clusters and a positive definite information"
         } else {
             "the information of the fit is not positive definite, so it has no covariance"
@@ -86,16 +90,28 @@ fn covariance<'a>(fit: &'a FlexParFit, opts: &FlexparPredictOptions) -> Result<&
     })
 }
 
-fn point(fit: &FlexParFit, x: MatRef<'_, f64>, row: usize, time: f64) -> Result<Point> {
-    if !(time > 0.0 && time.is_finite()) {
-        return Err(Error::invalid("times must be positive and finite"));
+/// Refuse times that are not finite and positive.
+fn check_times(times: &[f64]) -> Result<()> {
+    refuse_non_finite(times, "times")?;
+    match times.iter().position(|&t| t <= 0.0) {
+        Some(row) => Err(Error::from(InputError::Domain {
+            what: "times",
+            value: times[row],
+            domain: "(0, inf)",
+            row: Some(row),
+        })),
+        None => Ok(()),
     }
+}
+
+/// The design row of `row` of `x` at `time`, which is finite and positive.
+fn point(fit: &FlexParFit, x: MatRef<'_, f64>, row: usize, time: f64) -> Point {
     let q = fit.design.dim();
     let (mut z, mut w) = (vec![0.0; q], vec![0.0; q]);
     fit.design.fill(x, row, time.ln(), &mut z, Some(&mut w));
     let eta = z.iter().zip(&fit.theta).map(|(a, b)| a * b).sum();
     let slope = w.iter().zip(&fit.theta).map(|(a, b)| a * b).sum();
-    Ok(Point { z, w, eta, slope })
+    Point { z, w, eta, slope }
 }
 
 fn variance(fit: &FlexParFit, cov: &[Option<f64>], g: &[f64]) -> f64 {
@@ -111,18 +127,17 @@ fn variance(fit: &FlexParFit, cov: &[Option<f64>], g: &[f64]) -> f64 {
     total
 }
 
-fn check_columns(fit: &FlexParFit, x: MatRef<'_, f64>) -> Result<()> {
+/// Refuse a covariate argument `name` without the columns of the fit or with
+/// a value that is not finite.
+fn check_columns(fit: &FlexParFit, x: MatRef<'_, f64>, name: &'static str) -> Result<()> {
     if x.ncols() != fit.n_covariates() {
-        return Err(Error::invalid(format!(
+        return Err(Error::mismatch(format!(
             "the covariates have {} columns and the fit {}",
             x.ncols(),
             fit.n_covariates()
         )));
     }
-    if (0..x.nrows()).any(|i| (0..x.ncols()).any(|j| !x[(i, j)].is_finite())) {
-        return Err(Error::invalid("the covariates must be finite"));
-    }
-    Ok(())
+    refuse_non_finite_matrix(x, name)
 }
 
 /// The log hazard and its gradient in the estimated parameters, `None` where
@@ -177,14 +192,15 @@ pub fn predict(
     options: &FlexparPredictOptions,
 ) -> Result<Vec<Vec<FlexparPrediction>>> {
     let cov = covariance(fit, options)?;
-    check_columns(fit, x_new)?;
+    check_columns(fit, x_new, "x_new")?;
+    check_times(times)?;
     let z = normal::quantile(1.0 - (1.0 - options.level.confidence_value()) / 2.0);
     let scale = fit.scale;
     let mut out = Vec::with_capacity(x_new.nrows());
     for row in 0..x_new.nrows() {
         let mut curve = Vec::with_capacity(times.len());
         for &time in times {
-            let p = point(fit, x_new, row, time)?;
+            let p = point(fit, x_new, row, time);
             let eta_se = variance(fit, cov, &p.z).sqrt();
             curve.push(match what {
                 Predict::Survival => {
@@ -254,13 +270,14 @@ pub fn contrast(
     options: &FlexparPredictOptions,
 ) -> Result<Vec<Vec<FlexparPrediction>>> {
     let cov = covariance(fit, options)?;
-    check_columns(fit, x_new)?;
-    check_columns(fit, x_ref)?;
+    check_columns(fit, x_new, "x_new")?;
+    check_columns(fit, x_ref, "x_ref")?;
     if x_ref.nrows() != 1 && x_ref.nrows() != x_new.nrows() {
-        return Err(Error::invalid(
+        return Err(Error::mismatch(
             "the reference has one row or as many as the rows to compare",
         ));
     }
+    check_times(times)?;
     let z = normal::quantile(1.0 - (1.0 - options.level.confidence_value()) / 2.0);
     let scale = fit.scale;
     let mut out = Vec::with_capacity(x_new.nrows());
@@ -268,8 +285,8 @@ pub fn contrast(
         let ref_row = if x_ref.nrows() == 1 { 0 } else { row };
         let mut curve = Vec::with_capacity(times.len());
         for &time in times {
-            let a = point(fit, x_new, row, time)?;
-            let b = point(fit, x_ref, ref_row, time)?;
+            let a = point(fit, x_new, row, time);
+            let b = point(fit, x_ref, ref_row, time);
             let none = FlexparPrediction {
                 time,
                 estimate: f64::NAN,

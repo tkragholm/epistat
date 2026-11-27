@@ -278,7 +278,7 @@ fn flexpar_against_r() {
                 );
                 worst.rel(
                     &format!("{} beta se", r.source),
-                    se(f.beta_index(j).unwrap()),
+                    se(f.beta_index(j).unwrap().unwrap()),
                     sj,
                     1e-300,
                     1e-4 * loose,

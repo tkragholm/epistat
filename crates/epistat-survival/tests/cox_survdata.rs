@@ -7,11 +7,12 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
+use epistat_core::{Classify, ErrorKind};
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
+use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties, fit, score_residuals};
 use epistat_survival::timefix::TimeFix;
-use epistat_survival::{Error, SurvData};
 
 struct Sample {
     x: Mat<f64>,
@@ -155,11 +156,11 @@ fn the_event_code_picks_the_cause() {
         let opts = CoxOptions { cause, ..NO_FIX };
         assert!(matches!(
             fit(&data, x.as_ref(), &opts),
-            Err(Error::Input(_) | Error::Invalid(_))
+            Err(ref e) if e.kind() == ErrorKind::Input
         ));
         assert!(matches!(
             score_residuals(&data, x.as_ref(), &[Some(0.0), Some(0.0)], &opts),
-            Err(Error::Input(_) | Error::Invalid(_))
+            Err(ref e) if e.kind() == ErrorKind::Input
         ));
     }
     let binary: Vec<i32> = s.status.iter().map(|&c| i32::from(c == 1)).collect();
@@ -217,11 +218,11 @@ fn the_design_must_fit_the_data() {
     for x in [short.as_ref(), nan.as_ref()] {
         assert!(matches!(
             fit(&data, x, &NO_FIX),
-            Err(Error::Input(_) | Error::Invalid(_))
+            Err(ref e) if e.kind() == ErrorKind::Input
         ));
         assert!(matches!(
             score_residuals(&data, x, &[Some(0.0)], &NO_FIX),
-            Err(Error::Input(_) | Error::Invalid(_))
+            Err(ref e) if e.kind() == ErrorKind::Input
         ));
     }
     // A design without columns is the null model, as coxph(~ 1); a coefficient
@@ -234,7 +235,7 @@ fn the_design_must_fit_the_data() {
     );
     assert!(matches!(
         score_residuals(&data, empty.as_ref(), &[Some(0.0)], &NO_FIX),
-        Err(Error::Input(_) | Error::Invalid(_))
+        Err(ref e) if e.kind() == ErrorKind::Input
     ));
     let x = Mat::from_fn(n, 1, |i, _| s.x[(i, 0)]);
     assert!(score_residuals(&data, x.as_ref(), &[Some(0.0), Some(0.0)], &NO_FIX).is_err());

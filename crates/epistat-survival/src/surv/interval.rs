@@ -13,6 +13,7 @@ use crate::error::Result;
 ///
 /// The codes are those of the status of R's `Surv(type = "interval")`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum IntervalKind {
     /// The event had not happened by the lower bound: status 0.
     Right,

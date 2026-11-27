@@ -1,6 +1,7 @@
 //! The rows that the models of the per-protocol weights are fitted on, as
 //! `TrialEmulation` chooses them.
 
+use crate::check::check_lengths;
 use crate::error::{Error, Result};
 
 /// The panel of a sequential trial emulation in columns: one row per person and
@@ -62,24 +63,21 @@ pub struct ProtocolRows {
 /// ordered by person and period.
 pub fn protocol_rows(panel: &ProtocolPanel<'_>) -> Result<ProtocolRows> {
     let n = panel.id.len();
-    for (name, len) in [
+    check_lengths(&[
+        ("id", n),
         ("period", panel.period.len()),
         ("treatment", panel.treatment.len()),
         ("eligible", panel.eligible.len()),
         ("outcome", panel.outcome.len()),
-    ] {
-        if len != n {
-            return Err(Error::invalid(format!("{name}: {len} values for {n} rows")));
-        }
-    }
+    ])?;
     for i in 1..n {
         if panel.id[i] < panel.id[i - 1] {
-            return Err(Error::invalid(format!(
+            return Err(Error::order(format!(
                 "id: the rows of a person must be next to each other and ordered, row {i}"
             )));
         }
         if panel.id[i] == panel.id[i - 1] && panel.period[i] <= panel.period[i - 1] {
-            return Err(Error::invalid(format!(
+            return Err(Error::order(format!(
                 "period: row {i} is not after the row before it for person {}",
                 panel.id[i]
             )));

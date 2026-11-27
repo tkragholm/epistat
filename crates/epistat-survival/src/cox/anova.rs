@@ -44,6 +44,7 @@
 //! 1. Therneau TM, Grambsch PM. Modeling Survival Data: Extending the Cox
 //!    Model. Springer, 2000, section 3.4.
 
+use epistat_core::InputError;
 use epistat_linalg::{Mat, MatRef};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
@@ -56,6 +57,7 @@ const EPS: f64 = 1e-9;
 
 /// One row of an analysis of deviance table.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct AnovaRow {
     /// The maximised log partial likelihood, `None` when the model has none.
     pub log_likelihood: Option<f64>,
@@ -73,6 +75,7 @@ pub struct AnovaRow {
 
 /// An analysis of deviance table, the result of [`anova`] and [`anova_terms`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct AnovaTable {
     /// One row per model. For [`anova_terms`] the first row is the null model
     /// and row `k` adds term `k - 1`.
@@ -93,7 +96,7 @@ fn tolerance(a: f64, b: f64) -> f64 {
 fn compare(smaller: (f64, usize), larger: (f64, usize)) -> Result<(f64, usize, Option<f64>)> {
     let diff = larger.0 - smaller.0;
     if diff < -tolerance(larger.0, smaller.0) {
-        return Err(Error::invalid(
+        return Err(Error::inconsistent(
             "a model has a lower log likelihood than the smaller model it contains, so the \
              models are not nested or one fit is not at its maximum",
         ));
@@ -122,18 +125,18 @@ fn compare(smaller: (f64, usize), larger: (f64, usize)) -> Result<(f64, usize, O
 )]
 pub fn anova(fits: &[&CoxModelFit]) -> Result<AnovaTable> {
     if fits.len() < 2 {
-        return Err(Error::invalid("anova needs at least two fits"));
+        return Err(Error::no_information("anova needs at least two fits"));
     }
     let first = fits[0];
     for (k, f) in fits.iter().enumerate() {
         if f.n_rows != first.n_rows || f.n_used != first.n_used || f.n_events != first.n_events {
-            return Err(Error::invalid(format!(
+            return Err(Error::fit(format!(
                 "fit {k} has another number of rows or events than fit 0, so it was not fitted to \
                  the same data"
             )));
         }
         if f.log_partial_likelihood.is_none() {
-            return Err(Error::invalid(format!("fit {k} has no log likelihood")));
+            return Err(Error::fit(format!("fit {k} has no log likelihood")));
         }
         if !f.converged {
             return Err(Error::NotConverged {
@@ -154,7 +157,7 @@ pub fn anova(fits: &[&CoxModelFit]) -> Result<AnovaTable> {
         if k > 0 {
             let before = fits[k - 1];
             if f.rank <= before.rank {
-                return Err(Error::invalid(format!(
+                return Err(Error::order(format!(
                     "fit {k} does not have a larger rank than fit {}: give the models from the \
                      smallest to the largest",
                     k - 1
@@ -204,10 +207,10 @@ pub fn anova_terms(
     opts: &CoxOptions,
 ) -> Result<AnovaTable> {
     if groups.is_empty() {
-        return Err(Error::invalid("anova_terms needs at least one term"));
+        return Err(InputError::Empty { what: "groups" }.into());
     }
     if opts.start.is_some() {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "start gives starting values for the full design and does not apply to its prefixes",
         ));
     }
@@ -216,14 +219,16 @@ pub fn anova_terms(
     let mut fits: Vec<CoxModelFit> = Vec::with_capacity(groups.len());
     for (g, group) in groups.iter().enumerate() {
         if group.is_empty() {
-            return Err(Error::invalid(format!("term {g} has no columns")));
+            return Err(Error::no_information(format!("term {g} has no columns")));
         }
         for &c in *group {
             if c >= x.ncols() {
-                return Err(Error::invalid(format!("term {g}: column {c} is not in x")));
+                return Err(Error::out_of_range(format!(
+                    "term {g}: column {c} is not in x"
+                )));
             }
             if std::mem::replace(&mut seen[c], true) {
-                return Err(Error::invalid(format!(
+                return Err(Error::inconsistent(format!(
                     "column {c} is in more than one term"
                 )));
             }
@@ -232,7 +237,7 @@ pub fn anova_terms(
         let sub = Mat::from_fn(x.nrows(), columns.len(), |i, j| x[(i, columns[j])]);
         let f = fit(data, sub.as_ref(), opts)?;
         if f.log_partial_likelihood.is_none() || !f.converged {
-            return Err(Error::invalid(format!(
+            return Err(Error::fit(format!(
                 "the model with terms 0 to {g} has no log likelihood or did not converge"
             )));
         }

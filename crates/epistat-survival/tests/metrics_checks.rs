@@ -178,7 +178,7 @@ fn score_refuses_what_it_cannot_score() {
     assert!(msg(&[5.0, 5.0]).contains("repeats at row 1"));
     assert!(msg(&[5.0, 11.0]).contains("after the last observed time"));
     assert!(msg(&[5.0, f64::NAN]).contains("is not finite"));
-    assert!(msg(&[]).contains("at least one time"));
+    assert!(msg(&[]).contains("times is empty"));
     assert!(msg(&[5.0]).contains("is 11 by 2, but there are 11 rows and 1 times"));
 
     let bad = Mat::from_fn(n, 2, |i, _| risk[i] * 2.0);
@@ -310,7 +310,7 @@ fn calibration_by_hand_and_its_refusals() {
     let e = calibration::estimate(&data, &off, 5.0, &o(Groups::Quantiles(2))).unwrap_err();
     assert!(e.to_string().contains("not a probability"));
     let e = calibration::estimate(&data, &risk, f64::NAN, &o(Groups::Quantiles(2))).unwrap_err();
-    assert!(e.to_string().contains("time is not finite"));
+    assert!(e.to_string().contains("time is NaN"));
 }
 
 #[test]
@@ -368,7 +368,7 @@ fn rttright_and_brier_refuse_what_they_do_not_support() {
     let e = rttright::estimate(&data, Some(&[f64::NAN]), &RttrightOptions::default()).unwrap_err();
     assert!(e.to_string().contains("not finite"));
     let e = rttright::estimate(&data, Some(&[]), &RttrightOptions::default()).unwrap_err();
-    assert!(e.to_string().contains("give at least one time"));
+    assert!(e.to_string().contains("times is empty"));
 
     let m = Mat::from_fn(n, 1, |i, _| risk[i]);
     let e = brier::estimate(&delayed, m.as_ref(), &[5.0], &BrierOptions::default()).unwrap_err();

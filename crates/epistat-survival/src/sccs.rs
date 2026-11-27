@@ -157,9 +157,10 @@ pub use event_dependent::{
 pub use sample_size::{SampleSizeSpec, sample_size};
 pub use semiparametric::{SemiparametricPieces, semiparametric_pieces};
 
-use epistat_core::{Covariance, Level};
+use epistat_core::{Covariance, InputError, Level, check};
 use epistat_linalg::{Mat, MatRef, congruence};
 
+use crate::check::{check_ascending, check_lengths};
 use crate::covariance;
 use crate::error::{Error, Result};
 use crate::ldl;
@@ -210,6 +211,7 @@ impl Default for SccsOptions {
 
 /// A fitted self-controlled case series model.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SccsFit {
     /// The log relative incidences, one per column, `None` for an aliased
     /// column and for every column when the fit has no estimate.
@@ -293,10 +295,6 @@ struct Persons {
     ranges: Vec<(usize, usize)>,
 }
 
-fn invalid(message: impl Into<String>) -> Error {
-    Error::invalid(message)
-}
-
 fn persons_of(data: &SccsData<'_>) -> Result<Persons> {
     let n = data.person.len();
     let mut ranges = Vec::new();
@@ -310,7 +308,7 @@ fn persons_of(data: &SccsData<'_>) -> Result<Persons> {
     let mut ids: Vec<u32> = ranges.iter().map(|&(a, _)| data.person[a]).collect();
     ids.sort_unstable();
     if ids.windows(2).any(|w| w[0] == w[1]) {
-        return Err(invalid(
+        return Err(Error::order(
             "the pieces of a person are not contiguous: a person code reappears after another",
         ));
     }
@@ -420,42 +418,26 @@ fn blocked(
 
 fn check_data(data: &SccsData<'_>, x: MatRef<'_, f64>) -> Result<()> {
     let n = data.person.len();
-    if data.length.len() != n || data.events.len() != n || x.nrows() != n {
-        return Err(invalid(format!(
-            "person, length, events and the rows of x must have one entry per piece, found {}, {}, {} and {}",
-            n,
-            data.length.len(),
-            data.events.len(),
-            x.nrows()
-        )));
-    }
+    check_lengths(&[
+        ("person", n),
+        ("length", data.length.len()),
+        ("events", data.events.len()),
+        ("x", x.nrows()),
+    ])?;
     if x.ncols() == 0 {
-        return Err(invalid("x has no column"));
+        return Err(Error::no_information("x has no column"));
     }
-    if let Some(i) = data
-        .length
-        .iter()
-        .position(|&l| !(l.is_finite() && l > 0.0))
-    {
-        return Err(invalid(format!(
-            "length of piece {i} is {}, which is not positive and finite",
-            data.length[i]
-        )));
-    }
-    if let Some(i) = data
-        .events
-        .iter()
-        .position(|&y| !(y.is_finite() && y >= 0.0))
-    {
-        return Err(invalid(format!(
-            "events of piece {i} is {}, which is negative or not finite",
-            data.events[i]
-        )));
-    }
+    check::positive_weights("length", data.length)?;
+    check::weights("events", data.events)?;
     for j in 0..x.ncols() {
         for i in 0..n {
             if !x[(i, j)].is_finite() {
-                return Err(invalid(format!("x[{i}, {j}] is not finite")));
+                return Err(InputError::NotFinite {
+                    what: "x",
+                    row: i,
+                    column: Some(j),
+                }
+                .into());
             }
         }
     }
@@ -485,7 +467,7 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
         || opts.alias_tolerance <= 0.0
         || opts.max_iterations == 0
     {
-        return Err(invalid(
+        return Err(Error::options(
             "tolerance and alias_tolerance must be positive and finite, and max_iterations at least 1",
         ));
     }
@@ -535,7 +517,9 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
     let mut info0 = start.info.clone();
     let pivots = ldl::factorise(&mut info0, n_cols, opts.alias_tolerance);
     if !pivots.clean {
-        return Err(invalid("the information is not positive semi-definite"));
+        return Err(Error::undefined(
+            "the information is not positive semi-definite",
+        ));
     }
     let cols: Vec<usize> = all
         .iter()
@@ -591,7 +575,7 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
     let mut factored = current.info.clone();
     let pivots = ldl::factorise(&mut factored, p, opts.alias_tolerance);
     if !pivots.clean || pivots.rank != p {
-        return Err(invalid("the information is not positive definite"));
+        return Err(Error::undefined("the information is not positive definite"));
     }
     let mut last = current.score.clone();
     ldl::solve(&factored, p, &mut last);
@@ -676,6 +660,7 @@ fn informative_by_column(data: &SccsData<'_>, x: MatRef<'_, f64>, persons: &Pers
 /// The relative incidence of one column with its interval and test, from
 /// [`SccsFit::relative_incidence`].
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct RelativeIncidence {
     /// The coefficient, the log relative incidence.
     pub coefficient: f64,
@@ -710,7 +695,7 @@ impl SccsFit {
     ) -> Result<Vec<Option<RelativeIncidence>>> {
         let se = if robust {
             self.robust_se.as_ref().ok_or_else(|| {
-                invalid("the fit has no robust covariance: set SccsOptions::robust")
+                Error::fit("the fit has no robust covariance: set SccsOptions::robust")
             })?
         } else {
             &self.se
@@ -742,7 +727,7 @@ fn newton_step(sums: &Sums, p: usize, tolerance: f64) -> Result<Vec<f64>> {
     let mut factored = sums.info.clone();
     let pivots = ldl::factorise(&mut factored, p, tolerance);
     if !pivots.clean || pivots.rank != p {
-        return Err(invalid("the information is not positive definite"));
+        return Err(Error::undefined("the information is not positive definite"));
     }
     let mut step = sums.score.clone();
     ldl::solve(&factored, p, &mut step);
@@ -842,6 +827,7 @@ pub struct PieceSpec<'a> {
 
 /// A column of [`Pieces::design`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Column {
     /// The indicator of risk window `window` of exposure series `series`.
     Window {
@@ -860,6 +846,7 @@ pub enum Column {
 
 /// The pieces of the observation periods of a set of people.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Pieces {
     /// The position of each piece's person in the input.
     pub person: Vec<u32>,
@@ -891,6 +878,7 @@ pub struct Pieces {
 
 /// The cases and events in one risk window, from [`Pieces::window_summary`].
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct WindowSummary {
     /// The exposure series.
     pub series: usize,
@@ -976,12 +964,16 @@ impl Pieces {
     /// The people with observed time in any risk window of exposure series
     /// `series`: the cases exposed while observed.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When `series` is not a series of the pieces.
-    #[must_use]
-    pub fn exposed_cases(&self, series: usize) -> usize {
-        let window = &self.window[series];
+    /// An input error when `series` is not a series of the pieces.
+    pub fn exposed_cases(&self, series: usize) -> Result<usize> {
+        let window = self.window.get(series).ok_or_else(|| {
+            Error::out_of_range(format!(
+                "series {series} is not below the {} exposure series",
+                self.window.len()
+            ))
+        })?;
         let mut count = 0;
         let mut k = 0;
         while k < self.person.len() {
@@ -993,7 +985,7 @@ impl Pieces {
             }
             count += usize::from(exposed);
         }
-        count
+        Ok(count)
     }
 
     /// The cases, events and time of each risk window of each series, in the
@@ -1050,14 +1042,14 @@ fn check_windows(series: usize, windows: &[WindowSpec]) -> Result<()> {
             || w.from == f64::INFINITY
             || w.from == f64::NEG_INFINITY
         {
-            return Err(invalid(format!(
+            return Err(Error::value(format!(
                 "window {k} of exposure series {series} is [{}, {}), which is not a non-empty interval with a finite start",
                 w.from, w.to
             )));
         }
         for (l, v) in windows.iter().enumerate().take(k) {
             if w.from < v.to && v.from < w.to {
-                return Err(invalid(format!(
+                return Err(Error::order(format!(
                     "windows {l} and {k} of exposure series {series} overlap"
                 )));
             }
@@ -1073,25 +1065,14 @@ fn valid_season_start(s: SeasonStart) -> bool {
 }
 
 fn check_calendar(cal: &Calendar<'_>, n: usize) -> Result<()> {
-    if cal.origin.len() != n {
-        return Err(invalid("the calendar origin needs one entry per person"));
-    }
-    if let Some(i) = cal.origin.iter().position(|o| !o.is_finite()) {
-        return Err(invalid(format!(
-            "the calendar origin of person {i} is {}, which is not finite",
-            cal.origin[i]
-        )));
-    }
-    if !cal.cuts.iter().all(|c| c.is_finite()) || cal.cuts.windows(2).any(|w| w[0] >= w[1]) {
-        return Err(invalid(
-            "the calendar cuts must be finite and strictly increasing",
-        ));
-    }
+    check::same_length("origin", n, cal.origin.len())?;
+    check::finite("origin", cal.origin)?;
+    check_ascending(cal.cuts, "cuts", true)?;
     if cal.season_starts.len() == 1 {
-        return Err(invalid("seasons need at least two season starts"));
+        return Err(Error::value("seasons need at least two season starts"));
     }
     if let Some(s) = cal.season_starts.iter().find(|&&s| !valid_season_start(s)) {
-        return Err(invalid(format!(
+        return Err(Error::value(format!(
             "the season start {}-{} is not a day of every year",
             s.month, s.day
         )));
@@ -1101,7 +1082,7 @@ fn check_calendar(cal: &Calendar<'_>, n: usize) -> Result<()> {
         .windows(2)
         .any(|w| (w[0].month, w[0].day) >= (w[1].month, w[1].day))
     {
-        return Err(invalid(
+        return Err(Error::order(
             "the season starts must be in calendar order without repeats",
         ));
     }
@@ -1110,54 +1091,51 @@ fn check_calendar(cal: &Calendar<'_>, n: usize) -> Result<()> {
 
 pub(crate) fn check_spec(spec: &PieceSpec<'_>) -> Result<usize> {
     let n = spec.start.len();
-    if spec.end.len() != n || spec.event_offsets.len() != n + 1 {
-        return Err(invalid(
-            "start and end need one entry per person and the event offsets one more",
-        ));
-    }
+    check::same_length("end", n, spec.end.len())?;
+    check::same_length("event_offsets", n + 1, spec.event_offsets.len())?;
     if u32::try_from(n).is_err() {
-        return Err(invalid("more people than a u32 addresses"));
+        return Err(too_many_people(n));
     }
-    if !check_offsets(spec.event_offsets, n, spec.events.len()) {
-        return Err(invalid(
-            "the event offsets must start at 0, not decrease and end at the number of events",
-        ));
-    }
+    check::csr_offsets("event_offsets", spec.event_offsets, spec.events.len())?;
     for (s, series) in spec.exposures.iter().enumerate() {
         if !check_offsets(series.offsets, n, series.dates.len()) {
-            return Err(invalid(format!(
+            return Err(Error::order(format!(
                 "the offsets of exposure series {s} must have one more entry than people, start at 0, not decrease and end at the number of its dates"
             )));
         }
         if let Some(&t) = series.dates.iter().find(|t| !t.is_finite()) {
-            return Err(invalid(format!(
+            return Err(Error::value(format!(
                 "exposure series {s} has the date {t}, which is not finite"
             )));
         }
         check_windows(s, series.windows)?;
     }
+    check::finite("start", spec.start)?;
+    check::finite("end", spec.end)?;
     for i in 0..n {
         if !(spec.start[i].is_finite() && spec.end[i].is_finite() && spec.start[i] < spec.end[i]) {
-            return Err(invalid(format!(
+            return Err(Error::value(format!(
                 "person {i} has the observation period [{}, {}), which is not a finite, non-empty interval",
                 spec.start[i], spec.end[i]
             )));
         }
     }
-    if let Some(&t) = spec.events.iter().find(|t| !t.is_finite()) {
-        return Err(invalid(format!("an event time is {t}")));
-    }
-    if !spec.age_cuts.iter().all(|c| c.is_finite())
-        || spec.age_cuts.windows(2).any(|w| w[0] >= w[1])
-    {
-        return Err(invalid(
-            "the age cut points must be finite and strictly increasing",
-        ));
-    }
+    check::finite("events", spec.events)?;
+    check_ascending(spec.age_cuts, "age_cuts", true)?;
     if let Some(cal) = &spec.calendar {
         check_calendar(cal, n)?;
     }
     Ok(n)
+}
+
+/// The refusal of `n` people, more than a `u32` person code addresses.
+fn too_many_people(n: usize) -> Error {
+    InputError::TooLarge {
+        what: "start",
+        limit: u64::from(u32::MAX),
+        found: n as u64,
+    }
+    .into()
 }
 
 /// The day count of a time on the calendar, rounded down.
@@ -1204,7 +1182,7 @@ fn cut_person(spec: &PieceSpec<'_>, i: usize, out: &mut Pieces) -> Result<()> {
     let events = &spec.events[spec.event_offsets[i]..spec.event_offsets[i + 1]];
     for &t in events {
         if !(t >= start && t < end) {
-            return Err(invalid(format!(
+            return Err(Error::value(format!(
                 "person {i} has an event at {t} outside the observation period [{start}, {end})"
             )));
         }
@@ -1246,7 +1224,7 @@ fn cut_person(spec: &PieceSpec<'_>, i: usize, out: &mut Pieces) -> Result<()> {
     }
     cuts.sort_by(f64::total_cmp);
     cuts.dedup();
-    let person = u32::try_from(i).map_err(|_| invalid("more people than a u32 addresses"))?;
+    let person = u32::try_from(i).map_err(|_| too_many_people(i))?;
     let first = out.person.len();
     let mut labels: Vec<Option<u32>> = vec![None; spec.exposures.len()];
     for pair in cuts.windows(2) {

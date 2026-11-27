@@ -6,6 +6,7 @@
     reason = "a case weight is 0 or 1 exactly or it is refused"
 )]
 
+use epistat_core::InputError;
 use epistat_linalg::MatRef;
 
 use crate::check::check_ascending;
@@ -59,13 +60,13 @@ pub(super) fn sort_rows(data: &SurvData<'_>, timefix: TimeFix, cause: u32) -> Re
     let data = data.clone().with_timefix(timefix)?;
     let surv = data.followup()?;
     if surv.start().is_some() {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "data with delayed entry has no censoring distribution to weight by; \
              give follow-up from time 0",
         ));
     }
     if cause == 0 || cause > surv.n_codes() {
-        return Err(Error::invalid(format!(
+        return Err(Error::out_of_range(format!(
             "cause {cause} is outside 1..={}; 0 is censoring",
             surv.n_codes()
         )));
@@ -81,7 +82,7 @@ pub(super) fn sort_rows(data: &SurvData<'_>, timefix: TimeFix, cause: u32) -> Re
     }
     let mut rows: Vec<u32> = data.used_rows().collect();
     if rows.is_empty() {
-        return Err(Error::invalid("no row has positive weight"));
+        return Err(Error::no_information("no row has positive weight"));
     }
     let stop = surv.stop();
     rows.sort_unstable_by(|&a, &b| {
@@ -114,13 +115,13 @@ pub(super) fn sort_rows(data: &SurvData<'_>, timefix: TimeFix, cause: u32) -> Re
 /// lie after the last observed time.
 pub(super) fn check_times(times: &[f64], max_time: f64) -> Result<()> {
     if times.is_empty() {
-        return Err(Error::invalid("times: at least one time is needed"));
+        return Err(Error::from(InputError::Empty { what: "times" }));
     }
     check_ascending(times, "times", true)?;
     if let Some(&last) = times.last()
         && last > max_time
     {
-        return Err(Error::invalid(format!(
+        return Err(Error::value(format!(
             "time {last} is after the last observed time {max_time}; riskRegression::Score \
                  drops such times, here they are refused"
         )));
@@ -129,28 +130,53 @@ pub(super) fn check_times(times: &[f64], max_time: f64) -> Result<()> {
 }
 
 /// Refuse a matrix of predictions that does not have one row per row of the
-/// data and one column per time, or has a value that is not finite.
+/// data and one column per time, or has a value that is not finite. The first
+/// value refused is the first in column order.
 pub(super) fn check_matrix(
-    name: &str,
+    name: &'static str,
     m: MatRef<'_, f64>,
     n_rows: usize,
     n_times: usize,
 ) -> Result<()> {
-    if m.nrows() != n_rows || m.ncols() != n_times {
-        return Err(Error::invalid(format!(
+    check_shape(name, m, n_rows, n_times)?;
+    for j in 0..n_times {
+        for i in 0..n_rows {
+            if !m[(i, j)].is_finite() {
+                return Err(Error::from(InputError::NotFinite {
+                    what: name,
+                    row: i,
+                    column: Some(j),
+                }));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a matrix of predictions that does not have one row per row of the
+/// data and one column per time.
+pub(super) fn check_shape(
+    name: &'static str,
+    m: MatRef<'_, f64>,
+    n_rows: usize,
+    n_times: usize,
+) -> Result<()> {
+    if m.nrows() != n_rows {
+        if m.nrows() == 0 {
+            return Err(Error::from(InputError::Empty { what: name }));
+        }
+        return Err(Error::from(InputError::Length {
+            what: name,
+            expected: n_rows,
+            found: m.nrows(),
+        }));
+    }
+    if m.ncols() != n_times {
+        return Err(Error::mismatch(format!(
             "{name} is {} by {}, but there are {n_rows} rows and {n_times} times",
             m.nrows(),
             m.ncols()
         )));
-    }
-    for j in 0..n_times {
-        for i in 0..n_rows {
-            if !m[(i, j)].is_finite() {
-                return Err(Error::invalid(format!(
-                    "{name}: row {i}, column {j} is not finite"
-                )));
-            }
-        }
     }
     Ok(())
 }
@@ -165,23 +191,23 @@ pub(super) fn check_common_start(data: &SurvData<'_>) -> Result<()> {
         return Ok(());
     };
     let ids = data.id().ok_or_else(|| {
-        Error::invalid("data with delayed entry needs an id column, as survival::brier does")
+        Error::missing("data with delayed entry needs an id column, as survival::brier does")
     })?;
     if data.istate().is_some() {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "the data has an istate column: only data with one starting state is supported",
         ));
     }
     let mut seen = vec![false; data.n_ids()];
     for (row, &id) in ids.iter().enumerate() {
         if std::mem::replace(&mut seen[id as usize], true) {
-            return Err(Error::invalid(format!(
+            return Err(Error::inconsistent(format!(
                 "a subject has several rows, the second at row {row}: survival::brier counts                  every row as a subject, which makes the score wrong, so one row per subject is                  required with a start column"
             )));
         }
     }
     if let Some(row) = start.iter().position(|&s| s != start[0]) {
-        return Err(Error::invalid(format!(
+        return Err(Error::not_applicable(format!(
             "subjects start at different times (row {row} starts at {}, row 0 at {}); one              common start is required",
             start[row], start[0]
         )));

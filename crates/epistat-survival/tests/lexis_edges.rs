@@ -76,8 +76,8 @@ fn the_scales_and_the_intervals_of_a_scale_are_counted() {
     assert_eq!(out.n_scales(), 2);
     // The breaks are sorted and unique, so two breaks make three intervals.
     assert_eq!(out.breaks[0], vec![1.0, 2.0]);
-    assert_eq!(out.n_intervals(0), 3);
-    assert_eq!(out.n_intervals(1), 1);
+    assert_eq!(out.n_intervals(0).unwrap(), 3);
+    assert_eq!(out.n_intervals(1).unwrap(), 1);
 }
 
 #[test]

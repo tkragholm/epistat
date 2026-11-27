@@ -87,12 +87,14 @@
 //!    covariance matrix estimators with improved finite sample properties,
 //!    J Econometrics 29: 305-325.
 
+use epistat_core::check;
 use epistat_glm::robust::SandwichType;
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::Clusters;
 use epistat_inference::sandwich::{meat, sandwich};
 use epistat_linalg::{Attempt, Mat, MatRef, inverse, weighted_gram};
 
+use crate::check::{refuse_non_finite, refuse_non_finite_matrix};
 use crate::covariance;
 use crate::error::{Error, Result};
 
@@ -146,6 +148,7 @@ impl PseudoRegressionOptions {
 
 /// A fitted regression.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct PseudoRegression {
     /// The coefficients, one per column of the design.
     pub coefficients: Vec<f64>,
@@ -234,47 +237,39 @@ pub fn fit(
     opts: &PseudoRegressionOptions,
 ) -> Result<PseudoRegression> {
     let (n, p) = (x.nrows(), x.ncols());
+    check::non_empty("x", n)?;
     for (name, length) in [("y", y.len()), ("cluster", cluster.len())]
         .into_iter()
         .chain(weights.map(|w| ("weights", w.len())))
         .chain(offset.map(|o| ("offset", o.len())))
     {
-        if length != n {
-            return Err(Error::invalid(format!(
-                "{name} has {length} entries and the design has {n} rows"
-            )));
-        }
+        check::non_empty(name, length)?;
+        check::same_length(name, n, length)?;
     }
-    if let Some(start) = start
-        && start.len() != p
-    {
-        return Err(Error::invalid(format!(
-            "start has {} entries and the design has {p} columns",
-            start.len()
-        )));
+    if let Some(start) = start {
+        check::same_length("start", p, start.len())?;
     }
     if p == 0 || n < p {
-        return Err(Error::invalid(format!(
+        return Err(Error::no_information(format!(
             "a design of {n} rows and {p} columns cannot be fitted"
         )));
     }
     if !(opts.tolerance.is_finite() && opts.tolerance > 0.0) {
-        return Err(Error::invalid("the tolerance must be positive and finite"));
+        return Err(Error::options("the tolerance must be positive and finite"));
     }
     if opts.max_iterations == 0 {
-        return Err(Error::invalid("at least one iteration must be allowed"));
+        return Err(Error::options("at least one iteration must be allowed"));
     }
-    let finite = y.iter().all(|v| v.is_finite())
-        && (0..n).all(|i| (0..p).all(|j| x[(i, j)].is_finite()))
-        && weights.is_none_or(|w| w.iter().all(|v| v.is_finite()))
-        && offset.is_none_or(|o| o.iter().all(|v| v.is_finite()));
-    if !finite {
-        return Err(Error::invalid(
-            "y, the design, the weights and the offset must be finite",
-        ));
+    refuse_non_finite(y, "y")?;
+    refuse_non_finite_matrix(x, "x")?;
+    if let Some(w) = weights {
+        refuse_non_finite(w, "weights")?;
     }
-    if weights.is_some_and(|w| w.iter().any(|&v| v < 0.0)) {
-        return Err(Error::invalid("a weight is negative"));
+    if let Some(o) = offset {
+        refuse_non_finite(o, "offset")?;
+    }
+    if let Some(w) = weights {
+        check::weights("weights", w)?;
     }
     let w: Vec<f64> = weights.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
     let o: Vec<f64> = offset.map_or_else(|| vec![0.0; n], <[f64]>::to_vec);
@@ -293,10 +288,13 @@ pub fn fit(
     }
     let total_weight: f64 = w.iter().sum();
     if total_weight <= 0.0 {
-        return Err(Error::invalid("the weights sum to zero"));
+        return Err(Error::no_information("the weights sum to zero"));
     }
-    let rank_deficient =
-        || Error::invalid("the design is rank deficient, a column is a combination of the others");
+    let rank_deficient = || {
+        Error::no_information(
+            "the design is rank deficient, a column is a combination of the others",
+        )
+    };
 
     let beta0: Vec<f64> = if let Some(start) = start {
         start.to_vec()
@@ -305,7 +303,7 @@ pub fn fit(
         // pseudo-values, and one weighted least squares step on it.
         let mean = y.iter().zip(&w).map(|(v, wi)| v * wi).sum::<f64>() / total_weight;
         if admits(link, mean) != Some(true) {
-            return Err(Error::invalid(format!(
+            return Err(Error::value(format!(
                 "the mean {mean} of the pseudo-values is outside the range of the link, \
                  so there is no start; supply one"
             )));
@@ -362,7 +360,7 @@ pub fn fit(
             break;
         }
     }
-    let solved = solved.ok_or_else(|| Error::invalid("no iteration ran"))?;
+    let solved = solved.ok_or_else(|| Error::internal("no iteration ran"))?;
     let fitted = solved.fitted;
     let derivative: Vec<f64> = solved
         .linear_predictor
@@ -380,7 +378,7 @@ pub fn fit(
     let (factor, leverage): (Vec<f64>, Option<Vec<f64>>) = match opts.covariance {
         SandwichType::Hc3 => {
             if clusters.count() != n {
-                return Err(Error::invalid(
+                return Err(Error::not_applicable(
                     "HC3 is defined for one observation in each cluster",
                 ));
             }
@@ -404,7 +402,7 @@ pub fn fit(
                     if h < 1.0 {
                         Ok(1.0 / (1.0 - h))
                     } else {
-                        Err(Error::invalid(format!("observation {i} has leverage 1")))
+                        Err(Error::value(format!("observation {i} has leverage 1")))
                     }
                 })
                 .collect::<Result<_>>()?;

@@ -74,7 +74,7 @@ fn pooled_fit_refuses_invalid_input() {
             None,
             &PooledOptions::default()
         ))
-        .contains("design: 3 rows")
+        .contains("design has length 3")
     );
     assert!(
         err(pooled::fit(

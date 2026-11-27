@@ -105,6 +105,7 @@ use crate::timefix::TimeFix;
 /// The size of the neighbourhoods of the smoothed curve, as a fraction of the
 /// number of rows.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum Bandwidth {
     /// This fraction, `bandwidth = ` a number of `neighborhood`. At least 1
     /// gives one point.
@@ -146,6 +147,7 @@ impl SmoothOptions {
 
 /// One point of the smoothed curve.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SmoothedPoint {
     /// The distinct predicted risk, after rounding.
     pub predicted: f64,
@@ -157,6 +159,7 @@ pub struct SmoothedPoint {
 
 /// The smoothed calibration curve at one time.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SmoothedCurve {
     /// The time the risks are for.
     pub time: f64,
@@ -179,7 +182,7 @@ fn pseudo_risk(
     cause: u32,
 ) -> Result<(Vec<u32>, Vec<f64>)> {
     if data.cluster().is_some() || data.id().is_some() || data.stratum().is_some() {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "pseudo-values of the risk are of the whole sample: the data must have no \
              cluster, id or stratum column",
         ));
@@ -194,9 +197,7 @@ fn pseudo_risk(
     let made = pseudo(data, &[time], &options)?;
     // Without a cluster or id column the subjects are the used rows, ascending.
     if made.subject.windows(2).any(|w| w[1] <= w[0]) {
-        return Err(Error::invalid(
-            "internal: pseudo-value subjects are not rows",
-        ));
+        return Err(Error::internal("pseudo-value subjects are not rows"));
     }
     Ok((made.subject, made.values))
 }
@@ -257,7 +258,9 @@ pub fn smoothed_curve(
     let (rows, y) = pseudo_risk(data, time, opts.timefix, opts.cause)?;
     let n = rows.len();
     if n < 2 {
-        return Err(Error::invalid("at least two rows are needed to smooth"));
+        return Err(Error::no_information(
+            "at least two rows are needed to smooth",
+        ));
     }
     check_risk(risk, data.n_rows(), false)?;
     let nf = n as f64;
@@ -266,7 +269,7 @@ pub fn smoothed_curve(
         Bandwidth::Smooth => nf.powf(-0.25),
     };
     if !(bandwidth.is_finite() && bandwidth > 0.0) {
-        return Err(Error::invalid("the bandwidth must be positive and finite"));
+        return Err(Error::options("the bandwidth must be positive and finite"));
     }
     let mut p: Vec<f64> = rows.iter().map(|&r| risk[r as usize]).collect();
     if bandwidth >= 1.0 {
@@ -325,7 +328,7 @@ pub fn smoothed_curve(
             c + radius
         };
         if last < first {
-            return Err(Error::invalid("internal: an empty neighbourhood"));
+            return Err(Error::internal("an empty neighbourhood"));
         }
         let mut members: Vec<usize> = order[first - 1..last].to_vec();
         members.sort_unstable();
@@ -347,6 +350,9 @@ pub fn smoothed_curve(
 
 fn check_risk(risk: &[f64], n_rows: usize, open: bool) -> Result<()> {
     if risk.len() != n_rows {
+        if risk.is_empty() {
+            return Err(Error::from(InputError::Empty { what: "risk" }));
+        }
         return Err(Error::from(InputError::Length {
             what: "risk",
             expected: n_rows,
@@ -360,7 +366,14 @@ fn check_risk(risk: &[f64], n_rows: usize, open: bool) -> Result<()> {
             (0.0..=1.0).contains(&p)
         };
         if !ok {
-            return Err(Error::invalid(format!(
+            if !p.is_finite() {
+                return Err(Error::from(InputError::NotFinite {
+                    what: "risk",
+                    row: position,
+                    column: None,
+                }));
+            }
+            return Err(Error::value(format!(
                 "risk: row {position} is {p}, which is not a probability{}",
                 if open {
                     " strictly between 0 and 1"
@@ -375,6 +388,7 @@ fn check_risk(risk: &[f64], n_rows: usize, open: bool) -> Result<()> {
 
 /// The scale on which the slope and the intercept are read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RecalibrationScale {
     /// The log odds, `log(R / (1 - R))`.
     Logit,
@@ -426,6 +440,7 @@ impl RecalibrationOptions {
 
 /// The calibration intercept and slope at one time.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Recalibration {
     /// The time the risks are for.
     pub time: f64,
@@ -502,10 +517,10 @@ pub fn slope_intercept(
     let n = rows.len();
     check_risk(risk, data.n_rows(), true)?;
     if !(opts.tolerance.is_finite() && opts.tolerance > 0.0) {
-        return Err(Error::invalid("the tolerance must be positive and finite"));
+        return Err(Error::options("the tolerance must be positive and finite"));
     }
     if opts.max_iterations == 0 {
-        return Err(Error::invalid("at least one iteration must be allowed"));
+        return Err(Error::options("at least one iteration must be allowed"));
     }
     let link = opts.scale.link();
     let x = Mat::from_fn(n, 2, |i, j| {
@@ -552,13 +567,21 @@ fn gee(
     let n = x.nrows();
     #[expect(clippy::float_cmp, reason = "equal predictions are equal values")]
     if (1..n).all(|i| x[(i, 1)] == x[(0, 1)]) {
-        return Err(Error::invalid(
+        return Err(Error::no_information(
             "the predictions are all equal on the scale of the link: the slope is not \
              estimable",
         ));
     }
     let cluster: Vec<u32> = (0..n)
-        .map(|i| u32::try_from(i).map_err(|_| Error::invalid("more rows than u32::MAX")))
+        .map(|i| {
+            u32::try_from(i).map_err(|_| {
+                Error::from(InputError::TooLarge {
+                    what: "rows",
+                    limit: u64::from(u32::MAX),
+                    found: n as u64,
+                })
+            })
+        })
         .collect::<Result<_>>()?;
     let options = PseudoRegressionOptions {
         tolerance: opts.tolerance,

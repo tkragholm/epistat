@@ -55,7 +55,7 @@
 //! 3. Clayton D, Hills M. Statistical Models in Epidemiology. Oxford 1993,
 //!    chapters 22 to 24.
 
-use epistat_core::Level;
+use epistat_core::{InputError, Level, check};
 use epistat_glm::{Family, Fit, Glm, Link};
 use epistat_linalg::Mat;
 use epistat_stats::dist::normal;
@@ -85,6 +85,7 @@ impl Default for RateOptions {
 
 /// A fitted rate model.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Rates {
     /// The Poisson fit, over the pieces with exposure only: the coefficients
     /// with `None` for an aliased column, and the covariance.
@@ -103,6 +104,7 @@ pub struct Rates {
 
 /// A log-linear prediction with its Wald limits, as a row of `ci.lin`.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct LinCi {
     /// `l beta`, `None` when the contrast is not estimable.
     pub estimate: Option<f64>,
@@ -118,6 +120,7 @@ pub struct LinCi {
 
 /// The exponential of a prediction and its limits, as a row of `ci.exp`.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct ExpCi {
     /// `exp(l beta)`, `None` when the contrast is not estimable.
     pub estimate: Option<f64>,
@@ -125,6 +128,25 @@ pub struct ExpCi {
     pub lower: Option<f64>,
     /// The upper limit.
     pub upper: Option<f64>,
+}
+
+/// The refusal of `value`, at row `row` of `what`, where a count or a length
+/// must be finite and not negative.
+fn not_a_count(what: &'static str, value: f64, row: usize) -> InputError {
+    if value.is_finite() {
+        InputError::Domain {
+            what,
+            value,
+            domain: "[0, inf)",
+            row: Some(row),
+        }
+    } else {
+        InputError::NotFinite {
+            what,
+            row,
+            column: None,
+        }
+    }
 }
 
 /// Fit the rate model of the events on the columns of the design, with the
@@ -145,51 +167,38 @@ pub fn fit_rates(
     options: &RateOptions,
 ) -> Result<Rates> {
     let n = length.len();
-    if events.len() != n {
-        return Err(Error::invalid(format!(
-            "events has {} values against {n} lengths",
-            events.len()
-        )));
-    }
-    if columns.is_empty() {
-        return Err(Error::invalid("the design has no columns"));
-    }
+    check::same_length("events", n, events.len())?;
+    check::non_empty("columns", columns.len())?;
     for (j, c) in columns.iter().enumerate() {
         if c.len() != n {
-            return Err(Error::invalid(format!(
-                "column {j} has {} values against {n} pieces",
-                c.len()
-            )));
+            return Err(InputError::Length {
+                what: "columns",
+                expected: n,
+                found: c.len(),
+            }
+            .into());
         }
-        if let Some(i) = c.iter().position(|v| !v.is_finite()) {
-            return Err(Error::invalid(format!(
-                "column {j}: the value of piece {i} is not finite"
-            )));
-        }
+        check::finite_column("columns", j, c)?;
     }
     let mut keep = Vec::with_capacity(n);
     for i in 0..n {
         let (y, d) = (length[i], events[i]);
         if !(y.is_finite() && y >= 0.0) {
-            return Err(Error::invalid(format!(
-                "the length of piece {i} is not finite and non-negative"
-            )));
+            return Err(not_a_count("length", y, i).into());
         }
         if !(d.is_finite() && d >= 0.0) {
-            return Err(Error::invalid(format!(
-                "the events of piece {i} are not finite and non-negative"
-            )));
+            return Err(not_a_count("events", d, i).into());
         }
         if y > 0.0 {
             keep.push(i);
         } else if d > 0.0 {
-            return Err(Error::invalid(format!(
+            return Err(Error::value(format!(
                 "piece {i} has events and no exposure, so its rate is not defined"
             )));
         }
     }
     if keep.is_empty() {
-        return Err(Error::invalid("no piece has exposure"));
+        return Err(Error::no_information("no piece has exposure"));
     }
     let x = Mat::from_fn(keep.len(), columns.len(), |r, j| columns[j][keep[r]]);
     let y: Vec<f64> = keep.iter().map(|&i| events[i]).collect();
@@ -232,15 +241,18 @@ impl Rates {
         let mut out = Vec::with_capacity(contrasts.len());
         for (r, l) in contrasts.iter().enumerate() {
             if l.len() != p {
-                return Err(Error::invalid(format!(
+                return Err(Error::mismatch(format!(
                     "contrast {r} has {} weights against {p} coefficients",
                     l.len()
                 )));
             }
-            if l.iter().any(|w| !w.is_finite()) {
-                return Err(Error::invalid(format!(
-                    "contrast {r} has a weight that is not finite"
-                )));
+            if let Some(j) = l.iter().position(|w| !w.is_finite()) {
+                return Err(InputError::NotFinite {
+                    what: "contrasts",
+                    row: r,
+                    column: Some(j),
+                }
+                .into());
             }
             let estimable = (0..p).all(|j| l[j] == 0.0 || self.fit.coefficients[j].is_some());
             if !estimable {

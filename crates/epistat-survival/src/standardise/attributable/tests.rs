@@ -2,10 +2,10 @@
 //! standardised risks: the arithmetic, the scales of the limits and the results
 //! that are not numbers.
 
+use crate::standardise::Standardised;
+use crate::standardise::attributable::af_from_standardised;
+use crate::{Covariance, Level};
 use epistat_glm::attributable::IntervalScale;
-use epistat_survival::standardise::Standardised;
-use epistat_survival::standardise::attributable::af_from_standardised;
-use epistat_survival::{Covariance, Level};
 
 /// Two levels at three times: the unexposed risks, then the observed.
 fn risks(cov: bool) -> Standardised {

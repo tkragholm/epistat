@@ -98,6 +98,7 @@ use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef};
 
 use super::summary::WeightSummary;
+use crate::check::refuse_non_finite_matrix;
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 
@@ -106,6 +107,7 @@ use crate::surv::SurvData;
 ///
 /// It keeps the designs, which the variance reads again.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct PooledIpcw {
     /// The weight of each row through the row: the product over the rows of its
     /// subject up to and including it.
@@ -245,7 +247,7 @@ fn fit_model(
         .predict(&model, design, None)
         .map_err(Error::model(format!("{what} model")))?;
     if let Some(i) = probability.iter().position(|&p| !(p > 0.0 && p < 1.0)) {
-        return Err(Error::invalid(format!(
+        return Err(Error::value(format!(
             "{what} model: row {i} has fitted probability {}",
             probability[i]
         )));
@@ -255,6 +257,7 @@ fn fit_model(
 
 /// What the rows of a pooled logistic model are events of.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub enum PooledEvent<'a> {
     /// The rows are intervals at risk of censoring. `censored`
     /// marks the censoring events, `None` takes the last row of each subject
@@ -275,6 +278,7 @@ pub enum PooledEvent<'a> {
 
 /// The rows of a subject that treatment weights use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TreatmentHistory {
     /// From the first row up to and including the first treated one:
     /// `type = "first"`, for an absorbing treatment.
@@ -328,7 +332,7 @@ pub fn fit(
     if let Some((lo, hi)) = trunc
         && !(0.0 <= lo && lo < hi && hi <= 1.0)
     {
-        return Err(Error::invalid(format!(
+        return Err(Error::options(format!(
             "trunc: ({lo}, {hi}) are not probabilities in increasing order"
         )));
     }
@@ -351,18 +355,11 @@ pub fn fit(
     }
     for (name, m) in [("design", Some(design)), ("numerator", numerator)] {
         let Some(m) = m else { continue };
-        if m.nrows() != n {
-            return Err(Error::invalid(format!(
-                "{name}: {} rows for {n} rows of data",
-                m.nrows()
-            )));
-        }
+        epistat_core::check::same_length(name, n, m.nrows())?;
         if m.ncols() == 0 {
-            return Err(Error::invalid(format!("{name}: no columns")));
+            return Err(Error::no_information(format!("{name}: no columns")));
         }
-        if !epistat_linalg::is_finite(m) {
-            return Err(Error::invalid(format!("{name}: a value is not finite")));
-        }
+        refuse_non_finite_matrix(m, name)?;
     }
     if let Some(c) = censored
         && c.len() != n
@@ -386,7 +383,7 @@ pub fn fit(
     for w in order.windows(2) {
         let (a, b) = (w[0] as usize, w[1] as usize);
         if subject[a] == subject[b] && stop[a].total_cmp(&stop[b]).is_eq() {
-            return Err(Error::invalid(format!(
+            return Err(Error::inconsistent(format!(
                 "id: rows {a} and {b} of one subject have the same stop"
             )));
         }
@@ -435,7 +432,7 @@ pub fn fit(
     let n_positive = (0..n).filter(|&r| active[r] && response[r]).count();
     let n_active = active.iter().filter(|&&a| a).count();
     if n_positive == 0 || n_positive == n_active {
-        return Err(Error::invalid(if treated.is_some() {
+        return Err(Error::no_information(if treated.is_some() {
             "treated: the rows of the fit need both treated and untreated rows"
         } else {
             "censored: the rows of the fit need both censoring events and rows that are not"
@@ -486,7 +483,7 @@ pub fn fit(
         )]
         let limit = |p: f64| -> Result<Limit> {
             let value = epistat_stats::quantile::type7(&sorted, p)
-                .ok_or_else(|| Error::invalid("trunc: there are no weights"))?;
+                .ok_or_else(|| Error::no_information("trunc: there are no weights"))?;
             // The position of R's type 7, as epistat_stats::quantile computes it.
             let index = 1.0 + (n - 1) as f64 * p;
             let (j, k) = (index.floor() as usize - 1, index.ceil() as usize - 1);

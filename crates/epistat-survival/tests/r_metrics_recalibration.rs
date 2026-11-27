@@ -175,6 +175,7 @@ fn recalibration_against_r() {
             .map(|&p| match scale {
                 RecalibrationScale::Logit => (p / (1.0 - p)).ln().abs(),
                 RecalibrationScale::Cloglog => (-(-p).ln_1p()).ln().abs(),
+                _ => unreachable!("a kind this test does not cover"),
             })
             .fold(1.0f64, f64::max);
         let big = case.coef.iter().fold(1.0f64, |m, b| m.max(b.abs()));

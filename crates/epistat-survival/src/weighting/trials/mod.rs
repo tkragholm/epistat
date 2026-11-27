@@ -88,7 +88,7 @@
 //!    object-oriented implementation of clustered covariances in R. J Stat Softw
 //!    2020;95(1):1-36.
 
-use epistat_core::{Covariance, InputError};
+use epistat_core::{Covariance, InputError, check};
 use epistat_glm::robust::{SandwichType, robust_covariance};
 use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
@@ -96,6 +96,7 @@ use epistat_inference::Clusters;
 use epistat_linalg::{Mat, MatRef, ROW_BLOCK};
 use rayon::prelude::*;
 
+use crate::check::{check_lengths, refuse_non_finite_matrix};
 use crate::error::{Error, Result};
 
 mod bootstrap;
@@ -126,24 +127,21 @@ pub struct PersonPeriod<'a> {
 impl PersonPeriod<'_> {
     fn check(&self) -> Result<usize> {
         let n = self.id.len();
-        for (name, len) in [
+        check_lengths(&[
+            ("id", n),
             ("period", self.period.len()),
             ("treatment", self.treatment.len()),
             ("previous", self.previous.len()),
-        ] {
-            if len != n {
-                return Err(Error::invalid(format!("{name}: {len} values for {n} rows")));
-            }
-        }
+        ])?;
         for i in 1..n {
             if self.id[i] == self.id[i - 1] && self.period[i] <= self.period[i - 1] {
-                return Err(Error::invalid(format!(
+                return Err(Error::order(format!(
                     "period: row {i} is not after the row before it for person {}",
                     self.id[i]
                 )));
             }
             if self.id[i] < self.id[i - 1] {
-                return Err(Error::invalid(format!(
+                return Err(Error::order(format!(
                     "id: the rows of a person must be next to each other and ordered, row {i}"
                 )));
             }
@@ -164,6 +162,7 @@ pub struct WeightModel<'a> {
 /// How the models of a weight are fitted over the values of the previous
 /// treatment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TrialWeightFit {
     /// One model for each value of the previous treatment.
     ByPreviousTreatment,
@@ -173,6 +172,7 @@ pub enum TrialWeightFit {
 
 /// The weights of each row and the fitted models.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct RowWeights {
     /// The weight of each row.
     pub weight: Vec<f64>,
@@ -188,20 +188,12 @@ pub struct RowWeights {
     pub denominator_coefficients: Vec<Vec<f64>>,
 }
 
-fn check_design(name: &str, x: MatRef<'_, f64>, n: usize) -> Result<()> {
-    if x.nrows() != n {
-        return Err(Error::invalid(format!(
-            "{name}: {} rows for {n} rows of data",
-            x.nrows()
-        )));
-    }
+fn check_design(name: &'static str, x: MatRef<'_, f64>, n: usize) -> Result<()> {
+    check::same_length(name, n, x.nrows())?;
     if x.ncols() == 0 {
-        return Err(Error::invalid(format!("{name}: no columns")));
+        return Err(Error::no_information(format!("{name}: no columns")));
     }
-    if !epistat_linalg::is_finite(x) {
-        return Err(Error::invalid(format!("{name}: a value is not finite")));
-    }
-    Ok(())
+    refuse_non_finite_matrix(x, name)
 }
 
 /// Fit a logistic model of `y` on `x` over `rows`, with the case weights
@@ -219,7 +211,7 @@ fn fit_logistic(
     let total = rows.iter().filter(|&&r| counted(r)).count();
     let positives = rows.iter().filter(|&&r| counted(r) && y[r]).count();
     if positives == 0 || positives == total {
-        return Err(Error::invalid(format!(
+        return Err(Error::no_information(format!(
             "{what}: the rows of the fit need both values of the response"
         )));
     }
@@ -289,12 +281,9 @@ impl WeightRows<'_> {
                 found: f.len(),
             }));
         }
-        if let Some(c) = self.case_weight
-            && (c.len() != n || c.iter().any(|v| !(v.is_finite() && *v >= 0.0)))
-        {
-            return Err(Error::invalid(
-                "case_weight: one non-negative finite value per row",
-            ));
+        if let Some(c) = self.case_weight {
+            check::same_length("case_weight", n, c.len())?;
+            check::weights("case_weight", c)?;
         }
         Ok(())
     }
@@ -332,7 +321,7 @@ fn ratio_weights(
     let mut denominator_coefficients = Vec::new();
     for (g, group) in groups.iter().enumerate() {
         if group.is_empty() {
-            return Err(Error::invalid(format!(
+            return Err(Error::no_information(format!(
                 "{what}: no rows with previous treatment {g}"
             )));
         }
@@ -488,9 +477,11 @@ pub fn trial_weights(
         }));
     }
     let m = rows.id.len();
-    if rows.trial_period.len() != m || rows.follow_up.len() != m {
-        return Err(Error::invalid("trial rows: columns of different lengths"));
-    }
+    check_lengths(&[
+        ("id", m),
+        ("trial_period", rows.trial_period.len()),
+        ("follow_up", rows.follow_up.len()),
+    ])?;
     let mut cumulative = vec![0.0; n];
     for i in 0..n {
         cumulative[i] = if i > 0 && data.id[i] == data.id[i - 1] {
@@ -519,7 +510,7 @@ pub fn trial_weights(
             let (id, s) = (rows.id[r], rows.trial_period[r]);
             let t = s + rows.follow_up[r];
             let (Some(a), Some(b)) = (find(id, s), find(id, t)) else {
-                return Err(Error::invalid(format!(
+                return Err(Error::out_of_range(format!(
                     "trial row {r}: person {id} has no row in period {s} or {t}"
                 )));
             };
@@ -544,6 +535,7 @@ pub struct MsmInput<'a> {
 
 /// The outcome model of the stacked trials.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Msm {
     /// The coefficients.
     pub coefficients: Vec<f64>,
@@ -579,9 +571,11 @@ impl Msm {
 pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
     let n = input.outcome.len();
     check_design("design", input.design, n)?;
-    if input.weight.len() != n || input.person.len() != n {
-        return Err(Error::invalid("weight and person need one value per row"));
-    }
+    check_lengths(&[
+        ("outcome", n),
+        ("weight", input.weight.len()),
+        ("person", input.person.len()),
+    ])?;
     let y: Vec<f64> = input
         .outcome
         .iter()
@@ -611,7 +605,7 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
     .map_err(Error::model("outcome model"))?;
     let g = clusters.count();
     if g < 2 {
-        return Err(Error::invalid(
+        return Err(Error::no_information(
             "outcome model: at least two persons are needed",
         ));
     }
@@ -690,22 +684,20 @@ pub fn fit_msm_trials(
             found: outcome.len(),
         }));
     }
-    if trials.start.len() != trials.end.len() {
-        return Err(Error::invalid("trial spans: columns of different lengths"));
-    }
+    check_lengths(&[("start", trials.start.len()), ("end", trials.end.len())])?;
     for (k, (&a, &b)) in trials.start.iter().zip(trials.end).enumerate() {
         if !(a < b && b <= n) {
-            return Err(Error::invalid(format!(
+            return Err(Error::out_of_range(format!(
                 "trial {k}: the rows {a} to {b} are not a span of the {n} rows"
             )));
         }
         if data.id[a] != data.id[b - 1] {
-            return Err(Error::invalid(format!(
+            return Err(Error::order(format!(
                 "trial {k}: the rows {a} to {b} have more than one person"
             )));
         }
         if k > 0 && a < trials.start[k - 1] {
-            return Err(Error::invalid(format!(
+            return Err(Error::order(format!(
                 "trial {k}: the trials must be ordered by their first row"
             )));
         }
@@ -835,7 +827,7 @@ impl Rows for TrialStack<'_> {
 /// cluster numbers, with the number of persons `rows` has.
 pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Result<Msm> {
     if columns == 0 {
-        return Err(Error::invalid("design has no columns"));
+        return Err(Error::no_information("design has no columns"));
     }
     let n = rows.n_rows();
     let finite = (0..n.div_ceil(ROW_BLOCK)).into_par_iter().all(|b| {
@@ -855,7 +847,7 @@ pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Re
         epistat_linalg::is_finite(x.as_ref())
     });
     if !finite {
-        return Err(Error::invalid("design: a value is not finite"));
+        return Err(Error::value("design: a value is not finite"));
     }
     let model = Glm::new(Family::Binomial, Link::Logit);
     let fit = model
@@ -867,7 +859,7 @@ pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Re
         .map_err(Error::model("outcome model"))?;
     let g = rows.n_clusters();
     if g < 2 {
-        return Err(Error::invalid(
+        return Err(Error::no_information(
             "outcome model: at least two persons are needed",
         ));
     }
@@ -898,6 +890,7 @@ impl Clustered for TrialStack<'_> {
 
 /// The cumulative incidence at each follow-up time, with its standard error.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CumulativeIncidence {
     /// `1 - mean(prod over s <= t of (1 - p_s))` at each time.
     pub risk: Vec<f64>,
@@ -921,12 +914,12 @@ pub struct CumulativeIncidence {
 pub fn cumulative_incidence(msm: &Msm, designs: &[MatRef<'_, f64>]) -> Result<CumulativeIncidence> {
     let p = msm.coefficients.len();
     let Some(first) = designs.first() else {
-        return Err(Error::invalid("designs: no times"));
+        return Err(Error::from(InputError::Empty { what: "designs" }));
     };
     let rows = first.nrows();
     for (t, d) in designs.iter().enumerate() {
         if d.nrows() != rows || d.ncols() != p {
-            return Err(Error::invalid(format!(
+            return Err(Error::mismatch(format!(
                 "designs[{t}]: {} by {} where {rows} by {p} is needed",
                 d.nrows(),
                 d.ncols()
@@ -963,13 +956,13 @@ pub fn cumulative_incidence_rows(
 ) -> Result<CumulativeIncidence> {
     let p = msm.coefficients.len();
     if times == 0 {
-        return Err(Error::invalid("designs: no times"));
+        return Err(Error::no_information("designs: no times"));
     }
     if rows == 0 {
         return Err(Error::from(InputError::Empty { what: "designs" }));
     }
     if msm.covariance.dim() != p {
-        return Err(Error::invalid("msm: the covariance is not p by p"));
+        return Err(Error::mismatch("msm: the covariance is not p by p"));
     }
     let covariance = dense(&msm.covariance, "msm")?;
     let mut mean = vec![0.0; times];
@@ -984,7 +977,7 @@ pub fn cumulative_incidence_rows(
         for t in 0..times {
             design(r, t, &mut x);
             if x.iter().any(|v| !v.is_finite()) {
-                return Err(Error::invalid(format!(
+                return Err(Error::value(format!(
                     "design: a value of row {r} at time {t} is not finite"
                 )));
             }
@@ -1017,7 +1010,7 @@ pub(crate) fn dense(covariance: &Covariance, what: &str) -> Result<Vec<f64>> {
     covariance
         .as_slice()
         .iter()
-        .map(|v| v.ok_or_else(|| Error::invalid(format!("{what}: the covariance is not defined"))))
+        .map(|v| v.ok_or_else(|| Error::fit(format!("{what}: the covariance is not defined"))))
         .collect()
 }
 

@@ -59,6 +59,7 @@ use crate::surv::SurvData;
 
 /// How the cases of a matched set enter the likelihood.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ClogitMethod {
     /// The exact conditional likelihood, `method = "exact"`.
     Exact,

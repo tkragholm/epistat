@@ -5,10 +5,11 @@
     reason = "a weight of 0 or 1 and the end of a follow-up are compared with the values they were copied from"
 )]
 
-use epistat_core::Covariance;
+use epistat_core::{Covariance, InputError, check};
 
 use super::ExpectedHazard;
 use super::expected::Reader;
+use crate::check::check_ascending;
 use crate::covariance;
 use crate::error::{Error, Result};
 use crate::ldl;
@@ -62,6 +63,7 @@ impl<'a> ExcessOptions<'a> {
 /// unit of the follow-up time, then the coefficients of the columns of `x`.
 /// Matrices are square of that dimension in row-major order.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct ExcessFit {
     /// The estimate of each parameter: `None` for an interval in which no one
     /// is at risk, and minus infinity for an interval at the boundary.
@@ -389,37 +391,39 @@ pub fn excess_hazard(
     opts: &ExcessOptions<'_>,
 ) -> Result<ExcessFit> {
     let cuts = opts.cuts;
-    if cuts.len() < 2
-        || cuts[0] != 0.0
-        || cuts.iter().any(|c| !c.is_finite())
-        || cuts.windows(2).any(|w| w[1] <= w[0])
-    {
-        return Err(Error::invalid(
+    check::non_empty("cuts", cuts.len())?;
+    check_ascending(cuts, "cuts", true)?;
+    if cuts.len() < 2 || cuts[0] != 0.0 {
+        return Err(Error::order(
             "the cut points must be at least two, finite and strictly increasing from 0",
         ));
     }
     if opts.tolerance.is_nan() || opts.tolerance <= 0.0 || opts.max_iterations == 0 {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "tolerance and max_iterations must be positive",
         ));
     }
     let n = data.n_rows();
     if expected.n_rows() != n {
-        return Err(Error::invalid(format!(
+        return Err(Error::mismatch(format!(
             "the expected hazards are for {} rows and the data has {n}",
             expected.n_rows()
         )));
     }
-    if x.iter()
-        .any(|c| c.len() != n || c.iter().any(|v| !v.is_finite()))
-    {
-        return Err(Error::invalid(
-            "each covariate must be finite and have one value per row",
-        ));
+    for (j, c) in x.iter().enumerate() {
+        if c.len() != n {
+            return Err(InputError::Length {
+                what: "x",
+                expected: n,
+                found: c.len(),
+            }
+            .into());
+        }
+        check::finite_column("x", j, c)?;
     }
     let surv = data.followup()?;
     if surv.n_codes() != 1 {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "the excess hazard model needs a binary status: use SurvData::cause",
         ));
     }
@@ -427,7 +431,7 @@ pub fn excess_hazard(
         .weight()
         .is_some_and(|w| w.iter().any(|&v| v != 0.0 && v != 1.0))
     {
-        return Err(Error::invalid(
+        return Err(Error::value(
             "the excess hazard model takes weights of 0 and 1 only, which select rows",
         ));
     }
@@ -435,10 +439,10 @@ pub fn excess_hazard(
     let (stop, start) = (surv.stop(), surv.start());
     for &i in &rows {
         if start.is_some_and(|s| s[i] < 0.0) {
-            return Err(Error::invalid(format!("row {i} has a negative entry time")));
+            return Err(Error::value(format!("row {i} has a negative entry time")));
         }
         if expected.horizon(i) < stop[i] {
-            return Err(Error::invalid(format!(
+            return Err(Error::value(format!(
                 "the expected hazard of row {i} ends at {} before its follow-up at {}",
                 expected.horizon(i),
                 stop[i]
@@ -470,7 +474,7 @@ pub fn excess_hazard(
     }
     let kept: Vec<usize> = (0..n_all).filter(|&k| years[k] > 0.0).collect();
     if kept.is_empty() {
-        return Err(Error::invalid("there is no person-time"));
+        return Err(Error::no_information("there is no person-time"));
     }
     for (s, &k) in kept.iter().enumerate() {
         setup.slot[k] = s;

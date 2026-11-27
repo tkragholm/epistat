@@ -94,6 +94,7 @@ use crate::surv::SurvData;
 
 /// The transform of time that the coefficients are tested against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ZphTransform {
     /// One minus the left-continuous Kaplan-Meier survival, `transform = "km"`.
     #[default]
@@ -135,6 +136,7 @@ impl Default for ZphOptions<'_> {
 
 /// The result of [`zph`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CoxZph {
     /// The transform that was used.
     pub transform: ZphTransform,
@@ -345,16 +347,16 @@ fn terms_of(groups: Option<&[Vec<usize>]>, keep: &[usize], columns: usize) -> Re
     let mut by_column = Vec::new();
     for group in &groups {
         if group.is_empty() {
-            return Err(Error::invalid("groups: a term has no column"));
+            return Err(Error::no_information("groups: a term has no column"));
         }
         for &j in group {
             if j >= columns {
-                return Err(Error::invalid(format!(
+                return Err(Error::out_of_range(format!(
                     "groups: column {j} is outside the {columns} columns of x"
                 )));
             }
             if std::mem::replace(&mut seen[j], true) {
-                return Err(Error::invalid(format!(
+                return Err(Error::inconsistent(format!(
                     "groups: column {j} is in more than one term, or twice in one"
                 )));
             }
@@ -398,13 +400,13 @@ pub fn zph(
         ("fit coefficients", fit.coefficients.len()),
     ])?;
     if fit.n_used != data.n_used() {
-        return Err(Error::invalid(
+        return Err(Error::fit(
             "fit: the number of rows used differs from the data's, so it is not a fit of these data",
         ));
     }
     let prep = prepare(data, x, &opts.cox, &fit.coefficients)?;
     if prep.n_events == 0 {
-        return Err(Error::invalid("the data have no event"));
+        return Err(Error::no_information("the data have no event"));
     }
     let p = prep.p;
     let (terms, term_columns) = terms_of(opts.groups, &prep.keep, columns)?;
@@ -423,7 +425,7 @@ pub fn zph(
             .iter()
             .any(|s| s.event_times.iter().any(|&t| t <= 0.0))
     {
-        return Err(Error::invalid(
+        return Err(Error::value(
             "transform: the log of a time that is not positive is not defined",
         ));
     }

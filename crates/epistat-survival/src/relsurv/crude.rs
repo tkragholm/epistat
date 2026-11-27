@@ -17,6 +17,7 @@ use epistat_stats::dist::normal;
 
 /// The crude probabilities of death of one stratum.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct CrudeMortality {
     /// The level of the stratum, 0 when the data has no strata.
     pub stratum: usize,
@@ -88,7 +89,7 @@ pub fn crude_mortality(
     level: Level,
 ) -> Result<Vec<CrudeMortality>> {
     if data.followup()?.n_codes() != 1 {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "the crude probabilities need a binary status of death from any cause",
         ));
     }
@@ -126,7 +127,7 @@ fn one(
         })
         .sum();
     if work > SWEEP_LIMIT {
-        return Err(Error::invalid(format!(
+        return Err(Error::options(format!(
             "the crude probabilities would visit {work:.3e} pairs of a person and a time point, \
              above the limit of {SWEEP_LIMIT:.0e}"
         )));

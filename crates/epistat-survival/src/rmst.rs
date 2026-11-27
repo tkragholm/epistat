@@ -109,11 +109,12 @@
 //!    time with the subject's baseline covariates in survival analysis,
 //!    Biostatistics 15: 222-233.
 
-use epistat_core::{Covariance, Level};
+use epistat_core::{Covariance, InputError, Level};
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::sandwich::sandwich;
 use epistat_linalg::{Attempt, Mat, MatRef, weighted_gram};
 
+use crate::check::refuse_non_finite_matrix;
 use crate::covariance;
 use crate::error::{Error, Result};
 use crate::metrics::censoring::CensoringKm;
@@ -123,6 +124,7 @@ use crate::timefix::TimeFix;
 
 /// The horizon of the restricted means.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum Tau {
     /// A horizon chosen by the caller.
     Fixed(f64),
@@ -158,6 +160,7 @@ impl RmstOptions {
 
 /// The restricted mean survival time and time lost of one group.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct GroupRmst {
     /// The caller's stratum code of the group.
     pub group: u32,
@@ -186,6 +189,7 @@ pub struct GroupRmst {
 
 /// A contrast between the groups with its limits and p-value.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct RmstContrast {
     /// The difference or ratio, group 1 against group 0.
     pub estimate: Option<f64>,
@@ -205,6 +209,7 @@ pub type Contrast = RmstContrast;
 
 /// The restricted means of two groups and their contrasts.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Rmst2 {
     /// The horizon used.
     pub tau: f64,
@@ -243,7 +248,7 @@ pub struct Rmst2 {
 /// origin of the curves or is above the largest the data determine.
 pub fn rmst2(data: &SurvData<'_>, opts: &RmstOptions) -> Result<Rmst2> {
     if data.n_strata() != 2 {
-        return Err(Error::invalid(format!(
+        return Err(Error::not_applicable(format!(
             "rmst2 compares two groups, and the stratum column has {} levels",
             data.n_strata()
         )));
@@ -302,7 +307,7 @@ fn horizon(data: &SurvData<'_>, opts: &RmstOptions) -> Result<(GroupCurve, Group
         },
     )?;
     let [curve0, curve1] = fit.groups.as_slice() else {
-        return Err(Error::invalid(
+        return Err(Error::no_information(
             "rmst2 needs rows of positive weight in both groups",
         ));
     };
@@ -313,10 +318,10 @@ fn horizon(data: &SurvData<'_>, opts: &RmstOptions) -> Result<(GroupCurve, Group
         Tau::Largest => tau_largest,
         Tau::Fixed(tau) => {
             if !tau.is_finite() {
-                return Err(Error::invalid("the horizon must be finite"));
+                return Err(Error::options("the horizon must be finite"));
             }
             if tau > tau_largest {
-                return Err(Error::invalid(format!(
+                return Err(Error::options(format!(
                     "the horizon {tau} is above {tau_largest}, the largest up to which \
                      both curves are determined by the data"
                 )));
@@ -383,6 +388,7 @@ fn contrast(centre: f64, se: f64, z: f64, exponentiate: bool) -> RmstContrast {
 
 /// The effect of an arm or covariate on the restricted mean.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RmstEffect {
     /// A difference of restricted mean survival times, the identity link.
     Difference,
@@ -394,6 +400,7 @@ pub enum RmstEffect {
 
 /// The coefficients of a regression of the restricted mean.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct RmstRegression {
     /// The effect modelled.
     pub effect: RmstEffect,
@@ -428,6 +435,7 @@ pub struct RmstRegression {
 
 /// The three effects of `rmst2` with covariates.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct AdjustedRmst {
     /// The difference of restricted mean survival times.
     pub difference: RmstRegression,
@@ -477,18 +485,18 @@ pub fn rmst2_regression(
     opts: &RmstOptions,
 ) -> Result<RmstRegression> {
     if data.n_strata() != 2 {
-        return Err(Error::invalid(format!(
+        return Err(Error::not_applicable(format!(
             "the arm is the stratum column, which must have two levels, and it has {}",
             data.n_strata()
         )));
     }
     if data.weight().is_some() {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "the regression of the restricted mean takes no case weights",
         ));
     }
     if data.followup()?.start().is_some() {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "the regression of the restricted mean takes no delayed entry",
         ));
     }
@@ -496,21 +504,21 @@ pub fn rmst2_regression(
     let q = covariates.map_or(0, |c| c.ncols());
     if let Some(c) = covariates {
         if c.nrows() != n {
-            return Err(Error::invalid(format!(
-                "the covariates have {} rows and the data {n}",
-                c.nrows()
-            )));
+            return Err(InputError::Length {
+                what: "covariates",
+                expected: n,
+                found: c.nrows(),
+            }
+            .into());
         }
-        if (0..n).any(|i| (0..q).any(|j| !c[(i, j)].is_finite())) {
-            return Err(Error::invalid("the covariates must be finite"));
-        }
+        refuse_non_finite_matrix(c, "covariates")?;
     }
     let (_, _, tau, tau_largest) = horizon(data, opts)?;
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     let arm_of = data
         .stratum()
-        .ok_or_else(|| Error::invalid("the arm is the stratum column"))?;
+        .ok_or_else(|| Error::missing("the arm is the stratum column"))?;
     let p = 2 + q;
     let x = Mat::from_fn(n, p, |i, j| match j {
         0 => 1.0,

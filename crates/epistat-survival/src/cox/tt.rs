@@ -82,10 +82,11 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+use epistat_core::InputError;
 use epistat_linalg::{Mat, MatRef};
 
 use super::design::{CoxModelFit, CoxOptions, fit};
-use crate::check::{check_lengths, check_row_count};
+use crate::check::{check_lengths, check_row_count, refuse_non_finite_matrix};
 use crate::error::{Error, Result};
 use crate::order::sort_by_key;
 use crate::surv::{SurvBuf, SurvData};
@@ -100,6 +101,7 @@ pub type RiskSetTransform<'a> = dyn Fn(f64, &[f64], &[f64], &mut [f64]) + Sync +
 
 /// How one covariate is transformed at an event time `t`.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub enum TimeTransform<'a> {
     /// `x * t`.
     Product,
@@ -158,6 +160,7 @@ pub struct TtOptions {
 
 /// A Cox fit with time-transform covariates.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CoxTtFit {
     /// The fit of the expansion. `n_rows` and `n_used` count the rows of the
     /// data, not of the expansion. `n_events` and every other field is as in
@@ -203,25 +206,23 @@ pub fn fit_tt(
 ) -> Result<CoxTtFit> {
     check_lengths(&[("data", data.n_rows()), ("x", x.nrows())])?;
     if x.ncols() == 0 {
-        return Err(Error::invalid("x has no columns"));
+        return Err(Error::missing("x has no columns"));
     }
     if transforms.is_empty() {
-        return Err(Error::invalid(
-            "transforms is empty; without a time transform use cox::fit",
-        ));
+        return Err(InputError::Empty { what: "transforms" }.into());
     }
     let mut seen = vec![false; x.ncols()];
     for t in transforms {
         match seen.get_mut(t.column) {
             None => {
-                return Err(Error::invalid(format!(
+                return Err(Error::out_of_range(format!(
                     "transforms: column {} is outside the {} columns of x",
                     t.column,
                     x.ncols()
                 )));
             }
             Some(flag) if *flag => {
-                return Err(Error::invalid(format!(
+                return Err(Error::inconsistent(format!(
                     "transforms: column {} is named twice",
                     t.column
                 )));
@@ -229,20 +230,14 @@ pub fn fit_tt(
             Some(flag) => *flag = true,
         }
     }
-    for j in 0..x.ncols() {
-        if (0..x.nrows()).any(|i| !x[(i, j)].is_finite()) {
-            return Err(Error::invalid(format!(
-                "x: column {j} has a value that is not finite"
-            )));
-        }
-    }
+    refuse_non_finite_matrix(x, "x")?;
     let data = data.clone().with_timefix(opts.cox.timefix)?;
     let surv = data.followup()?;
     let code = match (opts.cox.cause, surv.n_codes()) {
         (None, 1) => 1,
         (Some(code), _) => code,
         (None, _) => {
-            return Err(Error::invalid(
+            return Err(Error::missing(
                 "cause: the status has several codes, so the event code is required",
             ));
         }
@@ -300,7 +295,7 @@ pub fn fit_tt(
 
     let total: usize = plans.iter().map(|p| p.size).sum();
     if let Some(limit) = opts.max_expanded_rows.filter(|&limit| total > limit) {
-        return Err(Error::invalid(format!(
+        return Err(Error::options(format!(
             "the expansion has {total} rows, more than max_expanded_rows = {limit}"
         )));
     }
@@ -359,7 +354,7 @@ pub fn fit_tt(
                     data.weight(),
                 );
                 if let Some(k) = (0..total).find(|&k| !design[(k, j)].is_finite()) {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::value(format!(
                         "transforms: column {j} is not finite at time {}",
                         time[k]
                     )));

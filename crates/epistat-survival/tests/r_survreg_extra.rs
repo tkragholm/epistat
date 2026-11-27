@@ -597,6 +597,7 @@ fn extra_options_match_r() {
                             interval && is_t
                         }
                         SurvregResidualKind::Working => false,
+                        _ => unreachable!("a kind this test does not cover"),
                     };
                     !displaced
                 })

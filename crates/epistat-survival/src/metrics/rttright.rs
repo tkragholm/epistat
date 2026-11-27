@@ -87,6 +87,7 @@
     reason = "a common start and a case weight are equal when they are the same value"
 )]
 
+use epistat_core::InputError;
 use epistat_linalg::Mat;
 
 use crate::survcheck::survcheck;
@@ -119,6 +120,7 @@ impl Default for RttrightOptions {
 
 /// The result of [`estimate`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Rttright {
     /// The weights, one row per row of the data and one column per reporting
     /// time, or one column when no time was given. Rows of weight 0 have
@@ -149,12 +151,14 @@ pub fn estimate(
     opts: &RttrightOptions,
 ) -> Result<Rttright> {
     if let Some(position) = times.and_then(|t| t.iter().position(|v| !v.is_finite())) {
-        return Err(Error::invalid(format!(
-            "times: value {position} is not finite"
-        )));
+        return Err(Error::from(InputError::NotFinite {
+            what: "times",
+            row: position,
+            column: None,
+        }));
     }
     if times.is_some_and(<[f64]>::is_empty) {
-        return Err(Error::invalid("times: give at least one time, or none"));
+        return Err(Error::from(InputError::Empty { what: "times" }));
     }
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
@@ -194,7 +198,7 @@ pub fn estimate(
         if opts.renorm {
             let total: f64 = w.iter().sum();
             if !total.is_finite() {
-                return Err(Error::invalid(
+                return Err(Error::value(
                     "the case weights of a stratum sum to more than a double can hold",
                 ));
             }
@@ -256,17 +260,17 @@ fn counting(
         surv.status(),
     );
     let ids = data.id().ok_or_else(|| {
-        Error::invalid("data with delayed entry needs an id column, as rttright does")
+        Error::missing("data with delayed entry needs an id column, as rttright does")
     })?;
     if data.istate().is_some() {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "rttright is for one starting state: the data has an istate column",
         ));
     }
     let check = survcheck(data)?;
     check.enforce(crate::survcheck::Policy::Strict)?;
     if !check.gap.rows.is_empty() {
-        return Err(Error::invalid(format!(
+        return Err(Error::order(format!(
             "a subject has a gap between rows, first at row {}; rttright refuses data that              survcheck flags",
             check.gap.rows[0]
         )));
@@ -298,7 +302,7 @@ fn counting(
         let first = subject.rows[0];
         let s = start[first as usize];
         if *common_start.get_or_insert(s) != s {
-            return Err(Error::invalid(
+            return Err(Error::not_applicable(
                 "subjects start at different times; rttright needs one common start",
             ));
         }
@@ -306,7 +310,7 @@ fn counting(
             .iter()
             .any(|&r| status[r as usize] != 0)
         {
-            return Err(Error::invalid(format!(
+            return Err(Error::order(format!(
                 "a row that is not the last of its subject ends in an event, near row {};                  only the last row of a subject may",
                 subject.rows[0]
             )));
@@ -318,7 +322,7 @@ fn counting(
             .iter()
             .any(|&r| case_weight(r) != subject.weight || stratum_of(r) != subject.stratum)
         {
-            return Err(Error::invalid(format!(
+            return Err(Error::inconsistent(format!(
                 "a subject has several case weights or strata, near row {}",
                 subject.rows[0]
             )));
@@ -328,7 +332,7 @@ fn counting(
     if let Some(times) = times
         && let Some(t) = times.iter().find(|&&t| t <= origin)
     {
-        return Err(Error::invalid(format!(
+        return Err(Error::value(format!(
             "the reporting time {t} is not after the common start {origin}"
         )));
     }
@@ -362,7 +366,7 @@ fn counting(
         if opts.renorm {
             let total: f64 = w.iter().sum();
             if !total.is_finite() {
-                return Err(Error::invalid(
+                return Err(Error::value(
                     "the case weights of a stratum sum to more than a double can hold",
                 ));
             }

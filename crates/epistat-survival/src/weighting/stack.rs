@@ -142,7 +142,7 @@ pub(super) fn units(
         if unit[s] == usize::MAX {
             unit[s] = c;
         } else if unit[s] != c {
-            return Err(Error::invalid(format!(
+            return Err(Error::inconsistent(format!(
                 "cluster: the rows of subject {s} are in more than one cluster"
             )));
         }
@@ -165,7 +165,7 @@ pub(super) fn check_subjects(
     subject: Option<&[u32]>,
 ) -> Result<()> {
     match subject {
-        None if n_rows != n_subjects => Err(Error::invalid(format!(
+        None if n_rows != n_subjects => Err(Error::missing(format!(
             "subject: the data has {n_rows} rows and the weights {n_subjects} subjects, \
              so a subject for each row is needed"
         ))),
@@ -176,7 +176,7 @@ pub(super) fn check_subjects(
             found: s.len(),
         })),
         Some(s) => match s.iter().position(|&v| v as usize >= n_subjects) {
-            Some(row) => Err(Error::invalid(format!(
+            Some(row) => Err(Error::out_of_range(format!(
                 "subject: row {row} names subject {} of {n_subjects}",
                 s[row]
             ))),
@@ -189,7 +189,7 @@ pub(super) fn check_subjects(
 /// refusing data that already has weights.
 pub(super) fn with_weights(data: &SurvData<'_>, weight: Vec<f64>) -> Result<SurvBuf> {
     if data.weight().is_some() {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "data: carries case weights, but the weights come from the weighting",
         ));
     }

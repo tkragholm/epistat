@@ -60,6 +60,7 @@ pub struct CondenseOptions {
 
 /// The rows left after merging, as columns of equal length.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Condensed {
     /// The start of each row, the earliest start of the rows merged into it.
     pub start: Vec<f64>,
@@ -118,13 +119,13 @@ fn order_index(i: usize) -> u32 {
 pub fn condense(data: &SurvData<'_>, key: &[u64], options: &CondenseOptions) -> Result<Condensed> {
     let id = data
         .id()
-        .ok_or_else(|| Error::invalid("condense needs an id column"))?;
+        .ok_or_else(|| Error::missing("condense needs an id column"))?;
     let data = data.followup()?;
     let n = data.len();
     check_lengths(&[("status", n), ("key", key.len())])?;
     let start = data
         .start()
-        .ok_or_else(|| Error::invalid("condense needs a start column"))?;
+        .ok_or_else(|| Error::missing("condense needs a start column"))?;
     let stop = data.stop();
     let status = data.status();
 

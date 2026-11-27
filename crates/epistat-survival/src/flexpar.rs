@@ -157,12 +157,13 @@ mod start;
 
 use std::collections::HashSet;
 
-use epistat_core::Covariance;
+use epistat_core::{Covariance, InputError, check};
 use epistat_inference::sandwich::sandwich_with_inverse;
 use epistat_linalg::{Mat, MatRef, row_scaled_gram};
 
 use self::design::{Design, Spline, TvcTerm};
 use self::model::{Model, Work, maximise};
+use crate::check::refuse_non_finite_matrix;
 use crate::covariance;
 use crate::error::{Error, Result};
 use crate::ldl;
@@ -174,6 +175,7 @@ pub use self::predict::{
 
 /// The scale on which the survivor function is linear in the covariates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FlexparScale {
     /// The log cumulative hazard `ln(-ln S)`: proportional hazards.
     Hazard,
@@ -247,6 +249,7 @@ impl FlexParOptions<'_> {
 
 /// A time-varying term of a fit with the knots of its spline.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct TimeVaryingFit {
     /// The column of the covariate matrix.
     pub column: usize,
@@ -263,6 +266,7 @@ pub struct TimeVaryingFit {
 /// in turn. The covariances are square matrices of that dimension, with
 /// `None` in the rows and columns of aliased covariates.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct FlexParFit {
     /// The intercept and the baseline spline coefficients, `df + 1` values.
     pub gamma: Vec<f64>,
@@ -325,10 +329,18 @@ impl FlexParFit {
     /// the estimated parameter `k`.
     /// The position of the coefficient of covariate `column` in the covariance
     /// matrices, `None` if it is aliased.
-    #[must_use]
-    pub fn beta_index(&self, column: usize) -> Option<usize> {
-        self.beta[column]?;
-        Some(self.gamma.len() + column)
+    ///
+    /// # Errors
+    ///
+    /// An input error for a `column` not below [`Self::n_covariates`].
+    pub fn beta_index(&self, column: usize) -> Result<Option<usize>> {
+        let Some(beta) = self.beta.get(column).copied() else {
+            return Err(Error::out_of_range(format!(
+                "column {column} is not below the {} covariates of the fit",
+                self.beta.len()
+            )));
+        };
+        Ok(beta.map(|_| self.gamma.len() + column))
     }
 
     fn full_index(&self, k: usize) -> usize {
@@ -347,40 +359,38 @@ impl FlexParFit {
 fn check_inputs(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FlexParOptions<'_>) -> Result<()> {
     let n = data.n_rows();
     if x.nrows() != n {
-        return Err(Error::invalid(format!(
-            "the covariate matrix has {} rows and the follow-up {n}",
-            x.nrows()
-        )));
+        if x.nrows() == 0 {
+            return Err(Error::from(InputError::Empty { what: "x" }));
+        }
+        return Err(Error::from(InputError::Length {
+            what: "x",
+            expected: n,
+            found: x.nrows(),
+        }));
     }
     if opts.df == 0 {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "the baseline needs at least one degree of freedom",
         ));
     }
     if opts.tolerance.is_nan() || opts.tolerance <= 0.0 || opts.max_iterations == 0 {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "tolerance and max_iterations must be positive",
         ));
     }
     if let Some(h) = opts.bhazard {
         if opts.scale != FlexparScale::Hazard {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "an expected hazard needs the hazard scale: the excess hazard is additive on the hazard",
             ));
         }
-        if h.len() != n || h.iter().any(|v| !v.is_finite() || *v < 0.0) {
-            return Err(Error::invalid(
-                "the expected hazard must be finite, not negative and have one value per row",
-            ));
-        }
+        check::same_length("bhazard", n, h.len())?;
+        check::weights("bhazard", h)?;
     }
     if data.n_strata() > 0 {
         return Err(Error::unsupported("strata are not supported by flexpar"));
     }
-    if (0..x.nrows()).any(|i| (0..x.ncols()).any(|j| !x[(i, j)].is_finite())) {
-        return Err(Error::invalid("the covariates must be finite"));
-    }
-    Ok(())
+    refuse_non_finite_matrix(x, "x")
 }
 
 /// Fits the model by maximum likelihood.
@@ -411,7 +421,7 @@ pub fn fit(
     check_inputs(data, x, opts)?;
     let surv = data.followup()?;
     if surv.n_codes() != 1 {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "flexpar needs a binary status: use SurvData::cause for competing events",
         ));
     }
@@ -422,12 +432,12 @@ pub fn fit(
     let used = |i: usize| weight.is_none_or(|w| w[i] > 0.0);
     for i in (0..n).filter(|&i| used(i)) {
         if stop[i] <= 0.0 {
-            return Err(Error::invalid(format!(
+            return Err(Error::value(format!(
                 "row {i} has a time that is not positive, and ln t is needed"
             )));
         }
         if start.is_some_and(|s| s[i] < 0.0) {
-            return Err(Error::invalid(format!("row {i} has a negative entry time")));
+            return Err(Error::value(format!("row {i} has a negative entry time")));
         }
     }
     if opts.scale != FlexparScale::Hazard
@@ -435,7 +445,7 @@ pub fn fit(
     {
         let mut seen = HashSet::new();
         if (0..n).filter(|&i| used(i)).any(|i| !seen.insert(id[i])) {
-            return Err(Error::invalid(
+            return Err(Error::inconsistent(
                 "a subject has several rows: only the hazard scale accepts split follow-up",
             ));
         }
@@ -445,14 +455,16 @@ pub fn fit(
         .map(|i| stop[i].ln())
         .collect();
     if events.is_empty() {
-        return Err(Error::invalid("there are no events with positive weight"));
+        return Err(Error::no_information(
+            "there are no events with positive weight",
+        ));
     }
     events.sort_by(f64::total_cmp);
 
     let baseline_knots = match opts.knots {
         Some(k) => {
             if k.len() != opts.df + 1 {
-                return Err(Error::invalid(format!(
+                return Err(Error::options(format!(
                     "df = {} needs {} knots, boundary knots included, and {} were given",
                     opts.df,
                     opts.df + 1,
@@ -469,24 +481,24 @@ pub fn fit(
     let mut tvc = Vec::with_capacity(opts.tvc.len());
     for (j, t) in opts.tvc.iter().enumerate() {
         if t.column >= p {
-            return Err(Error::invalid(format!(
+            return Err(Error::out_of_range(format!(
                 "the time-varying column {} is out of range",
                 t.column
             )));
         }
         if t.df == 0 {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "a time-varying effect needs at least one degree of freedom",
             ));
         }
         if aliased[t.column] {
-            return Err(Error::invalid(format!(
+            return Err(Error::no_information(format!(
                 "the time-varying column {} is aliased with the intercept or another column",
                 t.column
             )));
         }
         if opts.tvc[..j].iter().any(|u| u.column == t.column) {
-            return Err(Error::invalid(format!(
+            return Err(Error::inconsistent(format!(
                 "column {} has two time-varying terms",
                 t.column
             )));
@@ -506,7 +518,7 @@ pub fn fit(
     let n_used = (0..n).filter(|&i| used(i)).count();
     let n_event_rows = (0..n).filter(|&i| used(i) && event[i] != 0).count();
     if n_event_rows < q {
-        return Err(Error::invalid(format!(
+        return Err(Error::no_information(format!(
             "{n_event_rows} events cannot fit {q} parameters"
         )));
     }

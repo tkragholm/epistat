@@ -59,7 +59,7 @@ impl PersonCounts {
         ids.iter()
             .map(|&id| {
                 self.count(id).map(f64::from).ok_or_else(|| {
-                    Error::invalid(format!("id {id} is not among the persons resampled"))
+                    Error::out_of_range(format!("id {id} is not among the persons resampled"))
                 })
             })
             .collect()

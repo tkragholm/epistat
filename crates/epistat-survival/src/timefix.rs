@@ -93,6 +93,7 @@ use crate::error::{Error, Result};
 
 /// How times that differ by rounding error are treated.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum TimeFix {
     /// Times are compared exactly and nothing changes.
     Exact,
@@ -115,6 +116,7 @@ impl Default for TimeFix {
 
 /// Times after the tie policy, where it found a tie.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct FixedTimes {
     /// The start times, or `None` when the input had none.
     pub start: Option<Vec<f64>>,
@@ -146,7 +148,7 @@ pub fn fix_times(
         TimeFix::Exact => 0.0,
         TimeFix::Aeq { tolerance } => {
             if !tolerance.is_finite() || tolerance < 0.0 {
-                return Err(Error::invalid(format!(
+                return Err(Error::options(format!(
                     "time tolerance must be finite and not negative, got {tolerance}"
                 )));
             }
@@ -178,7 +180,7 @@ pub fn fix_times(
 
     let total = epistat_stats::sum::exact(unique.iter().map(|v| v.abs()));
     if !total.is_finite() {
-        return Err(Error::invalid(
+        return Err(Error::value(
             "times are too large to average; rescale them before estimating",
         ));
     }
@@ -217,7 +219,7 @@ pub fn fix_times(
             .zip(new.iter().zip(&new_stop))
             .any(|((&a, &b), (&na, &nb))| na == nb && a != b);
         if collapsed {
-            return Err(Error::invalid(
+            return Err(Error::value(
                 "an interval has effective length 0 after times equal up to rounding \
                  error are made equal",
             ));

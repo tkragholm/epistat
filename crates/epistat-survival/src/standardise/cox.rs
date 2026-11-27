@@ -40,7 +40,7 @@ impl CoxEval<'_> {
         if value.is_finite() {
             Ok(value)
         } else {
-            Err(Error::invalid(format!(
+            Err(Error::undefined(format!(
                 "levels: the risk score of row {row} is not finite"
             )))
         }

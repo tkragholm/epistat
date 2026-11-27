@@ -133,7 +133,7 @@ fn bad_input_is_refused() {
     let data = SurvData::builder(&time, &status).build().unwrap();
     let go = |opts: &SurvregOptions, x: &Mat<f64>| message(fit(&data, x.as_ref(), opts));
     let base = SurvregOptions::default();
-    assert!(go(&base, &Mat::zeros(19, 2)).contains("19 rows"));
+    assert!(go(&base, &Mat::zeros(19, 2)).contains("x has length 19, expected 20"));
     assert!(go(&base, &Mat::zeros(20, 0)).contains("no columns"));
     let mut bad = x.clone();
     bad[(3, 1)] = f64::NAN;

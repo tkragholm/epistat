@@ -68,7 +68,7 @@
 //!    and cohort studies using the R package AF. Eur J Epidemiol
 //!    2016;31(6):575-82.
 
-use epistat_core::Level;
+use epistat_core::{InputError, Level};
 use epistat_glm::attributable::IntervalScale;
 use epistat_stats::dist::normal;
 
@@ -77,6 +77,7 @@ use crate::error::{Error, Result};
 
 /// The attributable fraction at each time of a [`Standardised`] result.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct AfCurve {
     /// The times, as given.
     pub times: Vec<f64>,
@@ -109,14 +110,15 @@ pub fn af_from_standardised(
     scale: IntervalScale,
 ) -> Result<AfCurve> {
     if times.len() != s.n_times {
-        return Err(Error::invalid(format!(
-            "times has {} entries and the standardised risks {}",
-            times.len(),
-            s.n_times
-        )));
+        return Err(InputError::Length {
+            what: "times",
+            expected: s.n_times,
+            found: times.len(),
+        }
+        .into());
     }
     if unexposed == observed {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "the unexposed and the observed level must be different levels",
         ));
     }
@@ -153,3 +155,6 @@ pub fn af_from_standardised(
     }
     Ok(curve)
 }
+
+#[cfg(test)]
+mod tests;

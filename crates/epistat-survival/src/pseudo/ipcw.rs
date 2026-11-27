@@ -62,7 +62,7 @@
 use epistat_core::InputError;
 use epistat_linalg::MatRef;
 
-use crate::check::check_ascending;
+use crate::check::{check_ascending, refuse_non_finite_matrix};
 use crate::cox::predict::{CoxPredictOptions, CoxPredictType, FittedModel, NewData, predict};
 use crate::cox::{CoxOptions, fit};
 use crate::error::{Error, Result};
@@ -74,6 +74,7 @@ use super::{GroupEstimate, Pseudo, Target};
 /// How the pseudo-observation is formed from the weighted outcome, `ipcw.method`
 /// of `eventglm`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum IpcwMethod {
     /// The mean of the weighted outcomes, `"binder"`.
     #[default]
@@ -151,20 +152,24 @@ pub fn pseudo_ipcw(
         || data.id().is_some()
         || data.followup()?.start().is_some()
     {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "inverse probability of censoring weighting takes each row as a subject, \
              without delayed entry, weights, strata, clusters or ids",
         ));
     }
     let n = data.n_rows();
     if n == 0 {
-        return Err(Error::invalid("no row has positive weight"));
+        return Err(Error::no_information("no row has positive weight"));
     }
     if censoring.nrows() != n {
-        return Err(Error::invalid(format!(
-            "the censoring covariates have {} rows and the data {n}",
-            censoring.nrows()
-        )));
+        if censoring.nrows() == 0 {
+            return Err(Error::from(InputError::Empty { what: "censoring" }));
+        }
+        return Err(Error::from(InputError::Length {
+            what: "censoring",
+            expected: n,
+            found: censoring.nrows(),
+        }));
     }
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
@@ -172,12 +177,12 @@ pub fn pseudo_ipcw(
     let n_codes = surv.n_codes();
     match opts.target {
         Target::CumulativeHazard | Target::CauseHazard { .. } => {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "a cumulative hazard is not the outcome of a subject",
             ));
         }
         Target::Survival | Target::RestrictedMean if n_codes != 1 => {
-            return Err(Error::invalid(
+            return Err(Error::not_applicable(
                 "the survival and the restricted mean need a single event code",
             ));
         }
@@ -198,9 +203,10 @@ pub fn pseudo_ipcw(
         timefix: TimeFix::Exact,
         ..CoxOptions::default()
     };
+    refuse_non_finite_matrix(censoring, "censoring")?;
     let model = fit(&cdata, censoring, &copts)?;
     if model.coefficients.iter().any(Option::is_none) {
-        return Err(Error::invalid(
+        return Err(Error::no_information(
             "the model of the censoring has a column that is a combination of the others",
         ));
     }
@@ -255,7 +261,7 @@ pub fn pseudo_ipcw(
             };
             if ti >= t || di > 0 {
                 if g[i].is_nan() || g[i] <= 0.0 {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::value(format!(
                         "row {i} is observed and has a probability of 0 of not being censored"
                     )));
                 }
@@ -285,7 +291,15 @@ pub fn pseudo_ipcw(
         times: times.to_vec(),
         group: vec![0; n],
         subject: (0..n)
-            .map(|i| u32::try_from(i).map_err(|_| Error::invalid("more rows than u32::MAX")))
+            .map(|i| {
+                u32::try_from(i).map_err(|_| {
+                    Error::from(InputError::TooLarge {
+                        what: "rows",
+                        limit: u64::from(u32::MAX),
+                        found: n as u64,
+                    })
+                })
+            })
             .collect::<Result<_>>()?,
         values,
         groups: vec![GroupEstimate {

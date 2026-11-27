@@ -76,12 +76,16 @@
 //! 2. Breslow NE, Day NE. Statistical Methods in Cancer Research, volume II.
 //!    IARC 1987, chapter 3.
 
+use epistat_core::InputError;
+
+use crate::check::check_ascending;
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
 /// One dimension of the table.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub enum Dimension<'a> {
     /// A factor with the level of every row as a code in `0..levels`. Every
     /// level is a cell, whether any row has it or not.
@@ -130,6 +134,7 @@ impl Default for PyearsOptions {
 
 /// The cells of a person-time table.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Pyears {
     /// The number of cells in each dimension, in the order given. Empty when
     /// no dimension was given, and then there is one cell.
@@ -311,7 +316,7 @@ impl<'d, 'x> Layout<'d, 'x> {
         needs_cause: bool,
     ) -> Result<Self> {
         if !(opts.scale.is_finite() && opts.scale > 0.0) {
-            return Err(Error::invalid("scale must be finite and positive"));
+            return Err(Error::options("scale must be finite and positive"));
         }
         let data = data.clone().with_timefix(opts.timefix)?;
         let surv = data.followup()?;
@@ -320,13 +325,14 @@ impl<'d, 'x> Layout<'d, 'x> {
             Some(code) => data.cause(code)?.code(),
             None if surv.n_codes() == 1 => 1,
             None => {
-                return Err(Error::invalid(format!(
+                return Err(Error::missing(format!(
                     "the status has {} event codes, so the cause to count must be given",
                     surv.n_codes()
                 )));
             }
         };
-        let code = i32::try_from(code).map_err(|_| Error::invalid("cause does not fit an i32"))?;
+        let code =
+            i32::try_from(code).map_err(|_| Error::out_of_range("cause does not fit an i32"))?;
         let n_rows = data.n_rows();
 
         let mut sizes = Vec::with_capacity(dims.len());
@@ -335,16 +341,16 @@ impl<'d, 'x> Layout<'d, 'x> {
             let size = match *dim {
                 Dimension::Factor { codes, levels } => {
                     if codes.len() != n_rows {
-                        return Err(length_error(d, codes.len(), n_rows));
+                        return Err(length_error("codes", codes.len(), n_rows));
                     }
                     if levels == 0 {
-                        return Err(Error::invalid(format!("dimension {d} has no levels")));
+                        return Err(Error::value(format!("dimension {d} has no levels")));
                     }
                     if let Some(row) = codes
                         .iter()
                         .position(|&c| usize::try_from(c).map_or(true, |c| c >= levels))
                     {
-                        return Err(Error::invalid(format!(
+                        return Err(Error::out_of_range(format!(
                             "dimension {d}: the code {} in row {row} is not below the {levels} levels",
                             codes[row]
                         )));
@@ -353,23 +359,24 @@ impl<'d, 'x> Layout<'d, 'x> {
                 }
                 Dimension::Time { origin, cuts } => {
                     if origin.len() != n_rows {
-                        return Err(length_error(d, origin.len(), n_rows));
+                        return Err(length_error("origin", origin.len(), n_rows));
+                    }
+                    if cuts.is_empty() {
+                        return Err(Error::from(InputError::Empty { what: "cuts" }));
                     }
                     if cuts.len() < 2 {
-                        return Err(Error::invalid(format!(
+                        return Err(Error::no_information(format!(
                             "dimension {d} needs at least two cut points"
                         )));
                     }
-                    if cuts.iter().any(|c| !c.is_finite()) || cuts.windows(2).any(|w| w[0] > w[1]) {
-                        return Err(Error::invalid(format!(
-                            "dimension {d}: the cut points must be finite and not decreasing"
-                        )));
-                    }
+                    check_ascending(cuts, "cuts", false)?;
                     let bad = data.used_rows().find(|&r| !origin[r as usize].is_finite());
                     if let Some(row) = bad {
-                        return Err(Error::invalid(format!(
-                            "dimension {d}: the value in row {row} is not finite"
-                        )));
+                        return Err(Error::from(InputError::NotFinite {
+                            what: "origin",
+                            row: row as usize,
+                            column: None,
+                        }));
                     }
                     cuts.len() - 1
                 }
@@ -377,7 +384,7 @@ impl<'d, 'x> Layout<'d, 'x> {
             cells = cells
                 .checked_mul(size)
                 .filter(|&c| c <= isize::MAX as usize / 24)
-                .ok_or_else(|| Error::invalid("the table has too many cells"))?;
+                .ok_or_else(|| Error::value("the table has too many cells"))?;
             sizes.push(size);
         }
 
@@ -385,7 +392,7 @@ impl<'d, 'x> Layout<'d, 'x> {
         if surv.start().is_none()
             && let Some(row) = data.used_rows().find(|&r| stop[r as usize] < 0.0)
         {
-            return Err(Error::invalid(format!(
+            return Err(Error::value(format!(
                 "row {row} has a negative follow-up time and no start time"
             )));
         }
@@ -586,10 +593,17 @@ fn reach(cut: f64, x0: f64, begin: f64, end: f64) -> f64 {
     4.0 * f64::EPSILON * (cut.abs() + x0.abs() + begin.abs() + end.abs())
 }
 
-fn length_error(dimension: usize, got: usize, rows: usize) -> Error {
-    Error::invalid(format!(
-        "dimension {dimension} has {got} values against {rows} rows"
-    ))
+/// The error for the column `what` of a dimension with `got` values against
+/// the `rows` rows of the data.
+fn length_error(what: &'static str, got: usize, rows: usize) -> Error {
+    if got == 0 {
+        return Error::from(InputError::Empty { what });
+    }
+    Error::from(InputError::Length {
+        what,
+        expected: rows,
+        found: got,
+    })
 }
 
 #[cfg(test)]

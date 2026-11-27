@@ -66,10 +66,6 @@ pub struct SampleSizeSpec<'a> {
     pub power: f64,
 }
 
-fn invalid(message: impl Into<String>) -> Error {
-    Error::invalid(message)
-}
-
 /// The number of cases a self-controlled case series needs to detect
 /// [`SampleSizeSpec::relative_incidence`], before rounding up. See the module
 /// documentation for the formula.
@@ -90,12 +86,12 @@ fn invalid(message: impl Into<String>) -> Error {
 pub fn sample_size(spec: &SampleSizeSpec<'_>) -> Result<f64> {
     let rho = spec.relative_incidence;
     if !(rho.is_finite() && rho > 0.0) || rho == 1.0 {
-        return Err(invalid(format!(
+        return Err(Error::options(format!(
             "the relative incidence is {rho}, which is not positive, finite and other than 1"
         )));
     }
     if !(spec.start.is_finite() && spec.end.is_finite() && spec.start < spec.end) {
-        return Err(invalid(
+        return Err(Error::value(
             "the observation period is not a finite, non-empty interval",
         ));
     }
@@ -106,13 +102,13 @@ pub fn sample_size(spec: &SampleSizeSpec<'_>) -> Result<f64> {
         .windows(2)
         .any(|w| w[0].partial_cmp(&w[1]) != Some(std::cmp::Ordering::Less))
     {
-        return Err(invalid(
+        return Err(Error::order(
             "the age cuts must be strictly increasing and inside the observation period",
         ));
     }
     let bands = bounds.len() - 1;
     if spec.age_relative_incidence.len() + 1 != bands || spec.exposed.len() != bands {
-        return Err(invalid(format!(
+        return Err(Error::mismatch(format!(
             "{bands} age bands need {} age relative incidences and {bands} exposure probabilities, found {} and {}",
             bands - 1,
             spec.age_relative_incidence.len(),
@@ -124,27 +120,27 @@ pub fn sample_size(spec: &SampleSizeSpec<'_>) -> Result<f64> {
         .iter()
         .any(|&a| !(a.is_finite() && a > 0.0))
     {
-        return Err(invalid(
+        return Err(Error::value(
             "the age relative incidences must be positive and finite",
         ));
     }
     let total: f64 = spec.exposed.iter().sum();
     if spec.exposed.iter().any(|&p| !(p.is_finite() && p >= 0.0)) || !(total > 0.0 && total <= 1.0)
     {
-        return Err(invalid(
+        return Err(Error::value(
             "the exposure probabilities must not be negative and must sum to more than 0 and at most 1",
         ));
     }
     let length: Vec<f64> = bounds.windows(2).map(|w| w[1] - w[0]).collect();
     let r = spec.risk_length;
     if !(r.is_finite() && r > 0.0) || length.iter().any(|&e| r >= e) {
-        return Err(invalid(
+        return Err(Error::options(
             "the risk window must be positive and shorter than every age band",
         ));
     }
     for (name, value) in [("alpha", spec.alpha), ("power", spec.power)] {
         if !(value > 0.0 && value < 1.0) {
-            return Err(invalid(format!(
+            return Err(Error::options(format!(
                 "{name} is {value}, which is not in (0, 1)"
             )));
         }

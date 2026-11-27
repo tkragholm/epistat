@@ -208,6 +208,7 @@ pub fn advance(
 ///
 /// `cif` holds one column per cause, in the order of `causes`.
 #[derive(Debug, Default, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Curves {
     /// The causes, ascending. [`estimate`] lists every code from 1 to
     /// `n_codes`, observed or not.
@@ -448,7 +449,7 @@ pub fn estimate(data: &SurvData<'_>, opts: &AalenJohansenOptions) -> Result<Curv
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     let n_codes = i32::try_from(surv.n_codes())
-        .map_err(|_| Error::invalid("n_codes must fit an i32 status"))?;
+        .map_err(|_| Error::out_of_range("n_codes must fit an i32 status"))?;
     let used = data.used_index();
     let index = used.as_deref();
     let time = pick_used(surv.stop(), index);
@@ -502,6 +503,7 @@ pub type VarianceOptions = AalenJohansenVarianceOptions;
 /// The influence part of [`AalenJohansenVariance`] that is not one row per time: one entry
 /// for each group.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GroupInfluence {
     /// The group, as in [`Curves::group`].
     pub group: u32,
@@ -528,6 +530,7 @@ pub struct GroupInfluence {
 /// A state is the event-free state, `0` in the vectors that say `state`, and then
 /// each cause in the order of `causes`.
 #[derive(Debug, Clone, PartialEq, Default)]
+#[non_exhaustive]
 pub struct AalenJohansenVariance {
     /// The causes, as in [`Curves::causes`].
     pub causes: Vec<i32>,
@@ -628,7 +631,7 @@ pub(crate) fn variance_dfbeta(
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     let n_codes = i32::try_from(surv.n_codes())
-        .map_err(|_| Error::invalid("n_codes must fit an i32 status"))?;
+        .map_err(|_| Error::out_of_range("n_codes must fit an i32 status"))?;
     let causes: Vec<i32> = (1..=n_codes).collect();
     let k = causes.len();
     let states = k + 1;
@@ -797,6 +800,7 @@ pub(crate) fn variance_dfbeta(
 /// cells needs. The two modes give different draws, not the same draws at a
 /// different cost.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum Draw {
     /// Weights over the clusters of each cell, drawn from that cell's seed.
     PerCell,
@@ -1036,15 +1040,15 @@ impl RowWindows {
     /// `rows`, or a row indexes past `n_rows`.
     pub fn new(rows: Vec<u32>, offsets: Vec<u32>, n_rows: usize, label: &str) -> Result<Self> {
         let Some(&last) = offsets.last() else {
-            return Err(Error::invalid(format!("{label}_offsets must not be empty")));
+            return Err(Error::order(format!("{label}_offsets must not be empty")));
         };
         if offsets.windows(2).any(|pair| pair[0] > pair[1]) || last as usize > rows.len() {
-            return Err(Error::invalid(format!(
+            return Err(Error::order(format!(
                 "{label}_offsets must be non-decreasing and within {label}_rows"
             )));
         }
         if rows.iter().any(|&row| row as usize >= n_rows) {
-            return Err(Error::invalid(format!(
+            return Err(Error::out_of_range(format!(
                 "{label}_rows indexes past the frame"
             )));
         }
@@ -1069,11 +1073,21 @@ impl RowWindows {
 
     /// The rows of window `window`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// When `window` is not below [`len`](Self::len).
-    #[must_use]
-    pub fn get(&self, window: usize) -> &[u32] {
+    /// An input error when `window` is not below [`len`](Self::len).
+    pub fn get(&self, window: usize) -> Result<&[u32]> {
+        if window >= self.len() {
+            return Err(Error::out_of_range(format!(
+                "window {window} is not below the {} windows",
+                self.len()
+            )));
+        }
+        Ok(self.window(window))
+    }
+
+    /// The rows of window `window`, which is below [`len`](Self::len).
+    fn window(&self, window: usize) -> &[u32] {
         &self.rows[self.offsets[window] as usize..self.offsets[window + 1] as usize]
     }
 
@@ -1149,15 +1163,15 @@ pub fn bootstrap(
 ) -> Result<ArmDraws> {
     let data = data.clone().with_timefix(opts.timefix)?;
     let code = i32::try_from(data.cause(cause)?.code())
-        .map_err(|_| Error::invalid("the cause must fit an i32 status"))?;
+        .map_err(|_| Error::out_of_range("the cause must fit an i32 status"))?;
     let surv = data.followup()?;
     if surv.start().is_some() {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "the bootstrap takes no start times, everyone is at risk from a common origin",
         ));
     }
     let Some(cluster) = data.cluster() else {
-        return Err(Error::invalid("the bootstrap needs a cluster column"));
+        return Err(Error::missing("the bootstrap needs a cluster column"));
     };
     check_lengths(&[("stop", data.n_rows()), ("exposed", exposed.len())])?;
     let weight = data
@@ -1211,7 +1225,7 @@ fn bootstrap_core(
     } = *frame;
     let n_cells = cells.len();
     if cells.frame_rows() != time.len() {
-        return Err(Error::invalid(
+        return Err(Error::mismatch(
             "the cell windows were built for a frame of another size than the columns",
         ));
     }
@@ -1227,7 +1241,7 @@ fn bootstrap_core(
 
     let gathered: Vec<Option<Cell>> = (0..n_cells)
         .into_par_iter()
-        .map(|c| Cell::gather(cells.get(c), time, event, weight, family, exposed, draw))
+        .map(|c| Cell::gather(cells.window(c), time, event, weight, family, exposed, draw))
         .collect();
     let estimable: Vec<bool> = gathered.iter().map(Option::is_some).collect();
     let mut exposed_out = vec![0.0f64; n_cells * block];
@@ -1659,7 +1673,7 @@ mod tests {
         };
         assert_eq!(
             refused(vec![0], vec![], 1),
-            Some(Error::invalid("cell_offsets must not be empty"))
+            Some(Error::order("cell_offsets must not be empty"))
         );
         assert!(
             refused(vec![0, 1], vec![0, 2, 1], 2).is_some(),
@@ -1668,7 +1682,7 @@ mod tests {
         assert!(refused(vec![0], vec![0, 2], 1).is_some(), "past the rows");
         assert_eq!(
             refused(vec![0, 5], vec![0, 2], 3),
-            Some(Error::invalid("cell_rows indexes past the frame"))
+            Some(Error::out_of_range("cell_rows indexes past the frame"))
         );
     }
 
@@ -1676,9 +1690,9 @@ mod tests {
     fn a_window_reads_its_own_slice_of_the_row_list() {
         let windows = RowWindows::new(vec![0, 2, 1, 2], vec![0, 2, 2, 4], 3, "cell").unwrap();
         assert_eq!(windows.len(), 3);
-        assert_eq!(windows.get(0), &[0, 2]);
-        assert_eq!(windows.get(1), &[] as &[u32]);
-        assert_eq!(windows.get(2), &[1, 2]);
+        assert_eq!(windows.get(0), Ok(&[0_u32, 2][..]));
+        assert_eq!(windows.get(1), Ok(&[] as &[u32]));
+        assert_eq!(windows.get(2), Ok(&[1_u32, 2][..]));
     }
 
     #[test]
@@ -2187,10 +2201,7 @@ mod variance_tests {
                 influence_times: vec![f64::NAN],
             },
         ] {
-            assert!(matches!(
-                variance(&data, &opts, &v),
-                Err(Error::Input(_) | Error::Invalid(_))
-            ));
+            assert!(matches!(variance(&data, &opts, &v), Err(Error::Input(_))));
         }
     }
 }

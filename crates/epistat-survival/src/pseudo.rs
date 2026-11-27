@@ -171,7 +171,7 @@ mod states;
 mod steps;
 mod table;
 
-use epistat_core::InputError;
+use epistat_core::{InputError, check};
 use epistat_linalg::{Mat, MatRef};
 
 use crate::check::check_ascending;
@@ -193,6 +193,7 @@ pub use states::{StateEstimate, StateOptions, StatePseudo, StateTarget, pseudo_s
 
 /// What is estimated at each time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Target {
     /// The event-free probability, `pstate` of `survival::pseudo`. Every cause
     /// is the event.
@@ -235,6 +236,7 @@ impl Target {
 
 /// How the pseudo-values are made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum PseudoMethod {
     /// The infinitesimal jackknife, as `survival::pseudo`.
     #[default]
@@ -282,6 +284,7 @@ impl PseudoOptions {
 
 /// The estimate of one group at the times.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GroupEstimate {
     /// The caller's stratum code, 0 without a stratum column.
     pub group: u32,
@@ -296,6 +299,7 @@ pub struct GroupEstimate {
 
 /// Pseudo-observations at a set of times.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Pseudo {
     /// The times, ascending.
     pub times: Vec<f64>,
@@ -344,7 +348,7 @@ pub fn pseudo(data: &SurvData<'_>, times: &[f64], opts: &PseudoOptions) -> Resul
         Target::RestrictedMean | Target::RestrictedTimeLost { .. }
     ) && times[0] < origin
     {
-        return Err(Error::invalid(format!(
+        return Err(Error::value(format!(
             "the time {} of a restricted mean is before the start of the curves, {origin}",
             times[0]
         )));
@@ -441,7 +445,7 @@ pub fn pseudo(data: &SurvData<'_>, times: &[f64], opts: &PseudoOptions) -> Resul
         match opts.method {
             PseudoMethod::Jackknife => {
                 if n < 2 {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::no_information(format!(
                         "the jackknife needs two subjects in a group, and group {} has {n}",
                         group.code
                     )));
@@ -481,6 +485,7 @@ pub fn pseudo(data: &SurvData<'_>, times: &[f64], opts: &PseudoOptions) -> Resul
 /// The rows of a regression on pseudo-observations: one row for each subject
 /// and time.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Stacked {
     /// The response, the pseudo-observations by subject and then time.
     pub y: Vec<f64>,
@@ -507,7 +512,8 @@ impl Pseudo {
     ///
     /// # Errors
     ///
-    /// An input error when `covariates` does not have one row per subject.
+    /// An input error when `covariates` does not have one row per subject or
+    /// there are no times.
     pub fn stacked(
         &self,
         covariates: Option<MatRef<'_, f64>>,
@@ -515,14 +521,19 @@ impl Pseudo {
     ) -> Result<Stacked> {
         let n = self.n_subjects();
         let k = self.times.len();
+        check::non_empty("times", k)?;
         let q = covariates.map_or(0, |c| c.ncols());
         if let Some(c) = covariates
             && c.nrows() != n
         {
-            return Err(Error::invalid(format!(
-                "the covariates have {} rows and there are {n} subjects",
-                c.nrows()
-            )));
+            if c.nrows() == 0 {
+                return Err(Error::from(InputError::Empty { what: "covariates" }));
+            }
+            return Err(Error::from(InputError::Length {
+                what: "covariates",
+                expected: n,
+                found: c.nrows(),
+            }));
         }
         let t = if time_effects { k - 1 } else { 0 };
         let x = Mat::from_fn(n * k, 1 + t + q, |row, col| {
@@ -540,8 +551,13 @@ impl Pseudo {
             x,
             cluster: (0..n * k)
                 .map(|row| {
-                    u32::try_from(row / k)
-                        .map_err(|_| Error::invalid("more subjects than u32::MAX"))
+                    u32::try_from(row / k).map_err(|_| {
+                        Error::from(InputError::TooLarge {
+                            what: "subjects",
+                            limit: u64::from(u32::MAX),
+                            found: n as u64,
+                        })
+                    })
                 })
                 .collect::<Result<_>>()?,
         })

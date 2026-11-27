@@ -164,6 +164,7 @@
 
 use std::cmp::Ordering;
 
+use epistat_core::InputError;
 use epistat_inference::{ClusterRule, Clusters, Influence};
 use rayon::prelude::*;
 
@@ -174,6 +175,7 @@ use crate::timefix::TimeFix;
 
 /// How the event times are weighted. See the module documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum TimeWeight {
     /// Every event time counts the same: Harrell's C.
     N,
@@ -227,6 +229,7 @@ impl Default for ConcordanceOptions {
 
 /// Weighted counts of pairs, as `concordance` reports them.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct PairCounts {
     /// Pairs where the death had the smaller score, or the larger when the
     /// orientation is reversed.
@@ -244,6 +247,7 @@ pub struct PairCounts {
 
 /// The counts of one stratum, labelled by the caller's stratum code.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct StratumCounts {
     /// The caller's code of the stratum.
     pub code: u32,
@@ -253,6 +257,7 @@ pub struct StratumCounts {
 
 /// The result of [`estimate`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Concordance {
     /// The counts over all strata.
     pub counts: PairCounts,
@@ -379,25 +384,25 @@ pub fn estimate(
     refuse_non_finite(score, "score")?;
     for (name, value) in [("ymin", opts.ymin), ("ymax", opts.ymax)] {
         if value.is_some_and(|v| !v.is_finite()) {
-            return Err(Error::invalid(format!("{name} must be a finite number")));
+            return Err(Error::options(format!("{name} must be a finite number")));
         }
     }
     if opts.influence && !opts.variance {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "influence: the influence of the rows is part of the variance, which is off",
         ));
     }
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     if surv.n_codes() != 1 {
-        return Err(Error::invalid(format!(
+        return Err(Error::not_applicable(format!(
             "status has {} event codes, and concordance takes one; pass one cause as 0 and 1",
             surv.n_codes()
         )));
     }
     let counting = surv.start().is_some();
     if counting && matches!(opts.time_weight, TimeWeight::SOverG | TimeWeight::NOverG2) {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "time weight S/G and N/G2 need a censoring distribution, which data with delayed entry does not have",
         ));
     }
@@ -475,8 +480,13 @@ pub fn estimate(
                 *d = -*d;
             }
         }
-        let n_rows = u32::try_from(data.n_rows())
-            .map_err(|_| Error::invalid("data: more rows than u32::MAX"))?;
+        let n_rows = u32::try_from(data.n_rows()).map_err(|_| {
+            Error::from(InputError::TooLarge {
+                what: "data",
+                limit: u64::from(u32::MAX),
+                found: data.n_rows() as u64,
+            })
+        })?;
         let rows = Influence::from_dfbeta_over_rows(
             dfbeta,
             (0..n_rows).collect(),
@@ -669,7 +679,7 @@ fn time_weights(local: &Local, order: &[u32], opts: &ConcordanceOptions) -> Resu
         times.reverse();
     }
     if weights.iter().any(|v| !v.is_finite()) {
-        return Err(Error::invalid(
+        return Err(Error::no_information(
             "a time weight is not finite: the censoring distribution or the risk set is empty at an event time",
         ));
     }
