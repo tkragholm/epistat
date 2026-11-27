@@ -153,6 +153,7 @@ impl Units {
 /// MatchIt's `match.matrix`: one row per case, in input order, holding its
 /// controls in the order they were assigned.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MatchMatrix {
     /// The case of each row.
     pub case_id: Vec<String>,

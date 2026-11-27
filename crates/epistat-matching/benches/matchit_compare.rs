@@ -665,6 +665,7 @@ fn output_lines(out: &SpecOutput) -> (usize, Vec<(u64, u64)>, &'static str) {
             Vec::new(),
             "",
         ),
+        _ => (0, Vec::new(), ""),
     }
 }
 

@@ -96,6 +96,7 @@ const DEVIANCE_CLIP: f64 = 1e-5;
 
 /// The cross-validation curve and the choice made from it.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CrossValidation {
     /// The fold of each row, from 0, in the order of the design matrix: the
     /// cases, then the controls.

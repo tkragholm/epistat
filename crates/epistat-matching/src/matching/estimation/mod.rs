@@ -86,6 +86,7 @@ use std::sync::{Arc, OnceLock};
 
 /// Propensity-score estimation output.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct PropensityScoreEstimate {
     /// The ids of the units, the cases first and then the controls, each
     /// in the order it was given. The three score columns below are in this
@@ -238,6 +239,7 @@ impl PropensityScoreEstimate {
 
 /// Combined propensity output and distance config.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct PropensityDistancePreparation {
     /// Prepared distance config for matching APIs.
     pub distance_config: DistanceConfig,
@@ -247,6 +249,7 @@ pub struct PropensityDistancePreparation {
 
 /// In-crate Mahalanobis preprocessing result.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct MahalanobisDistancePreparation {
     /// Prepared distance config for matching APIs.
     pub distance_config: DistanceConfig,
@@ -269,6 +272,7 @@ pub struct MahalanobisDistancePreparation {
 
 /// Euclidean distance preprocessing result.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct EuclideanDistancePreparation {
     /// Prepared distance config for matching APIs.
     pub distance_config: DistanceConfig,
@@ -288,6 +292,7 @@ pub struct EuclideanDistancePreparation {
 
 /// Matched output combined with in-crate propensity estimation details.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct PropensityMatchedOutcome {
     /// Matching outcome.
     pub outcome: MatchOutcome,

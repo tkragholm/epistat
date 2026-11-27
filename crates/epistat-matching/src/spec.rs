@@ -948,6 +948,7 @@ pub enum SpecInput<'a, R> {
 
 /// What a spec produced.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum SpecOutput {
     /// Pairs of cases and controls.
     Pairs {

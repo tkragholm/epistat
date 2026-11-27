@@ -7,6 +7,7 @@ use std::fmt::{Display, Formatter};
 
 /// Canonical exclusion-reason key for diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ExclusionReason {
     /// A pair removed by a filter other than the named constraints.
     AdditionalFilter,
@@ -92,6 +93,7 @@ impl From<CommonSupportFailureReason> for ExclusionReason {
 
 /// Typed estimand drift reason recorded by matching diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum EstimandDriftReason {
     /// Cases were dropped as outside common support.
     CommonSupportTrimming,
@@ -123,6 +125,7 @@ impl Display for EstimandDriftReason {
 /// Each variant is named by the text the matching constraint of the same name
 /// reports, so [`Self::from_reason_str`] and `Display` are inverses.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ConstraintReason {
     /// The control was already used and replacement is off.
     ReplacementDisallowed,
@@ -189,6 +192,7 @@ impl Display for ConstraintReason {
 
 /// Typed distance-caliper exclusion reason.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DistanceCaliperReason {
     /// A caliper on the birth-date distance.
     Date,
@@ -234,6 +238,7 @@ impl Display for DistanceCaliperReason {
 
 /// Typed invalid-criteria diagnostics code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum InvalidCriteriaReason {
     /// The birth-date window is negative.
     NegativeBirthDateWindow,
@@ -273,6 +278,7 @@ impl InvalidCriteriaReason {
 
 /// Typed common-support failure diagnostics code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum CommonSupportFailureReason {
     /// Common support was asked for without propensity scores.
     RequiresPropensityScoreMap,
@@ -309,6 +315,7 @@ impl Display for ExclusionReason {
 ///
 /// Both lists are empty when nothing was trimmed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TrimmedUnits {
     /// Ids of the trimmed cases.
     pub cases: Vec<String>,
@@ -326,6 +333,7 @@ impl TrimmedUnits {
 
 /// A case and one of its controls.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MatchedPair {
     /// The id of the case.
     pub case_id: String,
@@ -346,6 +354,7 @@ impl MatchedPair {
 
 /// Matching summary statistics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MatchOutcome {
     /// Selected case/control pairs.
     pub pairs: Vec<MatchedPair>,
@@ -361,6 +370,42 @@ pub struct MatchOutcome {
     /// Structured run diagnostics.
     #[serde(default)]
     pub diagnostics: MatchDiagnostics,
+}
+
+impl MatchOutcome {
+    /// The outcome of pairs matched elsewhere, such as by R's `matchit()`, for
+    /// the weights and balance statistics of this crate. `estimand` is the
+    /// requested and the realised estimand. The counts are those of the
+    /// pairs: the distinct cases are the matched cases and the distinct
+    /// controls the used controls. No case is counted as unmatched, since
+    /// the pairs do not say which cases were eligible.
+    #[must_use]
+    pub fn from_pairs(pairs: Vec<MatchedPair>, estimand: Estimand) -> Self {
+        let cases: std::collections::BTreeSet<&str> =
+            pairs.iter().map(|pair| pair.case_id.as_str()).collect();
+        let controls: std::collections::BTreeSet<&str> =
+            pairs.iter().map(|pair| pair.control_id.as_str()).collect();
+        let matched_cases = cases.len();
+        let used_controls = controls.len();
+        let avg_controls_per_case =
+            (matched_cases != 0).then(|| pairs.len() as f64 / matched_cases as f64);
+        let mut diagnostics = MatchDiagnostics {
+            requested_estimand: estimand,
+            realized_estimand: estimand,
+            matched_cases,
+            pairs_selected: pairs.len(),
+            ..MatchDiagnostics::default()
+        };
+        diagnostics.total_cases_evaluated = matched_cases;
+        Self {
+            pairs,
+            unmatched_cases: 0,
+            used_controls,
+            matched_cases,
+            avg_controls_per_case,
+            diagnostics,
+        }
+    }
 }
 
 impl MatchDiagnostics {
@@ -530,6 +575,24 @@ impl std::fmt::Debug for MatchDiagnostics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_outcome_from_pairs_counts_its_cases_and_controls() {
+        let pairs = vec![
+            MatchedPair::new("a", "x"),
+            MatchedPair::new("a", "y"),
+            MatchedPair::new("b", "x"),
+        ];
+        let outcome = MatchOutcome::from_pairs(pairs, Estimand::Atc);
+        assert_eq!(outcome.matched_cases, 2);
+        assert_eq!(outcome.used_controls, 2);
+        assert_eq!(outcome.unmatched_cases, 0);
+        assert_eq!(outcome.avg_controls_per_case, Some(1.5));
+        assert_eq!(outcome.diagnostics.realized_estimand, Estimand::Atc);
+        assert_eq!(outcome.diagnostics.pairs_selected, 3);
+        let empty = MatchOutcome::from_pairs(Vec::new(), Estimand::Att);
+        assert_eq!(empty.avg_controls_per_case, None);
+    }
 
     #[test]
     fn matched_pair_and_outcome_accessors_are_consistent() {

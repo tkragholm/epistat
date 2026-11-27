@@ -12,6 +12,7 @@ mod common;
 
 use chrono::NaiveDate;
 use common::{Level, Person, Rec, cohort, records, two_pass};
+use epistat_core::Estimand;
 use epistat_matching::prelude::*;
 use epistat_matching::{DeterministicSelection, NearestBirthDateSelection};
 use epistat_matching::{
@@ -287,22 +288,11 @@ const E_STD_NOSTRATA: (u64, u64) = (0xd72f85f8c74df990, 0x1a8b1221f7c395a3);
 #[test]
 fn the_golden_rendering_writes_the_average_as_the_plain_number() {
     let pair = MatchedPair::new("a", "c");
-    let matched = MatchOutcome {
-        pairs: vec![pair],
-        unmatched_cases: 0,
-        used_controls: 1,
-        matched_cases: 1,
-        avg_controls_per_case: Some(1.0),
-        diagnostics: MatchDiagnostics::default(),
-    };
-    let unmatched = MatchOutcome {
-        pairs: Vec::new(),
-        unmatched_cases: 1,
-        used_controls: 0,
-        matched_cases: 0,
-        avg_controls_per_case: None,
-        diagnostics: MatchDiagnostics::default(),
-    };
+    let mut matched = MatchOutcome::from_pairs(vec![pair], Estimand::Att);
+    matched.diagnostics = MatchDiagnostics::default();
+    let mut unmatched = MatchOutcome::from_pairs(Vec::new(), Estimand::Att);
+    unmatched.unmatched_cases = 1;
+    unmatched.diagnostics = MatchDiagnostics::default();
     assert!(common::golden_debug(&matched).contains("avg_controls_per_case: 1.0, diagnostics"));
     assert!(common::golden_debug(&unmatched).contains("avg_controls_per_case: 0.0, diagnostics"));
 }

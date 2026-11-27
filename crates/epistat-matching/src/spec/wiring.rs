@@ -200,6 +200,7 @@ impl Default for CardinalitySpec {
 /// The outcome of cardinality or profile matching with the units it was run
 /// on.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CardinalityMatch {
     /// The weights, selection and pairs, by position in `ids`.
     pub outcome: CardinalityOutcome,

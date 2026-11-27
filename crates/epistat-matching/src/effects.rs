@@ -438,6 +438,7 @@ impl MatchedSample {
 
 /// An effect and its standard error.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct Effect {
     /// The estimate.
     pub estimate: f64,
@@ -448,6 +449,7 @@ pub struct Effect {
 
 /// The effect estimates of one fit.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct EffectEstimates {
     /// The weighted average prediction of the target with everyone treated.
     pub mean_treated: f64,
@@ -834,6 +836,7 @@ impl BootstrapSpec {
 
 /// The bootstrap distribution of one statistic.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BootstrapSummary {
     /// The estimate in the matched sample.
     pub estimate: f64,
@@ -848,6 +851,7 @@ pub struct BootstrapSummary {
 
 /// The values of one statistic in every replicate, with its summary.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BootstrapStatistic {
     /// The replicates in the order of their draws.
     pub replicates: Vec<f64>,
@@ -857,6 +861,7 @@ pub struct BootstrapStatistic {
 
 /// The bootstrap of the matched sets.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BootstrapEffects {
     /// The difference of the average predictions.
     pub difference: BootstrapStatistic,

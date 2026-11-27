@@ -48,8 +48,8 @@ use epistat_core::Estimand;
 use epistat_matching::prelude::*;
 use epistat_matching::{
     BalanceRecord, BalanceReport, BalanceReportOptions, BalanceSummary, BalanceWeights,
-    CategoricalBalance, CovariateValue, MatchDiagnostics, NumericBalance, NumericBalanceTransform,
-    SampleSizeTable, balance_improvement, balance_summary,
+    CategoricalBalance, CovariateValue, NumericBalance, NumericBalanceTransform, SampleSizeTable,
+    balance_improvement, balance_summary,
 };
 use epistat_testkit::{Tolerance, load_json, na_f64, na_f64_vec};
 use r_reference::{Versions, assert_r_version};
@@ -202,22 +202,13 @@ fn estimand(name: &str) -> Estimand {
 }
 
 fn outcome(pairs: &[(String, String)], estimand: Estimand) -> MatchOutcome {
-    MatchOutcome {
-        pairs: pairs
+    MatchOutcome::from_pairs(
+        pairs
             .iter()
             .map(|(treated, control)| MatchedPair::new(treated.clone(), control.clone()))
             .collect(),
-        unmatched_cases: 0,
-        used_controls: 0,
-        matched_cases: 0,
-        avg_controls_per_case: None,
-        diagnostics: {
-            let mut diagnostics = MatchDiagnostics::default();
-            diagnostics.requested_estimand = estimand;
-            diagnostics.realized_estimand = estimand;
-            diagnostics
-        },
-    }
+        estimand,
+    )
 }
 
 const LALONDE: [&str; 6] = ["age", "educ", "race", "married", "nodegree", "re74"];

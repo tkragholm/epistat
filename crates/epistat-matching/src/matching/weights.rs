@@ -105,6 +105,7 @@ impl MatchWeightMethod {
 
 /// Pair-level weight entry aligned to one matched pair.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PairWeight {
     /// Matched pair identifier tuple.
     pub pair: MatchedPair,
@@ -114,6 +115,7 @@ pub struct PairWeight {
 
 /// Pair-level weight output.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PairWeightSet {
     /// Pair-level entries in the same order as source pairs.
     pub pairs: Vec<PairWeight>,
@@ -145,6 +147,7 @@ impl PairWeightSet {
 
 /// Flat row for pair-level table outputs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PairWeightRow {
     /// Case-side unit identifier.
     pub case_id: String,
@@ -156,6 +159,7 @@ pub struct PairWeightRow {
 
 /// Pair-weight rows for dataframe/table ingestion.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PairWeightTable {
     /// Flat pair-level rows.
     pub rows: Vec<PairWeightRow>,
@@ -198,6 +202,7 @@ impl UnitRole {
 
 /// Flat row for unit-weight table outputs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UnitWeightRow {
     /// Unit identifier.
     pub unit_id: String,
@@ -213,6 +218,7 @@ pub struct UnitWeightRow {
 
 /// Unit-weight rows for dataframe/table ingestion.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UnitWeightTable {
     /// Flat unit-level rows.
     pub rows: Vec<UnitWeightRow>,
@@ -232,6 +238,7 @@ impl UnitWeightTable {
 /// Every sum, mean and table formed from the set runs over the ids in sorted
 /// order, so the results do not depend on how the set was built.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UnitWeightSet {
     pub(crate) case: BTreeMap<String, f64>,
     pub(crate) control: BTreeMap<String, f64>,

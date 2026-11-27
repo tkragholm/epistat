@@ -272,6 +272,7 @@ impl AbadieImbensData {
 
 /// The estimate and its standard errors.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct AbadieImbensEstimate {
     /// The estimate, bias adjusted when the spec asks for it.
     pub estimate: f64,

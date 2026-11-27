@@ -27,6 +27,7 @@ pub struct ReconstructedEpisode {
 
 /// The geographical level at which a pair was matched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ReconstructedMatchingTier {
     /// The case and the control live in the same municipality.
     Municipality,
@@ -36,6 +37,7 @@ pub enum ReconstructedMatchingTier {
 
 /// One control matched to one case.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ReconstructedMatchedPair {
     /// The case.
     pub case_id: String,
@@ -62,6 +64,7 @@ pub struct ReconstructedMatchingOptions {
 
 /// The result of [`reconstruct_case_control_pairs`].
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct ReconstructedMatchingOutput {
     /// The cases that could be given controls.
     pub eligible_case_ids: HashSet<String>,

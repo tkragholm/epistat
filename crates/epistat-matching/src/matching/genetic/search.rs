@@ -61,6 +61,7 @@ impl GeneticSearch {
 
 /// What a search found.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GeneticOutcome {
     /// The best weights, one per matching variable.
     pub weights: Vec<f64>,

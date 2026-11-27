@@ -202,6 +202,7 @@ impl<'a> CardinalityRequest<'a> {
 
 /// How the search of one stratum went.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct StratumReport {
     /// The exact key of the stratum, 0 without strata.
     pub key: u64,
@@ -227,6 +228,7 @@ pub struct StratumReport {
 
 /// The result of cardinality or profile matching.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CardinalityOutcome {
     /// The weight of each unit: 0 for a unit that is not selected.
     pub weights: Vec<f64>,

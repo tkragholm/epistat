@@ -131,6 +131,7 @@ impl Default for GeneticMatchOptions {
 
 /// The pairs of a match.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GeneticMatches {
     /// The focal unit of each row, by position in the input.
     pub focal: Vec<usize>,

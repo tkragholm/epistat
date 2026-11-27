@@ -144,6 +144,7 @@ impl CemVariable {
 /// The stratum of every case and control, or `None` where a unit is in a
 /// stratum that lacks one of the groups.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CemStrata {
     /// Stratum of each case, in the order of the cases.
     pub cases: Vec<Option<usize>>,

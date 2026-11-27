@@ -113,6 +113,7 @@ impl Default for GpsConfig {
 
 /// The generalised propensity score of a set of units.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GeneralisedPropensityScore {
     /// The number of groups.
     pub groups: usize,
@@ -325,6 +326,7 @@ impl VectorMatchSpec {
 
 /// The match of the focal group to one other group.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct GroupMatch {
     /// The group matched to the focal group.
     pub group: usize,
@@ -338,6 +340,7 @@ pub struct GroupMatch {
 
 /// The result of a vector match.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct VectorMatchOutcome {
     /// The score the matching used: the refit one when refitting.
     pub gps: GeneralisedPropensityScore,

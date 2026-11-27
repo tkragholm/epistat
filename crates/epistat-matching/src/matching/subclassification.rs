@@ -102,6 +102,7 @@ impl Default for SubclassificationConfig {
 
 /// Per-subclass summary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SubclassSummary {
     /// Subclass index.
     pub subclass: usize,
@@ -121,6 +122,7 @@ pub struct SubclassSummary {
 /// weights are not stored; each is derived from the case share of the unit's
 /// subclass in [`subclasses`](Self::subclasses) when asked for.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SubclassificationOutcome {
     /// Requested estimand for weighting.
     pub estimand: Estimand,

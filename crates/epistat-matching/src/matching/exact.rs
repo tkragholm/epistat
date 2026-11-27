@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 /// unit's subclass in [`subclasses`](Self::subclasses) when asked for, so the
 /// result holds one id and one subclass number per unit and nothing else.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SubclassedUnits {
     /// The id of each unit.
     pub ids: Vec<String>,

@@ -131,6 +131,7 @@ const SCALE_BRACKET: (f64, f64) = (0.8, 1.1);
 
 /// The statistics of a CBPS fit besides the scores.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct CbpsFit {
     /// `J`, the over-identified objective `gbar' W gbar` at the fitted
     /// coefficients, with the weight matrix `W` fixed at the starting value.
