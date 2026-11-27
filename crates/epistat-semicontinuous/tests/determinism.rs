@@ -8,10 +8,10 @@
 //! standard error bit for bit.
 
 use epistat_linalg::Mat;
-use epistat_semicontinuous::{
-    FitOptions, LogNormalOptions, ModelInput, TweedieOptions, fit_lognormal_smearing_input,
-    fit_tweedie_input, fit_two_part_input,
-};
+use epistat_semicontinuous::lognormal::LogNormalOptions;
+use epistat_semicontinuous::tweedie::TweedieOptions;
+use epistat_semicontinuous::two_part::TwoPartOptions;
+use epistat_semicontinuous::{CostData, lognormal, tweedie, two_part};
 use epistat_testkit::on_threads;
 
 const N_ROWS: usize = 12_000;
@@ -39,7 +39,24 @@ impl Stream {
 /// A cost-shaped fixture: intercept, a binary exposure, continuous covariates,
 /// about 40% zeros, right-skewed positives, positive weights, and family-sized
 /// clusters of one to four rows.
-fn fixture(weighted: bool) -> ModelInput {
+struct Fixture {
+    x: Mat<f64>,
+    y: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    clusters: Vec<u32>,
+}
+
+impl Fixture {
+    fn data(&self) -> CostData<'_> {
+        let mut data = CostData::builder(self.x.as_ref(), &self.y).clusters(&self.clusters);
+        if let Some(weights) = &self.weights {
+            data = data.weights(weights);
+        }
+        data.build().expect("data")
+    }
+}
+
+fn fixture(weighted: bool) -> Fixture {
     let mut stream = Stream(20_261_001);
     let mut x = Mat::<f64>::zeros(N_ROWS, N_COLS);
     for i in 0..N_ROWS {
@@ -49,30 +66,30 @@ fn fixture(weighted: bool) -> ModelInput {
             x[(i, j)] = 2.0f64.mul_add(stream.uniform(), -1.0);
         }
     }
-    let mut y = Mat::<f64>::zeros(N_ROWS, 1);
+    let mut y = vec![0.0; N_ROWS];
     for i in 0..N_ROWS {
         let eta = 0.4f64.mul_add(x[(i, 1)], 0.2 * x[(i, 2)] - 0.1 * x[(i, 3)]);
         if stream.uniform() < 0.4 {
             continue;
         }
         let noise = -stream.uniform().max(1e-12).ln();
-        y[(i, 0)] = 1_000.0 * (8.0f64 + eta).exp() / 3_000.0 * noise;
+        y[i] = 1_000.0 * (8.0f64 + eta).exp() / 3_000.0 * noise;
     }
     let mut clusters = Vec::with_capacity(N_ROWS);
-    let mut cluster = 0_u64;
+    let mut cluster = 0_u32;
     while clusters.len() < N_ROWS {
         let size = 1 + (stream.next_u64() % 4) as usize;
         for _ in 0..size.min(N_ROWS - clusters.len()) {
-            clusters.push(cluster * 7_919 + 13);
+            clusters.push(cluster);
         }
         cluster += 1;
     }
-    let input = ModelInput::new(x, y).with_cluster_ids(clusters);
-    if weighted {
-        let w = Mat::from_fn(N_ROWS, 1, |_, _| 0.5 + stream.uniform());
-        input.with_sample_weights(w)
-    } else {
-        input
+    let weights = weighted.then(|| (0..N_ROWS).map(|_| 0.5 + stream.uniform()).collect());
+    Fixture {
+        x,
+        y,
+        weights,
+        clusters,
     }
 }
 
@@ -83,9 +100,13 @@ fn bits(values: &[&Mat<f64>]) -> Vec<u64> {
         .collect()
 }
 
-fn two_part_bits(input: &ModelInput) -> Vec<u64> {
-    let options = FitOptions::builder().robust_se(true).build();
-    let (model, report) = fit_two_part_input(input, options).expect("two-part fit");
+fn two_part_bits(data: &CostData<'_>) -> Vec<u64> {
+    let options = TwoPartOptions {
+        robust_se: true,
+        ..TwoPartOptions::default()
+    };
+    let model = two_part::fit(data, &options, None).expect("two-part fit");
+    let report = &model.report;
     bits(&[
         &model.beta_logit,
         &model.beta_gamma,
@@ -94,16 +115,22 @@ fn two_part_bits(input: &ModelInput) -> Vec<u64> {
     ])
 }
 
-fn tweedie_bits(input: &ModelInput, power: f64) -> Vec<u64> {
-    let options = TweedieOptions::builder().robust_se(true).build();
-    let (model, report) = fit_tweedie_input(input, power, options).expect("tweedie fit");
-    bits(&[&model.beta, report.se.as_ref().expect("tweedie SE")])
+fn tweedie_bits(data: &CostData<'_>, power: f64) -> Vec<u64> {
+    let options = TweedieOptions {
+        robust_se: true,
+        ..TweedieOptions::default()
+    };
+    let model = tweedie::fit(data, power, &options, None, None).expect("tweedie fit");
+    bits(&[&model.beta, model.report.se.as_ref().expect("tweedie SE")])
 }
 
-fn lognormal_bits(input: &ModelInput) -> Vec<u64> {
-    let options = LogNormalOptions::builder().robust_se(true).build();
-    let (model, report) = fit_lognormal_smearing_input(input, options).expect("lognormal fit");
-    bits(&[&model.beta, report.se.as_ref().expect("lognormal SE")])
+fn lognormal_bits(data: &CostData<'_>) -> Vec<u64> {
+    let options = LogNormalOptions {
+        robust_se: true,
+        ..LogNormalOptions::default()
+    };
+    let model = lognormal::fit(data, &options).expect("lognormal fit");
+    bits(&[&model.beta, model.report.se.as_ref().expect("lognormal SE")])
 }
 
 fn assert_reproducible(label: &str, fit: impl Fn() -> Vec<u64> + Sync) {
@@ -117,17 +144,12 @@ fn assert_reproducible(label: &str, fit: impl Fn() -> Vec<u64> + Sync) {
     }
 }
 
-fn without_clusters(input: &ModelInput) -> ModelInput {
-    let mut input = input.clone();
-    input.cluster_ids = None;
-    input
-}
-
 #[test]
 fn two_part_fits_are_bit_identical() {
     for weighted in [false, true] {
-        let clustered = fixture(weighted);
-        let plain = without_clusters(&clustered);
+        let fixture = fixture(weighted);
+        let clustered = fixture.data();
+        let plain = clustered.without_clusters();
         assert_reproducible("two-part clustered", || two_part_bits(&clustered));
         assert_reproducible("two-part", || two_part_bits(&plain));
     }
@@ -136,8 +158,9 @@ fn two_part_fits_are_bit_identical() {
 #[test]
 fn tweedie_fits_are_bit_identical() {
     for weighted in [false, true] {
-        let clustered = fixture(weighted);
-        let plain = without_clusters(&clustered);
+        let fixture = fixture(weighted);
+        let clustered = fixture.data();
+        let plain = clustered.without_clusters();
         for power in [1.5, 2.0] {
             assert_reproducible("tweedie clustered", || tweedie_bits(&clustered, power));
             assert_reproducible("tweedie", || tweedie_bits(&plain, power));
@@ -147,8 +170,9 @@ fn tweedie_fits_are_bit_identical() {
 
 #[test]
 fn lognormal_fits_are_bit_identical() {
-    let clustered = fixture(false);
-    let plain = without_clusters(&clustered);
+    let fixture = fixture(false);
+    let clustered = fixture.data();
+    let plain = clustered.without_clusters();
     assert_reproducible("lognormal clustered", || lognormal_bits(&clustered));
     assert_reproducible("lognormal", || lognormal_bits(&plain));
 }

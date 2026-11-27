@@ -7,9 +7,13 @@ by quasi-likelihood, log-normal regression with Duan's smearing
 retransformation, and the marginalised two-part model for panels, fitted by
 MCMC with correlated subject effects.
 
-The regression fits are IRLS with `glm.fit`'s convergence rule and step
-halving, with prior weights, ridge and elastic-net penalties, warm starts and
-a fallback ladder of ridges for fits that fail. Standard errors are
+Each method has one entry point, `two_part::fit`, `tweedie::fit`,
+`lognormal::fit`, `mtp::fit` and `compare::{compare, cross_validate,
+select}`, on a checked view of the data, `CostData` or `LongitudinalData`,
+and every function returns the crate's one `Error`. The regression fits are
+IRLS with `glm.fit`'s convergence rule and step halving, with prior weights,
+ridge and elastic-net penalties, warm starts and, when asked for, a fallback
+ladder of ridges for fits that fail, reported in the fit. Standard errors are
 model-based, robust or cluster-robust. Compact designs refit one design
 under many weight vectors, as a fractional-random-weight bootstrap does,
 without forming the dense products again. Model comparison gives in-sample
@@ -22,17 +26,20 @@ not depend on the number of threads, and golden hashes pin the fits.
 
 ```rust
 use epistat_linalg::Mat;
-use epistat_semicontinuous::{FitOptions, Model, ModelInput, fit_two_part_input};
+use epistat_semicontinuous::{CostData, Model, two_part};
 
 let n = 40;
 let x = Mat::from_fn(n, 2, |i, j| if j == 0 { 1.0 } else { i as f64 / 10.0 });
-let y = Mat::from_fn(n, 1, |i, _| if i % 4 == 0 { 0.0 } else { 1.0 + 0.1 * i as f64 });
-let input = ModelInput::new(x, y);
+let y: Vec<f64> = (0..n)
+    .map(|i| if i % 4 == 0 { 0.0 } else { 1.0 + 0.1 * i as f64 })
+    .collect();
+let data = CostData::builder(x.as_ref(), &y).build()?;
 
-let (model, report) = fit_two_part_input(&input, FitOptions::default()).expect("fit");
-let prediction = model.predict(&input.design_matrix);
+let model = two_part::fit(&data, &two_part::TwoPartOptions::default(), None)?;
+let prediction = model.predict(x.as_ref())?;
 assert_eq!(prediction.expected_outcome.nrows(), n);
-assert!(report.iterations_logit > 0);
+assert!(model.report.iterations_logit > 0);
+# Ok::<(), epistat_semicontinuous::Error>(())
 ```
 
 The `bench-internals` feature exposes the products the benchmarks time. The

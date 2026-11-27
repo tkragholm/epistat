@@ -12,7 +12,8 @@ mod common;
 
 use common::{Lines, Rng, Table, Writer};
 use epistat_linalg::Mat;
-use epistat_semicontinuous::{FitOptions, ModelInput, fit_two_part_input};
+use epistat_semicontinuous::CostData;
+use epistat_semicontinuous::two_part::{self, TwoPartOptions};
 
 const SEED: u64 = 20_261_209;
 
@@ -46,11 +47,11 @@ fn main() {
         1 => x1[i],
         _ => x2[i],
     });
-    let outcome = Mat::from_fn(n, 1, |i, _| y[i]);
-    let input = ModelInput::new(x, outcome);
-    let (times, (model, report)) = common::timed(common::reps(), || {
-        fit_two_part_input(&input, FitOptions::default()).expect("two-part fit")
+    let input = CostData::builder(x.as_ref(), y).build().expect("data");
+    let (times, model) = common::timed(common::reps(), || {
+        two_part::fit(&input, &TwoPartOptions::default(), None).expect("two-part fit")
     });
+    let report = &model.report;
     let mut lines = Lines::default();
     for (part, beta, se) in [
         ("logit", &model.beta_logit, &report.se_logit),

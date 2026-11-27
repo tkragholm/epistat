@@ -7,10 +7,11 @@ use epistat_linalg::{
     Accum, Attempt, Factor, Mat, MatMut, MatRef, Method, Par, ROW_BLOCK, Ridge, matmul,
 };
 
-use crate::input::LongitudinalModelInput;
-use crate::models::two_part::TwoPartError;
+use crate::Error;
+use crate::mtp::input::LongitudinalInput;
 
 /// Calibration summary for one predicted-probability bin.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct CalibrationBinSummary {
     /// The bin, from 0.
@@ -28,6 +29,7 @@ pub struct CalibrationBinSummary {
 }
 
 /// Posterior summary interval for a scalar effect quantity.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EffectIntervalSummary {
     /// The posterior mean.
@@ -65,20 +67,20 @@ pub fn max_abs_diff(a: &Mat<f64>, b: &Mat<f64>) -> f64 {
 
 /// # Errors
 ///
-/// Returns `TwoPartError::SolveFailed` if the solve produces non-finite values.
+/// Returns `Error::Singular` if the solve produces non-finite values.
 pub(crate) fn solve_linear_system_ref(
     a_ref: MatRef<'_, f64>,
     b_ref: MatRef<'_, f64>,
-) -> Result<Mat<f64>, TwoPartError> {
+) -> Result<Mat<f64>, Error> {
     epistat_linalg::solve(a_ref, b_ref, &Attempt::SYMMETRIC)
         .map(|solution| solution.x)
-        .map_err(|_| TwoPartError::SolveFailed)
+        .map_err(|_| Error::Singular)
 }
 
 /// # Errors
 ///
-/// Returns `TwoPartError::SolveFailed` if the solve produces non-finite values.
-pub fn solve_linear_system(a: &Mat<f64>, b: &Mat<f64>) -> Result<Mat<f64>, TwoPartError> {
+/// Returns `Error::Singular` if the solve produces non-finite values.
+pub fn solve_linear_system(a: &Mat<f64>, b: &Mat<f64>) -> Result<Mat<f64>, Error> {
     solve_linear_system_ref(a.as_ref(), b.as_ref())
 }
 
@@ -102,9 +104,9 @@ const CACHED_FACTOR_ATTEMPTS: [Attempt; 2] = [
 ///
 /// # Errors
 ///
-/// Returns `TwoPartError::SolveFailed` if `matrix` is not square.
-pub(crate) fn cached_factor(matrix: &Mat<f64>) -> Result<Factor, TwoPartError> {
-    Factor::new(matrix.as_ref(), &CACHED_FACTOR_ATTEMPTS).map_err(|_| TwoPartError::SolveFailed)
+/// Returns `Error::Singular` if `matrix` is not square.
+pub(crate) fn cached_factor(matrix: &Mat<f64>) -> Result<Factor, Error> {
+    Factor::new(matrix.as_ref(), &CACHED_FACTOR_ATTEMPTS).map_err(|_| Error::Singular)
 }
 
 /// IRLS weights for a log-link GLM whose Fisher-scoring weight is β-independent
@@ -421,7 +423,7 @@ pub fn calculate_quantile(sorted_values: &[f64], quantile: f64) -> Option<f64> {
 #[must_use]
 pub fn calibration_bins_summary(
     predicted_probability: &[f64],
-    input: &LongitudinalModelInput,
+    input: &LongitudinalInput,
     bins: usize,
 ) -> Vec<CalibrationBinSummary> {
     let mut grouped: Vec<Vec<usize>> = vec![Vec::new(); bins];
@@ -526,7 +528,7 @@ mod tests {
         let a = Mat::from_fn(2, 2, |i, j| if i == j { 1.0 } else { 0.0 });
         let b = Mat::from_fn(2, 1, |i, _| if i == 0 { f64::NAN } else { 1.0 });
         let err = solve_linear_system(&a, &b).expect_err("non-finite rhs should fail");
-        assert!(matches!(err, TwoPartError::SolveFailed));
+        assert!(matches!(err, Error::Singular));
     }
 
     #[test]

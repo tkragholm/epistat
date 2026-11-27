@@ -8,7 +8,8 @@
 //! computed in R from the glm fit's fitted means.
 
 use epistat_linalg::Mat;
-use epistat_semicontinuous::{ModelInput, TweedieOptions, fit_tweedie_input};
+use epistat_semicontinuous::CostData;
+use epistat_semicontinuous::tweedie::{self, TweedieOptions};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -50,23 +51,24 @@ fn tweedie_matches_statmod_glm() {
         1 => fixture.x1[i],
         _ => fixture.x2[i],
     });
-    let y = Mat::from_fn(n, 1, |i, _| fixture.y[i]);
 
     let mut worst_beta = 0.0_f64;
     let mut worst_se = 0.0_f64;
     for case in &fixture.cases {
         assert!(case.converged);
-        let mut input = ModelInput::new(x.clone(), y.clone());
+        let mut input = CostData::builder(x.as_ref(), &fixture.y);
         if case.weighted {
-            input = input.with_sample_weights(Mat::from_fn(n, 1, |i, _| fixture.weights[i]));
+            input = input.weights(&fixture.weights);
         }
-        let options = TweedieOptions::builder()
-            .max_iter(200_usize)
-            .tolerance(1e-16_f64)
-            .robust_se(true)
-            .build();
-        let (model, report) = fit_tweedie_input(&input, case.power, options).expect("tweedie fit");
-        let se = report.se.expect("robust standard errors");
+        let input = input.build().expect("data");
+        let options = TweedieOptions {
+            max_iterations: 200,
+            tolerance: 1e-16,
+            robust_se: true,
+            ..TweedieOptions::default()
+        };
+        let model = tweedie::fit(&input, case.power, &options, None, None).expect("tweedie fit");
+        let se = model.report.se.as_ref().expect("robust standard errors");
         for j in 0..3 {
             let beta_dev = rel(model.beta[(j, 0)], case.beta[j]);
             let se_dev = rel(se[(j, 0)], case.se_robust[j]);

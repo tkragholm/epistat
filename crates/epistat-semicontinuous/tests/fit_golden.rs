@@ -12,11 +12,10 @@
 //! `GOLDEN_PRINT=1 cargo test --test fit_golden -- --nocapture` after a change
 //! that is meant to alter results.
 use epistat_linalg::Mat;
-use epistat_semicontinuous::{
-    FitOptions, LogNormalOptions, Model, ModelInput, TweedieOptions, TwoPartWarmStart,
-    fit_lognormal_smearing_input, fit_tweedie_input, fit_tweedie_input_warm, fit_two_part_input,
-    fit_two_part_input_warm,
-};
+use epistat_semicontinuous::lognormal::LogNormalOptions;
+use epistat_semicontinuous::tweedie::TweedieOptions;
+use epistat_semicontinuous::two_part::{TwoPartOptions, TwoPartWarmStart};
+use epistat_semicontinuous::{CostData, Model, lognormal, tweedie, two_part};
 use epistat_testkit::Fingerprint;
 
 const N_ROWS: usize = 10_000;
@@ -38,9 +37,31 @@ impl Stream {
     }
 }
 
+/// The columns of a fixture.
+struct Fixture {
+    x: Mat<f64>,
+    y: Vec<f64>,
+    weights: Option<Vec<f64>>,
+    clusters: Option<Vec<u32>>,
+}
+
+impl Fixture {
+    fn data(&self) -> CostData<'_> {
+        let mut data = CostData::builder(self.x.as_ref(), &self.y);
+        if let Some(weights) = &self.weights {
+            data = data.weights(weights);
+        }
+        if let Some(clusters) = &self.clusters {
+            data = data.clusters(clusters);
+        }
+        data.build().expect("data")
+    }
+}
+
 /// Intercept, eight dummies, three continuous columns; about 40% zeros when
-/// `zeros` is set; positive weights and family-sized clusters.
-fn fixture(zeros: bool, weighted: bool, clustered: bool) -> ModelInput {
+/// `zeros` is set; positive weights and family-sized clusters, each family a
+/// code of its own.
+fn fixture(zeros: bool, weighted: bool, clustered: bool) -> Fixture {
     let mut stream = Stream(20_261_028);
     let mut x = Mat::<f64>::zeros(N_ROWS, N_COLS);
     for i in 0..N_ROWS {
@@ -53,7 +74,7 @@ fn fixture(zeros: bool, weighted: bool, clustered: bool) -> ModelInput {
             x[(i, j)] = 2.0f64.mul_add(stream.uniform(), -1.0);
         }
     }
-    let mut y = Mat::<f64>::zeros(N_ROWS, 1);
+    let mut y = vec![0.0; N_ROWS];
     for i in 0..N_ROWS {
         let eta = 0.4f64.mul_add(
             x[(i, 1)],
@@ -62,24 +83,29 @@ fn fixture(zeros: bool, weighted: bool, clustered: bool) -> ModelInput {
         let is_zero = zeros && stream.uniform() < 0.4 - 0.1 * x[(i, 3)];
         let noise = -stream.uniform().max(1e-12).ln() - stream.uniform().max(1e-12).ln();
         if !is_zero {
-            y[(i, 0)] = (8.0f64 + eta).exp() / 2.0 * noise + 1.0;
+            y[i] = (8.0f64 + eta).exp() / 2.0 * noise + 1.0;
         }
     }
-    let mut input = ModelInput::new(x, y);
+    let mut input = Fixture {
+        x,
+        y,
+        weights: None,
+        clusters: None,
+    };
     if clustered {
         let mut clusters = Vec::with_capacity(N_ROWS);
-        let mut cluster = 0_u64;
+        let mut cluster = 0_u32;
         while clusters.len() < N_ROWS {
             let size = 1 + (stream.next_u64() % 4) as usize;
             for _ in 0..size.min(N_ROWS - clusters.len()) {
-                clusters.push(cluster * 7_919 + 13);
+                clusters.push(cluster);
             }
             cluster += 1;
         }
-        input = input.with_cluster_ids(clusters);
+        input.clusters = Some(clusters);
     }
     if weighted {
-        input = input.with_sample_weights(Mat::from_fn(N_ROWS, 1, |_, _| 0.5 + stream.uniform()));
+        input.weights = Some((0..N_ROWS).map(|_| 0.5 + stream.uniform()).collect());
     }
     input
 }
@@ -124,11 +150,12 @@ type Golden = Vec<(&'static str, u64)>;
 fn two_part(
     out: &mut Golden,
     name: &'static str,
-    input: &ModelInput,
-    options: FitOptions,
+    input: &Fixture,
+    options: TwoPartOptions,
     warm: Option<&TwoPartWarmStart>,
 ) -> TwoPartWarmStart {
-    let (model, report) = fit_two_part_input_warm(input, options, warm).expect(name);
+    let model = two_part::fit(&input.data(), &options, warm).expect(name);
+    let report = &model.report;
     let mut h = Hasher::new();
     h.mat(&model.beta_logit);
     h.mat(&model.beta_gamma);
@@ -139,7 +166,7 @@ fn two_part(
     h.word(report.iterations_logit as u64);
     h.word(report.iterations_gamma as u64);
     h.word(report.meta.fallback_attempts as u64);
-    let prediction = model.predict(&input.design_matrix);
+    let prediction = model.predict(input.x.as_ref()).expect("predict");
     h.mat(&prediction.prob_positive);
     h.mat(&prediction.mean_positive);
     h.mat(&prediction.expected_outcome);
@@ -153,19 +180,20 @@ fn two_part(
 fn tweedie(
     out: &mut Golden,
     name: &'static str,
-    input: &ModelInput,
+    input: &Fixture,
     power: f64,
     options: TweedieOptions,
     warm: Option<&Mat<f64>>,
 ) -> Mat<f64> {
-    let (model, report) = fit_tweedie_input_warm(input, power, options, warm).expect(name);
+    let model = tweedie::fit(&input.data(), power, &options, warm, None).expect(name);
+    let report = &model.report;
     let mut h = Hasher::new();
     h.mat(&model.beta);
     h.opt(report.se.as_ref());
     h.opt(report.cov.as_ref());
     h.word(report.meta.iterations as u64);
     h.word(report.meta.fallback_attempts as u64);
-    h.mat(&model.predict(&input.design_matrix).mean);
+    h.mat(&model.predict(input.x.as_ref()).expect("predict").mean);
     out.push((name, h.finish()));
     model.beta
 }
@@ -182,31 +210,37 @@ fn collect() -> Golden {
         &mut out,
         "two_part/unweighted/robust/clustered",
         &zeros_unweighted,
-        FitOptions::builder().robust_se(true).build(),
+        TwoPartOptions {
+            robust_se: true,
+            ..TwoPartOptions::default()
+        },
         None,
     );
     two_part(
         &mut out,
         "two_part/unweighted/model_se",
         &fixture(true, false, false),
-        FitOptions::default(),
+        TwoPartOptions::default(),
         None,
     );
     two_part(
         &mut out,
         "two_part/weighted/model_se",
         &zeros_plain,
-        FitOptions::default(),
+        TwoPartOptions::default(),
         None,
     );
     let warm = two_part(
         &mut out,
         "two_part/weighted/robust/clustered",
         &zeros_weighted,
-        FitOptions::builder().robust_se(true).build(),
+        TwoPartOptions {
+            robust_se: true,
+            ..TwoPartOptions::default()
+        },
         None,
     );
-    let stable = FitOptions::stable_defaults();
+    let stable = TwoPartOptions::stable_defaults();
     two_part(
         &mut out,
         "two_part/weighted/stable",
@@ -214,7 +248,7 @@ fn collect() -> Golden {
         stable,
         None,
     );
-    let replicate_options = FitOptions {
+    let replicate_options = TwoPartOptions {
         compute_covariance: false,
         ..stable
     };
@@ -229,7 +263,7 @@ fn collect() -> Golden {
         &mut out,
         "two_part/weighted/warm/model_se",
         &zeros_plain,
-        FitOptions::default(),
+        TwoPartOptions::default(),
         Some(&warm),
     );
 
@@ -237,7 +271,10 @@ fn collect() -> Golden {
     // weights, robust and not, warm and cold.
     let positive_weighted = fixture(false, true, true);
     let positive_plain = fixture(false, false, false);
-    let robust = TweedieOptions::builder().robust_se(true).build();
+    let robust = TweedieOptions {
+        robust_se: true,
+        ..TweedieOptions::default()
+    };
     let cold = tweedie(
         &mut out,
         "tweedie2/weighted/robust/clustered",
@@ -267,10 +304,11 @@ fn collect() -> Golden {
         "tweedie2/weighted/ridge/warm/robust",
         &positive_weighted,
         2.0,
-        TweedieOptions::builder()
-            .l2_penalty(1e-4)
-            .robust_se(true)
-            .build(),
+        TweedieOptions {
+            l2_penalty: 1e-4,
+            robust_se: true,
+            ..TweedieOptions::default()
+        },
         Some(&cold),
     );
     tweedie(
@@ -290,12 +328,17 @@ fn collect() -> Golden {
         None,
     );
 
-    // Log-normal, which shares the Gram and matrix-vector helpers.
-    let (model, report) = fit_lognormal_smearing_input(
-        &fixture(true, true, true),
-        LogNormalOptions::builder().robust_se(true).build(),
+    // Log-normal, which shares the Gram and matrix-vector helpers. It has no
+    // prior weights, so it is fitted to the data without the fixture's.
+    let model = lognormal::fit(
+        &fixture(true, true, true).data().without_weights(),
+        &LogNormalOptions {
+            robust_se: true,
+            ..LogNormalOptions::default()
+        },
     )
     .expect("lognormal");
+    let report = &model.report;
     let mut h = Hasher::new();
     h.mat(&model.beta);
     h.opt(report.se.as_ref());
@@ -303,13 +346,20 @@ fn collect() -> Golden {
     out.push(("lognormal/weighted/robust/clustered", h.finish()));
 
     // The plain-API wrappers used elsewhere.
-    let (model, _) = fit_two_part_input(&zeros_plain, FitOptions::default()).expect("two-part");
+    let model =
+        two_part::fit(&zeros_plain.data(), &TwoPartOptions::default(), None).expect("two-part");
     let mut h = Hasher::new();
     h.mat(&model.beta_logit);
     h.mat(&model.beta_gamma);
     out.push(("two_part/input/default", h.finish()));
-    let (model, _) =
-        fit_tweedie_input(&positive_plain, 2.0, TweedieOptions::default()).expect("tweedie");
+    let model = tweedie::fit(
+        &positive_plain.data(),
+        2.0,
+        &TweedieOptions::default(),
+        None,
+        None,
+    )
+    .expect("tweedie");
     let mut h = Hasher::new();
     h.mat(&model.beta);
     out.push(("tweedie2/input/default", h.finish()));
