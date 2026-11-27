@@ -52,11 +52,11 @@
 
 use epistat_core::InputError;
 use epistat_did::{
-    EtwfeControl, EtwfeError, EtwfeFamily, EtwfeGlmConfig, EtwfeGlmTerm, EtwfeTerm, EtwfeType,
-    StaggeredPanel, StaggeredPanelBuilder, did_covariance, estimate_etwfe_glm,
+    EtwfeControl, EtwfeEffects, EtwfeFamily, EtwfeOptions, EtwfeTerm, EtwfeType, EtwfeVcov,
+    StaggeredPanel, StaggeredPanelBuilder, etwfe,
 };
-use epistat_glm::{Error as GlmError, Family, Glm, Link, Ssc, Vcov};
-use epistat_inference::Clusters;
+use epistat_glm::{Error as GlmError, Family, Glm, Link, Ssc};
+use epistat_inference::{ClusterRule, Influence};
 use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
 use serde::Deserialize;
@@ -161,21 +161,22 @@ fn columns<'a>(
     panel
 }
 
-fn config<'a>(case: &Case, ways: &'a [&'a [u32]]) -> EtwfeGlmConfig<'a> {
-    EtwfeGlmConfig {
+fn config(case: &Case) -> EtwfeOptions {
+    EtwfeOptions {
+        family: family(case),
         control: if case.spec.control == "never" {
             EtwfeControl::NeverTreated
         } else {
             EtwfeControl::NotYetTreated
         },
         vcov: match case.spec.vcov.as_str() {
-            "iid" => Vcov::Iid,
-            "hetero" => Vcov::Hetero,
-            _ => Vcov::Cluster(ways),
+            "iid" => EtwfeVcov::Iid,
+            "hetero" => EtwfeVcov::Hetero,
+            _ => EtwfeVcov::Clustered,
         },
         tolerance: case.tolerance,
         max_iterations: 100,
-        ..EtwfeGlmConfig::new(family(case))
+        ..EtwfeOptions::default()
     }
 }
 
@@ -188,27 +189,28 @@ fn family(case: &Case) -> EtwfeFamily {
 }
 
 /// fixest's name of a column.
-fn name(term: EtwfeGlmTerm) -> String {
+fn name(term: EtwfeTerm) -> String {
     let x = |k: usize| format!("x{}", k + 1);
     match term {
-        EtwfeGlmTerm::Intercept => "(Intercept)".to_string(),
-        EtwfeGlmTerm::Cohort(g) => format!("g::{g}"),
-        EtwfeGlmTerm::Period(t) => format!("t::{t}"),
-        EtwfeGlmTerm::Term(EtwfeTerm::Covariate(k)) => x(k),
-        EtwfeGlmTerm::Term(EtwfeTerm::CohortSlope { cohort, covariate }) => {
+        EtwfeTerm::Intercept => "(Intercept)".to_string(),
+        EtwfeTerm::Cohort(g) => format!("g::{g}"),
+        EtwfeTerm::Period(t) => format!("t::{t}"),
+        EtwfeTerm::Covariate(k) => x(k),
+        EtwfeTerm::CohortSlope { cohort, covariate } => {
             format!("g::{cohort}:{}", x(covariate))
         }
-        EtwfeGlmTerm::Term(EtwfeTerm::PeriodSlope { period, covariate }) => {
+        EtwfeTerm::PeriodSlope { period, covariate } => {
             format!("t::{period}:{}", x(covariate))
         }
-        EtwfeGlmTerm::Term(EtwfeTerm::Cell { cohort, period }) => {
+        EtwfeTerm::Cell { cohort, period } => {
             format!(".Dtreat:g::{cohort}:t::{period}")
         }
-        EtwfeGlmTerm::Term(EtwfeTerm::CellSlope {
+        EtwfeTerm::CellSlope {
             cohort,
             period,
             covariate,
-        }) => format!(".Dtreat:g::{cohort}:t::{period}:{}_dm", x(covariate)),
+        } => format!(".Dtreat:g::{cohort}:t::{period}:{}_dm", x(covariate)),
+        other => panic!("{other:?} is not a column of etwfe"),
     }
 }
 
@@ -229,42 +231,43 @@ fn quad(u: &[f64], v: &[f64], m: &dyn Fn(usize) -> f64) -> f64 {
 struct Plain<'a> {
     case: &'a Case,
     x: Option<&'a Mat<f64>>,
-    terms: Vec<EtwfeGlmTerm>,
+    terms: Vec<EtwfeTerm>,
     means: std::collections::BTreeMap<(usize, i64), f64>,
     indicator: Vec<bool>,
 }
 
 impl Plain<'_> {
-    fn value(&self, i: usize, term: EtwfeGlmTerm, treated: bool) -> f64 {
+    fn value(&self, i: usize, term: EtwfeTerm, treated: bool) -> f64 {
         let case = self.case;
         let xv = |k: usize| self.x.unwrap()[(i, k)];
         let in_cohort = |g: i64| case.first_treated[i] == Some(g);
         let one = |b: bool| f64::from(u8::from(b));
         match term {
-            EtwfeGlmTerm::Intercept => 1.0,
-            EtwfeGlmTerm::Cohort(g) => one(in_cohort(g)),
-            EtwfeGlmTerm::Period(t) => one(case.time[i] == t),
-            EtwfeGlmTerm::Term(EtwfeTerm::Covariate(k)) => xv(k),
-            EtwfeGlmTerm::Term(EtwfeTerm::CohortSlope { cohort, covariate }) => {
+            EtwfeTerm::Intercept => 1.0,
+            EtwfeTerm::Cohort(g) => one(in_cohort(g)),
+            EtwfeTerm::Period(t) => one(case.time[i] == t),
+            EtwfeTerm::Covariate(k) => xv(k),
+            EtwfeTerm::CohortSlope { cohort, covariate } => {
                 one(in_cohort(cohort)) * xv(covariate)
             }
-            EtwfeGlmTerm::Term(EtwfeTerm::PeriodSlope { period, covariate }) => {
+            EtwfeTerm::PeriodSlope { period, covariate } => {
                 one(case.time[i] == period) * xv(covariate)
             }
-            EtwfeGlmTerm::Term(EtwfeTerm::Cell { cohort, period }) => {
+            EtwfeTerm::Cell { cohort, period } => {
                 one(treated && in_cohort(cohort) && case.time[i] == period)
             }
-            EtwfeGlmTerm::Term(EtwfeTerm::CellSlope {
+            EtwfeTerm::CellSlope {
                 cohort,
                 period,
                 covariate,
-            }) => {
+            } => {
                 if treated && in_cohort(cohort) && case.time[i] == period {
                     xv(covariate) - self.means[&(covariate, cohort)]
                 } else {
                     0.0
                 }
             }
+            other => panic!("{other:?} is not a column of etwfe"),
         }
     }
 
@@ -276,7 +279,7 @@ impl Plain<'_> {
     }
 }
 
-fn plain<'a>(case: &'a Case, x: Option<&'a Mat<f64>>, terms: Vec<EtwfeGlmTerm>) -> Plain<'a> {
+fn plain<'a>(case: &'a Case, x: Option<&'a Mat<f64>>, terms: Vec<EtwfeTerm>) -> Plain<'a> {
     let n = case.unit.len();
     let key = |i: usize| case.first_treated[i].unwrap_or(0);
     let mut means = std::collections::BTreeMap::new();
@@ -316,9 +319,8 @@ fn plain<'a>(case: &'a Case, x: Option<&'a Mat<f64>>, terms: Vec<EtwfeGlmTerm>) 
 fn etwfe_glm_matches_the_package() {
     for case in &reference().cases {
         let x = covariates(case);
-        let ways = [&case.unit[..]];
-        let config = config(case, &ways);
-        let result = estimate_etwfe_glm(&panel(case, x.as_ref()), &config).unwrap();
+        let config = config(case);
+        let result = etwfe::fit(&panel(case, x.as_ref()), &config).unwrap();
         assert!(result.converged, "{}", case.name);
         assert_eq!(result.n_rows, case.nobs, "{}", case.name);
         assert_eq!(result.df_k, case.df_k, "{}", case.name);
@@ -331,7 +333,7 @@ fn etwfe_glm_matches_the_package() {
 
         // The fit is that of Glm::fit on the design the documentation
         // defines, to the bit.
-        let terms: Vec<EtwfeGlmTerm> = result.coefficients.iter().map(|c| c.term).collect();
+        let terms: Vec<EtwfeTerm> = result.coefficients.iter().map(|c| c.term).collect();
         let design = plain(case, x.as_ref(), terms);
         let n = case.unit.len();
         let t_first = *case.time.iter().min().unwrap();
@@ -371,24 +373,25 @@ fn etwfe_glm_matches_the_package() {
         for j in 0..q {
             assert_eq!(
                 plain_fit.coefficients[j].map(f64::to_bits),
-                result.coefficients[j].estimate.map(f64::to_bits),
+                result.coefficients[j].estimate.map(|e| e.estimate.to_bits()),
                 "{} {}",
                 case.name,
                 labels[j]
             );
         }
-        assert_eq!(plain_fit.deviance.to_bits(), result.deviance.to_bits());
+        let deviance = result.deviance.unwrap();
+        assert_eq!(plain_fit.deviance.to_bits(), deviance.to_bits());
 
         // The distances of the module.
         let tol = case.tolerance;
         let e1 = |d: f64| (2.0 * tol * (d.abs() + 0.1)).sqrt();
         let e2 = |d: f64| (4.0 * tol * (d.abs() + 0.1)).sqrt();
-        let dist = e1(case.deviance) + e1(result.deviance);
-        let m = (e2(case.deviance) + e2(result.deviance)) * case.h.sqrt();
+        let dist = e1(case.deviance) + e1(deviance);
+        let m = (e2(case.deviance) + e2(deviance)) * case.h.sqrt();
         let grow = m.exp();
         let nobs = case.nobs as f64;
         let k_df = case.df_k as f64;
-        let units = result.units.len() as f64;
+        let units = result.n_units as f64;
         let ssc = match case.spec.vcov.as_str() {
             "iid" => (nobs - 1.0) / (nobs - k_df),
             "hetero" => nobs / (nobs - k_df),
@@ -406,7 +409,7 @@ fn etwfe_glm_matches_the_package() {
         let max_beta = case.coef.iter().fold(0.0_f64, |a, b| a.max(b.abs()));
         let mut worst = [0.0_f64; 3];
         for j in 0..q {
-            let got = result.coefficients[j].estimate.unwrap();
+            let got = result.coefficients[j].estimate.unwrap().estimate;
             let bound = dist * case.b_diag[j].sqrt() + round * max_beta;
             assert!(
                 (got - case.coef[j]).abs() <= bound,
@@ -416,7 +419,7 @@ fn etwfe_glm_matches_the_package() {
                 case.coef[j]
             );
             worst[0] = worst[0].max((got - case.coef[j]).abs() / case.b_diag[j].sqrt());
-            let v = result.covariance[j * q + j].unwrap();
+            let v = result.covariance.get(j, j).unwrap();
             let want = case.vcov[j * q + j];
             let bound = dvar(want, case.sens[j]) + round * want;
             assert!(
@@ -429,10 +432,20 @@ fn etwfe_glm_matches_the_package() {
         }
         // The influence functions give the unit-clustered covariance without
         // small-sample factors.
-        let of = Clusters::from_labels(&result.units);
+        let unit_variance = result
+            .influence
+            .as_ref()
+            .unwrap()
+            .variance_with(None, ClusterRule::NoSmallSample)
+            .unwrap();
+        let effect_variance = result
+            .effect_influence
+            .as_ref()
+            .unwrap()
+            .variance_with(None, ClusterRule::NoSmallSample)
+            .unwrap();
         for j in 0..q {
-            let psi = result.influence[j].clone().unwrap();
-            let v = did_covariance(&[psi], &of).unwrap()[0];
+            let v = unit_variance.get(j, j).unwrap();
             let want = case.vcov_unadjusted[j * q + j];
             let bound = m * (3.0 * m).exp() * case.sens_unit[j] + round * want;
             assert!(
@@ -474,14 +487,15 @@ fn etwfe_glm_matches_the_package() {
                     + 0.5 * m * m * grow * table.slope[r]
                     + 2.0 * EPS * table.round[r];
                 assert!(
-                    (effect.estimate - table.estimate[r]).abs() <= bound,
+                    (effect.estimate.estimate - table.estimate[r]).abs() <= bound,
                     "{} {term:?}: {} {} {bound:e}",
                     case.name,
-                    effect.estimate,
+                    effect.estimate.estimate,
                     table.estimate[r]
                 );
-                worst[2] = worst[2].max((effect.estimate - table.estimate[r]).abs() / bound);
-                let Some(se) = effect.std_error else {
+                worst[2] =
+                    worst[2].max((effect.estimate.estimate - table.estimate[r]).abs() / bound);
+                let Some(se) = effect.estimate.se else {
                     assert!(table.se[r].is_none(), "{} {term:?}", case.name);
                     continue;
                 };
@@ -522,7 +536,7 @@ fn etwfe_glm_matches_the_package() {
                 );
                 // The influence function of the effect gives J V_unit J'
                 // without the small-sample factors.
-                let v = did_covariance(&[result.effect_influence[a].clone()], &of).unwrap()[0];
+                let v = effect_variance.get(a, a).unwrap();
                 let vu = |ij: usize| case.vcov_unadjusted[ij];
                 let want = quad(&j_r, &j_r, &vu);
                 let tol = m * (3.0 * m).exp() * table.sens_unit[r]
@@ -551,7 +565,7 @@ fn etwfe_glm_matches_the_package() {
         let beta: Vec<f64> = result
             .coefficients
             .iter()
-            .map(|c| c.estimate.unwrap())
+            .map(|c| c.estimate.unwrap().estimate)
             .collect();
         let eta = |row: &[f64]| row.iter().zip(&beta).map(|(x, b)| x * b).sum::<f64>();
         let simple = &result.effects[0];
@@ -575,7 +589,7 @@ fn etwfe_glm_matches_the_package() {
         let bound = 4.0 * (q as f64 + rows.len() as f64) * EPS * size / rows.len() as f64;
         assert_eq!(simple.n_rows, rows.len());
         assert!(
-            (simple.estimate - total / rows.len() as f64).abs() <= bound,
+            (simple.estimate.estimate - total / rows.len() as f64).abs() <= bound,
             "{} plain simple",
             case.name
         );
@@ -591,24 +605,22 @@ fn unusable_inputs_are_errors() {
         .find(|c| c.name == "logit_last_cluster")
         .unwrap();
     let x = covariates(case);
-    let ways = [&case.unit[..]];
-    let two = [&case.unit[..], &case.unit[..]];
-    let base = config(case, &ways);
-    let two_ways = EtwfeGlmConfig {
-        vcov: Vcov::Cluster(&two),
+    let base = config(case);
+    let unit_effects = EtwfeOptions {
+        effects: EtwfeEffects::Unit,
         ..base
     };
     assert!(matches!(
-        estimate_etwfe_glm(&panel(case, x.as_ref()), &two_ways),
-        Err(EtwfeError::Fit(GlmError::Invalid(_)))
+        etwfe::fit(&panel(case, x.as_ref()), &unit_effects),
+        Err(epistat_did::Error::Unsupported { .. })
     ));
-    let never = EtwfeGlmConfig {
+    let never = EtwfeOptions {
         control: EtwfeControl::NeverTreated,
         ..base
     };
     assert_eq!(
-        estimate_etwfe_glm(&panel(case, x.as_ref()), &never).unwrap_err(),
-        EtwfeError::NoNeverTreated
+        etwfe::fit(&panel(case, x.as_ref()), &never).unwrap_err(),
+        epistat_did::Error::NoNeverTreated
     );
     let mut weights = case.weights.clone().unwrap();
     weights[7] = -1.0;
@@ -634,9 +646,16 @@ fn unusable_inputs_are_errors() {
         .build()
         .unwrap();
     assert_eq!(
-        estimate_etwfe_glm(&bad, &base).unwrap_err(),
-        EtwfeError::Fit(GlmError::Response { row, value: 2.0 })
+        etwfe::fit(&bad, &base).unwrap_err(),
+        epistat_did::Error::Glm(GlmError::Response { row, value: 2.0 })
     );
+}
+
+/// The values of an influence function, column after column.
+fn influence_values(influence: Option<&Influence>) -> impl Iterator<Item = f64> + '_ {
+    influence
+        .into_iter()
+        .flat_map(|f| (0..f.n_columns()).flat_map(move |j| f.column(j).iter().copied()))
 }
 
 fn etwfe_glm_bits() -> Vec<f64> {
@@ -644,22 +663,26 @@ fn etwfe_glm_bits() -> Vec<f64> {
     let mut out = Vec::new();
     for case in &reference.cases {
         let x = covariates(case);
-        let ways = [&case.unit[..]];
-        let c = EtwfeGlmConfig {
+        let c = EtwfeOptions {
             tolerance: 1e-8,
             max_iterations: 25,
             ssc: Ssc::new(),
-            ..config(case, &ways)
+            ..config(case)
         };
-        let result = estimate_etwfe_glm(&panel(case, x.as_ref()), &c).unwrap();
-        out.extend(result.coefficients.iter().filter_map(|t| t.estimate));
-        out.extend(result.effects.iter().map(|e| e.estimate));
-        out.extend(result.effects.iter().filter_map(|e| e.std_error));
-        out.extend(result.covariance.iter().flatten().take(400));
-        out.extend(result.effect_covariance.iter().flatten());
-        out.extend(result.effect_influence.iter().flatten().take(40));
-        out.extend(result.influence.iter().flatten().flatten().take(40));
-        out.push(result.deviance);
+        let result = etwfe::fit(&panel(case, x.as_ref()), &c).unwrap();
+        out.extend(
+            result
+                .coefficients
+                .iter()
+                .filter_map(|t| t.estimate.map(|e| e.estimate)),
+        );
+        out.extend(result.effects.iter().map(|e| e.estimate.estimate));
+        out.extend(result.effects.iter().filter_map(|e| e.estimate.se));
+        out.extend(result.covariance.as_slice().iter().flatten().take(400));
+        out.extend(result.effect_covariance.as_slice().iter().flatten());
+        out.extend(influence_values(result.effect_influence.as_ref()).take(40));
+        out.extend(influence_values(result.influence.as_ref()).take(40));
+        out.extend(result.deviance);
     }
     out
 }

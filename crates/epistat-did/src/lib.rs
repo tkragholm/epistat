@@ -276,9 +276,8 @@ pub use methods::efficient::{
 };
 pub use methods::etwfe;
 pub use methods::etwfe::{
-    EtwfeCoefficient, EtwfeConfig, EtwfeControl, EtwfeEffect, EtwfeEffects, EtwfeError,
-    EtwfeFamily, EtwfeGlmCoefficient, EtwfeGlmConfig, EtwfeGlmResult, EtwfeGlmTerm, EtwfeResult,
-    EtwfeTerm, EtwfeType, estimate_etwfe, estimate_etwfe_glm,
+    EtwfeCoefficient, EtwfeControl, EtwfeEffect, EtwfeEffects, EtwfeFamily, EtwfeFit,
+    EtwfeOptions, EtwfeTerm, EtwfeType, EtwfeVcov,
 };
 pub use methods::imputation;
 pub use methods::imputation::{

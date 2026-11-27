@@ -660,7 +660,7 @@ fn always_treated_rows_are_removed() {
 }
 
 /// The values of an influence function, column after column.
-fn columns(influence: Option<&epistat_inference::Influence>) -> impl Iterator<Item = f64> + '_ {
+fn influence_values(influence: Option<&epistat_inference::Influence>) -> impl Iterator<Item = f64> + '_ {
     influence
         .into_iter()
         .flat_map(|f| (0..f.n_columns()).flat_map(move |j| f.column(j).iter().copied()))
@@ -684,8 +684,8 @@ fn sunab_bits() -> Vec<f64> {
         out.extend(result.aggregates.iter().map(|e| e.estimate.estimate));
         out.extend(result.aggregates.iter().filter_map(|e| e.estimate.se));
         out.extend(result.covariance.as_slice().iter().flatten());
-        out.extend(columns(result.aggregate_influence.as_ref()).take(40));
-        out.extend(columns(result.influence.as_ref()).take(40));
+        out.extend(influence_values(result.aggregate_influence.as_ref()).take(40));
+        out.extend(influence_values(result.influence.as_ref()).take(40));
     }
     out
 }
