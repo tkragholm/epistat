@@ -24,8 +24,7 @@
 //! Brant test of proportional odds.
 //!
 //! [`absorb`] removes any number of fixed-effect factors from columns by
-//! preconditioned conjugate gradients or by `fixest`'s accelerated
-//! alternating projections, and [`feols`] fits linear models on
+//! preconditioned conjugate gradients, and [`feols`] fits linear models on
 //! top of it with the covariances of `fixest::feols`. The within-family
 //! (sibling) estimator is [`Feols`] with one factor, and [`between_within`]
 //! splits columns into family means and deviations.

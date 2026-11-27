@@ -18,13 +18,10 @@
 //!
 //! - `hfe`: a worker moves to a random one of `N / 20` firms with probability
 //!   0.05 a year, a sparse random graph of firms. Methods `feols_sparse2` and
-//!   `feols_sparse3` with the projections, `feols_sparse2_cg` and
-//!   `feols_sparse3_cg` with the conjugate gradients.
+//!   `feols_sparse3`.
 //! - `chn`: the firms, at most 1000, lie on a line and a worker moves to a
 //!   neighbouring firm with probability 0.1 a year, a chain. Methods
-//!   `feols_chain2_cg` and `feols_chain3_cg` with the conjugate gradients;
-//!   the projections do not reach the tolerance in their 10 000 iterations
-//!   there. `fixest` stops by its own criterion at its default tolerance,
+//!   `feols_chain2_cg` and `feols_chain3_cg`. `fixest` stops by its own criterion at its default tolerance,
 //!   which on these designs leaves it further from the exact projection.
 
 #![allow(
@@ -37,7 +34,7 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
-use epistat_glm::{Absorb, AbsorbMethod, Feols, FixedEffects, Singletons, Ssc, Vcov};
+use epistat_glm::{Absorb, Feols, FixedEffects, Singletons, Ssc, Vcov};
 use epistat_linalg::Mat;
 
 const SEED: u64 = 20_261_125;
@@ -163,14 +160,7 @@ fn workers(method: &str, n: usize) {
     } else {
         vec![&worker, &firm]
     };
-    let absorb = Absorb {
-        method: if method.ends_with("_cg") {
-            AbsorbMethod::ConjugateGradient
-        } else {
-            AbsorbMethod::ConjugateGradient
-        },
-        ..Absorb::new()
-    };
+    let absorb = Absorb::new();
     let ways: [&[u32]; 1] = [&worker];
     let (times, (coefficients, covariance, iterations)) = common::timed(common::reps(), || {
         let fe = FixedEffects::new(&factors, None, Singletons::Remove).expect("factors");

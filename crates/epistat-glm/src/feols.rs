@@ -552,7 +552,7 @@ impl FeolsFit {
     /// levels than the fixed effects of the fit.
     pub fn fixed_effects(&self, fe: &FixedEffects) -> Result<FixedEffectValues, Error> {
         self.check(fe)?;
-        Ok(fe.normalise(self.alpha.clone()))
+        Ok(fe.normalise(&self.alpha))
     }
 
     /// `B w_i e_i x~_i` for each row that enters: one row per row, one column
@@ -690,7 +690,7 @@ impl FeolsFit {
         let nparams = self.n_parameters();
         let references = || {
             if q >= 2 {
-                fe.normalise(self.alpha.clone()).references
+                fe.normalise(&self.alpha).references
             } else {
                 vec![0; q]
             }

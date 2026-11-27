@@ -77,8 +77,6 @@ feols_fe2:epistat-glm:tier1_feols:fe:10000000:tier1/bench.R:600
 feols_fe3:epistat-glm:tier1_feols:fe:10000000:tier1/bench.R:600
 feols_sparse2:epistat-glm:tier1_feols:hfe:10000000:tier1/bench.R:900
 feols_sparse3:epistat-glm:tier1_feols:hfe:10000000:tier1/bench.R:900
-feols_sparse2_cg:epistat-glm:tier1_feols:hfe:10000000:-:900
-feols_sparse3_cg:epistat-glm:tier1_feols:hfe:10000000:-:900
 feols_chain2_cg:epistat-glm:tier1_feols:chn:10000000:tier1/bench.R:900
 feols_chain3_cg:epistat-glm:tier1_feols:chn:10000000:tier1/bench.R:900
 glm_logit_p5:epistat-glm:tier1_glm_scale:none:10000000:-:300
