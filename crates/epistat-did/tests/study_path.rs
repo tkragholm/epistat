@@ -623,7 +623,7 @@ const GOLDEN: &[(&str, u64)] = &[
     ("fixed_weights/by_total_weight", 0xe22c_d8c7_552b_20a2),
     ("fixed_weights/equal", 0x6255_94e8_f6fc_0a38),
     ("cluster_sums", 0x7586_203b_1610_15b0),
-    ("pairwise/drdid_panel_intercept", 0),
+    ("pairwise/drdid_panel_intercept", 0xcde5_9623_46a6_5cc1),
     ("pairwise/nuisance", 0x11d5_dcb5_3803_4f58),
 ];
 
