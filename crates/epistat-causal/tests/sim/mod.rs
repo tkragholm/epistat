@@ -1,5 +1,6 @@
 //! The simulated data of the thread and golden tests.
 
+use epistat_causal::Estimate;
 use epistat_causal::aipw::{Aipw, GlmInput};
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
@@ -68,15 +69,23 @@ impl Simulated {
 
 pub fn flatten(r: &Aipw) -> Vec<f64> {
     let mut out = vec![r.n_trimmed as f64, r.min_propensity, r.max_propensity];
-    for e in [r.mean1, r.mean0, r.difference].into_iter().chain(r.ratio) {
-        out.extend([
-            e.estimate,
-            e.se,
-            e.lower,
-            e.upper,
-            e.p_value.unwrap_or(f64::NAN),
-        ]);
+    let c = &r.contrast;
+    for e in [c.mean1, c.mean0, c.difference].into_iter().chain(c.ratio) {
+        push_estimate(&mut out, &e);
     }
-    out.extend(&r.influence);
+    out.extend(r.influence.combine(&[1.0, -1.0]).unwrap().column(0));
+    out.extend(r.influence.column(0));
+    out.extend(r.influence.column(1));
     out
+}
+
+/// The estimate, standard error, limits and p-value of `e`, NaN where `None`.
+pub fn push_estimate(out: &mut Vec<f64>, e: &Estimate) {
+    out.extend([
+        e.estimate,
+        e.se.unwrap_or(f64::NAN),
+        e.lower().unwrap_or(f64::NAN),
+        e.upper().unwrap_or(f64::NAN),
+        e.p_value.unwrap_or(f64::NAN),
+    ]);
 }

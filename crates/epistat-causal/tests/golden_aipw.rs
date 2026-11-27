@@ -11,7 +11,8 @@
 
 mod sim;
 
-use epistat_causal::aipw::{AipwInput, AipwOptions, Target, aipw, aipw_glm};
+use epistat_causal::Estimand;
+use epistat_causal::aipw::{AipwInput, AipwOptions, aipw, aipw_glm};
 use epistat_glm::Family;
 use epistat_testkit::Fingerprint;
 
@@ -27,15 +28,17 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
     let s = sim::simulate();
     let mut out = Vec::new();
     for (name, target) in [
-        ("ate", Target::Ate),
-        ("att", Target::Att),
-        ("atc", Target::Atc),
+        ("ate", Estimand::Ate),
+        ("att", Estimand::Att),
+        ("atc", Estimand::Atc),
     ] {
         let r = aipw_glm(
             &s.input(),
             Family::Binomial,
-            target,
-            &AipwOptions::default(),
+            &AipwOptions {
+                estimand: target,
+                ..AipwOptions::default()
+            },
         )
         .unwrap();
         out.push((format!("glm {name}"), sim::flatten(&r)));
@@ -51,10 +54,12 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
             weight: Some(&s.weight),
             cluster: Some(&s.cluster),
         },
-        Target::Ate,
         &AipwOptions {
-            truncation: Some((0.05, 0.95)),
-            ..AipwOptions::default()
+            estimand: Estimand::Ate,
+            ..AipwOptions {
+                truncation: Some((0.05, 0.95)),
+                ..AipwOptions::default()
+            }
         },
     )
     .unwrap();

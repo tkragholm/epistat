@@ -54,8 +54,12 @@ Causal effect estimators for cohort data.
 The risk by a time with right censoring is in `epistat-survival::aipw`, since it
 needs the Cox and censoring machinery of that crate.
 
-Case weights and clusters are supported. Results do not depend on the number
-of threads, and are checked against `riskRegression::ate` and against
+Case weights and clusters are supported. The estimators of a contrast return
+the two means with their difference and ratio, and the influence functions of
+both means on the per-unit scale; the standard errors are those of
+`epistat_inference::Influence::variance`, with the factor `G / (G - 1)` for `G`
+clusters and every person its own cluster without clusters. Results do not
+depend on the number of threads, and are checked against `riskRegression::ate` and against
 estimators written out by hand in R. TMLE is checked against `tmle` with its
 learners replaced by `glm`, and its survival form against the estimator written
 out in R. Entropy balancing is also checked against `WeightIt` and `ebal`, and

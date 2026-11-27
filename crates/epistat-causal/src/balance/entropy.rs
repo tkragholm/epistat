@@ -87,8 +87,10 @@ use epistat_linalg::{
 };
 
 use super::{BalanceWeights, Nuisance, check_len, compensated, resolve_weights, summarise};
-use crate::aipw::Target;
+use epistat_core::Estimand;
+
 use crate::error::{Error, Result};
+use crate::shared::check_estimand;
 
 /// The data of [`entropy_balance`].
 #[derive(Debug, Clone, Copy)]
@@ -108,8 +110,8 @@ pub struct EntropyInput<'a> {
 /// What [`entropy_balance`] does besides the data.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct EntropyOptions {
-    /// The population to balance to. The default is the whole population.
-    pub target: Target,
+    /// The population to balance to: the ATE (the default), ATT or ATC.
+    pub estimand: Estimand,
     /// The largest standardised difference between the weighted means and the
     /// target that is accepted. The default is `1e-10`.
     pub tolerance: f64,
@@ -120,7 +122,7 @@ pub struct EntropyOptions {
 impl Default for EntropyOptions {
     fn default() -> Self {
         Self {
-            target: Target::Ate,
+            estimand: Estimand::Ate,
             tolerance: 1e-10,
             max_iterations: 100,
         }
@@ -336,15 +338,16 @@ pub fn entropy_balance(input: &EntropyInput<'_>, opts: &EntropyOptions) -> Resul
             "covariates: person {i} has a value that is not finite"
         )));
     }
+    check_estimand(opts.estimand)?;
     let s = resolve_weights("sample_weight", input.sample_weight, n)?;
     let q = resolve_weights("base_weight", input.base_weight, n)?;
     let t = input.treatment;
     let in_target = |i: usize| {
         s[i] > 0.0
-            && match opts.target {
-                Target::Ate => true,
-                Target::Att => t[i],
-                Target::Atc => !t[i],
+            && match opts.estimand {
+                Estimand::Att => t[i],
+                Estimand::Atc => !t[i],
+                _ => true,
             }
     };
     let target_rows: Vec<usize> = (0..n).filter(|&i| in_target(i)).collect();
@@ -374,10 +377,10 @@ pub fn entropy_balance(input: &EntropyInput<'_>, opts: &EntropyOptions) -> Resul
     let u = Mat::from_fn(n, p, |i, j| (c[(i, j)] - mean[j]) / sd[j]);
 
     // Groups to weight: false = controls, true = treated.
-    let groups: Vec<bool> = match opts.target {
-        Target::Att => vec![false],
-        Target::Atc => vec![true],
-        Target::Ate => vec![false, true],
+    let groups: Vec<bool> = match opts.estimand {
+        Estimand::Att => vec![false],
+        Estimand::Atc => vec![true],
+        _ => vec![false, true],
     };
     let mut weights = vec![1.0; n];
     let mut iterations = 0;
@@ -467,10 +470,10 @@ pub fn entropy_balance(input: &EntropyInput<'_>, opts: &EntropyOptions) -> Resul
             .x;
         for i in 0..n {
             let member = t[i] == arm;
-            let target_part = f64::from(u8::from(match opts.target {
-                Target::Ate => s[i] > 0.0,
-                Target::Att => t[i] && s[i] > 0.0,
-                Target::Atc => !t[i] && s[i] > 0.0,
+            let target_part = f64::from(u8::from(match opts.estimand {
+                Estimand::Att => t[i] && s[i] > 0.0,
+                Estimand::Atc => !t[i] && s[i] > 0.0,
+                _ => s[i] > 0.0,
             }));
             let factor = s[i] * (target_part - if member { weights[i] } else { 0.0 });
             if factor != 0.0 {
@@ -494,16 +497,16 @@ pub fn entropy_balance(input: &EntropyInput<'_>, opts: &EntropyOptions) -> Resul
     let controls = summarise(weighted(false), false, t, &s, &weights);
     let treated = summarise(weighted(true), true, t, &s, &weights);
     Ok(EntropyBalance {
-        weights: BalanceWeights {
-            target: opts.target,
+        weights: BalanceWeights::new(
+            opts.estimand,
             weights,
-            sample_weight: s,
-            treatment: t.to_vec(),
+            s,
+            t.to_vec(),
             controls,
             treated,
             iterations,
-            nuisance: Nuisance { influence, dlog },
-        },
+            Nuisance { influence, dlog },
+        ),
         max_imbalance,
         multipliers,
     })

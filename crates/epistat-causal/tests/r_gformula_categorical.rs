@@ -20,6 +20,7 @@
 //! exact risk by less than `1e-5`, a hundredth of the standard error of 200,000
 //! simulated persons.
 
+use epistat_causal::Panel;
 use epistat_causal::gformula::{
     Covariate, CovariateKind, GFormulaOptions, Intervention, Outcome, PersonPeriods, Term, gformula,
 };
@@ -29,8 +30,8 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 #[expect(non_snake_case, reason = "the columns keep the names of the R data")]
 struct Data {
-    id: Vec<u64>,
-    t0: Vec<usize>,
+    id: Vec<u32>,
+    t0: Vec<i64>,
     V: Vec<f64>,
     L1: Vec<f64>,
     L3: Vec<f64>,
@@ -62,8 +63,7 @@ fn a_categorical_covariate_agrees_with_gformula() {
     let baseline: [&[f64]; 1] = [&d.V];
     let time_varying: [&[f64]; 3] = [&d.L1, &d.L3, &d.A];
     let data = PersonPeriods {
-        id: &d.id,
-        period: &d.t0,
+        key: Panel::new(&d.id, &d.t0).unwrap(),
         baseline: &baseline,
         time_varying: &time_varying,
     };
@@ -159,8 +159,7 @@ fn a_class_outside_the_levels_is_an_error() {
     assert!(
         gformula(
             &PersonPeriods {
-                id: &id,
-                period: &period,
+                key: Panel::new(&id, &period).unwrap(),
                 baseline: &baseline,
                 time_varying: &time_varying,
             },

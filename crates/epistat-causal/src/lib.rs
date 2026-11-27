@@ -25,6 +25,19 @@
 //! The risk by a time with right censoring is in `epistat_survival::aipw`, which
 //! has the Cox and censoring models it needs.
 //!
+//! # Results
+//!
+//! The estimators of a contrast report it as a [`Contrast`] of two
+//! [`Estimate`]s, the mean (or risk) in arm 1 and in arm 0, with their
+//! difference and ratio, at the confidence [`Level`] of their options. The
+//! population is an [`Estimand`]: the ATE, ATT or ATC. They also return the
+//! [`Influence`] function of the two means on the per-unit scale, `theta_hat -
+//! theta ~ sum(psi_i) / n`, each person a unit coded by its row number, with
+//! which the standard errors were computed (`Influence::variance` under the
+//! small-sample rule `G / (G - 1)`, every person its own cluster without
+//! clusters), so that a caller can form the variance of any other combination
+//! of the two means.
+//!
 //! Results do not depend on the number of threads.
 #![warn(missing_docs)]
 
@@ -32,6 +45,9 @@ pub mod aipw;
 pub mod balance;
 mod error;
 pub mod gformula;
+mod shared;
 pub mod tmle;
 
+pub use epistat_core::{Contrast, Estimand, Estimate, Level, Panel};
+pub use epistat_inference::{ClusterRule, Clusters, Influence};
 pub use error::{Error, Result};

@@ -1,18 +1,14 @@
 //! The covariate, competing-event and outcome models, fitted to the observed
 //! rows with each person's prior weight.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
-use epistat_glm::{Family, Glm, Link, Multinom};
+use epistat_glm::{Family, Glm, Link, Multinom, MultinomData};
 use epistat_linalg::Mat;
 
 use super::history::{History, Term};
 use super::prepare::Prepared;
 use super::{Censoring, Covariate, CovariateKind, FittedModel, Models, Outcome, Restriction};
 use crate::error::{Error, Result};
+use crate::shared::{fit_glm, glm_data};
 
 /// A fitted linear predictor and how it maps to a mean; for a multinomial
 /// model, `classes - 1` linear predictors one after the other in `beta`.
@@ -264,18 +260,7 @@ fn fit_model(
     }
     let x = Mat::from_fn(n, q, |i, j| design[i * q + j]);
     let glm = Glm::new(family, link);
-    let fit = glm
-        .fit_slices(x.as_ref(), &y, Some(&w), None, None)
-        .map_err(|e| Error::input(format!("{what}: {e}")))?;
-    if !fit.converged {
-        return Err(Error::NoConvergence(format!("{what}: no convergence")));
-    }
-    let beta = fit
-        .coefficients
-        .iter()
-        .enumerate()
-        .map(|(j, c)| c.ok_or_else(|| Error::input(format!("{what}: term {j} is aliased"))))
-        .collect::<Result<Vec<_>>>()?;
+    let (fit, beta) = fit_glm(&glm, &glm_data(x.as_ref(), &y, Some(&w), None, what)?, what)?;
     let rmse = (family == Family::Gaussian).then(|| {
         let (mut ss, mut total) = (0.0, 0.0);
         for i in 0..n {
@@ -335,8 +320,12 @@ fn fit_multinomial(
         return Err(Error::input(format!("{what}: no rows to fit")));
     }
     let x = Mat::from_fn(n, q, |i, j| design[i * q + j]);
+    let data = MultinomData::builder(x.as_ref(), &y, levels)
+        .weights(&w)
+        .build()
+        .map_err(|e| Error::input(format!("{what}: {e}")))?;
     let fit = Multinom::default()
-        .fit_slices(x.as_ref(), &y, levels, Some(&w))
+        .fit(&data)
         .map_err(|e| Error::input(format!("{what}: {e}")))?;
     if !fit.converged {
         return Err(Error::NoConvergence(format!("{what}: no convergence")));

@@ -3,20 +3,23 @@
 
 mod sim;
 
-use epistat_causal::aipw::{AipwInput, AipwOptions, Target, aipw, aipw_glm};
+use epistat_causal::Estimand;
+use epistat_causal::aipw::{AipwInput, AipwOptions, aipw, aipw_glm};
 use epistat_glm::Family;
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
 #[test]
 fn estimators_are_the_same_on_every_pool() {
     let s = sim::simulate();
-    for target in [Target::Ate, Target::Att, Target::Atc] {
+    for target in [Estimand::Ate, Estimand::Att, Estimand::Atc] {
         assert_same_on_pools(&POOLS, || {
             let r = aipw_glm(
                 &s.input(),
                 Family::Binomial,
-                target,
-                &AipwOptions::default(),
+                &AipwOptions {
+                    estimand: target,
+                    ..AipwOptions::default()
+                },
             )
             .unwrap();
             sim::flatten(&r)
@@ -34,10 +37,12 @@ fn estimators_are_the_same_on_every_pool() {
                 weight: Some(&s.weight),
                 cluster: Some(&s.cluster),
             },
-            Target::Ate,
             &AipwOptions {
-                truncation: Some((0.05, 0.95)),
-                ..AipwOptions::default()
+                estimand: Estimand::Ate,
+                ..AipwOptions {
+                    truncation: Some((0.05, 0.95)),
+                    ..AipwOptions::default()
+                }
             },
         )
         .unwrap();

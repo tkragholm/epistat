@@ -174,11 +174,6 @@
 //! 3. Hansen LP, Heaton J, Yaron A. Finite-sample properties of some alternative
 //!    GMM estimators. J Bus Econ Stat. 1996;14(3):262-80.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{
     Attempt, Mat, MatRef, Method, Regularisation, cholesky_factor, design::independent_columns,
@@ -187,8 +182,11 @@ use epistat_linalg::{
 use epistat_optim::bfgs::Bfgs;
 
 use super::{BalanceWeights, Nuisance, check_len, compensated, resolve_weights, summarise};
-use crate::aipw::Target;
+use epistat_core::Estimand;
+use epistat_stats::logistic::expit;
+
 use crate::error::{Error, Result};
+use crate::shared::{check_estimand, fit_glm, glm_data};
 
 /// Whether the balance conditions alone or with the score conditions fix the
 /// coefficients.
@@ -225,8 +223,9 @@ pub struct CbpsInput<'a> {
 /// What [`cbps`] does besides the data.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CbpsOptions {
-    /// The population the weights refer to. The default is the whole population.
-    pub target: Target,
+    /// The population the weights refer to: the ATE (the default), ATT or
+    /// ATC, `CBPS`'s `ATT = 0, 1, 2`.
+    pub estimand: Estimand,
     /// Just or over identified. The default is over identified.
     pub identification: Identification,
     /// Whether the weighting matrix is fixed at the logistic fit (the default)
@@ -245,7 +244,7 @@ pub struct CbpsOptions {
 impl Default for CbpsOptions {
     fn default() -> Self {
         Self {
-            target: Target::Ate,
+            estimand: Estimand::Ate,
             identification: Identification::Over,
             two_step: true,
             standardise: true,
@@ -298,15 +297,6 @@ struct Problem {
     n: f64,
     /// `n / n_t` for the ATT, else 1.
     c: f64,
-}
-
-fn expit(eta: f64) -> f64 {
-    if eta >= 0.0 {
-        1.0 / (1.0 + (-eta).exp())
-    } else {
-        let z = eta.exp();
-        z / (1.0 + z)
-    }
 }
 
 impl Problem {
@@ -1071,8 +1061,9 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
     if (0..n).any(|i| (0..k).any(|j| !input.design[(i, j)].is_finite())) {
         return Err(Error::input("design: a value is not finite"));
     }
+    check_estimand(opts.estimand)?;
     let s = resolve_weights("sample_weight", input.sample_weight, n)?;
-    let flip = opts.target == Target::Atc;
+    let flip = opts.estimand == Estimand::Atc;
     let t: Vec<bool> = input.treatment.iter().map(|&a| a != flip).collect();
     let (nt, nc) = (
         compensated((0..n).filter(|&i| t[i]).map(|i| s[i])),
@@ -1110,26 +1101,21 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
         x,
         t: t.clone(),
         s: s.clone(),
-        att: opts.target != Target::Ate,
+        att: opts.estimand != Estimand::Ate,
         n: total,
-        c: if opts.target == Target::Ate {
+        c: if opts.estimand == Estimand::Ate {
             1.0
         } else {
             total / nt
         },
     };
     let y: Vec<f64> = t.iter().map(|&a| f64::from(u8::from(a))).collect();
-    let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit_slices(prob.x.as_ref(), &y, Some(&s), None, None)
-        .map_err(|e| Error::input(format!("logistic fit: {e}")))?;
-    if !fit.converged {
-        return Err(Error::input("logistic fit: no convergence"));
-    }
-    let mut ml: Vec<f64> = fit
-        .coefficients
-        .iter()
-        .map(|c| c.ok_or_else(|| Error::input("logistic fit: an aliased column")))
-        .collect::<Result<_>>()?;
+    let what = "logistic fit";
+    let (_, mut ml) = fit_glm(
+        &Glm::new(Family::Binomial, Link::Logit),
+        &glm_data(prob.x.as_ref(), &y, Some(&s), None, what)?,
+        what,
+    )?;
     prob.polish_logistic(&mut ml);
     check_probs(&prob.probs(&ml))?;
 
@@ -1206,7 +1192,7 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
     let mut raw = vec![0.0; n];
     let mut dlog_raw = Mat::<f64>::zeros(n, k);
     for i in 0..n {
-        let (r, dr): (f64, f64) = if opts.target == Target::Ate {
+        let (r, dr): (f64, f64) = if opts.estimand == Estimand::Ate {
             if t[i] {
                 (1.0 / e[i], -(1.0 - e[i]))
             } else {
@@ -1315,7 +1301,7 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
         let (r1, r2) = (prob.eta(&v[..k]), prob.eta(&v[k..]));
         let dw = prob.dwbal(e_final);
         for i in 0..n {
-            let kappa = if opts.target == Target::Ate {
+            let kappa = if opts.estimand == Estimand::Ate {
                 1.0
             } else {
                 prob.c * f64::from(u8::from(t[i]))
@@ -1339,7 +1325,7 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
         let mut beta_influence = Mat::<f64>::zeros(n, k);
         for i in 0..n {
             let ti = f64::from(u8::from(t[i]));
-            let kappa = if opts.target == Target::Ate {
+            let kappa = if opts.estimand == Estimand::Ate {
                 1.0
             } else {
                 prob.c * ti
@@ -1415,30 +1401,30 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
         max_imbalance = max_imbalance.max(((wmean(true) - wmean(false)) / sd).abs());
     }
     let ctrl = summarise(
-        opts.target != Target::Atc,
+        opts.estimand != Estimand::Atc,
         false,
         input.treatment,
         &s,
         &weights,
     );
     let trt = summarise(
-        opts.target != Target::Att,
+        opts.estimand != Estimand::Att,
         true,
         input.treatment,
         &s,
         &weights,
     );
     Ok(Cbps {
-        weights: BalanceWeights {
-            target: opts.target,
+        weights: BalanceWeights::new(
+            opts.estimand,
             weights,
-            sample_weight: s,
-            treatment: input.treatment.to_vec(),
-            controls: ctrl,
-            treated: trt,
+            s,
+            input.treatment.to_vec(),
+            ctrl,
+            trt,
             iterations,
             nuisance,
-        },
+        ),
         coefficients,
         propensity,
         objective,

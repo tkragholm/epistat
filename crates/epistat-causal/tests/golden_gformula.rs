@@ -12,6 +12,7 @@
 
 mod gformula_sim;
 
+use epistat_causal::Level;
 use epistat_causal::gformula::{GFormulaOptions, IntervalMethod, gformula};
 use epistat_testkit::Fingerprint;
 use gformula_sim::{complete, covariates, flatten, interventions, simulate};
@@ -42,13 +43,20 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
     let tv = sim.time_varying();
     let data = sim.data(&baseline, &tv);
     let outcome = sim.survival();
+    // The level the results were recorded at, an alpha of 0.05: the lower
+    // tail of a confidence of 0.95 is (1 - 0.95) / 2, one ulp away from
+    // 0.05 / 2, which moves percentile limits in the last bit.
+    let recorded = GFormulaOptions {
+        level: Level::alpha(0.05).unwrap(),
+        ..GFormulaOptions::default()
+    };
     let mut out = Vec::new();
     for (name, options) in [
         (
             "survival, each person once, bootstrap",
             GFormulaOptions {
                 bootstrap: 8,
-                ..GFormulaOptions::default()
+                ..recorded
             },
         ),
         (
@@ -58,7 +66,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
                 bootstrap: 5,
                 interval: IntervalMethod::Normal,
                 reference: 2,
-                ..GFormulaOptions::default()
+                ..recorded
             },
         ),
         (
@@ -67,7 +75,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
                 baseline_lags: true,
                 truncate: false,
                 periods: Some(3),
-                ..GFormulaOptions::default()
+                ..recorded
             },
         ),
     ] {
@@ -81,7 +89,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
     let outcome = end.binary_end();
     let options = GFormulaOptions {
         bootstrap: 4,
-        ..GFormulaOptions::default()
+        ..recorded
     };
     let g = gformula(&data, &covariates(), &outcome, &interventions(), &options).unwrap();
     out.push(("binary end, bootstrap".to_string(), flatten(&g)));

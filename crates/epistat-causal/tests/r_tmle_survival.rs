@@ -14,12 +14,23 @@
 //! condition number 1), and R records `L = sum_j |dv / de_j| max(|e_j|, 1)` for
 //! every reported number `v`. Later rounds take their clever covariate from the
 //! earlier ones, which `L` includes.
+//!
+//! The R estimator's variances follow the earlier rule, the sum of squares of
+//! the dfbeta influences (of the cluster sums, with `G / (G - 1)`); its
+//! standard errors are converted to the estimator's centred rule with
+//! `G / (G - 1)` and every person its own cluster without clusters by
+//! `rule::rule_ratio`
+//! (see there). Its stopping rule uses the earlier standard error too, which
+//! differs from the estimator's by less than the margin of either rule, as the
+//! equal number of rounds shows.
 
 use epistat_causal::tmle::PropensityBound;
 use epistat_causal::tmle::survival::{SurvivalInput, SurvivalOptions, tmle_survival};
 use epistat_linalg::Mat;
 use epistat_testkit::load_json;
 use serde::Deserialize;
+
+mod rule;
 
 const EPS: f64 = f64::EPSILON;
 
@@ -97,16 +108,16 @@ fn matches_the_hand_written_estimator() {
         };
         let got = tmle_survival(&input, &opts).unwrap();
         assert_eq!(got.iterations.to_vec(), s.iterations, "{}", s.name);
-        let ratio = got.ratio.unwrap();
+        let ratio = got.contrast.ratio.unwrap();
         let values = [
-            got.risk1.estimate,
-            got.risk0.estimate,
-            got.difference.estimate,
+            got.contrast.mean1.estimate,
+            got.contrast.mean0.estimate,
+            got.contrast.difference.estimate,
             ratio.estimate,
-            got.risk1.se,
-            got.risk0.se,
-            got.difference.se,
-            ratio.se,
+            got.contrast.mean1.se.unwrap(),
+            got.contrast.mean0.se.unwrap(),
+            got.contrast.difference.se.unwrap(),
+            ratio.se.unwrap(),
         ];
         let labels = [
             "risk1",
@@ -120,8 +131,14 @@ fn matches_the_hand_written_estimator() {
         ];
         let cells = (n * s.horizon) as f64;
         let mut worst = 0.0f64;
+        let combinations = rule::combinations(got.contrast.mean0.estimate, ratio.estimate);
         for (k, (label, v)) in labels.iter().zip(values).enumerate() {
-            let want = s.numbers[k];
+            let want = if k < 4 {
+                s.numbers[k]
+            } else {
+                let r = rule::rule_ratio(&got.influence, combinations[k - 4], s.cluster.as_deref());
+                s.numbers[k] * r.sqrt()
+            };
             let tol = 8.0 * EPS * s.lipschitz[k] + 16.0 * cells * EPS * want.abs().max(1.0);
             let d = (v - want).abs() / tol;
             assert!(
@@ -141,12 +158,10 @@ fn matches_the_hand_written_estimator() {
         }
         // Targeting stopped by its rule, at the mean R found.
         let rule = (n as f64).sqrt() * (n as f64).ln();
-        for ((g, w), se) in got
-            .score
-            .iter()
-            .zip(&s.scores)
-            .zip([got.risk1.se, got.risk0.se])
-        {
+        for ((g, w), se) in got.score.iter().zip(&s.scores).zip([
+            got.contrast.mean1.se.unwrap(),
+            got.contrast.mean0.se.unwrap(),
+        ]) {
             assert!(g.abs() <= se / rule, "{}: score {g}", s.name);
             let tol = 8.0 * EPS * s.lipschitz[2] + 16.0 * cells * EPS;
             assert!((g - w).abs() <= tol, "{}: score {g} against {w}", s.name);
@@ -154,11 +169,15 @@ fn matches_the_hand_written_estimator() {
         // The targeted risks differ from the one-step (augmented) estimates on the
         // same predictions by a term of second order, here below a tenth of the
         // standard error.
-        for (g, w) in [got.risk1.estimate, got.risk0.estimate]
+        for (g, w) in [got.contrast.mean1.estimate, got.contrast.mean0.estimate]
             .iter()
             .zip(&s.one_step)
         {
-            assert!((g - w).abs() < 0.1 * got.difference.se, "{}", s.name);
+            assert!(
+                (g - w).abs() < 0.1 * got.contrast.difference.se.unwrap(),
+                "{}",
+                s.name
+            );
         }
         println!("{}: worst deviation in tolerances {worst:.3e}", s.name);
     }

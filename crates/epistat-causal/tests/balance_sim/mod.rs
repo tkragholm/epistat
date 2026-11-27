@@ -52,22 +52,36 @@ pub fn simulate(n: usize) -> Simulated {
 /// Everything a thread or golden test compares for a set of weights and the
 /// estimates made with them.
 pub fn flatten(w: &BalanceWeights, s: &Simulated) -> Vec<f64> {
-    use epistat_causal::balance::WeightVariance;
-    let mut out = w.weights.clone();
-    for g in [w.controls, w.treated] {
-        out.extend([g.sum, g.min, g.max, g.effective_sample_size]);
+    use epistat_causal::balance::{OutcomeOptions, WeightVariance};
+    let mut out = w.weights().to_vec();
+    for g in [w.controls(), w.treated()] {
+        out.extend([g.sum, g.min, g.max, g.effective_sample_size.unwrap_or(0.0)]);
     }
-    for v in [WeightVariance::Estimated, WeightVariance::Fixed] {
-        let r = w.mean_difference(&s.y, Some(&s.cluster), v, 0.05).unwrap();
-        for e in [r.mean1, r.mean0, r.difference] {
+    let mut extra = Vec::new();
+    for variance in [WeightVariance::Estimated, WeightVariance::Fixed] {
+        let r = w
+            .mean_difference(
+                &s.y,
+                Some(&s.cluster),
+                &OutcomeOptions {
+                    variance,
+                    ..OutcomeOptions::default()
+                },
+            )
+            .unwrap();
+        let c = &r.contrast;
+        for e in [c.mean1, c.mean0, c.difference] {
             out.extend([
                 e.estimate,
-                e.se,
-                e.lower,
-                e.upper,
+                e.se.unwrap_or(f64::NAN),
+                e.lower().unwrap_or(f64::NAN),
+                e.upper().unwrap_or(f64::NAN),
                 e.p_value.unwrap_or(f64::NAN),
             ]);
         }
+        extra.extend(c.ratio.map(|e| e.estimate));
+        extra.extend(r.influence.column(0));
+        extra.extend(r.influence.column(1));
     }
     let design = Mat::from_fn(s.y.len(), 3, |i, j| match j {
         0 => 1.0,
@@ -77,7 +91,13 @@ pub fn flatten(w: &BalanceWeights, s: &Simulated) -> Vec<f64> {
     let reg = w
         .weighted_regression(&s.y, design.as_ref(), None, WeightVariance::Estimated)
         .unwrap();
-    out.extend(reg.coefficients);
-    out.extend(reg.covariance);
+    out.extend(&reg.coefficients);
+    out.extend(
+        reg.covariance
+            .as_slice()
+            .iter()
+            .map(|v| v.unwrap_or(f64::NAN)),
+    );
+    out.extend(extra);
     out
 }

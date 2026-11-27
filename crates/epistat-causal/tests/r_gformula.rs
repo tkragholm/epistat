@@ -27,6 +27,7 @@
 
 use std::collections::BTreeMap;
 
+use epistat_causal::Panel;
 use epistat_causal::gformula::{
     Action, Competing, Covariate, CovariateKind, GFormula, GFormulaOptions, History, Intervention,
     Outcome, PersonPeriods, Restriction, Rule, Term, gformula,
@@ -182,19 +183,16 @@ fn reference() -> Reference {
     clippy::cast_sign_loss,
     reason = "ids and periods written by R are small whole numbers"
 )]
-fn whole(values: &[f64]) -> (Vec<u64>, Vec<usize>) {
-    (
-        values.iter().map(|&v| v as u64).collect(),
-        values.iter().map(|&v| v as usize).collect(),
-    )
+fn ids(values: &[f64]) -> Vec<u32> {
+    values.iter().map(|&v| v as u32).collect()
 }
 
-fn ids(values: &[f64]) -> Vec<u64> {
-    whole(values).0
-}
-
-fn periods(values: &[f64]) -> Vec<usize> {
-    whole(values).1
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "periods written by R are small whole numbers"
+)]
+fn periods(values: &[f64]) -> Vec<i64> {
+    values.iter().map(|&v| v as i64).collect()
 }
 
 fn flags(values: &[f64]) -> Vec<bool> {
@@ -309,8 +307,7 @@ fn with_main<T>(
     let event = flags(&d.y);
     let competing = flags(&d.d);
     let data = PersonPeriods {
-        id: &id,
-        period: &period,
+        key: Panel::new(&id, &period).unwrap(),
         baseline: &baseline,
         time_varying,
     };
@@ -349,7 +346,10 @@ fn main_models_and_observed_risk_match_gformula() {
             assert_close(&[rmse], &[m.rmse["L2"]], COEF);
             let observed: Vec<f64> = g.observed.iter().map(|o| o.unwrap()).collect();
             assert_close(&observed, &m.observed, COUNTS);
-            assert_eq!(g.periods, (0..m.periods).collect::<Vec<_>>());
+            assert_eq!(
+                g.periods,
+                (0..i64::try_from(m.periods).unwrap()).collect::<Vec<_>>()
+            );
         },
     );
 }
@@ -610,8 +610,7 @@ fn eof_run(e: &Eof, binary: bool, simulated: Option<usize>) -> GFormula {
         Intervention::set(1, 0.0),
     ];
     let data = PersonPeriods {
-        id: &id,
-        period: &period,
+        key: Panel::new(&id, &period).unwrap(),
         baseline: &baseline,
         time_varying: &time_varying,
     };
@@ -673,8 +672,7 @@ fn deterministic_end_of_follow_up_matches_gformula() {
     let baseline = [&d.v[..]];
     let time_varying = [&d.z[..]];
     let data = PersonPeriods {
-        id: &id,
-        period: &period,
+        key: Panel::new(&id, &period).unwrap(),
         baseline: &baseline,
         time_varying: &time_varying,
     };
@@ -737,8 +735,7 @@ fn two_periods_match_the_exact_g_formula() {
     let event = flags(&d.y);
     let competing = flags(&d.d);
     let data = PersonPeriods {
-        id: &id,
-        period: &period,
+        key: Panel::new(&id, &period).unwrap(),
         baseline: &baseline,
         time_varying: &time_varying,
     };

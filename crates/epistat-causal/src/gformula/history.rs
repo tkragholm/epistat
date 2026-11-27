@@ -12,6 +12,7 @@ use crate::error::{Error, Result};
 /// [`PersonPeriods::baseline`](super::PersonPeriods::baseline). Lags reach back
 /// before period 0 as [`GFormulaOptions::baseline_lags`](super::GFormulaOptions::baseline_lags)
 /// says: 0 by default, the value at period 0 with the option.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Term {
     /// The constant 1.

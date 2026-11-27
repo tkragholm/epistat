@@ -12,7 +12,7 @@
 
 mod balance_sim;
 
-use epistat_causal::aipw::Target;
+use epistat_causal::Estimand;
 use epistat_causal::balance::{
     CbpsInput, CbpsOptions, EntropyInput, EntropyOptions, Identification, balance_columns, cbps,
     entropy_balance,
@@ -34,9 +34,9 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
     let cols = balance_columns(s.c.as_ref(), 2, true).unwrap();
     let mut out = Vec::new();
     for (name, target) in [
-        ("att", Target::Att),
-        ("ate", Target::Ate),
-        ("atc", Target::Atc),
+        ("att", Estimand::Att),
+        ("ate", Estimand::Ate),
+        ("atc", Estimand::Atc),
     ] {
         let r = entropy_balance(
             &EntropyInput {
@@ -46,7 +46,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
                 base_weight: Some(&s.q),
             },
             &EntropyOptions {
-                target,
+                estimand: target,
                 ..EntropyOptions::default()
             },
         )
@@ -56,9 +56,14 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
         out.push((format!("entropy {name}"), v));
     }
     for (name, target, identification, two_step) in [
-        ("ate exact", Target::Ate, Identification::Exact, true),
-        ("att over", Target::Att, Identification::Over, true),
-        ("atc over updated", Target::Atc, Identification::Over, false),
+        ("ate exact", Estimand::Ate, Identification::Exact, true),
+        ("att over", Estimand::Att, Identification::Over, true),
+        (
+            "atc over updated",
+            Estimand::Atc,
+            Identification::Over,
+            false,
+        ),
     ] {
         let r = cbps(
             &CbpsInput {
@@ -67,7 +72,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
                 sample_weight: Some(&s.s),
             },
             &CbpsOptions {
-                target,
+                estimand: target,
                 identification,
                 two_step,
                 ..CbpsOptions::default()

@@ -18,14 +18,15 @@ use epistat_causal::gformula::{
     Censoring, Competing, Covariate, CovariateKind, GFormulaOptions, Outcome, PersonPeriods, Term,
     WeightCutoff, gformula,
 };
+use epistat_causal::{Error, Panel};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 #[expect(non_snake_case, reason = "the columns keep the names of the R data")]
 struct Data {
-    id: Vec<u64>,
-    t0: Vec<usize>,
+    id: Vec<u32>,
+    t0: Vec<i64>,
     V: Vec<f64>,
     L1: Vec<f64>,
     L2: Vec<f64>,
@@ -72,8 +73,7 @@ fn the_models_and_the_weighted_observed_risk_agree_with_gformula() {
     let baseline: [&[f64]; 1] = [&d.V];
     let time_varying: [&[f64]; 3] = [&d.L1, &d.L2, &d.A];
     let data = PersonPeriods {
-        id: &d.id,
-        period: &d.t0,
+        key: Panel::new(&d.id, &d.t0).unwrap(),
         baseline: &baseline,
         time_varying: &time_varying,
     };
@@ -164,6 +164,37 @@ fn the_models_and_the_weighted_observed_risk_agree_with_gformula() {
             "{cutoff:?}: {got:?} against {want:?}"
         );
     }
+    // Cutoffs outside their ranges are errors, not a panic or every weight set
+    // to the cutoff.
+    for cutoff in [
+        WeightCutoff::Quantile(1.5),
+        WeightCutoff::Quantile(-0.1),
+        WeightCutoff::Quantile(f64::NAN),
+        WeightCutoff::Value(-1.0),
+        WeightCutoff::Value(0.0),
+        WeightCutoff::Value(f64::INFINITY),
+    ] {
+        let Outcome::Survival {
+            event,
+            terms,
+            competing,
+            censoring,
+        } = &outcome
+        else {
+            unreachable!("a survival outcome")
+        };
+        let cut = Outcome::Survival {
+            event,
+            terms: terms.clone(),
+            competing: competing.clone(),
+            censoring: censoring.clone().map(|c| Censoring { cutoff, ..c }),
+        };
+        let result = gformula(&data, &covariates, &cut, &[], &GFormulaOptions::default());
+        assert!(
+            matches!(result, Err(Error::Input(ref m)) if m.contains("weight cutoff")),
+            "{cutoff:?}"
+        );
+    }
 }
 
 #[test]
@@ -193,8 +224,7 @@ fn a_row_after_censoring_is_an_error() {
     assert!(
         gformula(
             &PersonPeriods {
-                id: &id,
-                period: &period,
+                key: Panel::new(&id, &period).unwrap(),
                 baseline: &baseline,
                 time_varying: &time_varying,
             },

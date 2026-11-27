@@ -376,7 +376,7 @@ fn simulate_person(
         if let Some((c, person)) = course.as_mut() {
             c.person.push(*person);
             c.source.push(source);
-            c.period.push(k);
+            c.period.push(i64::try_from(k).unwrap_or(i64::MAX));
             for (v, column) in c.values.iter_mut().enumerate() {
                 column.push(values[k * w + v]);
             }

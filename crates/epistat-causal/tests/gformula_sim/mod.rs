@@ -6,14 +6,15 @@
 //! is an outcome at the last period, NaN elsewhere.
 
 use epistat_causal::gformula::{
-    Action, Competing, Covariate, CovariateKind, Estimate, GFormula, History, Intervention,
-    Outcome, PersonPeriods, Rule, Term,
+    Action, Competing, Covariate, CovariateKind, GFormula, History, Intervention, Outcome,
+    PersonPeriods, Rule, SimulatedEstimate, Term,
 };
+use epistat_core::Panel;
 use epistat_rng::Stream;
 
 pub struct Sim {
-    pub id: Vec<u64>,
-    pub period: Vec<usize>,
+    pub id: Vec<u32>,
+    pub period: Vec<i64>,
     pub v: Vec<f64>,
     pub l: Vec<f64>,
     pub z: Vec<f64>,
@@ -63,8 +64,8 @@ pub fn simulate(n: usize, periods: usize, seed: u64) -> Sim {
             } else {
                 f64::NAN
             };
-            sim.id.push(i as u64 * 3 + 7);
-            sim.period.push(k);
+            sim.id.push(u32::try_from(i * 3 + 7).unwrap());
+            sim.period.push(i64::try_from(k).unwrap());
             sim.v.push(v);
             sim.l.push(l);
             sim.z.push(z);
@@ -196,8 +197,7 @@ impl Sim {
 
     pub fn data<'a>(&'a self, baseline: &'a [&'a [f64]], tv: &'a [&'a [f64]]) -> PersonPeriods<'a> {
         PersonPeriods {
-            id: &self.id,
-            period: &self.period,
+            key: Panel::new(&self.id, &self.period).unwrap(),
             baseline,
             time_varying: tv,
         }
@@ -228,7 +228,7 @@ impl Sim {
     }
 }
 
-fn push(out: &mut Vec<f64>, e: &Estimate) {
+fn push(out: &mut Vec<f64>, e: &SimulatedEstimate) {
     for x in [e.estimate, e.monte_carlo_se, e.se, e.lower, e.upper] {
         out.push(x.unwrap_or(f64::NAN));
     }

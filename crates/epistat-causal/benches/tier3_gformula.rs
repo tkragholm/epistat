@@ -22,6 +22,7 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
+use epistat_causal::Panel;
 use epistat_causal::gformula::{
     Action, Competing, Covariate, CovariateKind, GFormulaOptions, History, Intervention, Outcome,
     PersonPeriods, Rule, Term, gformula,
@@ -146,15 +147,14 @@ fn main() {
         "unknown method {method}"
     );
     let t = Table::read(&common::data_path("gf", n));
-    let id: Vec<u64> = t.ints("id");
-    let period: Vec<usize> = t.ints("t0");
+    let id: Vec<u32> = t.ints("id");
+    let period: Vec<i64> = t.ints("t0");
     let baseline = [t.col("V"), t.col("W")];
     let time_varying = [t.col("L1"), t.col("L2"), t.col("A")];
     let event: Vec<bool> = t.col("Y").iter().map(|&y| y > 0.5).collect();
     let competing = t.flags("D");
     let data = PersonPeriods {
-        id: &id,
-        period: &period,
+        key: Panel::new(&id, &period).unwrap(),
         baseline: &baseline,
         time_varying: &time_varying,
     };

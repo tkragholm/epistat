@@ -22,7 +22,8 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
-use epistat_causal::aipw::{GlmInput, Target};
+use epistat_causal::Estimand;
+use epistat_causal::aipw::GlmInput;
 use epistat_causal::tmle::survival::{SurvivalInput, SurvivalOptions, tmle_survival};
 use epistat_causal::tmle::{OutcomeModel, PropensityBound, TmleOptions, tmle_glm};
 use epistat_glm::Family;
@@ -90,13 +91,13 @@ fn main() {
         survival(&t, &treated);
         return;
     }
-    let (outcome, family, targets): (&[f64], Family, &[Target]) = match method.as_str() {
-        "tmle_ate_binary" => (t.col("yb"), Family::Binomial, &[Target::Ate]),
-        "tmle_ate_gaussian" => (t.col("yc"), Family::Gaussian, &[Target::Ate]),
+    let (outcome, family, targets): (&[f64], Family, &[Estimand]) = match method.as_str() {
+        "tmle_ate_binary" => (t.col("yb"), Family::Binomial, &[Estimand::Ate]),
+        "tmle_ate_gaussian" => (t.col("yc"), Family::Gaussian, &[Estimand::Ate]),
         "tmle_all_binary" => (
             t.col("yb"),
             Family::Binomial,
-            &[Target::Ate, Target::Att, Target::Atc],
+            &[Estimand::Ate, Estimand::Att, Estimand::Atc],
         ),
         other => panic!("unknown method {other}"),
     };
@@ -116,19 +117,28 @@ fn main() {
         targets
             .iter()
             .map(|&target| {
-                tmle_glm(&input, family, OutcomeModel::Pooled, target, &opts).expect("tmle")
+                tmle_glm(
+                    &input,
+                    family,
+                    &TmleOptions {
+                        estimand: target,
+                        outcome_model: OutcomeModel::Pooled,
+                        ..opts
+                    },
+                )
+                .expect("tmle")
             })
             .collect::<Vec<_>>()
     });
     let mut lines = Lines::default();
     for (target, r) in targets.iter().zip(&results) {
-        let name = match target {
-            Target::Ate => "ate",
-            Target::Att => "att",
-            Target::Atc => "atc",
-        };
-        lines.push(name, r.difference.estimate);
-        lines.push(&format!("info_se_{name}"), r.difference.se);
+        let name = target.as_str().to_lowercase();
+        let name = name.as_str();
+        lines.push(name, r.contrast.difference.estimate);
+        lines.push(
+            &format!("info_se_{name}"),
+            r.contrast.difference.se.unwrap(),
+        );
     }
     common::finish(&method, n, &times, &lines);
 }
@@ -158,8 +168,8 @@ fn survival(t: &Table, treated: &[bool]) {
         tmle_survival(&input, &SurvivalOptions::new(INTERVALS)).expect("tmle_survival")
     });
     let mut lines = Lines::default();
-    lines.push("risk1", r.risk1.estimate);
-    lines.push("risk0", r.risk0.estimate);
-    lines.push("info_se_difference", r.difference.se);
+    lines.push("risk1", r.contrast.mean1.estimate);
+    lines.push("risk0", r.contrast.mean0.estimate);
+    lines.push("info_se_difference", r.contrast.difference.se.unwrap());
     common::finish("tmle_survival", n, &times, &lines);
 }

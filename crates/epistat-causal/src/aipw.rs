@@ -22,23 +22,29 @@
 //! if either the outcome model or the propensity model is right, and efficient
 //! if both are.
 //!
-//! The influence function of a ratio `sum w U / sum w D` is `w_i (U_i - theta
-//! D_i) / sum w D`, which for the ATE is the efficient influence function
-//! `psi_i - tau` over `n`, and for the ATT and ATC contains the term `- tau A /
+//! The influence function of a ratio `sum w U / sum w D` is `n w_i (U_i - theta
+//! D_i) / sum w D` per person, which for the ATE is the efficient influence
+//! function `psi_i - tau`, and for the ATT and ATC contains the term `- tau A /
 //! P(A = 1)` that comes from estimating the size of the population. The
 //! influence of the difference is the difference of the influences, and of the
 //! ratio `theta_1 / theta_0` it is `(IF_1 - ratio IF_0) / theta_0`.
 //!
 //! # Variance
 //!
-//! [`Variance::Efficient`], from [`aipw`]: the sum of the squared influences,
-//! `sum IF_i^2`, with the influences of the rows of a cluster summed first and
-//! the factor `G / (G - 1)` for `G` clusters, as
-//! `epistat_inference::influence::clustered_variance`. It is the variance of
-//! the efficient estimator when both models are right, and the right one for
-//! predictions that come from cross-fitting. It takes the predictions as fixed,
-//! so with models that were fitted to the same data it is not valid when only
-//! one model is right.
+//! [`Aipw::influence`] holds the influence functions of the two means on the
+//! per-unit scale, each person a unit coded by its row number. Every variance
+//! is `Influence::variance` of them under `ClusterRule::SmallSample`: with the
+//! influences of a cluster summed first, centred, and the factor `G / (G - 1)`
+//! for `G` clusters, every person its own cluster when there are none, so that
+//! without clusters the variance of a mean is `sd(IF)^2 / n` with the `n - 1`
+//! divisor, as `riskRegression::ate` reports it. Fewer than two clusters leave
+//! the standard errors `None`.
+//!
+//! [`Variance::Efficient`], from [`aipw`], is the variance of the efficient
+//! estimator when both models are right, and the right one for predictions
+//! that come from cross-fitting. It takes the predictions as fixed, so with
+//! models that were fitted to the same data it is not valid when only one
+//! model is right.
 //!
 //! [`Variance::Stacked`], from [`aipw_glm`]: the estimating equations of the
 //! three fitted models (outcome among the treated, outcome among the controls,
@@ -57,11 +63,12 @@
 //! [`AipwOptions::truncation`], which changes the estimand and is off by default;
 //! [`Aipw::n_trimmed`] counts the rows it moved, and the derivative of a
 //! truncated propensity with respect to the propensity model is taken as 0. All
-//! persons in one arm, a target group of weight 0, and a fitted propensity
-//! model that does not converge, has an aliased column or has fitted
-//! probabilities numerically 0 or 1 (separation) are errors. The estimate may lie
-//! outside the range of the outcome, a known property of the estimator. The ratio
-//! is `None` when the mean of the controls is 0.
+//! persons in one arm, a target group of weight 0, an estimand other than the
+//! ATE, ATT and ATC, and a fitted propensity model that does not converge, has
+//! an aliased column or has fitted probabilities numerically 0 or 1
+//! (separation) are errors. The estimate may lie outside the range of the
+//! outcome, a known property of the estimator. The ratio is `None` when the
+//! mean of the controls is 0.
 //!
 //! # References
 //!
@@ -76,31 +83,19 @@
 //!    treatment effects with right-censored time to event outcome and competing
 //!    risks. Biom J. 2020;62(3):751-63.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
-use std::collections::BTreeMap;
-
+use epistat_core::{Contrast, Estimand, Level};
 use epistat_glm::{Family, Glm, Link};
+use epistat_inference::Influence;
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, weighted_gram};
 
 use crate::error::{Error, Result};
-
-/// The population the effect refers to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Target {
-    /// The whole population, the average treatment effect.
-    #[default]
-    Ate,
-    /// The treated, the average treatment effect in the treated.
-    Att,
-    /// The controls, the average treatment effect in the controls.
-    Atc,
-}
+use crate::shared::{
+    case_weights, check_arms, check_design, check_estimand, check_finite, check_len,
+    check_separation, clusters, compensated, contrast, fit_glm, glm_data, influence, unit_codes,
+};
 
 /// Which variance an estimate carries.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Variance {
     /// The variance of the efficient influence function, with the predictions
@@ -113,8 +108,11 @@ pub enum Variance {
 /// What the estimators do besides the data.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AipwOptions {
-    /// One minus the level of the confidence limits. The default is 0.05.
-    pub alpha: f64,
+    /// The population the effect refers to: the ATE (the default), ATT or ATC,
+    /// `riskRegression::ate`'s `estimator` population.
+    pub estimand: Estimand,
+    /// The level of the confidence limits, by default 95%.
+    pub level: Level,
     /// Limits `(lower, upper)`, with `0 < lower < upper < 1`, at which the
     /// propensity is truncated. The default is no truncation.
     pub truncation: Option<(f64, f64)>,
@@ -123,26 +121,11 @@ pub struct AipwOptions {
 impl Default for AipwOptions {
     fn default() -> Self {
         Self {
-            alpha: 0.05,
+            estimand: Estimand::Ate,
+            level: Level::default(),
             truncation: None,
         }
     }
-}
-
-/// An estimate with its standard error, normal confidence limits and Wald test.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Estimate {
-    /// The estimate.
-    pub estimate: f64,
-    /// The standard error.
-    pub se: f64,
-    /// The lower confidence limit.
-    pub lower: f64,
-    /// The upper confidence limit.
-    pub upper: f64,
-    /// The two-sided p-value of the Wald test of 0, or of 1 for a ratio. `None`
-    /// when the standard error is 0.
-    pub p_value: Option<f64>,
 }
 
 /// The predictions of the models and the data of the core estimator.
@@ -165,22 +148,21 @@ pub struct AipwInput<'a> {
 }
 
 /// The result of an augmented estimator.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Aipw {
     /// The population of the estimate.
-    pub target: Target,
-    /// The mean outcome had everyone been treated.
-    pub mean1: Estimate,
-    /// The mean outcome had no one been treated.
-    pub mean0: Estimate,
-    /// The difference `mean1 - mean0`.
-    pub difference: Estimate,
-    /// The ratio `mean1 / mean0` with the delta-method standard error, `None`
-    /// when `mean0` is 0.
-    pub ratio: Option<Estimate>,
-    /// The influence function of the difference, one value per person, so that
-    /// the variance is the sum of squares of the sums over clusters.
-    pub influence: Vec<f64>,
+    pub estimand: Estimand,
+    /// The mean outcome had everyone been treated (`mean1`), had no one been
+    /// treated (`mean0`), their difference and their ratio, the ratio with the
+    /// delta-method standard error, its interval on the scale of the ratio and
+    /// the p-value of a ratio of 1; `None` when `mean0` is 0.
+    pub contrast: Contrast,
+    /// The influence functions of `mean1` (column 0) and `mean0` (column 1),
+    /// per person on the per-unit scale, the units the row numbers. Their
+    /// `variance` with the clusters `Clusters::per_unit(rows, cluster)` (or
+    /// none) reproduces the standard errors.
+    pub influence: Influence,
     /// The variance of the estimates.
     pub variance: Variance,
     /// The number of persons whose propensity was truncated.
@@ -201,45 +183,20 @@ struct Core {
     /// The sum of the weights of the target, `sum w D`.
     size: f64,
     theta: [f64; 2],
-    /// The influences of the means 1 and 0.
+    /// The influences of the means 1 and 0, on the dfbeta scale.
     influence: [Vec<f64>; 2],
 }
 
-pub(crate) fn check_len(name: &str, found: usize, n: usize) -> Result<()> {
-    if found == n {
-        Ok(())
-    } else {
-        Err(Error::input(format!(
-            "{name}: {found} values for {n} persons"
-        )))
-    }
-}
-
-pub(crate) fn check_alpha(alpha: f64) -> Result<()> {
-    if alpha > 0.0 && alpha < 1.0 {
-        Ok(())
-    } else {
-        Err(Error::input(format!("alpha: {alpha} is not in (0, 1)")))
-    }
-}
-
-pub(crate) fn compensated(values: impl IntoIterator<Item = f64>) -> f64 {
-    epistat_stats::sum::compensated(values)
-}
-
-fn core(input: &AipwInput<'_>, target: Target, opts: &AipwOptions) -> Result<Core> {
+fn core(input: &AipwInput<'_>, opts: &AipwOptions) -> Result<Core> {
     let n = input.treatment.len();
     if n == 0 {
         return Err(Error::input("treatment: no persons"));
     }
-    check_alpha(opts.alpha)?;
+    check_estimand(opts.estimand)?;
     check_len("outcome", input.outcome.len(), n)?;
     check_len("mu1", input.mu1.len(), n)?;
     check_len("mu0", input.mu0.len(), n)?;
     check_len("propensity", input.propensity.len(), n)?;
-    if let Some(w) = input.weight {
-        check_len("weight", w.len(), n)?;
-    }
     if let Some(c) = input.cluster {
         check_len("cluster", c.len(), n)?;
     }
@@ -250,21 +207,10 @@ fn core(input: &AipwInput<'_>, target: Target, opts: &AipwOptions) -> Result<Cor
             "truncation: ({lo}, {hi}) are not limits with 0 < lower < upper < 1"
         )));
     }
-    for (name, v) in [
-        ("outcome", input.outcome),
-        ("mu1", input.mu1),
-        ("mu0", input.mu0),
-    ] {
-        if let Some(i) = v.iter().position(|x| !x.is_finite()) {
-            return Err(Error::input(format!("{name}: value {i} is not finite")));
-        }
-    }
-    let omega: Vec<f64> = input.weight.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
-    if let Some(i) = omega.iter().position(|&w| !(w.is_finite() && w >= 0.0)) {
-        return Err(Error::input(format!(
-            "weight: value {i} is negative or not finite"
-        )));
-    }
+    check_finite("outcome", input.outcome)?;
+    check_finite("mu1", input.mu1)?;
+    check_finite("mu0", input.mu0)?;
+    let omega = case_weights("weight", input.weight, n)?;
     let mut e = Vec::with_capacity(n);
     let mut clipped = Vec::with_capacity(n);
     for (i, &p) in input.propensity.iter().enumerate() {
@@ -277,35 +223,26 @@ fn core(input: &AipwInput<'_>, target: Target, opts: &AipwOptions) -> Result<Cor
         clipped.push(q.to_bits() != p.to_bits());
         e.push(q);
     }
-    let (mut treated, mut controls) = (false, false);
-    for (&w, &t) in omega.iter().zip(input.treatment) {
-        if w > 0.0 {
-            treated |= t;
-            controls |= !t;
-        }
-    }
-    if !(treated && controls) {
-        return Err(Error::input("treatment: both groups need persons"));
-    }
+    check_arms(&omega, input.treatment)?;
     let (mut u1, mut u0, mut d) = (vec![0.0; n], vec![0.0; n], vec![0.0; n]);
     for i in 0..n {
         let a = f64::from(u8::from(input.treatment[i]));
         let (y, m1, m0, p) = (input.outcome[i], input.mu1[i], input.mu0[i], e[i]);
         let ate1 = m1 + a * (y - m1) / p;
         let ate0 = m0 + (1.0 - a) * (y - m0) / (1.0 - p);
-        match target {
-            Target::Ate => {
-                (u1[i], u0[i], d[i]) = (ate1, ate0, 1.0);
-            }
-            Target::Att => {
+        match opts.estimand {
+            Estimand::Att => {
                 (u1[i], u0[i], d[i]) = (a * y, a * m0 + (1.0 - a) * p / (1.0 - p) * (y - m0), a);
             }
-            Target::Atc => {
+            Estimand::Atc => {
                 (u1[i], u0[i], d[i]) = (
                     (1.0 - a) * m1 + a * (1.0 - p) / p * (y - m1),
                     (1.0 - a) * y,
                     1.0 - a,
                 );
+            }
+            _ => {
+                (u1[i], u0[i], d[i]) = (ate1, ate0, 1.0);
             }
         }
     }
@@ -335,98 +272,21 @@ fn core(input: &AipwInput<'_>, target: Target, opts: &AipwOptions) -> Result<Cor
     })
 }
 
-/// The variance of a sum of influences: the sum of squares, or with clusters
-/// `G / (G - 1)` times the sum of squares of the sums over clusters.
-pub(crate) fn variance_of(influence: &[f64], cluster: Option<&[u32]>) -> Result<f64> {
-    let v = match cluster {
-        None => compensated(influence.iter().map(|x| x * x)),
-        Some(c) => {
-            let mut sums: BTreeMap<u32, Vec<f64>> = BTreeMap::new();
-            for (&g, &x) in c.iter().zip(influence) {
-                sums.entry(g).or_default().push(x);
-            }
-            let g = sums.len();
-            if g < 2 {
-                return Err(Error::input("cluster: the variance needs two clusters"));
-            }
-            let squares = compensated(sums.values().map(|v| {
-                let s = compensated(v.iter().copied());
-                s * s
-            }));
-            g as f64 / (g as f64 - 1.0) * squares
-        }
-    };
-    if v.is_finite() {
-        Ok(v.max(0.0))
-    } else {
-        Err(Error::input("the variance is not finite"))
-    }
-}
-
-pub(crate) fn estimate(value: f64, variance: f64, null: f64, alpha: f64) -> Result<Estimate> {
-    let se = variance.sqrt();
-    let level =
-        epistat_core::Level::alpha(alpha).map_err(|e| Error::input(format!("alpha: {e}")))?;
-    let interval = epistat_inference::interval::normal(value, se, level);
-    let (lower, upper) = (
-        interval.lower.unwrap_or(f64::NAN),
-        interval.upper.unwrap_or(f64::NAN),
-    );
-    let p_value =
-        (se > 0.0).then(|| 2.0 * epistat_stats::dist::normal::cdf(-((value - null) / se).abs()));
-    Ok(Estimate {
-        estimate: value,
-        se,
-        lower,
-        upper,
-        p_value,
-    })
-}
-
 fn finish(
     c: &Core,
-    influence: &[Vec<f64>; 2],
+    dfbeta: &[Vec<f64>; 2],
     cluster: Option<&[u32]>,
-    target: Target,
     variance: Variance,
     opts: &AipwOptions,
 ) -> Result<Aipw> {
     let n = c.omega.len();
-    let diff: Vec<f64> = (0..n).map(|i| influence[0][i] - influence[1][i]).collect();
-    let mean1 = estimate(
-        c.theta[0],
-        variance_of(&influence[0], cluster)?,
-        0.0,
-        opts.alpha,
-    )?;
-    let mean0 = estimate(
-        c.theta[1],
-        variance_of(&influence[1], cluster)?,
-        0.0,
-        opts.alpha,
-    )?;
-    let difference = estimate(
-        c.theta[0] - c.theta[1],
-        variance_of(&diff, cluster)?,
-        0.0,
-        opts.alpha,
-    )?;
-    let ratio = if c.theta[1] == 0.0 {
-        None
-    } else {
-        let r = c.theta[0] / c.theta[1];
-        let if_r: Vec<f64> = (0..n)
-            .map(|i| (influence[0][i] - r * influence[1][i]) / c.theta[1])
-            .collect();
-        Some(estimate(r, variance_of(&if_r, cluster)?, 1.0, opts.alpha)?)
-    };
+    let influence = influence([&dfbeta[0], &dfbeta[1]], unit_codes(0..n)?)?;
+    let clusters = clusters(cluster, n)?;
+    let contrast = contrast(c.theta, &influence, clusters.as_ref(), opts.level)?;
     Ok(Aipw {
-        target,
-        mean1,
-        mean0,
-        difference,
-        ratio,
-        influence: diff,
+        estimand: opts.estimand,
+        contrast,
+        influence,
         variance,
         n_trimmed: c.clipped.iter().filter(|&&x| x).count(),
         min_propensity: c.e.iter().copied().fold(f64::INFINITY, f64::min),
@@ -441,22 +301,15 @@ fn finish(
 ///
 /// [`Error::Input`] for inputs of different lengths, no persons, a value that is
 /// not finite, a negative weight, a propensity outside `(0, 1)`, truncation
-/// limits that are not `0 < lower < upper < 1`, `alpha` outside `(0, 1)`, a
-/// group without persons of positive weight, a target population of weight 0, and
-/// fewer than two clusters.
-pub fn aipw(input: &AipwInput<'_>, target: Target, opts: &AipwOptions) -> Result<Aipw> {
-    let c = core(input, target, opts)?;
-    finish(
-        &c,
-        &c.influence,
-        input.cluster,
-        target,
-        Variance::Efficient,
-        opts,
-    )
+/// limits that are not `0 < lower < upper < 1`, an estimand other than the
+/// ATE, ATT and ATC, a group without persons of positive weight and a target
+/// population of weight 0.
+pub fn aipw(input: &AipwInput<'_>, opts: &AipwOptions) -> Result<Aipw> {
+    let c = core(input, opts)?;
+    finish(&c, &c.influence, input.cluster, Variance::Efficient, opts)
 }
 
-/// The data of [`aipw_glm`].
+/// The data of [`aipw_glm`] and of [`crate::tmle::tmle_glm`].
 #[derive(Debug, Clone, Copy)]
 pub struct GlmInput<'a> {
     /// The outcome.
@@ -474,7 +327,6 @@ pub struct GlmInput<'a> {
     pub cluster: Option<&'a [u32]>,
 }
 
-/// `g^-1` and the variance function of a family with its canonical link.
 /// The variance function of a family, `V(mu)`.
 type VarianceFunction = fn(f64) -> f64;
 
@@ -489,37 +341,23 @@ fn canonical(family: Family) -> Result<(Link, VarianceFunction)> {
     }
 }
 
-pub(crate) struct Fitted {
-    /// The prediction for every row, from the coefficients.
-    pub(crate) mean: Vec<f64>,
-}
-
-pub(crate) fn fit_model(
+/// The predictions of a strict fit of `glm` for every row of `x`, from its
+/// coefficients.
+pub(crate) fn fitted_mean(
     glm: &Glm,
     x: MatRef<'_, f64>,
     y: &[f64],
     weights: &[f64],
     what: &str,
-) -> Result<Fitted> {
-    let model = glm
-        .fit_slices(x, y, Some(weights), None, None)
-        .map_err(|e| Error::input(format!("{what} model: {e}")))?;
-    if !model.converged {
-        return Err(Error::input(format!("{what} model: no convergence")));
-    }
-    let mut coefficients = Vec::with_capacity(model.coefficients.len());
-    for (j, c) in model.coefficients.iter().enumerate() {
-        coefficients.push(
-            c.ok_or_else(|| Error::input(format!("{what} model: design column {j} is aliased")))?,
-        );
-    }
-    let mean = (0..x.nrows())
+) -> Result<Vec<f64>> {
+    let what = &format!("{what} model");
+    let (_, coefficients) = fit_glm(glm, &glm_data(x, y, Some(weights), None, what)?, what)?;
+    Ok((0..x.nrows())
         .map(|i| {
             let eta: f64 = (0..x.ncols()).map(|j| x[(i, j)] * coefficients[j]).sum();
             glm.link.inverse(eta)
         })
-        .collect();
-    Ok(Fitted { mean })
+        .collect())
 }
 
 /// For one model: with `G = X' diag(gram) X`, the contribution to the influence of
@@ -537,7 +375,7 @@ fn block(
     let factor = Factor::new(g.as_ref(), &Attempt::SYMMETRIC)
         .map_err(|e| Error::input(format!("{what} model: {e}")))?;
     let b = Mat::from_fn(p, 2, |j, m| {
-        epistat_stats::sum::compensated((0..n).map(|i| x[(i, j)] * rhs[m][i]))
+        compensated((0..n).map(|i| x[(i, j)] * rhs[m][i]))
     });
     let v = factor
         .solve(b.as_ref())
@@ -566,42 +404,18 @@ fn block(
 ///
 /// The errors of [`aipw`], and [`Error::Input`] for a design with another number
 /// of rows than the data or without columns, an outcome family other than the
-/// three above, a model that does not converge or has an aliased column, a
-/// response outside the support of the family, and a propensity model whose
-/// fitted probabilities are numerically 0 or 1.
-pub fn aipw_glm(
-    input: &GlmInput<'_>,
-    family: Family,
-    target: Target,
-    opts: &AipwOptions,
-) -> Result<Aipw> {
+/// three above, a model that has an aliased column, a response outside the
+/// support of the family, and a propensity model whose fitted probabilities are
+/// numerically 0 or 1; [`Error::NoConvergence`] for a model that does not
+/// converge.
+pub fn aipw_glm(input: &GlmInput<'_>, family: Family, opts: &AipwOptions) -> Result<Aipw> {
     let n = input.treatment.len();
+    check_estimand(opts.estimand)?;
     check_len("outcome", input.outcome.len(), n)?;
-    for (name, m) in [
-        ("outcome_design", input.outcome_design),
-        ("propensity_design", input.propensity_design),
-    ] {
-        if m.nrows() != n {
-            return Err(Error::input(format!(
-                "{name}: {} rows for {n} persons",
-                m.nrows()
-            )));
-        }
-        if m.ncols() == 0 {
-            return Err(Error::input(format!("{name}: no columns")));
-        }
-        if !epistat_linalg::is_finite(m) {
-            return Err(Error::input(format!("{name}: a value is not finite")));
-        }
-    }
+    check_design("outcome_design", input.outcome_design, n)?;
+    check_design("propensity_design", input.propensity_design, n)?;
     let (link, variance_function) = canonical(family)?;
-    let omega: Vec<f64> = input.weight.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
-    if omega.len() != n {
-        return Err(Error::input(format!(
-            "weight: {} values for {n} persons",
-            omega.len()
-        )));
-    }
+    let omega = case_weights("weight", input.weight, n)?;
     let a: Vec<f64> = input
         .treatment
         .iter()
@@ -619,37 +433,28 @@ pub fn aipw_glm(
             .collect()
     };
     let (x, z) = (input.outcome_design, input.propensity_design);
-    let propensity = fit_model(
+    let propensity = fitted_mean(
         &Glm::new(Family::Binomial, Link::Logit),
         z,
         &a,
         &omega,
         "propensity",
     )?;
-    let eps10 = 10.0 * f64::EPSILON;
-    if let Some(i) = propensity
-        .mean
-        .iter()
-        .position(|&p| p < eps10 || p > 1.0 - eps10)
-    {
-        return Err(Error::input(format!(
-            "propensity model: person {i} has fitted probability {} (separation)",
-            propensity.mean[i]
-        )));
-    }
+    check_separation(&propensity)?;
     let glm = Glm::new(family, link);
-    let m1 = fit_model(&glm, x, input.outcome, &arm(true), "outcome (treated)")?;
-    let m0 = fit_model(&glm, x, input.outcome, &arm(false), "outcome (controls)")?;
+    let m1 = fitted_mean(&glm, x, input.outcome, &arm(true), "outcome (treated)")?;
+    let m0 = fitted_mean(&glm, x, input.outcome, &arm(false), "outcome (controls)")?;
     let data = AipwInput {
         outcome: input.outcome,
         treatment: input.treatment,
-        mu1: &m1.mean,
-        mu0: &m0.mean,
-        propensity: &propensity.mean,
+        mu1: &m1,
+        mu0: &m0,
+        propensity: &propensity,
         weight: input.weight,
         cluster: input.cluster,
     };
-    let c = core(&data, target, opts)?;
+    let c = core(&data, opts)?;
+    let estimand = opts.estimand;
 
     // Derivatives of U_1 and U_0 per person with respect to the outcome models
     // (a scalar times the design row) and to the propensity model, divided by the
@@ -658,30 +463,30 @@ pub fn aipw_glm(
     let (mut d1e, mut d0e) = (vec![0.0; n], vec![0.0; n]);
     for i in 0..n {
         let (y, p) = (input.outcome[i], c.e[i]);
-        let (v1, v0) = (variance_function(m1.mean[i]), variance_function(m0.mean[i]));
+        let (v1, v0) = (variance_function(m1[i]), variance_function(m0[i]));
         let (ai, wi) = (a[i], c.omega[i] / c.size);
         let odds = p / (1.0 - p);
         let inverse_odds = (1.0 - p) / p;
         d1b[i] = wi
             * v1
-            * match target {
-                Target::Ate => 1.0 - ai / p,
-                Target::Atc => (1.0 - ai) - ai * inverse_odds,
-                Target::Att => 0.0,
+            * match estimand {
+                Estimand::Atc => (1.0 - ai) - ai * inverse_odds,
+                Estimand::Att => 0.0,
+                _ => 1.0 - ai / p,
             };
         d0b[i] = wi
             * v0
-            * match target {
-                Target::Ate => 1.0 - (1.0 - ai) / (1.0 - p),
-                Target::Att => ai - (1.0 - ai) * odds,
-                Target::Atc => 0.0,
+            * match estimand {
+                Estimand::Att => ai - (1.0 - ai) * odds,
+                Estimand::Atc => 0.0,
+                _ => 1.0 - (1.0 - ai) / (1.0 - p),
             };
         if !c.clipped[i] {
-            if target != Target::Att {
-                d1e[i] = -wi * ai * (y - m1.mean[i]) * inverse_odds;
+            if estimand != Estimand::Att {
+                d1e[i] = -wi * ai * (y - m1[i]) * inverse_odds;
             }
-            if target != Target::Atc {
-                d0e[i] = wi * (1.0 - ai) * (y - m0.mean[i]) * odds;
+            if estimand != Estimand::Atc {
+                d0e[i] = wi * (1.0 - ai) * (y - m0[i]) * odds;
             }
         }
     }
@@ -710,23 +515,23 @@ pub fn aipw_glm(
     let zeros = vec![0.0; n];
     // The propensity model's own equations, on the fitted probabilities.
     let ps_score: Vec<f64> = (0..n)
-        .map(|i| c.omega[i] * (a[i] - propensity.mean[i]))
+        .map(|i| c.omega[i] * (a[i] - propensity[i]))
         .collect();
     let ps_gram: Vec<f64> = (0..n)
-        .map(|i| c.omega[i] * propensity.mean[i] * (1.0 - propensity.mean[i]))
+        .map(|i| c.omega[i] * propensity[i] * (1.0 - propensity[i]))
         .collect();
     let b1 = block(
         x,
-        &gram(true, &m1.mean),
+        &gram(true, &m1),
         [&d1b, &zeros],
-        &score(true, &m1.mean),
+        &score(true, &m1),
         "outcome (treated)",
     )?;
     let b0 = block(
         x,
-        &gram(false, &m0.mean),
+        &gram(false, &m0),
         [&zeros, &d0b],
-        &score(false, &m0.mean),
+        &score(false, &m0),
         "outcome (controls)",
     )?;
     let be = block(z, &ps_gram, [&d1e, &d0e], &ps_score, "propensity")?;
@@ -736,12 +541,5 @@ pub fn aipw_glm(
         influence[0][i] += b1[0][i] + e1[i];
         influence[1][i] += b0[1][i] + e0[i];
     }
-    finish(
-        &c,
-        &influence,
-        input.cluster,
-        target,
-        Variance::Stacked,
-        opts,
-    )
+    finish(&c, &influence, input.cluster, Variance::Stacked, opts)
 }
