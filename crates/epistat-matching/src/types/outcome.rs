@@ -398,6 +398,7 @@ impl MatchDiagnostics {
 }
 
 /// Run diagnostics for matching.
+#[non_exhaustive]
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct MatchDiagnostics {
     /// Total anchors evaluated by the engine.

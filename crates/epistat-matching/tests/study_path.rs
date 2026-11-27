@@ -25,6 +25,7 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::{Days, NaiveDate};
 use epistat_matching::constraints::{MissingPolicy, ResidenceSpell, caliper_on_field};
+use epistat_matching::delegate_matching_record;
 use epistat_matching::prelude::*;
 use epistat_matching::{PairWeightTable, UnitRole, UnitWeightTable};
 use epistat_stats::weighted::effective_sample_size;
@@ -79,33 +80,7 @@ struct Person {
 type Member = RoleTransitionRecord<Person>;
 
 impl MatchingRecord for Person {
-    fn id(&self) -> &str {
-        self.base.id()
-    }
-
-    fn birth_date(&self) -> NaiveDate {
-        self.base.birth_date()
-    }
-
-    fn strata(&self) -> &HashMap<String, String> {
-        self.base.strata()
-    }
-
-    fn numeric(&self, name: &str) -> Option<f64> {
-        self.base.numeric(name)
-    }
-
-    fn unique_key(&self) -> Option<&str> {
-        self.base.unique_key()
-    }
-
-    fn death_date(&self) -> Option<NaiveDate> {
-        self.base.death_date()
-    }
-
-    fn emigration_date(&self) -> Option<NaiveDate> {
-        self.base.emigration_date()
-    }
+    delegate_matching_record!(base);
 }
 
 struct PassPolicy<'a> {

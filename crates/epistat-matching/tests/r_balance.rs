@@ -186,10 +186,11 @@ fn outcome(pairs: &[(String, String)], estimand: Estimand) -> MatchOutcome {
         used_controls: 0,
         matched_cases: 0,
         avg_controls_per_case: None,
-        diagnostics: MatchDiagnostics {
-            requested_estimand: estimand,
-            realized_estimand: estimand,
-            ..MatchDiagnostics::default()
+        diagnostics: {
+            let mut diagnostics = MatchDiagnostics::default();
+            diagnostics.requested_estimand = estimand;
+            diagnostics.realized_estimand = estimand;
+            diagnostics
         },
     }
 }

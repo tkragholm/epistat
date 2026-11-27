@@ -147,6 +147,10 @@ fn property_anchor_candidate_api_supports_multiple_record_shapes() {
             &self.strata
         }
 
+        fn stratum(&self, key: &str) -> Option<&str> {
+            self.strata.get(key).map(String::as_str)
+        }
+
         fn unique_key(&self) -> Option<&str> {
             None
         }

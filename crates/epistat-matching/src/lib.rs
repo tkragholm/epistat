@@ -86,19 +86,38 @@ macro_rules! impl_with_distance_config {
     };
 }
 
-/// Generates a full `MatchingRecord` impl that delegates every method to an
-/// inner field, or to the record behind a reference with `*`. A method added
-/// to `MatchingRecord` must be added to `delegate_matching_methods` too:
-/// `matching::records::tests::delegate_macro_forwards_every_trait_method`
-/// fails until it is.  Used for the wrappers of a record, in the crate and in
-/// test fixtures.
+/// Implements every method of [`MatchingRecord`] by forwarding it to an inner
+/// record: to the field `$field` with `delegate_matching_record!(field)`, or
+/// to the record behind a reference or a box with `delegate_matching_record!(*)`.
 ///
-/// ```ignore
-/// impl crate::MatchingRecord for MyWrapper {
-///     crate::delegate_matching_record!(inner);
-/// }
+/// A wrapper that adds data of its own to a record, such as the flags a
+/// risk-set policy reads, implements the trait with this macro, so that a
+/// method the wrapper does not write by hand reads the inner record rather
+/// than the trait's default. Forwarding by hand misses a method silently: a
+/// forgotten [`MatchingRecord::numeric`] refuses every pair on a caliper, and
+/// a forgotten [`MatchingRecord::entry_date`] ignores the entry date. The
+/// crate's tests check that the macro forwards every method of the trait.
+///
 /// ```
-#[doc(hidden)]
+/// use chrono::NaiveDate;
+/// use epistat_matching::{BaseRecord, MatchingRecord, delegate_matching_record};
+///
+/// struct Person {
+///     base: BaseRecord,
+///     exposed: bool,
+/// }
+///
+/// impl MatchingRecord for Person {
+///     delegate_matching_record!(base);
+/// }
+///
+/// let birth = NaiveDate::from_ymd_opt(2010, 1, 1).unwrap();
+/// let mut base = BaseRecord::new("p1", birth);
+/// base.strata.insert("sex".into(), "F".into());
+/// let person = Person { base, exposed: true };
+/// assert_eq!(person.stratum("sex"), Some("F"));
+/// assert!(person.exposed);
+/// ```
 #[macro_export]
 macro_rules! delegate_matching_record {
     ($field:ident) => {
