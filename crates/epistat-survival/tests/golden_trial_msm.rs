@@ -17,8 +17,8 @@ use epistat_testkit::Fingerprint;
 
 /// `(name, length, digest)` of each recorded output.
 const EXPECTED: &[(&str, usize, u64)] = &[
-    ("switching", 11047, 0xf373_58ff_cda2_d9be),
-    ("with censoring", 15743, 0xe7fb_c2d2_9fa7_2ba5),
+    ("switching", 11047, 0x2216_255e_8d39_8958),
+    ("with censoring", 15743, 0x1351_4c75_c27b_8997),
 ];
 
 #[test]

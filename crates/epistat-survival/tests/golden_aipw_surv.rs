@@ -17,10 +17,10 @@ use epistat_testkit::Fingerprint;
 
 /// `(name, length, digest)` of each recorded output.
 const EXPECTED: &[(&str, usize, u64)] = &[
-    ("aiptw km", 7224, 0x579d_dc44_2666_8503),
-    ("aiptw cox", 7224, 0x3cbf_f73c_0181_e870),
-    ("iptw km", 7224, 0x8d40_6d0f_8f11_231f),
-    ("iptw cox", 7224, 0x230e_a873_2cbf_12fe),
+    ("aiptw km", 7224, 0x48b0_3bfc_6d1d_f466),
+    ("aiptw cox", 7224, 0xc104_9e5f_9632_5f0d),
+    ("iptw km", 7224, 0x2153_36a7_ff7e_1307),
+    ("iptw cox", 7224, 0x3e48_00d9_08a6_3ad2),
 ];
 
 fn outputs() -> Vec<(String, Vec<f64>)> {

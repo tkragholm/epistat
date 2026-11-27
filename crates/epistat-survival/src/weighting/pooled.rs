@@ -217,10 +217,6 @@ pub(super) struct Limit {
     pub h: f64,
 }
 
-fn expit(eta: f64) -> f64 {
-    1.0 / (1.0 + (-eta).exp())
-}
-
 /// Fit the model of one design on the active rows, and give its coefficients and
 /// the probability for every row.
 fn fit_model(
@@ -238,20 +234,16 @@ fn fit_model(
         subset.as_ref()
     };
     let ys: Vec<f64> = kept.iter().map(|&i| y[i]).collect();
-    let model = Glm::new(Family::Binomial, Link::Logit)
+    let glm = Glm::new(Family::Binomial, Link::Logit);
+    let model = glm
         .fit(&crate::logistic::data(x, &ys, None, None, None)?)
         .map_err(Error::model(format!("{what} model")))?;
     let coefficients = model
         .full_rank()
         .map_err(Error::model(format!("{what} model")))?;
-    let probability: Vec<f64> = (0..design.nrows())
-        .map(|i| {
-            let eta: f64 = (0..design.ncols())
-                .map(|j| design[(i, j)] * coefficients[j])
-                .sum();
-            expit(eta)
-        })
-        .collect();
+    let probability = glm
+        .predict(&model, design, None)
+        .map_err(Error::model(format!("{what} model")))?;
     if let Some(i) = probability.iter().position(|&p| !(p > 0.0 && p < 1.0)) {
         return Err(Error::invalid(format!(
             "{what} model: row {i} has fitted probability {}",

@@ -354,10 +354,6 @@ struct Model {
     max_stop: f64,
 }
 
-fn expit(eta: f64) -> f64 {
-    1.0 / (1.0 + (-eta).exp())
-}
-
 fn linear_predictor(x: MatRef<'_, f64>, cf: Counterfactual<'_>, beta: &[f64], row: usize) -> f64 {
     let p = x.ncols();
     let mut eta = 0.0;
@@ -552,7 +548,8 @@ impl Model {
             .iter()
             .map(|&a| f64::from(u8::from(a)))
             .collect();
-        let glm = Glm::new(Family::Binomial, Link::Logit)
+        let model = Glm::new(Family::Binomial, Link::Logit);
+        let glm = model
             .fit(&crate::logistic::data(
                 spec.propensity_x,
                 &y,
@@ -561,14 +558,14 @@ impl Model {
                 None,
             )?)
             .map_err(Error::model("treatment model"))?;
-        let gamma = glm.full_rank().map_err(Error::model("treatment model"))?;
+        glm.full_rank().map_err(Error::model("treatment model"))?;
+        let fitted = model
+            .predict(&glm, spec.propensity_x, None)
+            .map_err(Error::model("treatment model"))?;
         let mut n_trimmed = 0;
         let mut pi = Vec::with_capacity(n);
-        for i in 0..n {
-            let eta: f64 = (0..gamma.len())
-                .map(|j| spec.propensity_x[(i, j)] * gamma[j])
-                .sum();
-            let mut e = expit(eta);
+        for (i, &fitted) in fitted.iter().enumerate() {
+            let mut e = fitted;
             if !(e > 0.0 && e < 1.0) {
                 return Err(Error::invalid(format!(
                     "treatment model: row {i} has fitted probability {e}"
@@ -1671,6 +1668,11 @@ fn km_tables(
 
 #[cfg(test)]
 mod tests {
+    /// The logistic function the simulated treatment is drawn with.
+    fn expit(eta: f64) -> f64 {
+        1.0 / (1.0 + (-eta).exp())
+    }
+
     use super::*;
     use epistat_linalg::Mat;
     use epistat_rng::Stream;

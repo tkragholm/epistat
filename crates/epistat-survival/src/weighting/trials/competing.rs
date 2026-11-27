@@ -191,7 +191,7 @@ fn product(a: &Mat<f64>, b: &Mat<f64>) -> Mat<f64> {
 
 fn expit(x: &[f64], coefficients: &[f64]) -> f64 {
     let eta: f64 = x.iter().zip(coefficients).map(|(a, b)| a * b).sum();
-    1.0 / (1.0 + (-eta).exp())
+    epistat_glm::Link::Logit.inverse(eta)
 }
 
 fn add_score(score: &mut [f64], x: &[f64], scale: f64) {

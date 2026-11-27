@@ -990,7 +990,7 @@ pub fn cumulative_incidence_rows(
                 )));
             }
             let eta: f64 = (0..p).map(|j| x[j] * msm.coefficients[j]).sum();
-            let prob = 1.0 / (1.0 + (-eta).exp());
+            let prob = Link::Logit.inverse(eta);
             surv *= 1.0 - prob;
             for j in 0..p {
                 dlog[j] += prob * x[j];

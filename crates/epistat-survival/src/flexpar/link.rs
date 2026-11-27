@@ -34,15 +34,7 @@ pub(super) fn softplus(x: f64) -> f64 {
     x.max(0.0) + (-x.abs()).exp().ln_1p()
 }
 
-/// `1 / (1 + e^-x)`, stable in both tails.
-pub(super) fn expit(x: f64) -> f64 {
-    if x >= 0.0 {
-        1.0 / (1.0 + (-x).exp())
-    } else {
-        let e = x.exp();
-        e / (1.0 + e)
-    }
-}
+pub(super) use epistat_stats::logistic::expit;
 
 /// `Phi(-y) / phi(y)` by the continued fraction
 /// `1 / (y + 1 / (y + 2 / (y + 3 / (y + ...))))`, evaluated from the tail

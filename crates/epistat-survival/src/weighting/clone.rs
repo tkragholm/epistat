@@ -576,7 +576,7 @@ fn fit_deviation(
 
 fn probability(x: MatRef<'_, f64>, coef: &[f64], row: usize) -> f64 {
     let eta: f64 = (0..coef.len()).map(|j| x[(row, j)] * coef[j]).sum();
-    1.0 / (1.0 + (-eta).exp())
+    Link::Logit.inverse(eta)
 }
 
 /// The weights of the clones of one fit of the deviation models.
@@ -854,7 +854,7 @@ fn finite_design(design: DeviationDesign<'_>, n: usize) -> bool {
 /// design row `x`, as `probability` forms it from a matrix.
 fn probability_of(x: &[f64], coef: &[f64]) -> f64 {
     let eta: f64 = (0..coef.len()).map(|j| x[j] * coef[j]).sum();
-    1.0 / (1.0 + (-eta).exp())
+    Link::Logit.inverse(eta)
 }
 
 /// The denominator probability of every clone row of strategy `k`.

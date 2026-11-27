@@ -297,8 +297,8 @@ fn weights_bits(w: &DeviationWeights) -> Vec<u64> {
 const EXPECTED: &[(&str, usize, u64)] = &[
     ("trial msm", 32, 0xe0e2_53ac_13f3_a6d9),
     ("trial msm", 32, 0xe0e2_53ac_13f3_a6d9),
-    ("ccw", 32, 0xa72a_7c84_5364_6e98),
-    ("ccw", 32, 0xa72a_7c84_5364_6e98),
+    ("ccw", 32, 0x989c_fdab_8314_0c48),
+    ("ccw", 32, 0x989c_fdab_8314_0c48),
 ];
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
