@@ -87,12 +87,7 @@ fn flexpar_fit_predict_contrast() {
             ] {
                 for curve in predict(&f, xs.as_ref(), &times, what, &o).unwrap() {
                     for p in curve {
-                        out.extend([
-                            p.estimate,
-                            p.standard_error,
-                            p.lower.unwrap(),
-                            p.upper.unwrap(),
-                        ]);
+                        out.extend([p.estimate, p.se, p.lower.unwrap(), p.upper.unwrap()]);
                     }
                 }
             }
@@ -103,12 +98,7 @@ fn flexpar_fit_predict_contrast() {
             ] {
                 for curve in contrast(&f, xs.as_ref(), x0.as_ref(), &times, what, &o).unwrap() {
                     for p in curve {
-                        out.extend([
-                            p.estimate,
-                            p.standard_error,
-                            p.lower.unwrap(),
-                            p.upper.unwrap(),
-                        ]);
+                        out.extend([p.estimate, p.se, p.lower.unwrap(), p.upper.unwrap()]);
                     }
                 }
             }

@@ -15,7 +15,7 @@ use epistat_testkit::{POOLS, absent, absent_all, assert_same_on_pools};
 
 fn summary(model: &epistat_survival::cox::CoxModelFit) -> Vec<f64> {
     let mut out = absent_all(&model.coefficients);
-    out.extend(absent_all(&model.standard_errors));
+    out.extend(absent_all(&model.se));
     out.extend(absent_all(&model.covariance));
     out.extend([
         absent(model.log_partial_likelihood),

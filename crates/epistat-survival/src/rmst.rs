@@ -399,10 +399,10 @@ pub struct RmstRegression {
     /// The coefficients: the intercept, the arm and then the covariates.
     pub coefficients: Vec<f64>,
     /// Their standard errors.
-    pub std_err: Vec<f64>,
+    pub se: Vec<f64>,
     /// The covariance matrix, row-major, `p` by `p`.
     pub covariance: Vec<f64>,
-    /// `coefficient / std_err`.
+    /// `coefficient / se`.
     pub z: Vec<f64>,
     /// The two-sided normal p-value of each coefficient.
     pub p_value: Vec<f64>,
@@ -642,7 +642,7 @@ pub fn rmst2_regression(
             .map(|(i, j)| covariance[(i, j)])
             .collect(),
         coefficients: beta,
-        std_err,
+        se: std_err,
         z,
         p_value,
         level: opts.level,

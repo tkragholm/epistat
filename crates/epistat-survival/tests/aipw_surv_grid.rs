@@ -65,7 +65,7 @@ fn run(s: &Scenario, km: bool, grid: Option<usize>) -> AipwSurv {
 }
 
 fn worst(a: &AipwSurv, b: &AipwSurv) -> f64 {
-    let se = |r: &AipwSurv| r.risks.std_err.clone().unwrap();
+    let se = |r: &AipwSurv| r.risks.se.clone().unwrap();
     let mut w: f64 = 0.0;
     for (x, y) in a.risks.risk.iter().zip(&b.risks.risk) {
         w = w.max((x.unwrap() - y.unwrap()).abs());

@@ -533,8 +533,8 @@ fn fits_match_coxph_on_finegray_rows() {
                     range,
                     r.se,
                 );
-                let se = fit_deviation(fit.standard_errors[0].unwrap(), r.se);
-                let robust = match (&fit.robust_standard_errors, r.robust_se) {
+                let se = fit_deviation(fit.se[0].unwrap(), r.se);
+                let robust = match (&fit.robust_se, r.robust_se) {
                     (Some(got), Some(want)) => fit_deviation(got[0].unwrap(), want),
                     (None, None) => 0.0,
                     other => panic!("{label}: robust standard errors {other:?}"),
@@ -608,7 +608,7 @@ fn coefficients_match_crr_when_no_failure_ties_with_a_censoring() {
                     r.covariate,
                     r.coefficient,
                     difference / tolerance,
-                    fit.standard_errors[0].unwrap(),
+                    fit.se[0].unwrap(),
                     r.se
                 );
                 if tie {
@@ -792,7 +792,7 @@ fn check_multi(
         let sd = r.vcov[a][a].sqrt();
         // sqrt is 1/2 relative of the variance.
         let tolerance = f64::midpoint(b.dv[a][a], p * b.solve * r.vcov[a][a]) / sd;
-        se = se.max(units(model.standard_errors[a].unwrap(), sd, tolerance));
+        se = se.max(units(model.se[a].unwrap(), sd, tolerance));
         for c in 0..4 {
             let tolerance = b.dv[a][c] + p * b.solve * (r.vcov[a][a] * r.vcov[c][c]).sqrt();
             covariance = covariance.max(units(

@@ -55,7 +55,7 @@ fn without_censoring_the_metrics_are_the_plain_ones() {
         assert!((b.brier[j] - mean).abs() <= tol);
         let var = r.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / (n as f64 - 1.0);
         let se = (var / n as f64).sqrt();
-        assert!((b.std_err[j].unwrap() - se).abs() <= tol);
+        assert!((b.se[j].unwrap() - se).abs() <= tol);
 
         let (mut num, mut pairs) = (0.0, 0.0);
         for i in 0..n {
@@ -83,7 +83,7 @@ fn an_area_without_cases_or_controls_is_missing() {
     let m = Mat::from_fn(time.len(), 1, |i, _| risk[i]);
     let a = auc(&data, m.as_ref(), &[10.0], &ScoreOptions::default()).unwrap();
     assert_eq!(a.auc, vec![None]);
-    assert_eq!(a.std_err, vec![None]);
+    assert_eq!(a.se, vec![None]);
     // Before the first time every row is a control and none is a case.
     let a = auc(&data, m.as_ref(), &[0.5], &ScoreOptions::default()).unwrap();
     assert_eq!(a.auc, vec![None]);
@@ -111,7 +111,7 @@ fn rows_of_weight_zero_are_left_out_and_the_influence_has_one_row_per_used_row()
     let a = score_brier(&weighted, m.as_ref(), &[5.0], &opts).unwrap();
     let b = score_brier(&reduced, m2.as_ref(), &[5.0], &opts).unwrap();
     assert_eq!(a.brier, b.brier);
-    assert_eq!(a.std_err, b.std_err);
+    assert_eq!(a.se, b.se);
     assert_eq!((a.n_rows, a.n_used), (n, keep.len()));
     let influence = a.influence.as_ref().unwrap();
     assert_eq!(influence.nrows(), keep.len());
@@ -154,7 +154,7 @@ fn the_null_model_and_the_ipa_of_the_null_model() {
     let p = ipa(&z, &z).unwrap();
     for j in 0..2 {
         assert!(p.ipa[j].unwrap().abs() <= 4.0 * EPS);
-        assert!(p.std_err[j].unwrap().abs() <= 4.0 * n as f64 * EPS);
+        assert!(p.se[j].unwrap().abs() <= 4.0 * n as f64 * EPS);
     }
 }
 
@@ -255,7 +255,7 @@ fn a_single_row_has_no_standard_error() {
     let m = Mat::from_fn(1, 1, |_, _| 0.4);
     let b = score_brier(&data, m.as_ref(), &[3.0], &ScoreOptions::default()).unwrap();
     assert!((b.brier[0] - 0.36).abs() <= 4.0 * EPS);
-    assert_eq!(b.std_err, vec![None]);
+    assert_eq!(b.se, vec![None]);
 }
 
 #[test]

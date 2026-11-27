@@ -93,7 +93,7 @@ pub fn flatten(r: &AipwSurv) -> Vec<f64> {
     let mut v = Vec::new();
     for x in [&r.risks.risk]
         .into_iter()
-        .chain(r.risks.std_err.as_ref())
+        .chain(r.risks.se.as_ref())
         .chain(r.risks.covariance.as_ref())
     {
         v.extend(x.iter().map(|o| o.unwrap_or(f64::NAN)));

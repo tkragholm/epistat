@@ -104,9 +104,9 @@ fn fine_gray_rows() {
 /// Every number of a fit, with an absent one as a marker.
 fn fit_bits(fit: &CoxModelFit) -> Vec<f64> {
     let mut out: Vec<f64> = fit.coefficients.iter().copied().map(absent).collect();
-    out.extend(fit.standard_errors.iter().copied().map(absent));
+    out.extend(fit.se.iter().copied().map(absent));
     out.extend(fit.covariance.iter().copied().map(absent));
-    for matrix in [&fit.robust_standard_errors, &fit.robust_covariance] {
+    for matrix in [&fit.robust_se, &fit.robust_covariance] {
         out.extend(matrix.iter().flatten().copied().map(absent));
     }
     for value in [fit.log_partial_likelihood, fit.null_log_partial_likelihood] {

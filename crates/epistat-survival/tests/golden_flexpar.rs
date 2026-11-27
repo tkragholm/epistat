@@ -118,7 +118,7 @@ fn run(scale: Scale, case: &Case) -> (u64, u64) {
             for p in curve {
                 h = h
                     .f64(p.estimate)
-                    .f64(p.standard_error)
+                    .f64(p.se)
                     .option_f64(p.lower)
                     .option_f64(p.upper);
             }
@@ -133,7 +133,7 @@ fn run(scale: Scale, case: &Case) -> (u64, u64) {
             for p in curve {
                 h = h
                     .f64(p.estimate)
-                    .f64(p.standard_error)
+                    .f64(p.se)
                     .option_f64(p.lower)
                     .option_f64(p.upper);
             }

@@ -1245,11 +1245,7 @@ mod tests {
                 "{fit:?}"
             );
             assert!(
-                close(
-                    fit.standard_errors[0].unwrap(),
-                    0.634_301_730_060_493,
-                    1e-10
-                ),
+                close(fit.se[0].unwrap(), 0.634_301_730_060_493, 1e-10),
                 "{fit:?}"
             );
         }
@@ -1408,8 +1404,8 @@ mod tests {
         ));
         assert_eq!((plain.n_rows, plain.n_used), (20, 20));
         assert_eq!((clustered.n_rows, clustered.n_used), (20, 20));
-        assert!(clustered.robust_standard_errors.is_some());
-        assert!(plain.robust_standard_errors.is_none());
+        assert!(clustered.robust_se.is_some());
+        assert!(plain.robust_se.is_none());
     }
 
     /// Three columns, one of them a factor's indicator pair: the collapsed
@@ -1743,7 +1739,7 @@ mod tests {
             ));
             let sd = v(a, a).sqrt();
             worst[1] = worst[1].max(units(
-                got.standard_errors[a].unwrap(),
+                got.se[a].unwrap(),
                 sd,
                 f64::midpoint(b.dv[a * p + a], p as f64 * b.solve * v(a, a)) / sd,
             ));
@@ -1837,9 +1833,9 @@ mod tests {
                                     .zip(&want.coefficients)
                                     .map(|(a, b)| (a.unwrap() - b.unwrap()).abs())
                                     .fold(0.0, f64::max),
-                                got.standard_errors
+                                got.se
                                     .iter()
-                                    .zip(&want.standard_errors)
+                                    .zip(&want.se)
                                     .map(|(a, b)| (a.unwrap() / b.unwrap() - 1.0).abs())
                                     .fold(0.0, f64::max),
                                 got.covariance

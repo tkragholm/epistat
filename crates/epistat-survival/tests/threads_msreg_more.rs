@@ -33,7 +33,7 @@ fn push_probabilities(out: &mut Vec<f64>, pt: &ProbTrans) {
     out.extend_from_slice(&pt.time);
     out.extend_from_slice(&pt.probability);
     out.extend(
-        pt.std_err
+        pt.se
             .as_ref()
             .unwrap()
             .iter()

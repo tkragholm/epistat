@@ -202,11 +202,7 @@ fn fits_match_r() {
             let columns: Vec<usize> = r.monotone_columns.iter().map(|c| c - 1).collect();
             assert_eq!(fit.monotone_columns, columns, "{}", r.name);
             assert!(fit.coefficients.iter().all(Option::is_none), "{}", r.name);
-            assert!(
-                fit.standard_errors.iter().all(Option::is_none),
-                "{}",
-                r.name
-            );
+            assert!(fit.se.iter().all(Option::is_none), "{}", r.name);
             assert!(
                 fit.log_partial_likelihood.is_none() && !fit.converged,
                 "{}",
@@ -229,23 +225,17 @@ fn fits_match_r() {
             1.0,
             NanRule::Coincide,
         );
-        let se = worst_deviation(
-            &none_as_nan(&fit.standard_errors),
-            &r.se,
-            bound,
-            1.0,
-            NanRule::Coincide,
-        );
+        let se = worst_deviation(&none_as_nan(&fit.se), &r.se, bound, 1.0, NanRule::Coincide);
         let robust = if r.use_cluster {
             worst_deviation(
-                &none_as_nan(fit.robust_standard_errors.as_ref().unwrap()),
+                &none_as_nan(fit.robust_se.as_ref().unwrap()),
                 &r.robust_se,
                 bound,
                 1.0,
                 NanRule::Coincide,
             )
         } else {
-            assert!(fit.robust_standard_errors.is_none());
+            assert!(fit.robust_se.is_none());
             0.0
         };
         let loglik = worst_deviation(

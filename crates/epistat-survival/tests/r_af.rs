@@ -90,7 +90,7 @@ fn the_attributable_fraction_function_matches_afcoxph() {
         for (j, b) in c.coef.iter().enumerate() {
             let got = model.coefficients[j].unwrap();
             assert!(
-                (got - b).abs() <= 1e-8 * model.standard_errors[j].unwrap(),
+                (got - b).abs() <= 1e-8 * model.se[j].unwrap(),
                 "{}",
                 c.label
             );
@@ -98,7 +98,7 @@ fn the_attributable_fraction_function_matches_afcoxph() {
         let observed = Level::single(Counterfactual::Columns(&[]));
         let unexposed = Level::single(Counterfactual::Design(x0.as_ref()));
         let opts = StandardiseOptions {
-            std_err: true,
+            se: true,
             ..StandardiseOptions::default()
         };
         let s = standardise_cox(

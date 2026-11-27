@@ -148,12 +148,12 @@ fn fit_record(fit: Result<CoxModelFit, epistat_survival::Error>) -> Vec<u64> {
     match fit {
         Ok(fit) => vec![
             opt_bits(fit.coefficients[0]),
-            opt_bits(fit.standard_errors[0]),
+            opt_bits(fit.se[0]),
             fit.n_events.to_bits(),
             fit.n_rows as u64,
             u64::from(fit.iterations),
             u64::from(fit.converged),
-            opt_bits(fit.robust_standard_errors.and_then(|v| v[0])),
+            opt_bits(fit.robust_se.and_then(|v| v[0])),
         ],
         Err(error) => {
             let text = error.to_string();

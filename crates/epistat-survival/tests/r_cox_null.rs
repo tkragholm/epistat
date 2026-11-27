@@ -161,7 +161,7 @@ fn null_cox_matches_r() {
         };
 
         // The fit.
-        assert_eq!(model.coefficients.len() + model.standard_errors.len(), 0);
+        assert_eq!(model.coefficients.len() + model.se.len(), 0);
         assert_eq!(model.covariance.len(), 0);
         assert_eq!(model.robust_covariance.is_some(), r.cluster, "{name}");
         assert_eq!(model.rank, 0);
@@ -410,7 +410,7 @@ fn null_cox_matches_r() {
             note(
                 "std_err",
                 worst_deviation(
-                    c.std_err.as_ref().unwrap(),
+                    c.se.as_ref().unwrap(),
                     &rs.std_err[sl.clone()],
                     b_sum,
                     0.0,
@@ -450,7 +450,7 @@ fn null_cox_matches_r() {
             note(
                 "alt std_err",
                 worst_deviation(
-                    a.std_err.as_ref().unwrap(),
+                    a.se.as_ref().unwrap(),
                     &ra.std_err[sl.clone()],
                     b_sum,
                     0.0,

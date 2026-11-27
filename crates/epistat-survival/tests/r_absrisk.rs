@@ -405,7 +405,7 @@ fn absolute_risk_matches_r() {
         for res in &case.results {
             let ropts = RiskOptions {
                 product_limit: res.product_limit,
-                std_err: true,
+                se: true,
                 // riskRegression's first-order form, which the reference has.
                 influence: InfluenceForm::Exponential,
                 limits: RiskLimits::LogLog,
@@ -434,14 +434,11 @@ fn absolute_risk_matches_r() {
                     &new,
                     &case.times,
                     case.cause,
-                    &RiskOptions {
-                        std_err: false,
-                        ..ropts
-                    },
+                    &RiskOptions { se: false, ..ropts },
                 )
                 .unwrap();
             assert_eq!(plain.risk, got.risk, "{name}: se does not move the risk");
-            assert!(plain.std_err.is_none() && plain.lower.is_none());
+            assert!(plain.se.is_none() && plain.lower.is_none());
             let n_times = case.times.len();
             let z = normal::quantile(0.975);
             naive_case.product_limit = res.product_limit;
@@ -508,7 +505,7 @@ fn absolute_risk_matches_r() {
                         (None, None) => assert!(beyond, "{name}: undefined without cause"),
                         other => panic!("{name} risk [{r},{t_idx}]: {other:?}"),
                     }
-                    let sum = got.std_err.as_ref().unwrap()[at];
+                    let sum = got.se.as_ref().unwrap()[at];
                     let mut cond = 1.0;
                     if counts[t_idx] > 0 && !beyond {
                         let (se_naive, se_abs) = *naive_iter.next().unwrap();
@@ -527,7 +524,7 @@ fn absolute_risk_matches_r() {
                         cond = (se_abs / se_naive).max(1.0);
                         // The exact form against its own direct evaluation.
                         let (se_x, se_x_abs) = *naive_exact_iter.next().unwrap();
-                        let gx = exact.std_err.as_ref().unwrap()[at].unwrap();
+                        let gx = exact.se.as_ref().unwrap()[at].unwrap();
                         let fast_bound_x = b_row[r]
                             * (p_max * kappa).max(1.0)
                             * (se_x_abs / se_x).max(1.0)

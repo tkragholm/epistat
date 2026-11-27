@@ -462,7 +462,7 @@ fn delta_checks(
                 );
                 worst.rel(
                     &format!("delta {key} se"),
-                    pr.standard_error,
+                    pr.se,
                     reference.se.as_ref().unwrap()[i],
                     1e-6,
                     1e-6,
@@ -490,7 +490,7 @@ fn delta_checks(
             if let Some(se_log) = &reference.se_log {
                 worst.rel(
                     "delta hazard_ratio se_log",
-                    pr.standard_error / pr.estimate,
+                    pr.se / pr.estimate,
                     se_log[i],
                     1e-6,
                     1e-6,
@@ -498,7 +498,7 @@ fn delta_checks(
             } else {
                 worst.rel(
                     &format!("delta {key} se"),
-                    pr.standard_error,
+                    pr.se,
                     reference.se.as_ref().unwrap()[i],
                     1e-6,
                     1e-6,

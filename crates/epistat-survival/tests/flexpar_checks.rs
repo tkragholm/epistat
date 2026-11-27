@@ -355,7 +355,7 @@ fn the_hazard_ratio_is_constant_without_time_varying_effects_and_is_not_with_the
         &o,
     )
     .unwrap();
-    assert!(hd[0].iter().all(|p| p.standard_error.is_finite()));
+    assert!(hd[0].iter().all(|p| p.se.is_finite()));
 }
 
 #[test]

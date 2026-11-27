@@ -111,14 +111,12 @@ fn main() {
         fit(&surv, d.x.as_ref(), &opts).expect("cox fit")
     });
     let mut lines = Lines::default();
-    for (j, (&coef, &se)) in f.coefficients.iter().zip(&f.standard_errors).enumerate() {
+    for (j, (&coef, &se)) in f.coefficients.iter().zip(&f.se).enumerate() {
         lines.push_opt(&format!("coef_{j}"), coef);
         lines.push_opt(&format!("se_{j}"), se);
         lines.push_opt(
             &format!("robust_se_{j}"),
-            f.robust_standard_errors
-                .as_ref()
-                .and_then(|robust| robust[j]),
+            f.robust_se.as_ref().and_then(|robust| robust[j]),
         );
     }
     lines.push_opt("loglik", f.log_partial_likelihood);

@@ -78,7 +78,7 @@ fn zero_coefficients_give_kaplan_meier() {
     let h = c.curves[0].cumulative_hazard[3];
     assert!((h - (0.3 + 1.0 / 7.0 + 0.5)).abs() < 1e-15, "{h}");
     // Greenwood's sum of d / (n (n - d)), the coefficient being known.
-    let se = c.curves[0].std_err.as_ref().unwrap();
+    let se = c.curves[0].se.as_ref().unwrap();
     let first = 3.0 / (10.0 * 7.0);
     let second = first + 1.0 / (7.0 * 6.0);
     let third = second + 2.0 / (4.0 * 2.0);
@@ -199,8 +199,8 @@ fn constant_path_equals_the_curve() {
                 assert!(close(got.cumulative_hazard[k], curve.cumulative_hazard[k]));
                 assert!(close(got.survival[k], curve.survival[k]));
                 assert!(close(
-                    got.std_err.as_ref().unwrap()[k],
-                    curve.std_err.as_ref().unwrap()[k]
+                    got.se.as_ref().unwrap()[k],
+                    curve.se.as_ref().unwrap()[k]
                 ));
             }
         }

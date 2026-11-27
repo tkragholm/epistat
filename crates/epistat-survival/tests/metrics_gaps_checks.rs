@@ -55,7 +55,7 @@ fn the_cox_censoring_model_refuses_what_it_cannot_use() {
         &make(&col, CoxOptions::default()),
     )
     .unwrap();
-    assert!(ok.std_err[0].is_some());
+    assert!(ok.se[0].is_some());
     let short = Mat::from_fn(n - 1, 1, |i, _| x[i]);
     let e = brier(
         &data,
@@ -113,7 +113,7 @@ fn contrasts_need_matching_scores_with_influence() {
     // A model against itself has no difference and no variance.
     let same = brier_difference(&sa, &sa, &ContrastOptions::default()).unwrap();
     assert_eq!(same.difference[0], Some(0.0));
-    assert!(same.std_err[0].is_none() && same.p_value[0].is_none());
+    assert!(same.se[0].is_none() && same.p_value[0].is_none());
     let plain = brier(&data, a.as_ref(), &[3.0, 6.0], &ScoreOptions::default()).unwrap();
     let e = brier_difference(&plain, &sb, &ContrastOptions::default()).unwrap_err();
     assert!(e.to_string().contains("influence"), "{e}");

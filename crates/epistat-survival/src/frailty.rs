@@ -396,7 +396,7 @@ pub struct FrailtyFit {
     /// One coefficient per column of the design, `None` for an aliased column.
     pub coefficients: Vec<Option<f64>>,
     /// Standard errors from `covariance`.
-    pub standard_errors: Vec<Option<f64>>,
+    pub se: Vec<Option<f64>>,
     /// The coefficient block of the inverse of the whole penalised
     /// information, row-major `p * p`, `var` of `coxph(sparse = FALSE)`.
     /// `None` in an entry of an aliased column, and everywhere when the
@@ -406,7 +406,7 @@ pub struct FrailtyFit {
     /// `H^-1 (H - P) H^-1`, `var2` of `coxph(sparse = FALSE)`.
     pub covariance_sandwich: Vec<Option<f64>>,
     /// Standard errors from `diagonal_covariance`.
-    pub diagonal_standard_errors: Vec<Option<f64>>,
+    pub diagonal_se: Vec<Option<f64>>,
     /// The covariance with the frailty block of the information replaced by
     /// its diagonal, `var` of `coxph(sparse = TRUE)`, the default for more
     /// than five clusters.
@@ -1142,8 +1142,8 @@ pub fn fit(
         None
     };
     Ok(FrailtyFit {
-        standard_errors: diagonal(&covariance),
-        diagonal_standard_errors: diagonal(&diagonal_covariance),
+        se: diagonal(&covariance),
+        diagonal_se: diagonal(&diagonal_covariance),
         coefficients,
         covariance,
         covariance_sandwich,

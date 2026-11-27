@@ -134,7 +134,7 @@ pub struct EventDependentFit {
     /// The sandwich covariance, `p * p` row-major, `None` without estimate.
     pub covariance: Vec<Option<f64>>,
     /// The square roots of its diagonal.
-    pub standard_errors: Vec<Option<f64>>,
+    pub se: Vec<Option<f64>>,
     /// The number of exposure columns, before the age columns.
     pub n_exposure_columns: usize,
     /// The cases.
@@ -420,7 +420,7 @@ pub fn fit_event_dependent(
     let mut result = EventDependentFit {
         coefficients: vec![None; p],
         covariance: vec![None; p * p],
-        standard_errors: vec![None; p],
+        se: vec![None; p],
         n_exposure_columns: n_expo,
         n_cases: n,
         n_doses_after_event: n_dropped,
@@ -531,7 +531,7 @@ pub fn fit_event_dependent(
         }
         result.coefficients[j] = Some(estimate[j]);
     }
-    result.standard_errors = (0..p)
+    result.se = (0..p)
         .map(|j| result.covariance[j * p + j].map(f64::sqrt))
         .collect();
     Ok(result)

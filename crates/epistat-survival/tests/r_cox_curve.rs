@@ -492,7 +492,7 @@ fn from_curves(
         n_censor: t.n_censor.clone(),
         cumhaz: curve.cumulative_hazard.clone(),
         surv: curve.survival.clone(),
-        std_err: curve.std_err.clone().unwrap(),
+        std_err: curve.se.clone().unwrap(),
         log: (curve.lower.clone().unwrap(), curve.upper.clone().unwrap()),
         loglog: (
             ll.curves[i].lower.clone().unwrap(),
@@ -789,7 +789,7 @@ fn curves_match_r() {
                     n_censor: c.n_censor.clone(),
                     cumhaz: c.cumulative_hazard.clone(),
                     surv: c.survival.clone(),
-                    std_err: c.std_err.clone().unwrap(),
+                    std_err: c.se.clone().unwrap(),
                     log: (c.lower.clone().unwrap(), c.upper.clone().unwrap()),
                     loglog: (
                         ll.curves[k].lower.clone().unwrap(),

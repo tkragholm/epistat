@@ -168,7 +168,7 @@ fn main() {
                 lines.push_opt(&format!("diff_{tau}"), c.difference[k]);
                 lines.push_opt(
                     &format!("diff_se_{tau}"),
-                    c.difference_inference.as_ref().and_then(|i| i.std_err[k]),
+                    c.difference_inference.as_ref().and_then(|i| i.se[k]),
                 );
             }
             times

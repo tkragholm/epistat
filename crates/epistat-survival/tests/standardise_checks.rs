@@ -201,7 +201,7 @@ fn influence_cox_tied_strata() {
         &levels,
         &times,
         &StandardiseOptions {
-            std_err: true,
+            se: true,
             ..StandardiseOptions::default()
         },
     )
@@ -256,7 +256,7 @@ fn csc_run(
         &levels,
         times,
         &StandardiseOptions {
-            std_err,
+            se: std_err,
             product_limit,
             influence,
             ..StandardiseOptions::default()
@@ -340,11 +340,11 @@ fn first_order_form_differs_from_exact_under_the_product_limit() {
                 cause,
             );
             for (a, b) in exact
-                .std_err
+                .se
                 .as_ref()
                 .unwrap()
                 .iter()
-                .zip(first.std_err.as_ref().unwrap())
+                .zip(first.se.as_ref().unwrap())
             {
                 let (a, b) = (a.unwrap(), b.unwrap());
                 gap = gap.max((a - b).abs() / a);
@@ -422,7 +422,7 @@ fn absrisk_standard_error_is_the_derivative() {
                         cause,
                         &RiskOptions {
                             product_limit,
-                            std_err: se,
+                            se,
                             influence: form,
                             ..RiskOptions::default()
                         },
@@ -476,7 +476,7 @@ fn absrisk_standard_error_is_the_derivative() {
                         2.0 * influence[c][t][i].abs() * tol[c][t][i] + tol[c][t][i] * tol[c][t][i]
                     })
                     .sum();
-                let got = unit[c].std_err.as_ref().unwrap()[t].unwrap();
+                let got = unit[c].se.as_ref().unwrap()[t].unwrap();
                 let bound = bound_sq / got.max(direct);
                 worst = worst.max((got - direct).abs() / bound);
                 assert!(
@@ -484,7 +484,7 @@ fn absrisk_standard_error_is_the_derivative() {
                     "product limit {product_limit}, cause {}, time {t}: {got} against {direct}, bound {bound}",
                     c + 1
                 );
-                let f = first[c].std_err.as_ref().unwrap()[t].unwrap();
+                let f = first[c].se.as_ref().unwrap()[t].unwrap();
                 gap_first = gap_first.max((f - direct).abs() / direct);
             }
         }
@@ -539,7 +539,7 @@ fn one_profile_is_one_prediction() {
                     cause,
                     &RiskOptions {
                         product_limit,
-                        std_err: true,
+                        se: true,
                         ..RiskOptions::default()
                     },
                 )
@@ -553,7 +553,7 @@ fn one_profile_is_one_prediction() {
                 &levels,
                 &times,
                 &StandardiseOptions {
-                    std_err: true,
+                    se: true,
                     product_limit,
                     ..StandardiseOptions::default()
                 },
@@ -562,10 +562,7 @@ fn one_profile_is_one_prediction() {
             let bound = 8.0 * (n as f64 + n_events) * f64::EPSILON;
             for k in 0..times.len() {
                 let (a, b) = (want.risk[k], got.risk[k]);
-                let (sa, sb) = (
-                    want.std_err.as_ref().unwrap()[k],
-                    got.std_err.as_ref().unwrap()[k],
-                );
+                let (sa, sb) = (want.se.as_ref().unwrap()[k], got.se.as_ref().unwrap()[k]);
                 assert_eq!(a.is_some(), b.is_some());
                 if let (Some(a), Some(b)) = (a, b) {
                     let e = (a - b).abs() / a.abs().max(f64::MIN_POSITIVE);

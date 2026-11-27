@@ -110,12 +110,12 @@ fn the_risks_agree_with_ate() {
             for t in 0..k {
                 worst[0] = worst[0].max((out.risks.risk[k + t].unwrap() - block.mean1[t]).abs());
                 worst[0] = worst[0].max((out.risks.risk[t].unwrap() - block.mean0[t]).abs());
-                let se = out.risks.std_err.as_ref().unwrap();
+                let se = out.risks.se.as_ref().unwrap();
                 worst[1] = worst[1].max(rel(se[k + t].unwrap(), block.se1[t]));
                 worst[1] = worst[1].max(rel(se[t].unwrap(), block.se0[t]));
                 worst[2] = worst[2].max((c.difference[t].unwrap() - block.diff[t]).abs());
                 worst[3] = worst[3].max(rel(
-                    c.difference_inference.as_ref().unwrap().std_err[t].unwrap(),
+                    c.difference_inference.as_ref().unwrap().se[t].unwrap(),
                     block.diff_se[t],
                 ));
                 worst[4] = worst[4].max((c.ratio[t].unwrap() - block.ratio[t]).abs());

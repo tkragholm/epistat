@@ -183,7 +183,7 @@ fn weights_columns_and_matrices_agree() {
         assert!(
             (weighted.estimate[l] - repeated.estimate[l]).abs() <= bound * repeated.estimate[l]
         );
-        assert!((weighted.std_err[l] - repeated.std_err[l]).abs() <= bound * repeated.std_err[l]);
+        assert!((weighted.se[l] - repeated.se[l]).abs() <= bound * repeated.se[l]);
     }
     for (a, b) in weighted.covariance.iter().zip(&repeated.covariance) {
         assert!((a - b).abs() <= bound * b.abs());
@@ -263,7 +263,7 @@ fn standardised_risks_are_tested_with_their_covariance() {
         &levels,
         &times,
         &StandardiseOptions {
-            std_err: true,
+            se: true,
             ..StandardiseOptions::default()
         },
     )

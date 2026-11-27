@@ -194,7 +194,7 @@ fn run_case(
         })
         .collect();
     let opts = StandardiseOptions {
-        std_err,
+        se: std_err,
         product_limit: case.product_limit.unwrap_or(true),
         influence,
         ..StandardiseOptions::default()
@@ -268,11 +268,11 @@ fn standardised_risks_match_r() {
             let exact = run_case(case, Ties::Efron, true, InfluenceForm::Exact, &mut worst);
             let (mut gap, mut gap_cov) = (0.0f64, 0.0f64);
             for (a, b) in out
-                .std_err
+                .se
                 .as_ref()
                 .unwrap()
                 .iter()
-                .zip(exact.std_err.as_ref().unwrap())
+                .zip(exact.se.as_ref().unwrap())
             {
                 let (a, b) = (a.unwrap(), b.unwrap());
                 if a > 0.0 {
@@ -351,7 +351,7 @@ fn standardised_risks_match_r() {
             if tied {
                 continue;
             }
-            let se = out.std_err.as_ref().unwrap()[l * t + k].unwrap();
+            let se = out.se.as_ref().unwrap()[l * t + k].unwrap();
             worst.put(&format!("{name} se"), (se - row.se).abs(), b_se * row.se);
             let (lo, up) = (
                 out.lower.as_ref().unwrap()[l * t + k].unwrap(),
@@ -365,7 +365,7 @@ fn standardised_risks_match_r() {
             let mut gap = 0.0f64;
             for row in &case.ate.mean {
                 let (l, k) = (level_of(&row.treatment), k_of(row.time));
-                let se = out.std_err.as_ref().unwrap()[l * t + k].unwrap();
+                let se = out.se.as_ref().unwrap()[l * t + k].unwrap();
                 gap = gap.max((se - row.se).abs() / row.se);
             }
             eprintln!(
@@ -397,7 +397,7 @@ fn standardised_risks_match_r() {
                 if tied {
                     continue;
                 }
-                let se = inference.std_err[k].unwrap();
+                let se = inference.se[k].unwrap();
                 worst.put(
                     &format!("{name} {label} se"),
                     (se - row.se).abs(),
@@ -457,7 +457,7 @@ fn stdreg_check(reference: &StdReg, case: &Case, b_se: f64) {
         &levels,
         &reference.times,
         &StandardiseOptions {
-            std_err: true,
+            se: true,
             ..StandardiseOptions::default()
         },
     )

@@ -106,7 +106,7 @@ fn product_limit_start_time_and_paths() {
                         for curve in &c.curves {
                             out.extend(&curve.cumulative_hazard);
                             out.extend(&curve.survival);
-                            out.extend(curve.std_err.clone().unwrap());
+                            out.extend(curve.se.clone().unwrap());
                             out.extend(options(curve.lower.clone()));
                             out.extend(options(curve.upper.clone()));
                         }
@@ -115,7 +115,7 @@ fn product_limit_start_time_and_paths() {
                             out.extend(&curve.time);
                             out.extend(&curve.cumulative_hazard);
                             out.extend(&curve.survival);
-                            out.extend(curve.std_err.clone().unwrap());
+                            out.extend(curve.se.clone().unwrap());
                             out.extend(options(curve.lower.clone()));
                             out.extend(options(curve.upper.clone()));
                         }

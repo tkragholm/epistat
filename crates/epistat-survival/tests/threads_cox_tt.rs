@@ -80,8 +80,8 @@ fn fit_tt_is_the_same_on_every_pool() {
             let r = fit_tt(&data, x.as_ref(), &transforms, &opts).unwrap();
             let f = r.fit;
             let mut out: Vec<f64> = f.coefficients.iter().map(|c| c.unwrap()).collect();
-            out.extend(f.standard_errors.iter().map(|c| c.unwrap()));
-            out.extend(f.robust_standard_errors.unwrap().iter().map(|c| c.unwrap()));
+            out.extend(f.se.iter().map(|c| c.unwrap()));
+            out.extend(f.robust_se.unwrap().iter().map(|c| c.unwrap()));
             out.extend([
                 f.log_partial_likelihood.unwrap(),
                 f64::from(f.iterations),

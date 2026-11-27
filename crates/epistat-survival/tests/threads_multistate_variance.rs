@@ -113,9 +113,9 @@ fn variance_does_not_depend_on_the_number_of_threads() {
     assert_same_on_pools(&POOLS, || {
         let got = variance(&data, &times, &opts, &v).unwrap();
         assert_eq!(got.n_clusters, 700);
-        assert!(got.std_err.iter().any(|&x| x > 0.0));
+        assert!(got.se.iter().any(|&x| x > 0.0));
         let mut out = got.probabilities.clone();
-        out.extend(&got.std_err);
+        out.extend(&got.se);
         out.extend(&got.cumhaz);
         out.extend(&got.std_cumhaz);
         out.extend(&got.std_time);

@@ -206,7 +206,7 @@ pub struct Yates {
     /// The population marginal mean of each level.
     pub estimate: Vec<f64>,
     /// Its standard error.
-    pub std_err: Vec<f64>,
+    pub se: Vec<f64>,
     /// The covariance of the means, `n_levels` by `n_levels`.
     pub covariance: Vec<f64>,
     /// The tests.
@@ -288,7 +288,7 @@ pub fn yates(
     let tests = wald_tests(&estimate, &cov, opts.test)?;
     Ok(Yates {
         estimate,
-        std_err,
+        se: std_err,
         covariance: cov,
         tests,
     })

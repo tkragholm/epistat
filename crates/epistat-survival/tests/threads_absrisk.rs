@@ -90,13 +90,13 @@ fn risk_standard_error_and_limits() {
                         &RiskOptions {
                             product_limit,
                             influence,
-                            std_err: true,
+                            se: true,
                             ..RiskOptions::default()
                         },
                     )
                     .unwrap();
                 let mut all: Vec<f64> = flat(&out.risk).collect();
-                all.extend(flat(out.std_err.as_ref().unwrap()));
+                all.extend(flat(out.se.as_ref().unwrap()));
                 all.extend(flat(out.lower.as_ref().unwrap()));
                 all.extend(flat(out.upper.as_ref().unwrap()));
                 all

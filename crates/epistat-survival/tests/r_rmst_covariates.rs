@@ -156,7 +156,7 @@ fn check(
         let l = format!("{label} coefficient {j}");
         w.see("coef", &l, got.coefficients[j], want.coef[j], tc);
         let se_tol = rel_se * want.se[j];
-        w.see("se", &l, got.std_err[j], want.se[j], se_tol);
+        w.see("se", &l, got.se[j], want.se[j], se_tol);
         let rel_z = tc / want.coef[j].abs() + rel_se;
         w.see(
             "z",

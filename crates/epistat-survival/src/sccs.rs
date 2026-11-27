@@ -221,9 +221,9 @@ pub struct SccsFit {
     pub robust_covariance: Option<Vec<Option<f64>>>,
     /// The standard errors of the coefficients, the square roots of the
     /// diagonal of `covariance`.
-    pub standard_errors: Vec<Option<f64>>,
+    pub se: Vec<Option<f64>>,
     /// The standard errors from `robust_covariance`, when it is formed.
-    pub robust_standard_errors: Option<Vec<Option<f64>>>,
+    pub robust_se: Option<Vec<Option<f64>>>,
     /// The log likelihood at the estimate, `None` without an estimate.
     pub log_likelihood: Option<f64>,
     /// The log likelihood at `beta = 0`, `None` when no person has an event in
@@ -509,8 +509,8 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
         coefficients: vec![None; n_cols],
         covariance: vec![None; n_cols * n_cols],
         robust_covariance: None,
-        standard_errors: vec![None; n_cols],
-        robust_standard_errors: None,
+        se: vec![None; n_cols],
+        robust_se: None,
         log_likelihood: None,
         null_log_likelihood: None,
         n_persons: persons.ranges.len(),
@@ -613,7 +613,7 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
             result.covariance[ca * n_cols + cb] = Some(inverse[a * p + b]);
         }
     }
-    result.standard_errors = diagonal_roots(&result.covariance, n_cols);
+    result.se = diagonal_roots(&result.covariance, n_cols);
     if opts.robust {
         let meat = blocked(data, x, &cols, &persons, &beta, true).meat;
         let sandwich = sandwich(&inverse, &meat, p)?;
@@ -623,7 +623,7 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
                 full[ca * n_cols + cb] = Some(sandwich[a * p + b]);
             }
         }
-        result.robust_standard_errors = Some(diagonal_roots(&full, n_cols));
+        result.robust_se = Some(diagonal_roots(&full, n_cols));
         result.robust_covariance = Some(full);
     }
     Ok(result)
@@ -677,14 +677,14 @@ pub struct RelativeIncidence {
     /// The coefficient, the log relative incidence.
     pub coefficient: f64,
     /// Its standard error, model-based or robust as asked.
-    pub standard_error: f64,
+    pub se: f64,
     /// `exp(coefficient)`.
     pub relative_incidence: f64,
-    /// The lower limit, `exp(coefficient - z standard_error)`.
+    /// The lower limit, `exp(coefficient - z se)`.
     pub lower: f64,
-    /// The upper limit, `exp(coefficient + z standard_error)`.
+    /// The upper limit, `exp(coefficient + z se)`.
     pub upper: f64,
-    /// The Wald statistic, `coefficient / standard_error`.
+    /// The Wald statistic, `coefficient / se`.
     pub z: f64,
     /// The two-sided p-value of the Wald statistic.
     pub p_value: f64,
@@ -706,11 +706,11 @@ impl SccsFit {
         robust: bool,
     ) -> Result<Vec<Option<RelativeIncidence>>> {
         let se = if robust {
-            self.robust_standard_errors.as_ref().ok_or_else(|| {
+            self.robust_se.as_ref().ok_or_else(|| {
                 invalid("the fit has no robust covariance: set SccsOptions::robust")
             })?
         } else {
-            &self.standard_errors
+            &self.se
         };
         let z = epistat_stats::dist::normal::quantile(level.upper_probability());
         Ok(self
@@ -723,7 +723,7 @@ impl SccsFit {
                 let wald = b / s;
                 Some(RelativeIncidence {
                     coefficient: b,
-                    standard_error: s,
+                    se: s,
                     relative_incidence: b.exp(),
                     lower: (b - z * s).exp(),
                     upper: (b + z * s).exp(),

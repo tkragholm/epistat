@@ -21,7 +21,7 @@ use epistat_testkit::{POOLS, assert_same_on_pools};
 
 fn flat(out: &Standardised) -> Vec<f64> {
     let mut all: Vec<f64> = out.risk.iter().map(|v| v.unwrap_or(-1.0)).collect();
-    for table in [&out.std_err, &out.lower, &out.upper, &out.covariance]
+    for table in [&out.se, &out.lower, &out.upper, &out.covariance]
         .into_iter()
         .flatten()
     {
@@ -78,7 +78,7 @@ fn weights_entry_offset_and_survival_type_are_the_same_on_every_pool() {
         Level::single(Counterfactual::Columns(&two)),
     ];
     let std_err = StandardiseOptions {
-        std_err: true,
+        se: true,
         ..StandardiseOptions::default()
     };
     assert_same_on_pools(&POOLS, || {
@@ -156,13 +156,13 @@ fn weights_entry_offset_and_survival_type_are_the_same_on_every_pool() {
                 &times,
                 1,
                 &RiskOptions {
-                    std_err: true,
+                    se: true,
                     ..RiskOptions::default()
                 },
             )
             .unwrap();
         let mut all: Vec<f64> = out.risk.iter().map(|v| v.unwrap_or(-1.0)).collect();
-        all.extend(out.std_err.unwrap().iter().map(|v| v.unwrap_or(-1.0)));
+        all.extend(out.se.unwrap().iter().map(|v| v.unwrap_or(-1.0)));
         all
     });
 }

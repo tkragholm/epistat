@@ -52,7 +52,7 @@
 //!
 //! # The standard error
 //!
-//! With `std_err` the standard error is the square root of the sum of the
+//! With `se` the standard error is the square root of the sum of the
 //! squares of the influence function of the estimate over the subjects of the
 //! fit, the infinitesimal-jackknife variance. Every model contributes the
 //! influence function of its coefficients and of its baseline hazard. For the
@@ -122,7 +122,7 @@
 //!
 //! # Confidence limits
 //!
-//! With `std_err` the limits are those of `confint.predictCSC`: on the scale
+//! With `se` the limits are those of `confint.predictCSC`: on the scale
 //! given by [`RiskLimits`], by default the log-log scale, `F^exp(+- z se / (F
 //! |log F|))` with `z` the normal quantile of the level. Without a standard
 //! error there are no limits.
@@ -277,13 +277,13 @@ pub struct RiskOptions {
     pub product_limit: bool,
     /// Whether to give standard errors, `se`, from the influence functions of
     /// the models, see the module documentation.
-    pub std_err: bool,
+    pub se: bool,
     /// How the standard error takes the derivative of the product limit.
     /// `Exact`, the derivative of the estimate. `InfluenceForm::Exponential`
     /// is riskRegression's, see the module documentation. It is not read
-    /// without `product_limit` or `std_err`.
+    /// without `product_limit` or `se`.
     pub influence: InfluenceForm,
-    /// The scale of the confidence limits, which exist with `std_err`.
+    /// The scale of the confidence limits, which exist with `se`.
     pub limits: RiskLimits,
     /// The confidence level.
     pub level: Level,
@@ -293,7 +293,7 @@ impl Default for RiskOptions {
     fn default() -> Self {
         Self {
             product_limit: true,
-            std_err: false,
+            se: false,
             influence: InfluenceForm::Exact,
             limits: RiskLimits::LogLog,
             level: Level::default(),
@@ -314,9 +314,9 @@ pub struct AbsoluteRisk {
     pub n_times: usize,
     /// The absolute risk of the cause.
     pub risk: Vec<Option<f64>>,
-    /// The standard error, with `std_err`.
-    pub std_err: Option<Vec<Option<f64>>>,
-    /// The lower confidence limit, with `std_err` and limits other than
+    /// The standard error, with `se`.
+    pub se: Option<Vec<Option<f64>>>,
+    /// The lower confidence limit, with `se` and limits other than
     /// `RiskLimits::None`.
     pub lower: Option<Vec<Option<f64>>>,
     /// The upper confidence limit.
@@ -396,7 +396,7 @@ impl<'a> CauseSpecificCox<'a> {
     /// covariate is not finite, when the new designs do not match the models in
     /// number or in columns, when a new stratum is not one of the data or is
     /// missing for data with strata, when a model has a coefficient that is
-    /// `None` (drop the aliased column), when a risk score is not finite, and with `std_err` for a covariance
+    /// `None` (drop the aliased column), when a risk score is not finite, and with `se` for a covariance
     /// that is not defined.
     pub fn predict(
         &self,
@@ -408,7 +408,7 @@ impl<'a> CauseSpecificCox<'a> {
         let ctx = self.context(new, times, cause, opts)?;
         let n_rows = new.designs[0].nrows();
         let n_times = times.len();
-        let influence = if opts.std_err {
+        let influence = if opts.se {
             Some(Influence::new(&self.inputs(), &ctx.base)?)
         } else {
             None
@@ -418,11 +418,11 @@ impl<'a> CauseSpecificCox<'a> {
             .map(|r| ctx.row(r, new, times, influence.as_ref()))
             .collect();
         let mut risk = Vec::with_capacity(n_rows * n_times);
-        let mut std_err = opts.std_err.then(|| Vec::with_capacity(n_rows * n_times));
+        let mut std_err = opts.se.then(|| Vec::with_capacity(n_rows * n_times));
         for row in &per_row {
             risk.extend_from_slice(&row.risk);
             if let Some(out) = std_err.as_mut() {
-                out.extend_from_slice(&row.std_err);
+                out.extend_from_slice(&row.se);
             }
         }
         let (lower, upper) = match &std_err {
@@ -437,7 +437,7 @@ impl<'a> CauseSpecificCox<'a> {
             n_rows,
             n_times,
             risk,
-            std_err,
+            se: std_err,
             lower,
             upper,
         })
@@ -578,7 +578,7 @@ struct Context {
 /// One new row: the risks and the standard errors at the times given.
 struct Row {
     risk: Vec<Option<f64>>,
-    std_err: Vec<Option<f64>>,
+    se: Vec<Option<f64>>,
 }
 
 impl CauseSpecificCox<'_> {
@@ -782,7 +782,7 @@ impl Context {
                 })
                 .collect()
         });
-        Row { risk, std_err }
+        Row { risk, se: std_err }
     }
 
     /// The standard error of the risk of the row at each of the positive

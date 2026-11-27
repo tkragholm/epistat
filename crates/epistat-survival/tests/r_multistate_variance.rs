@@ -196,7 +196,7 @@ fn matches_r_survfit() {
             for s in 0..STATES {
                 w[0].1.see(
                     &at(&format!("std.err {s}")),
-                    (got.std_err[t * STATES + s] - case.std_err[s][t]).abs(),
+                    (got.se[t * STATES + s] - case.std_err[s][t]).abs(),
                     tol_se,
                 );
                 w[2].1.see(

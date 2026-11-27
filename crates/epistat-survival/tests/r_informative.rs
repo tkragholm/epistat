@@ -130,7 +130,7 @@ fn a_fit_on_the_informative_sets_equals_the_fit_on_all() {
         let (a, b) = (a.unwrap(), b.unwrap());
         assert!((a - b).abs() <= 1e-9 * a.abs().max(1.0), "{a} {b}");
     }
-    for (a, b) in all.standard_errors.iter().zip(&part.standard_errors) {
+    for (a, b) in all.se.iter().zip(&part.se) {
         let (a, b) = (a.unwrap(), b.unwrap());
         assert!((a - b).abs() <= 1e-9 * a, "{a} {b}");
     }

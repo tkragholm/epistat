@@ -416,16 +416,16 @@ pub struct CoxModelFit {
     /// diverges.
     pub coefficients: Vec<Option<f64>>,
     /// The model-based standard errors, `None` where the coefficient is.
-    pub standard_errors: Vec<Option<f64>>,
+    pub se: Vec<Option<f64>>,
     /// The model-based covariance matrix of the coefficients, row-major with
     /// `p * p` entries on the scale of the columns given. An entry is `None`
     /// where its row or its column is a coefficient that is `None`.
     pub covariance: Vec<Option<f64>>,
     /// Standard errors from the cluster-robust variance. `None` when no
     /// cluster was given or there are fewer than two clusters.
-    pub robust_standard_errors: Option<Vec<Option<f64>>>,
+    pub robust_se: Option<Vec<Option<f64>>>,
     /// The cluster-robust covariance matrix, laid out as `covariance`. `None`
-    /// exactly when `robust_standard_errors` is, and with every entry `None`
+    /// exactly when `robust_se` is, and with every entry `None`
     /// when clusters were given and the fit has no robust variance.
     pub robust_covariance: Option<Vec<Option<f64>>>,
     /// The log partial likelihood at the estimate, `None` when there is no
@@ -511,9 +511,9 @@ impl CoxModelFit {
     pub(crate) fn degenerate(p: usize, n_events: f64, n_rows: usize, with_clusters: bool) -> Self {
         Self {
             coefficients: vec![None; p],
-            standard_errors: vec![None; p],
+            se: vec![None; p],
             covariance: vec![None; p * p],
-            robust_standard_errors: with_clusters.then(|| vec![None; p]),
+            robust_se: with_clusters.then(|| vec![None; p]),
             robust_covariance: with_clusters.then(|| vec![None; p * p]),
             log_partial_likelihood: None,
             null_log_partial_likelihood: None,
@@ -1917,9 +1917,9 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
         // or tested.
         return Ok(CoxModelFit {
             coefficients: Vec::new(),
-            standard_errors: Vec::new(),
+            se: Vec::new(),
             covariance: Vec::new(),
-            robust_standard_errors: with_clusters.then(Vec::new),
+            robust_se: with_clusters.then(Vec::new),
             robust_covariance: with_clusters.then(Vec::new),
             log_partial_likelihood: Some(start.loglik),
             null_log_partial_likelihood: null_loglik,
@@ -2139,9 +2139,9 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
 
     Ok(CoxModelFit {
         coefficients,
-        standard_errors,
+        se: standard_errors,
         covariance,
-        robust_standard_errors,
+        robust_se: robust_standard_errors,
         robust_covariance,
         log_partial_likelihood: Some(last.loglik),
         null_log_partial_likelihood: null_loglik,
@@ -2314,7 +2314,7 @@ mod tests {
         let x = column([0.5, 1.5, -1.0, 0.2, 2.0, -0.7, 1.1, 0.3]);
         let fit = design(&x, Some(&[0; 8])).unwrap();
         assert!(fit.converged && fit.coefficients[0].is_some());
-        assert_eq!(fit.robust_standard_errors, Some(vec![None]));
+        assert_eq!(fit.robust_se, Some(vec![None]));
     }
 
     #[test]
@@ -2329,7 +2329,7 @@ mod tests {
         let fit = design(&x, None).unwrap();
         assert_eq!(fit.rank, 1);
         assert!(fit.coefficients[0].is_some() && fit.coefficients[1].is_none());
-        assert!(fit.standard_errors[1].is_none());
+        assert!(fit.se[1].is_none());
     }
 
     #[test]
@@ -2384,7 +2384,7 @@ mod tests {
         });
         let fit = design(&x, Some(&[0, 0, 1, 1, 2, 2, 3, 3])).unwrap();
         let robust = fit.robust_covariance.as_ref().unwrap();
-        let robust_se = fit.robust_standard_errors.as_ref().unwrap();
+        let robust_se = fit.robust_se.as_ref().unwrap();
         for a in 0..3 {
             for b in 0..3 {
                 assert_eq!(fit.covariance[a * 3 + b], fit.covariance[b * 3 + a]);
@@ -2395,8 +2395,7 @@ mod tests {
                     "the constant column is aliased"
                 );
             }
-            if let (Some(variance), Some(se)) = (fit.covariance[a * 3 + a], fit.standard_errors[a])
-            {
+            if let (Some(variance), Some(se)) = (fit.covariance[a * 3 + a], fit.se[a]) {
                 assert!((variance.sqrt() - se).abs() <= 4.0 * f64::EPSILON * se);
             }
             if let (Some(variance), Some(se)) = (robust[a * 3 + a], robust_se[a]) {

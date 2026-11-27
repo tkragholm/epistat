@@ -123,9 +123,9 @@ fn main() {
             &f.coefficients.iter().map(|&b| value(b)).collect::<Vec<_>>(),
         );
         let (se, other) = if dense {
-            (&f.standard_errors, &f.diagonal_standard_errors)
+            (&f.se, &f.diagonal_se)
         } else {
-            (&f.diagonal_standard_errors, &f.standard_errors)
+            (&f.diagonal_se, &f.se)
         };
         lines.push_all("se", &se.iter().map(|&s| value(s)).collect::<Vec<_>>());
         lines.push_all(

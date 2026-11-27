@@ -104,7 +104,7 @@ fn model_without_covariates() {
                 for curve in &c.curves {
                     out.extend(&curve.cumulative_hazard);
                     out.extend(&curve.survival);
-                    out.extend(curve.std_err.clone().unwrap());
+                    out.extend(curve.se.clone().unwrap());
                 }
             }
             out

@@ -61,7 +61,7 @@ fn sim(n: usize, seed: u64) -> Sim {
 
 fn risk_opts(std_err: bool) -> RiskOptions {
     RiskOptions {
-        std_err,
+        se: std_err,
         ..RiskOptions::default()
     }
 }
@@ -207,8 +207,8 @@ fn strata_are_required_and_known() {
     assert_eq!(out.risk[0], reversed.risk[1]);
     assert_eq!(out.risk[1], reversed.risk[0]);
     assert_eq!(
-        out.std_err.as_ref().unwrap()[0],
-        reversed.std_err.as_ref().unwrap()[1]
+        out.se.as_ref().unwrap()[0],
+        reversed.se.as_ref().unwrap()[1]
     );
 }
 
@@ -233,7 +233,7 @@ fn the_standard_error_with_weights_and_entry_times() {
         .unwrap();
     let model = CauseSpecificCox::fit(&weighted, &designs, &CscOptions::default()).unwrap();
     let out = model.predict(&new, &[3.0], 1, &risk_opts(true)).unwrap();
-    assert!(out.std_err.unwrap()[0].is_some_and(|v| v > 0.0));
+    assert!(out.se.unwrap()[0].is_some_and(|v| v > 0.0));
     // Entry times of zero change nothing.
     let plain = SurvData::builder(&s.stop, &s.status)
         .n_codes(2)
@@ -252,10 +252,7 @@ fn the_standard_error_with_weights_and_entry_times() {
         .unwrap()
         .predict(&new, &[3.0], 1, &risk_opts(true))
         .unwrap();
-    let (x, y) = (
-        a.std_err.unwrap()[0].unwrap(),
-        b.std_err.unwrap()[0].unwrap(),
-    );
+    let (x, y) = (a.se.unwrap()[0].unwrap(), b.se.unwrap()[0].unwrap());
     assert!((x - y).abs() <= 1e-13 * x, "{x} against {y}");
 }
 
@@ -287,7 +284,7 @@ fn undefined_where_the_data_end_or_the_survival_is_not_a_probability() {
     let times = [0.0, first_event * 0.5, first_event, last, last + 1.0];
     let out = model.predict(&new, &times, 1, &risk_opts(true)).unwrap();
     let at = |r: usize, t: usize| out.risk[r * times.len() + t];
-    let se = |r: usize, t: usize| out.std_err.as_ref().unwrap()[r * times.len() + t];
+    let se = |r: usize, t: usize| out.se.as_ref().unwrap()[r * times.len() + t];
     // Before the first event, and at time 0, the risk is 0 with no uncertainty.
     for t in 0..2 {
         assert_eq!(at(0, t), Some(0.0));
@@ -349,8 +346,8 @@ fn the_order_of_the_times_does_not_matter() {
                 .unwrap();
             assert_eq!(a.risk[r * 5 + j], b.risk[r * 5 + i]);
             assert_eq!(
-                a.std_err.as_ref().unwrap()[r * 5 + j],
-                b.std_err.as_ref().unwrap()[r * 5 + i]
+                a.se.as_ref().unwrap()[r * 5 + j],
+                b.se.as_ref().unwrap()[r * 5 + i]
             );
             assert_eq!(
                 a.lower.as_ref().unwrap()[r * 5 + j],
@@ -360,7 +357,7 @@ fn the_order_of_the_times_does_not_matter() {
     }
     // No limits without a standard error, and none when asked for none.
     let plain = model.predict(&new, &sorted, 2, &risk_opts(false)).unwrap();
-    assert!(plain.lower.is_none() && plain.upper.is_none() && plain.std_err.is_none());
+    assert!(plain.lower.is_none() && plain.upper.is_none() && plain.se.is_none());
     let none = model
         .predict(
             &new,
@@ -372,7 +369,7 @@ fn the_order_of_the_times_does_not_matter() {
             },
         )
         .unwrap();
-    assert!(none.lower.is_none() && none.std_err.is_some());
+    assert!(none.lower.is_none() && none.se.is_some());
     assert_eq!(none.risk, plain.risk);
 }
 
@@ -428,7 +425,7 @@ fn case_weights_are_row_repeats() {
     let wb = b.predict(&new, &times, 1, &risk_opts(true)).unwrap();
     // The standard error of the repeated data is the one the model with unit
     // weights has.
-    assert!(wb.std_err.is_some());
+    assert!(wb.se.is_some());
     // The two sum the same positive terms in a different order, and the risk
     // sets differ by the order of the repeated rows: a relative error of at
     // most 4 eps (n + J + 10) in each of the two, with n the rows and J at

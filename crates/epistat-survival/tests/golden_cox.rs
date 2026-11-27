@@ -30,9 +30,9 @@ fn opts(hash: Fingerprint, values: &[Option<f64>]) -> Fingerprint {
 fn hash_fit(fit: &CoxModelFit) -> Fingerprint {
     let mut h = Fingerprint::new();
     h = opts(h, &fit.coefficients);
-    h = opts(h, &fit.standard_errors);
+    h = opts(h, &fit.se);
     h = opts(h, &fit.covariance);
-    h = match &fit.robust_standard_errors {
+    h = match &fit.robust_se {
         Some(v) => opts(h.u64(1), v),
         None => h.u64(0),
     };

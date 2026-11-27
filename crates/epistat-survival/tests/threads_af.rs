@@ -50,7 +50,7 @@ fn the_attributable_fraction_function_does_not_depend_on_the_number_of_threads()
             ],
             &times,
             &StandardiseOptions {
-                std_err: true,
+                se: true,
                 ..StandardiseOptions::default()
             },
         )

@@ -1117,7 +1117,7 @@ pub struct Variance {
     pub probabilities: Vec<f64>,
     /// `time * state`, row-major: the standard error of the probability of each
     /// state, `fit$std.err` of `survfit`.
-    pub std_err: Vec<f64>,
+    pub se: Vec<f64>,
     /// The transitions that occur among the rows used, as `(from, to)` ranks of
     /// states, ordered by `to` and then `from`, the order of the columns of
     /// `fit$cumhaz`. A move to the state the row is in is a transition. `survfit`
@@ -1299,7 +1299,7 @@ pub fn variance(
     );
     Ok(Variance {
         probabilities: out.p,
-        std_err: out.std_p,
+        se: out.std_p,
         transitions: out.transitions,
         cumhaz: out.cumhaz,
         std_cumhaz: out.std_c,

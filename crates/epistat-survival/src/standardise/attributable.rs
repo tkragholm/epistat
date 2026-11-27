@@ -134,10 +134,7 @@ pub fn af_from_standardised(
     for k in 0..t {
         let r = contrast.ratio[k];
         let af = r.map(|r| 1.0 - r);
-        let se = contrast
-            .ratio_inference
-            .as_ref()
-            .and_then(|inf| inf.std_err[k]);
+        let se = contrast.ratio_inference.as_ref().and_then(|inf| inf.se[k]);
         curve.af.push(af);
         curve.se.push(se);
         let limits = match (af, r, se) {

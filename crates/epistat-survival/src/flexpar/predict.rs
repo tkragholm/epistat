@@ -51,7 +51,7 @@ pub struct Prediction {
     /// The estimate.
     pub estimate: f64,
     /// The standard error of the estimate by the delta method.
-    pub standard_error: f64,
+    pub se: f64,
     /// The lower limit, `None` where the hazard is not positive and its
     /// logarithm is undefined.
     pub lower: Option<f64>,
@@ -194,7 +194,7 @@ pub fn predict(
                     Prediction {
                         time,
                         estimate: s,
-                        standard_error: variance(fit, cov, &grad).sqrt(),
+                        se: variance(fit, cov, &grad).sqrt(),
                         lower: Some((-h * factor).exp()),
                         upper: Some((-h / factor).exp()),
                     }
@@ -206,7 +206,7 @@ pub fn predict(
                     Prediction {
                         time,
                         estimate: h,
-                        standard_error: variance(fit, cov, &grad).sqrt(),
+                        se: variance(fit, cov, &grad).sqrt(),
                         lower: Some(h / factor),
                         upper: Some(h * factor),
                     }
@@ -221,7 +221,7 @@ pub fn predict(
                     Prediction {
                         time,
                         estimate: h,
-                        standard_error: se,
+                        se,
                         lower: limits.map(|l| l.0),
                         upper: limits.map(|l| l.1),
                     }
@@ -273,7 +273,7 @@ pub fn contrast(
             let none = Prediction {
                 time,
                 estimate: f64::NAN,
-                standard_error: f64::NAN,
+                se: f64::NAN,
                 lower: None,
                 upper: None,
             };
@@ -287,7 +287,7 @@ pub fn contrast(
                             Prediction {
                                 time,
                                 estimate: ratio,
-                                standard_error: ratio * se_log,
+                                se: ratio * se_log,
                                 lower: Some(ratio * (-z * se_log).exp()),
                                 upper: Some(ratio * (z * se_log).exp()),
                             }
@@ -318,7 +318,7 @@ fn wald(time: f64, estimate: f64, se: f64, z: f64) -> Prediction {
     Prediction {
         time,
         estimate,
-        standard_error: se,
+        se,
         lower: Some(estimate - z * se),
         upper: Some(estimate + z * se),
     }

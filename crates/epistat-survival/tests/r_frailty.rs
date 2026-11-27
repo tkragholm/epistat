@@ -363,8 +363,8 @@ fn em_equals_penalised() {
         let bound = (2e-14 * a.marginal_log_likelihood.unwrap().abs() / 1e-3).sqrt();
         let mut worst: f64 = 0.0;
         for k in 0..2 {
-            let dev = (a.coefficients[k].unwrap() - b.coefficients[k].unwrap()).abs()
-                / a.standard_errors[k].unwrap();
+            let dev =
+                (a.coefficients[k].unwrap() - b.coefficients[k].unwrap()).abs() / a.se[k].unwrap();
             worst = worst.max(dev);
         }
         for ((wa, wb), v) in a

@@ -166,7 +166,7 @@ impl<'a> Level<'a> {
 pub struct StandardiseOptions {
     /// Whether to give standard errors and limits. It is an error for a
     /// covariance of a model that is not defined.
-    pub std_err: bool,
+    pub se: bool,
     /// The confidence level of the limits.
     pub level: ConfidenceLevel,
     /// Whether the event-free survival of cause-specific models is the product
@@ -182,7 +182,7 @@ pub struct StandardiseOptions {
 impl Default for StandardiseOptions {
     fn default() -> Self {
         Self {
-            std_err: false,
+            se: false,
             level: ConfidenceLevel::default(),
             product_limit: true,
             influence: InfluenceForm::Exact,
@@ -206,14 +206,14 @@ pub struct Standardised {
     pub n_used: usize,
     /// The standardised risk.
     pub risk: Vec<Option<f64>>,
-    /// The standard error, with `std_err`.
-    pub std_err: Option<Vec<Option<f64>>>,
-    /// The lower normal limit, with `std_err`.
+    /// The standard error, with `se`.
+    pub se: Option<Vec<Option<f64>>>,
+    /// The lower normal limit, with `se`.
     pub lower: Option<Vec<Option<f64>>>,
-    /// The upper normal limit, with `std_err`.
+    /// The upper normal limit, with `se`.
     pub upper: Option<Vec<Option<f64>>>,
     /// The covariance of the standardised risks of the levels at each time,
-    /// `n_times` matrices of `n_levels` by `n_levels`, with `std_err`.
+    /// `n_times` matrices of `n_levels` by `n_levels`, with `se`.
     pub covariance: Option<Vec<Option<f64>>>,
     /// The confidence level of the limits.
     pub level: ConfidenceLevel,
@@ -227,7 +227,7 @@ pub struct Contrast {
     /// The risk of the first level over that of the second, `None` where the
     /// second is 0.
     pub ratio: Vec<Option<f64>>,
-    /// Standard errors, limits and p-values, with `std_err`.
+    /// Standard errors, limits and p-values, with `se`.
     pub difference_inference: Option<Inference>,
     /// As `difference_inference` for the ratio, tested against 1.
     pub ratio_inference: Option<Inference>,
@@ -237,7 +237,7 @@ pub struct Contrast {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Inference {
     /// The standard error.
-    pub std_err: Vec<Option<f64>>,
+    pub se: Vec<Option<f64>>,
     /// The lower normal limit.
     pub lower: Vec<Option<f64>>,
     /// The upper normal limit.
@@ -254,7 +254,7 @@ impl Standardised {
     ///
     /// # Errors
     ///
-    /// An input error without `std_err`, for a time that does not exist or
+    /// An input error without `se`, for a time that does not exist or
     /// where a risk is not defined, and for fewer than two levels.
     pub fn tests(&self, k: usize, kind: yates::Test) -> Result<Vec<yates::WaldTest>> {
         let Some(cov) = &self.covariance else {
@@ -354,7 +354,7 @@ fn inference(estimate: &[Option<f64>], se: &[Option<f64>], null: f64, z: f64) ->
         }
     }
     Inference {
-        std_err: se.to_vec(),
+        se: se.to_vec(),
         lower,
         upper,
         p_value,
@@ -373,7 +373,7 @@ fn inference(estimate: &[Option<f64>], se: &[Option<f64>], null: f64, z: f64) ->
 /// An input error for no level, a level that does not match the design, a
 /// value that is not finite, a time that is not finite, a coefficient that is
 /// `None`, a risk score that is not finite, no
-/// row of positive weight, and with `std_err` for a covariance that is not
+/// row of positive weight, and with `se` for a covariance that is not
 /// defined.
 pub fn standardise_cox<'a>(
     data: &SurvData<'a>,
@@ -635,7 +635,7 @@ fn run(
     let weight: Vec<f64> = raw.iter().map(|w| w / total).collect();
     let rows_of_levels = prepare(levels, models, &rows)?;
     let base = Baselines::new(models)?;
-    let infl = if opts.std_err {
+    let infl = if opts.se {
         Some(Influence::new(models, &base)?)
     } else {
         None
@@ -754,7 +754,7 @@ fn run(
         n_rows: data.n_rows(),
         n_used: n,
         risk,
-        std_err,
+        se: std_err,
         lower,
         upper,
         covariance,

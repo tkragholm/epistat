@@ -391,7 +391,7 @@ fn weighted_data<'a>(
 /// weights of [`weights`] for those rows. `data` may have strata, which are
 /// strata of the Cox model, but no weights or clusters. A row of weight 0 is
 /// left out. The result is that of [`cox::fit`](crate::cox::fit) with
-/// `robust_covariance` and `robust_standard_errors` set, one cluster per row.
+/// `robust_covariance` and `robust_se` set, one cluster per row.
 ///
 /// # Errors
 ///

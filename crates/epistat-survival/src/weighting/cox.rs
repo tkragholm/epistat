@@ -244,8 +244,8 @@ fn fit_iptw(
     let se = |c: &[f64]| (0..p).map(|i| c[i * p + i].max(0.0).sqrt()).collect();
     Ok(EstimatedCox {
         coefficients,
-        standard_errors: se(&covariance),
-        robust_standard_errors: se(&robust_covariance),
+        se: se(&covariance),
+        robust_se: se(&robust_covariance),
         covariance,
         robust_covariance,
         weight_covariance: Some(flat(&stacked, 0, k)),
@@ -265,11 +265,11 @@ pub struct EstimatedCox {
     /// every model of the weights, `p x p` row-major.
     pub covariance: Vec<f64>,
     /// The standard errors from `covariance`.
-    pub standard_errors: Vec<f64>,
+    pub se: Vec<f64>,
     /// The covariance that takes the weights as known, over the same units.
     pub robust_covariance: Vec<f64>,
     /// The standard errors from `robust_covariance`.
-    pub robust_standard_errors: Vec<f64>,
+    pub robust_se: Vec<f64>,
     /// For propensity weights alone, the covariance of the parameters of the
     /// weights from the stacked sandwich: the propensity coefficients, then
     /// the marginal probability of treatment for stabilised weights.
@@ -346,8 +346,8 @@ fn fit_general(
     let se = |c: &[f64]| (0..p).map(|i| c[i * p + i].max(0.0).sqrt()).collect();
     Ok(EstimatedCox {
         coefficients,
-        standard_errors: se(&covariance),
-        robust_standard_errors: se(&robust_covariance),
+        se: se(&covariance),
+        robust_se: se(&robust_covariance),
         covariance,
         robust_covariance,
         weight_covariance: None,

@@ -240,13 +240,7 @@ fn cox_censoring_and_contrasts_against_riskregression() {
                 let rm = &run.models[name];
                 for j in 0..t {
                     worst.check(&tag, "brier", score.brier[j], rm.brier[j], b_b);
-                    worst.check(
-                        &tag,
-                        "brier se",
-                        score.std_err[j].unwrap(),
-                        rm.brier_se[j],
-                        b_se,
-                    );
+                    worst.check(&tag, "brier se", score.se[j].unwrap(), rm.brier_se[j], b_se);
                     worst.check(
                         &tag,
                         "auc",
@@ -257,7 +251,7 @@ fn cox_censoring_and_contrasts_against_riskregression() {
                     worst.check(
                         &tag,
                         "auc se",
-                        area.std_err[j].unwrap(),
+                        area.se[j].unwrap(),
                         rm.auc_se.as_ref().unwrap()[j],
                         b_se,
                     );
@@ -270,7 +264,7 @@ fn cox_censoring_and_contrasts_against_riskregression() {
                 worst.check(
                     &tag,
                     "null brier se",
-                    s0.std_err[j].unwrap(),
+                    s0.se[j].unwrap(),
                     rz.brier_se[j],
                     b_se,
                 );
@@ -286,7 +280,7 @@ fn cox_censoring_and_contrasts_against_riskregression() {
                 worst.check(
                     &tag,
                     "ipa se",
-                    ipa_a.std_err[j].unwrap(),
+                    ipa_a.se[j].unwrap(),
                     ra_model.ipa_se.as_ref().unwrap()[j],
                     b_se * 2.0 * (1.0 / zj + bj / (zj * zj)),
                 );
@@ -358,13 +352,7 @@ fn check_contrast(
         delta,
         b_delta,
     );
-    worst.check(
-        tag,
-        &name("difference se"),
-        c.std_err[j].unwrap(),
-        row.se,
-        b_se,
-    );
+    worst.check(tag, &name("difference se"), c.se[j].unwrap(), row.se, b_se);
     worst.check(
         tag,
         &name("lower"),

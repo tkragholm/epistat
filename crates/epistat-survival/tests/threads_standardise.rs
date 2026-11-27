@@ -21,7 +21,7 @@ use epistat_testkit::{POOLS, assert_same_on_pools};
 
 fn flat(out: &Standardised) -> Vec<f64> {
     let mut all: Vec<f64> = out.risk.iter().map(|v| v.unwrap_or(-1.0)).collect();
-    for table in [&out.std_err, &out.lower, &out.upper, &out.covariance]
+    for table in [&out.se, &out.lower, &out.upper, &out.covariance]
         .into_iter()
         .flatten()
     {
@@ -83,7 +83,7 @@ fn standardised_risks_are_the_same_on_every_pool() {
             &levels,
             &times,
             &StandardiseOptions {
-                std_err: true,
+                se: true,
                 ..StandardiseOptions::default()
             },
         )
@@ -116,7 +116,7 @@ fn standardised_risks_are_the_same_on_every_pool() {
                 &levels,
                 &times,
                 &StandardiseOptions {
-                    std_err: true,
+                    se: true,
                     product_limit,
                     influence,
                     ..StandardiseOptions::default()

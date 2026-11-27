@@ -62,17 +62,14 @@ fn refused_input_and_undefined_times() {
     let out = run(
         std::slice::from_ref(&level),
         &[0.0, 1.0, last, last + 1.0],
-        &StandardiseOptions {
-            std_err: true,
-            ..plain
-        },
+        &StandardiseOptions { se: true, ..plain },
     )
     .unwrap();
     assert_eq!(out.risk[0], Some(0.0));
-    assert_eq!(out.std_err.as_ref().unwrap()[0], Some(0.0));
+    assert_eq!(out.se.as_ref().unwrap()[0], Some(0.0));
     assert!(out.risk[1].is_some() && out.risk[2].is_some());
     assert_eq!(out.risk[3], None);
-    assert_eq!(out.std_err.as_ref().unwrap()[3], None);
+    assert_eq!(out.se.as_ref().unwrap()[3], None);
     assert_eq!(out.lower.as_ref().unwrap()[3], None);
     let c = out.contrast(0, 0).unwrap();
     assert_eq!(c.difference[1], Some(0.0));
@@ -143,15 +140,10 @@ fn case_weights_act_as_repeated_rows() {
         &level,
         &times,
         &StandardiseOptions {
-            std_err: true,
+            se: true,
             ..StandardiseOptions::default()
         },
     )
     .unwrap();
-    assert!(
-        out.std_err
-            .unwrap()
-            .iter()
-            .all(|v| v.is_some_and(|v| v > 0.0))
-    );
+    assert!(out.se.unwrap().iter().all(|v| v.is_some_and(|v| v > 0.0)));
 }

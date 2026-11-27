@@ -82,7 +82,7 @@ pub struct PathCurve {
     /// The survival.
     pub survival: Vec<f64>,
     /// The standard error of the cumulative hazard, that is of `log S`.
-    pub std_err: Option<Vec<f64>>,
+    pub se: Option<Vec<f64>>,
     /// The lower confidence limit, `None` where it is undefined.
     pub lower: Option<Vec<Option<f64>>>,
     /// The upper confidence limit.
@@ -176,7 +176,7 @@ pub fn survfit_paths(
             n_censor: Vec::new(),
             cumulative_hazard: Vec::new(),
             survival: Vec::new(),
-            std_err: None,
+            se: None,
             lower: None,
             upper: None,
         };
@@ -225,7 +225,7 @@ pub fn survfit_paths(
             let (lower, upper) = bands(opts.conf_type, &curve.survival, Some(&se), z_value);
             curve.lower = lower;
             curve.upper = upper;
-            curve.std_err = Some(se);
+            curve.se = Some(se);
         }
         curves.push(curve);
     }

@@ -264,7 +264,7 @@ fn main() {
                     ],
                     &at,
                     &StandardiseOptions {
-                        std_err: true,
+                        se: true,
                         ..StandardiseOptions::default()
                     },
                 )

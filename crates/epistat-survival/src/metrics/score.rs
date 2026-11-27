@@ -313,7 +313,7 @@ pub struct Score {
     pub brier: Vec<f64>,
     /// Its standard error, `None` unless asked for and defined (at least two
     /// rows).
-    pub std_err: Vec<Option<f64>>,
+    pub se: Vec<Option<f64>>,
     /// The influence function of each used row at each time, one row per row
     /// of positive weight in the order of the data. `None` unless asked for.
     pub influence: Option<Mat<f64>>,
@@ -332,7 +332,7 @@ pub struct Ipa {
     pub ipa: Vec<Option<f64>>,
     /// Its standard error, `None` unless both scores kept their influence
     /// functions and it is defined.
-    pub std_err: Vec<Option<f64>>,
+    pub se: Vec<Option<f64>>,
 }
 
 /// The area under the ROC curve at each time.
@@ -343,7 +343,7 @@ pub struct Auc {
     /// The area, `None` where there is no case or no control.
     pub auc: Vec<Option<f64>>,
     /// Its standard error, `None` unless asked for and defined.
-    pub std_err: Vec<Option<f64>>,
+    pub se: Vec<Option<f64>>,
     /// The number of cases at each time.
     pub n_cases: Vec<usize>,
     /// The number of rows still at risk after each time.
@@ -538,7 +538,7 @@ pub(super) fn std_err_of(influence: &[f64]) -> Option<f64> {
 /// What one time of the Brier score returns.
 struct BrierColumn {
     brier: f64,
-    std_err: Option<f64>,
+    se: Option<f64>,
     influence: Option<Vec<f64>>,
 }
 
@@ -571,7 +571,7 @@ fn brier_column(
     if !opts.variance {
         return BrierColumn {
             brier,
-            std_err: None,
+            se: None,
             influence: None,
         };
     }
@@ -584,7 +584,7 @@ fn brier_column(
     }
     BrierColumn {
         brier,
-        std_err: std_err_of(&influence),
+        se: std_err_of(&influence),
         influence: Some(influence),
     }
 }
@@ -602,7 +602,7 @@ fn collect_score(
     Score {
         times: times.to_vec(),
         brier: columns.iter().map(|c| c.brier).collect(),
-        std_err: columns.iter().map(|c| c.std_err).collect(),
+        se: columns.iter().map(|c| c.se).collect(),
         influence,
         n_rows: core.sorted.n_rows,
         n_used: core.n,
@@ -706,13 +706,13 @@ pub fn ipa(model: &Score, null: &Score) -> Result<Ipa> {
     let mut out = Ipa {
         times: model.times.clone(),
         ipa: Vec::new(),
-        std_err: Vec::new(),
+        se: Vec::new(),
     };
     for j in 0..model.times.len() {
         let (b, b0) = (model.brier[j], null.brier[j]);
         if b0 <= 0.0 {
             out.ipa.push(None);
-            out.std_err.push(None);
+            out.se.push(None);
             continue;
         }
         out.ipa.push(Some(1.0 - b / b0));
@@ -725,7 +725,7 @@ pub fn ipa(model: &Score, null: &Score) -> Result<Ipa> {
             }
             _ => None,
         };
-        out.std_err.push(se);
+        out.se.push(se);
     }
     Ok(out)
 }
@@ -733,7 +733,7 @@ pub fn ipa(model: &Score, null: &Score) -> Result<Ipa> {
 /// What one time of the area returns.
 struct AucColumn {
     auc: Option<f64>,
-    std_err: Option<f64>,
+    se: Option<f64>,
     influence: Option<Vec<f64>>,
     n_cases: usize,
     n_survivors: usize,
@@ -791,7 +791,7 @@ fn auc_column(
     let dn: f64 = b.iter().sum();
     let counts = |auc, std_err, influence| AucColumn {
         auc,
-        std_err,
+        se: std_err,
         influence,
         n_cases,
         n_survivors,
@@ -907,7 +907,7 @@ pub fn auc(
     Ok(Auc {
         times: times.to_vec(),
         auc: columns.iter().map(|c| c.auc).collect(),
-        std_err: columns.iter().map(|c| c.std_err).collect(),
+        se: columns.iter().map(|c| c.se).collect(),
         n_cases: columns.iter().map(|c| c.n_cases).collect(),
         n_survivors: columns.iter().map(|c| c.n_survivors).collect(),
         n_competing: columns.iter().map(|c| c.n_competing).collect(),

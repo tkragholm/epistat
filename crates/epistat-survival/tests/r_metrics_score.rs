@@ -300,13 +300,7 @@ fn score_against_riskregression() {
                     run.ipa[j],
                     (b_b + (bj / zj) * b_b0) / zj,
                 );
-                check(
-                    "brier se",
-                    j,
-                    b.std_err[j].unwrap(),
-                    run.brier_se[j],
-                    base * u_b,
-                );
+                check("brier se", j, b.se[j].unwrap(), run.brier_se[j], base * u_b);
                 let mut inf: f64 = 0.0;
                 for i in 0..n {
                     inf = inf.max(b.influence.as_ref().unwrap()[(i, j)].abs());
@@ -318,7 +312,7 @@ fn score_against_riskregression() {
                 check(
                     "ipa se",
                     j,
-                    p.std_err[j].unwrap(),
+                    p.se[j].unwrap(),
                     run.ipa_se[j],
                     base * u_b * 2.0 * (1.0 / zj + bj / (zj * zj)),
                 );
@@ -332,7 +326,7 @@ fn score_against_riskregression() {
                 check(
                     "auc se",
                     j,
-                    a.std_err[j].unwrap(),
+                    a.se[j].unwrap(),
                     run.auc_se[j],
                     base * h * (2.0 + nf * kappa),
                 );
@@ -405,9 +399,9 @@ fn auc_against_timeroc() {
                     eprintln!(
                         "{key} {controls:?} t={}: se {:.6e}, timeROC {:.6e}, relative difference {:.2e}",
                         tr.times[j],
-                        a.std_err[j].unwrap(),
+                        a.se[j].unwrap(),
                         se_want[j],
-                        (a.std_err[j].unwrap() - se_want[j]).abs() / se_want[j]
+                        (a.se[j].unwrap() - se_want[j]).abs() / se_want[j]
                     );
                 }
             }

@@ -263,13 +263,13 @@ fn population_means_match_r() {
             let want = want_var[a][a].sqrt();
             worst.put(
                 &format!("{name} std"),
-                (out.std_err[a] - want).abs(),
+                (out.se[a] - want).abs(),
                 b_cov[a][a] / want,
             );
             if identity {
                 worst.put(
                     &format!("{name} std (yates)"),
-                    (out.std_err[a] - case.std[a]).abs(),
+                    (out.se[a] - case.std[a]).abs(),
                     b_cov[a][a] / want,
                 );
             }
@@ -303,7 +303,7 @@ fn population_means_match_r() {
         if !identity {
             let mut gap = 0.0f64;
             for a in 0..n_levels {
-                gap = gap.max((out.std_err[a] - case.std[a]).abs() / case.std[a]);
+                gap = gap.max((out.se[a] - case.std[a]).abs() / case.std[a]);
             }
             let mc = 1.0 / (2.0 * (case.nsim.unwrap() - 1.0)).sqrt();
             eprintln!(

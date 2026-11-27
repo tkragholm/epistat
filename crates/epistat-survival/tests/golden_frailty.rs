@@ -18,10 +18,10 @@ fn hash(f: &FrailtyFit) -> u64 {
     for v in f
         .coefficients
         .iter()
-        .chain(&f.standard_errors)
+        .chain(&f.se)
         .chain(&f.covariance)
         .chain(&f.covariance_sandwich)
-        .chain(&f.diagonal_standard_errors)
+        .chain(&f.diagonal_se)
         .chain(&f.diagonal_covariance)
         .chain(&f.diagonal_covariance_sandwich)
         .chain(&f.frailties)

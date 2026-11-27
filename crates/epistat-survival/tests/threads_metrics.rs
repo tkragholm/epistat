@@ -81,12 +81,12 @@ fn score_metrics_and_calibration() {
                 let a = auc(&data, s.risk.as_ref(), &times, &opts).unwrap();
                 let mut out = Vec::new();
                 out.extend(&b.brier);
-                out.extend(b.std_err.iter().map(|&v| absent(v)));
+                out.extend(b.se.iter().map(|&v| absent(v)));
                 out.extend(&z.brier);
                 out.extend(p.ipa.iter().map(|&v| absent(v)));
-                out.extend(p.std_err.iter().map(|&v| absent(v)));
+                out.extend(p.se.iter().map(|&v| absent(v)));
                 out.extend(a.auc.iter().map(|&v| absent(v)));
-                out.extend(a.std_err.iter().map(|&v| absent(v)));
+                out.extend(a.se.iter().map(|&v| absent(v)));
                 out.extend(a.n_cases.iter().map(|&v| v as f64));
                 let inf = b.influence.unwrap();
                 out.extend(

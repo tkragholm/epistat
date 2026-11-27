@@ -272,7 +272,7 @@ fn run_cox(ties: Ties, f: &Frame, c: &Cohort, reps: usize) -> Timed {
             lines,
             "coef_{name},{}\nse_{name},{}",
             fit.coefficients[k].expect("coefficient"),
-            fit.standard_errors[k].expect("se")
+            fit.se[k].expect("se")
         );
     }
     let _ = writeln!(
@@ -379,7 +379,7 @@ fn run_finegray(c: &Cohort, reps: usize) -> Timed {
             lines,
             "coef_{name},{}\nse_{name},{}",
             fit.coefficients[k].expect("coefficient"),
-            fit.standard_errors[k].expect("se")
+            fit.se[k].expect("se")
         );
     }
     Timed { times, lines }

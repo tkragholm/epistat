@@ -102,15 +102,29 @@ impl WeightedKm {
     /// The standard error of the curve of `group` (a position in `groups`) at
     /// `times[time]`, accounting for the estimation of the weights.
     #[must_use]
-    pub fn standard_error(&self, group: usize, time: usize) -> Option<f64> {
+    pub fn se(&self, group: usize, time: usize) -> Option<f64> {
         self.covariance[self.index(group, time, group)].map(|v| v.max(0.0).sqrt())
     }
 
     /// The standard error with the weights taken as known, as
     /// `survfit(robust = TRUE)`.
     #[must_use]
-    pub fn standard_error_known(&self, group: usize, time: usize) -> Option<f64> {
+    pub fn se_known(&self, group: usize, time: usize) -> Option<f64> {
         self.covariance_known[self.index(group, time, group)].map(|v| v.max(0.0).sqrt())
+    }
+
+    /// The standard error of the curve of `group` at `times[time]`.
+    #[must_use]
+    #[deprecated(since = "0.4.0", note = "use `se`")]
+    pub fn standard_error(&self, group: usize, time: usize) -> Option<f64> {
+        self.se(group, time)
+    }
+
+    /// The standard error with the weights taken as known.
+    #[must_use]
+    #[deprecated(since = "0.4.0", note = "use `se_known`")]
+    pub fn standard_error_known(&self, group: usize, time: usize) -> Option<f64> {
+        self.se_known(group, time)
     }
 
     /// The covariance of the curves of two groups at `times[time]`.
@@ -132,7 +146,7 @@ impl WeightedKm {
     /// # Panics
     ///
     /// When `group`, `other` or `time` is beyond the groups or times, as
-    /// [`Self::standard_error`].
+    /// [`Self::se`].
     #[must_use]
     pub fn risk_difference(&self, group: usize, other: usize, time: usize) -> KmDifference {
         let m = self.times.len();
@@ -149,8 +163,8 @@ impl WeightedKm {
         };
         KmDifference {
             estimate: self.surv[other * m + time] - self.surv[group * m + time],
-            std_err: se(&self.covariance),
-            std_err_known: se(&self.covariance_known),
+            se: se(&self.covariance),
+            se_known: se(&self.covariance_known),
         }
     }
 }
@@ -161,9 +175,9 @@ pub struct KmDifference {
     /// `(1 - S_group) - (1 - S_other)`.
     pub estimate: f64,
     /// Its standard error, accounting for the estimation of the weights.
-    pub std_err: Option<f64>,
+    pub se: Option<f64>,
     /// Its standard error with the weights taken as known.
-    pub std_err_known: Option<f64>,
+    pub se_known: Option<f64>,
 }
 
 /// What the variance needs of the estimated weights.

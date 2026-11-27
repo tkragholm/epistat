@@ -742,7 +742,7 @@ fn predictions_match_r() {
             note(
                 "curve std_err",
                 worst_deviation(
-                    c.std_err.as_ref().unwrap(),
+                    c.se.as_ref().unwrap(),
                     &rc.std_err,
                     b_se,
                     0.0,
@@ -820,7 +820,7 @@ fn predictions_match_r() {
             note(
                 "alt std_err",
                 worst_deviation(
-                    c.std_err.as_ref().unwrap(),
+                    c.se.as_ref().unwrap(),
                     &rc.std_err,
                     b_se,
                     0.0,
@@ -897,7 +897,7 @@ fn predictions_match_r() {
             note(
                 "means curve std_err",
                 worst_deviation(
-                    c.std_err.as_ref().unwrap(),
+                    c.se.as_ref().unwrap(),
                     &r.survfit_means.std_err[sl.clone()],
                     b_se,
                     0.0,

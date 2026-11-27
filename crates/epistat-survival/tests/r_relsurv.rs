@@ -671,13 +671,7 @@ fn flexible_excess_model_matches_stpm2() {
                     } else {
                         band.estimate[k] * (band.upper[k] / band.lower[k]).ln() / (2.0 * Z95)
                     };
-                    worst.rel(
-                        &format!("{label} {what:?} se"),
-                        pr.standard_error,
-                        se,
-                        1e-300,
-                        1e-5,
-                    );
+                    worst.rel(&format!("{label} {what:?} se"), pr.se, se, 1e-300, 1e-5);
                 }
             }
         }

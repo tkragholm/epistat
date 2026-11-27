@@ -76,14 +76,14 @@ fn cox_censoring_contrasts_and_calibration() {
         let mut out = Vec::new();
         for s in [&sa, &sb, &s0] {
             out.extend(&s.brier);
-            out.extend(s.std_err.iter().map(|&v| absent(v)));
+            out.extend(s.se.iter().map(|&v| absent(v)));
         }
         for c in [
             brier_difference(&sb, &sa, &level).unwrap(),
             brier_difference(&sa, &s0, &level).unwrap(),
             auc_difference(&ab, &aa, &level).unwrap(),
         ] {
-            for column in [&c.difference, &c.std_err, &c.lower, &c.upper, &c.p_value] {
+            for column in [&c.difference, &c.se, &c.lower, &c.upper, &c.p_value] {
                 out.extend(column.iter().map(|&v| absent(v)));
             }
         }

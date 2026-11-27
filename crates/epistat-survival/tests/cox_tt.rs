@@ -67,7 +67,7 @@ fn an_identity_transform_is_the_plain_fit() {
     for (a, b) in tt.fit.coefficients.iter().zip(&plain.coefficients) {
         assert!((a.unwrap() - b.unwrap()).abs() < 1e-12, "{a:?} {b:?}");
     }
-    for (a, b) in tt.fit.standard_errors.iter().zip(&plain.standard_errors) {
+    for (a, b) in tt.fit.se.iter().zip(&plain.se) {
         assert!((a.unwrap() - b.unwrap()).abs() < 1e-12);
     }
     assert_eq!(tt.fit.n_rows, 12);

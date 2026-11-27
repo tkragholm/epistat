@@ -91,7 +91,7 @@ fn attributable_fraction_bits_are_recorded() {
         ],
         &times,
         &StandardiseOptions {
-            std_err: true,
+            se: true,
             ..StandardiseOptions::default()
         },
     )

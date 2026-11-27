@@ -53,7 +53,7 @@ fn population_means_are_the_same_on_every_pool() {
                 )
                 .unwrap();
                 let mut all = out.estimate.clone();
-                all.extend(&out.std_err);
+                all.extend(&out.se);
                 all.extend(&out.covariance);
                 for t in &out.tests {
                     all.push(t.chi_square);

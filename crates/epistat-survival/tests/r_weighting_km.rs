@@ -106,7 +106,7 @@ fn weighted_curves_match_survfit_and_finite_differences() {
                 let dev = (k.surv[g * m_times + t] - r.surv[t][g]).abs() / tol;
                 assert!(dev <= 1.0, "{} curve ({t},{g})", r.name);
                 worst[0] = worst[0].max(dev);
-                let se = k.standard_error_known(g, t).unwrap();
+                let se = k.se_known(g, t).unwrap();
                 let tol = r.se_robust_survfit[g * m_times + t] * 4.0 * (n + m_times) as f64 * EPS;
                 let dev = (se - r.se_robust_survfit[g * m_times + t]).abs() / tol.max(1e-300);
                 // survfit prints its standard error to the rounding of its own sums.
@@ -214,8 +214,8 @@ fn weighted_curves_match_survfit_and_finite_differences() {
                 r.name
             );
             for (mine, cov, plain) in [
-                (d.std_err, &r.covariance, &r.covariance_plain),
-                (d.std_err_known, &r.known, &r.known_plain),
+                (d.se, &r.covariance, &r.covariance_plain),
+                (d.se_known, &r.known, &r.known_plain),
             ] {
                 let entry = |g: usize, h: usize| {
                     let scale = (r.covariance[t][g][g] * r.covariance[t][h][h]).sqrt();

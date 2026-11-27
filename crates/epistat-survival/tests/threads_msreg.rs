@@ -40,7 +40,7 @@ fn bits_of(model: &MsModel, profile: &[f64]) -> Vec<f64> {
     for predt in [0.0, 5.0] {
         let pt = probtrans(&h, predt, &ProbTransOptions::default()).unwrap();
         out.extend_from_slice(&pt.probability);
-        push(&mut out, pt.std_err.as_ref().unwrap());
+        push(&mut out, pt.se.as_ref().unwrap());
     }
     out
 }

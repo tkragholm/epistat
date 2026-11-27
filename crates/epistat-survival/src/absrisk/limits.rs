@@ -22,15 +22,10 @@ type Limits = (Vec<Option<f64>>, Vec<Option<f64>>);
 
 /// The limits for every risk with a standard error, `z` the upper normal
 /// quantile of the level. A limit that is not finite is `None`.
-pub(super) fn limits(
-    risk: &[Option<f64>],
-    std_err: &[Option<f64>],
-    kind: RiskLimits,
-    z: f64,
-) -> Limits {
+pub(super) fn limits(risk: &[Option<f64>], se: &[Option<f64>], kind: RiskLimits, z: f64) -> Limits {
     let mut lower = Vec::with_capacity(risk.len());
     let mut upper = Vec::with_capacity(risk.len());
-    for (f, s) in risk.iter().zip(std_err) {
+    for (f, s) in risk.iter().zip(se) {
         let pair = match (f, s) {
             (Some(f), Some(s)) => one(*f, *s, kind, z),
             _ => None,

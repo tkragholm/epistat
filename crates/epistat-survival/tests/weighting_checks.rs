@@ -246,7 +246,7 @@ fn the_covariance_between_two_curves_is_symmetric_and_holds_the_variance() {
         );
         for group in 0..2 {
             let variance = curves.covariance_between(group, group, time).unwrap();
-            let se = curves.standard_error(group, time).unwrap();
+            let se = curves.se(group, time).unwrap();
             assert!((se * se - variance.max(0.0)).abs() <= 1e-12 * variance.abs().max(1e-300));
         }
     }
@@ -268,11 +268,11 @@ fn a_curve_at_zero_has_no_variance() {
     )
     .unwrap();
     assert_eq!(curves.surv[0], 1.0);
-    assert_eq!(curves.standard_error(0, 0), Some(0.0));
-    assert!(curves.standard_error(0, 1).is_some());
+    assert_eq!(curves.se(0, 0), Some(0.0));
+    assert!(curves.se(0, 1).is_some());
     assert_eq!(curves.surv[2], 0.0);
-    assert!(curves.standard_error(0, 2).is_none());
-    assert!(curves.standard_error_known(0, 2).is_none());
+    assert!(curves.se(0, 2).is_none());
+    assert!(curves.se_known(0, 2).is_none());
 }
 
 #[test]

@@ -59,7 +59,7 @@ pub struct Contrast {
     /// The model minus the reference.
     pub difference: Vec<Option<f64>>,
     /// The standard error of the difference.
-    pub std_err: Vec<Option<f64>>,
+    pub se: Vec<Option<f64>>,
     /// The lower confidence limit.
     pub lower: Vec<Option<f64>>,
     /// The upper confidence limit.
@@ -148,7 +148,7 @@ fn contrast(
     let mut out = Contrast {
         times: times.to_vec(),
         difference: Vec::new(),
-        std_err: Vec::new(),
+        se: Vec::new(),
         lower: Vec::new(),
         upper: Vec::new(),
         p_value: Vec::new(),
@@ -158,7 +158,7 @@ fn contrast(
         let (Some(x), Some(y)) = (model[j], reference[j]) else {
             for v in [
                 &mut out.difference,
-                &mut out.std_err,
+                &mut out.se,
                 &mut out.lower,
                 &mut out.upper,
                 &mut out.p_value,
@@ -171,7 +171,7 @@ fn contrast(
         let diff: Vec<f64> = (0..a.nrows()).map(|i| a[(i, j)] - b[(i, j)]).collect();
         let se = std_err_of(&diff).filter(|&s| s > 0.0);
         out.difference.push(Some(delta));
-        out.std_err.push(se);
+        out.se.push(se);
         out.lower.push(se.map(|s| delta - z * s));
         out.upper.push(se.map(|s| delta + z * s));
         out.p_value

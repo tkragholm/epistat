@@ -31,7 +31,7 @@ fn risks(cov: bool) -> Standardised {
         n_rows: 100,
         n_used: 100,
         risk,
-        std_err: None,
+        se: None,
         lower: None,
         upper: None,
         covariance,

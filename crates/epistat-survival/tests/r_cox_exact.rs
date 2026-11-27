@@ -259,7 +259,7 @@ fn fits_match_r() {
                 worst
             };
             let se = worst_deviation(
-                &none_as_nan(&model.standard_errors),
+                &none_as_nan(&model.se),
                 &r.se,
                 bound,
                 1.0,

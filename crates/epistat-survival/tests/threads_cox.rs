@@ -69,8 +69,8 @@ fn cox_fit_and_residuals() {
             assert!(model.converged && model.coefficients[0].is_some());
             assert!(model.coefficients[3].is_none(), "the duplicate is aliased");
             let mut out = absent_all(&model.coefficients);
-            out.extend(absent_all(&model.standard_errors));
-            out.extend(absent_all(model.robust_standard_errors.as_ref().unwrap()));
+            out.extend(absent_all(&model.se));
+            out.extend(absent_all(model.robust_se.as_ref().unwrap()));
             out.extend([
                 absent(model.log_partial_likelihood),
                 absent(model.null_log_partial_likelihood),

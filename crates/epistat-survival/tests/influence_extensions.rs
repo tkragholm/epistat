@@ -272,7 +272,7 @@ fn cox_run(s: &Sim, w: &[f64], cfg: Cfg, times: &[f64], std_err: bool) -> Standa
         &levels(),
         times,
         &StandardiseOptions {
-            std_err,
+            se: std_err,
             ..StandardiseOptions::default()
         },
     )
@@ -336,7 +336,7 @@ fn csc_run(
         &[level(&SET0), level(&SET1)],
         times,
         &StandardiseOptions {
-            std_err,
+            se: std_err,
             product_limit,
             influence: form,
             ..StandardiseOptions::default()
@@ -417,7 +417,7 @@ fn forms_agree_without_the_product_limit() {
         true,
         1,
     );
-    for (x, y) in a.std_err.unwrap().iter().zip(b.std_err.unwrap().iter()) {
+    for (x, y) in a.se.unwrap().iter().zip(b.se.unwrap().iter()) {
         let (x, y) = (x.unwrap(), y.unwrap());
         assert!(
             (x - y).abs() <= 8.0 * n as f64 * f64::EPSILON * x.abs(),
@@ -487,7 +487,7 @@ fn predict_run(
             cause,
             &RiskOptions {
                 product_limit,
-                std_err,
+                se: std_err,
                 influence: InfluenceForm::Exact,
                 ..RiskOptions::default()
             },
@@ -495,7 +495,7 @@ fn predict_run(
         .unwrap();
     (
         out.risk.iter().map(|r| r.unwrap()).collect(),
-        out.std_err
+        out.se
             .map(|v| v.iter().map(|r| r.unwrap()).collect())
             .unwrap_or_default(),
     )
@@ -644,7 +644,7 @@ fn survival_type_run(
         &[level(&SET0), level(&SET1)],
         times,
         &StandardiseOptions {
-            std_err,
+            se: std_err,
             product_limit,
             ..StandardiseOptions::default()
         },

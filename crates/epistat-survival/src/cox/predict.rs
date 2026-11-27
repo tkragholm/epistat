@@ -51,7 +51,7 @@
 //!
 //! `V` is the covariance of the coefficients that the fit holds, the
 //! cluster-robust one when there are clusters, as in `coxph`'s `var`. The
-//! standard error `std_err` of a curve is that of the cumulative hazard, which
+//! standard error `se` of a curve is that of the cumulative hazard, which
 //! is that of `log S`. The confidence limits are the transforms of `survfit`'s
 //! `conf.type`, with the normal quantile of `conf.int`.
 //!
@@ -538,7 +538,7 @@ pub struct Curve {
     /// `exp(theta sum of l)` of [`CurveType::KalbfleischPrentice`].
     pub survival: Vec<f64>,
     /// The standard error of the cumulative hazard, that is of `log S`.
-    pub std_err: Option<Vec<f64>>,
+    pub se: Option<Vec<f64>>,
     /// The lower confidence limit, `None` where it is undefined.
     pub lower: Option<Vec<Option<f64>>>,
     /// The upper confidence limit.
@@ -1703,7 +1703,7 @@ pub fn survfit(
             stratum: s,
             cumulative_hazard,
             survival,
-            std_err,
+            se: std_err,
             lower,
             upper,
         });

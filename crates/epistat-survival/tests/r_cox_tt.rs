@@ -153,14 +153,8 @@ fn fits_match_r() {
             1.0,
             NanRule::Coincide,
         );
-        let se = worst_deviation(
-            &flat(&model.standard_errors),
-            &r.se,
-            bound,
-            1.0,
-            NanRule::Coincide,
-        );
-        let robust = match (&model.robust_standard_errors, &r.robust_se) {
+        let se = worst_deviation(&flat(&model.se), &r.se, bound, 1.0, NanRule::Coincide);
+        let robust = match (&model.robust_se, &r.robust_se) {
             (Some(got), Some(expected)) => {
                 worst_deviation(&flat(got), expected, bound, 1.0, NanRule::Coincide)
             }

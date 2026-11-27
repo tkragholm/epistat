@@ -214,7 +214,7 @@ fn the_estimate_of_two_pieces_per_person_is_the_log_odds_ratio_of_the_counts() {
     // 1e-10 relative in the log likelihood, so beta and var are within about
     // 1e-9 of it, and each derived quantity within a few times that.
     let se = (1.0_f64 / 8.0 + 1.0 / 12.0).sqrt();
-    assert_eq!(f.standard_errors[0], Some(var.sqrt()));
+    assert_eq!(f.se[0], Some(var.sqrt()));
     let ri = f.relative_incidence(Level::default(), false).unwrap()[0].unwrap();
     let z = 1.959_963_984_540_054;
     assert!((ri.relative_incidence - 8.0 / 12.0).abs() < 1e-8);

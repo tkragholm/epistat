@@ -74,7 +74,7 @@ fn worked_case() {
     // 0), xbar(2) = (1/2) (mean over rows 1,2 = 0.5).
     let g: f64 = 0.0 - (0.0 + 0.5 * 0.5);
     let want = (1.0 / 9.0 + 0.25 + 0.5 * g * g).sqrt();
-    assert!((c.std_err.as_ref().unwrap()[1] - want).abs() < 8.0 * f64::EPSILON);
+    assert!((c.se.as_ref().unwrap()[1] - want).abs() < 8.0 * f64::EPSILON);
 }
 
 type Simulated = (Vec<f64>, Vec<f64>, Vec<i32>, Vec<f64>, Vec<u32>, Mat<f64>);
@@ -224,7 +224,7 @@ fn curves_do_not_depend_on_the_means() {
             for (u, v) in a.cumulative_hazard.iter().zip(&b.cumulative_hazard) {
                 assert!((u - v).abs() <= bound * u.abs(), "{u} {v}");
             }
-            let (sa, sb) = (a.std_err.as_ref().unwrap(), b.std_err.as_ref().unwrap());
+            let (sa, sb) = (a.se.as_ref().unwrap(), b.se.as_ref().unwrap());
             for (u, v) in sa.iter().zip(sb) {
                 assert!((u - v).abs() <= bound * 10.0 * u.abs(), "{u} {v}");
             }
@@ -379,7 +379,7 @@ fn refusals() {
         },
     )
     .unwrap();
-    assert!(none.curves[0].std_err.is_none() && none.curves[0].lower.is_none());
+    assert!(none.curves[0].se.is_none() && none.curves[0].lower.is_none());
     let nolimits = survfit(
         &fitted,
         &new,
@@ -389,5 +389,5 @@ fn refusals() {
         },
     )
     .unwrap();
-    assert!(nolimits.curves[0].std_err.is_some() && nolimits.curves[0].upper.is_none());
+    assert!(nolimits.curves[0].se.is_some() && nolimits.curves[0].upper.is_none());
 }

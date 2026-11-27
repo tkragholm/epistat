@@ -87,7 +87,7 @@ pub struct ProbTrans {
     /// The standard error of each entry of `probability`, laid out as it is,
     /// `None` where the variance is below zero, which only rounding can cause.
     /// The outer `None` is without `se`.
-    pub std_err: Option<Vec<Option<f64>>>,
+    pub se: Option<Vec<Option<f64>>>,
     /// The covariance of the entries of `probability` at each time, for
     /// `covariance` in the options: `n_states^4` values for each time, the
     /// entry `r * n_states^2 + c` of a time being the covariance of the entries
@@ -120,7 +120,7 @@ impl ProbTrans {
     #[must_use]
     pub fn std_err_of(&self, t: usize, from: usize, to: usize) -> Option<f64> {
         let s = self.n_states;
-        self.std_err.as_ref()?[t * s * s + from * s + to]
+        self.se.as_ref()?[t * s * s + from * s + to]
     }
 
     /// The covariance at time index `t` of the probabilities `(from1, to1)` and
@@ -420,7 +420,7 @@ fn forward(
         predt,
         time,
         probability,
-        std_err,
+        se: std_err,
         covariance,
     })
 }
@@ -520,7 +520,7 @@ fn fixed_horizon(
         predt,
         time,
         probability,
-        std_err,
+        se: std_err,
         covariance,
     })
 }

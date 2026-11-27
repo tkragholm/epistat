@@ -173,7 +173,7 @@ fn fit_series(c: &Casecross, referent: Referent) -> (f64, f64, usize) {
     .unwrap();
     let x = Mat::from_fn(w.len(), 1, |i, _| c.x[(w.start[i] + 1 - c.first) as usize]);
     let f = clogit(&w.is_case, &w.set, x.as_ref(), &ClogitOptions::default()).unwrap();
-    let se = f.standard_errors[0].unwrap();
+    let se = f.se[0].unwrap();
     let sets = w.is_case.iter().filter(|&&b| b).count();
     (f.coefficients[0].unwrap(), se * se, sets)
 }

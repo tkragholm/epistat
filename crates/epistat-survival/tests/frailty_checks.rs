@@ -115,10 +115,10 @@ fn theta_zero_is_the_cox_model() {
         )
         .unwrap();
         for k in 0..2 {
-            let se = c.standard_errors[k].unwrap();
+            let se = c.se[k].unwrap();
             assert!((f.coefficients[k].unwrap() - c.coefficients[k].unwrap()).abs() <= 1e-9 * se);
-            assert!((f.standard_errors[k].unwrap() - se).abs() <= 1e-9 * se);
-            assert_eq!(f.standard_errors[k], f.diagonal_standard_errors[k]);
+            assert!((f.se[k].unwrap() - se).abs() <= 1e-9 * se);
+            assert_eq!(f.se[k], f.diagonal_se[k]);
         }
         let l = c.log_partial_likelihood.unwrap();
         assert!((f.log_partial_likelihood - l).abs() <= 1e-12 * l.abs());

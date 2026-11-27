@@ -244,7 +244,7 @@ fn fits_match_r() {
                 worst
             };
             let se = worst_deviation(
-                &none_as_nan(&model.standard_errors),
+                &none_as_nan(&model.se),
                 &r.se,
                 bound,
                 1.0,
@@ -253,7 +253,7 @@ fn fits_match_r() {
             let covariance = covariance_deviation(&model.covariance, &r.vcov, p * bound);
             let robust = if r.use_cluster {
                 worst_deviation(
-                    &none_as_nan(model.robust_standard_errors.as_ref().unwrap()),
+                    &none_as_nan(model.robust_se.as_ref().unwrap()),
                     &r.robust_se,
                     bound,
                     1.0,

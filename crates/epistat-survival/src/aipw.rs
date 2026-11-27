@@ -1237,7 +1237,7 @@ impl Model {
                 n_rows: n,
                 n_used: n,
                 risk,
-                std_err: Some(std_err),
+                se: Some(std_err),
                 lower: Some(lower),
                 upper: Some(upper),
                 covariance: Some(covariance),
@@ -1864,7 +1864,7 @@ mod tests {
                 for l in 0..2 {
                     let idx = l * 3 + t;
                     let (ea, eb) = (a.risks.risk[idx].unwrap(), b.risks.risk[idx].unwrap());
-                    let se = |r: &AipwSurv| r.risks.std_err.as_ref().unwrap()[idx].unwrap();
+                    let se = |r: &AipwSurv| r.risks.se.as_ref().unwrap()[idx].unwrap();
                     assert!(
                         (ea - eb).abs() <= d_est,
                         "km {km} level {l} time {tau}: {ea} {eb}"

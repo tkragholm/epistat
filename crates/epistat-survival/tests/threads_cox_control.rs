@@ -71,7 +71,7 @@ fn cox_control_and_tests() {
                 let model = fit(&data, x.as_ref(), &options).unwrap();
                 assert!(model.tests.score.is_some() && model.tests.wald.is_some());
                 let mut out: Vec<f64> = model.coefficients.iter().copied().map(absent).collect();
-                out.extend(model.standard_errors.iter().copied().map(absent));
+                out.extend(model.se.iter().copied().map(absent));
                 out.extend([
                     absent(model.log_partial_likelihood),
                     absent(model.null_log_partial_likelihood),
