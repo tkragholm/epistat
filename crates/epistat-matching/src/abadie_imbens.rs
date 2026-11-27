@@ -43,7 +43,7 @@
 //! the groups are swapped and the sign of the difference reversed.
 //!
 //! With `bias_adjust`, the outcome of a match is first corrected for the
-//! difference in covariates to its anchor (Abadie and Imbens \[2\]). The
+//! difference in covariates to its case (Abadie and Imbens \[2\]). The
 //! outcome of a control `j` matched to unit `i` becomes
 //! `Y_j + (Z_i - Z_j)' a_0`, with `a_0` the coefficients of the weighted
 //! least squares regression of the outcome on an intercept and `Z` among the
@@ -55,12 +55,12 @@
 //!
 //! With `N` target units, `sigma_i^2` the conditional variance of the outcome
 //! of unit `i` given its covariates, `tau` the estimate and `D_i` the
-//! difference `Y_i - Y_i(other)` of an anchor (adjusted when the estimate
+//! difference `Y_i - Y_i(other)` of an case (adjusted when the estimate
 //! is), the estimated variance of the population effect is
 //!
 //! ```text
 //! V = (1 / N^2) ( sum_i sigma_i^2 c_i (K_i^2 + e K_i - KK_i)
-//!                 + sum_{i in anchors} (D_i - tau)^2 )
+//!                 + sum_{i in cases} (D_i - tau)^2 )
 //! ```
 //!
 //! where for the ATT and ATC the sum over `i` is over the units of the other
@@ -71,7 +71,7 @@
 //! V_sample = (1 / N^2) sum_i sigma_i^2 (a_i + c_i K_i)^2
 //! ```
 //!
-//! with `a_i` 1 for an anchor and 0 for a unit of the other group when
+//! with `a_i` 1 for an case and 0 for a unit of the other group when
 //! estimating an effect in one group, and 1 for every unit for the ATE. The
 //! conditional part is `max(V_sample, V) - V_sample`. With bias adjustment
 //! `D_i` is the adjusted difference. The standard error is the square root
@@ -200,7 +200,8 @@ impl AbadieImbensData {
     ///
     /// # Errors
     ///
-    /// [`Error::Length`], [`Error::NotFinite`],
+    /// [`Error::Input`] for a column of the wrong length or with a value that
+    /// is not finite,
     /// [`Error::NoCovariates`] and [`Error::OneGroup`].
     pub fn new(
         treated: Vec<bool>,
@@ -248,7 +249,8 @@ impl AbadieImbensData {
     ///
     /// # Errors
     ///
-    /// [`Error::Length`] and [`Error::NotFinite`].
+    /// [`Error::Input`] for a column of the wrong length or with a value that
+    /// is not finite.
     pub fn with_bias_covariates(mut self, columns: Vec<Vec<f64>>) -> Result<Self, Error> {
         check_columns("bias covariate", &columns, self.treated.len())?;
         self.bias_covariates = Some(columns);
@@ -320,7 +322,7 @@ struct Estimator<'a> {
     trees: [Option<KdTree>; 2],
 }
 
-/// One anchor with its matches.
+/// One case with its matches.
 struct Anchor {
     unit: usize,
     matches: Vec<usize>,

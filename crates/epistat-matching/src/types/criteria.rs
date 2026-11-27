@@ -61,20 +61,20 @@ impl TryFrom<epistat_core::Estimand> for Estimand {
 /// scores of the other group, so a unit equal to an end of that range is
 /// kept.
 ///
-/// In standard matching the other group is all candidates for an anchor and
-/// all anchors for a candidate. In risk-set matching a case is trimmed against
-/// the scores of the records at risk on its own event date, and a candidate
+/// In standard matching the other group is all controls for an case and
+/// all cases for a control. In risk-set matching a case is trimmed against
+/// the scores of the records at risk on its own event date, and a control
 /// against the scores of all cases. At risk means the risk-set rule and, when
 /// the job has them, being alive and resident on that date. Strata, the birth
 /// window and the other matching constraints are not read. A case with nobody
 /// at risk is not trimmed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CommonSupport {
-    /// Discard anchors outside the overlap region.
+    /// Discard cases outside the overlap region.
     Treated,
-    /// Discard candidates outside the overlap region.
+    /// Discard controls outside the overlap region.
     Control,
-    /// Discard both anchors and candidates outside overlap.
+    /// Discard both cases and controls outside overlap.
     Both,
 }
 
@@ -83,13 +83,13 @@ pub enum CommonSupport {
 pub struct MatchingCriteria {
     /// Maximum absolute difference in days between record dates.
     pub birth_date_window_days: i32,
-    /// Requested number of candidates per anchor.
+    /// Requested number of controls per case.
     pub match_ratio: usize,
     /// Required exact-match strata keys.
     pub required_strata: Vec<String>,
     /// Optional strata key for control uniqueness (fallbacks to `unique_key`).
     pub unique_by_key: Option<String>,
-    /// Allow reusing candidates across anchors.
+    /// Allow reusing controls across cases.
     pub allow_replacement: bool,
     /// Requested target estimand.
     #[serde(default)]

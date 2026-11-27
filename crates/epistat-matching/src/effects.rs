@@ -16,10 +16,10 @@
 //! the unit of the row. [`MatchedSample::from_match_data`] builds it from
 //! [`crate::output::match_data`], whose rows are units. [`MatchedSample::from_long_matches`]
 //! builds it from [`crate::output::get_matches`], whose rows are units within
-//! pairs, so a control that is matched to several anchors has a row in each.
+//! pairs, so a control that is matched to several cases has a row in each.
 //! Use that form after matching with replacement. The outcome, the treatment
 //! and the covariates come from a [`UnitData`] keyed by the id of the unit,
-//! so every matching method gives the same input. The anchors need not be the
+//! so every matching method gives the same input. The cases need not be the
 //! treated units: the treatment is read from the [`UnitData`], so a match for
 //! the effect in the controls works the same way.
 //!
@@ -191,7 +191,7 @@ impl UnitData {
     ///
     /// # Errors
     ///
-    /// [`Error::Length`] when the lists differ in length,
+    /// [`Error::Input`] when the lists differ in length,
     /// [`Error::DuplicateId`] for a repeated id and
     /// [`Error::Value`] for an outcome that is not finite.
     pub fn new(ids: Vec<String>, treated: Vec<bool>, outcome: Vec<f64>) -> Result<Self, Error> {
@@ -223,7 +223,7 @@ impl UnitData {
     ///
     /// # Errors
     ///
-    /// [`Error::Length`] or [`Error::Value`].
+    /// [`Error::Input`] for a column of the wrong length or [`Error::Value`].
     pub fn with_covariate(
         mut self,
         name: impl Into<String>,
@@ -295,7 +295,7 @@ impl MatchedSample {
     ///
     /// # Errors
     ///
-    /// [`Error::Length`] for columns of different length and
+    /// [`Error::Input`] for columns of different length and
     /// [`Error::Value`] for a weight that is negative or not finite, or
     /// an outcome or covariate that is not finite.
     pub fn new(

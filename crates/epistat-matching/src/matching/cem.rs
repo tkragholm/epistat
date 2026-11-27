@@ -10,7 +10,7 @@
 //!
 //! * **Binning.** A numeric variable is binned by one of
 //!   - a rule, [`CemRule`], that gives a number of bins from the values of
-//!     all anchors and candidates (Sturges, Freedman-Diaconis, Scott), which
+//!     all cases and controls (Sturges, Freedman-Diaconis, Scott), which
 //!     is the default (Sturges);
 //!   - a number of bins, which cuts the range from the smallest to the largest
 //!     value into bins of equal width;
@@ -32,20 +32,20 @@
 //!   are subclasses with the weights of the exact method, see
 //!   [`exact_match_subclasses`](super::exact_match_subclasses).
 //! * **k:k matching.** [`cem_k2k_pairs`] pairs the units of each stratum one to
-//!   one, by a distance, in the order of the anchors, [`MatchOrder::Data`], or
+//!   one, by a distance, in the order of the cases, [`MatchOrder::Data`], or
 //!   by the distance of the pair, [`MatchOrder::Closest`] and
 //!   [`MatchOrder::Farthest`], with the same ties and replacement rules as
 //!   [`NearestSelection`](super::NearestSelection): without replacement, ties
-//!   to the candidate that comes first. Without a distance, a stratum's
-//!   candidates are taken in an order drawn from the seed.
+//!   to the control that comes first. Without a distance, a stratum's
+//!   controls are taken in an order drawn from the seed.
 //! * **Missing values.** A missing or non-finite value is an error, as the
 //!   bins of such a unit are undefined.
 //!
 //! # Cost
 //!
 //! Binning sorts each numeric variable once. The k:k pairing computes the
-//! distance of every anchor to every candidate of its stratum, so a stratum
-//! of `a` anchors and `c` candidates costs `a * c` distances.
+//! distance of every case to every control of its stratum, so a stratum
+//! of `a` cases and `c` controls costs `a * c` distances.
 
 use super::codes::{combine_codes, first_appearance_codes, first_missing};
 use super::distance::DistanceConfig;
@@ -141,16 +141,16 @@ impl CemVariable {
     }
 }
 
-/// The stratum of every anchor and candidate, or `None` where a unit is in a
+/// The stratum of every case and control, or `None` where a unit is in a
 /// stratum that lacks one of the groups.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CemStrata {
-    /// Stratum of each anchor, in the order of the anchors.
+    /// Stratum of each case, in the order of the cases.
     pub cases: Vec<Option<usize>>,
-    /// Stratum of each candidate, in the order of the candidates.
+    /// Stratum of each control, in the order of the controls.
     pub controls: Vec<Option<usize>>,
     /// Number of strata that hold both groups. They are numbered from 0 in
-    /// order of first appearance among the anchors.
+    /// order of first appearance among the cases.
     pub count: usize,
 }
 
@@ -330,7 +330,7 @@ pub fn cem_strata<R: MatchingRecord>(
 ///
 /// The strata are those of [`cem_strata`] and the weights those of
 /// [`exact_match_subclasses`](super::exact_match_subclasses). The numbers of
-/// the subclasses follow the first appearance among the anchors.
+/// the subclasses follow the first appearance among the cases.
 ///
 /// # Errors
 ///
@@ -462,7 +462,7 @@ fn group_codes(
         .collect()
 }
 
-/// The nearest available candidate of an anchor: the smallest distance, and
+/// The nearest available control of an case: the smallest distance, and
 /// among equal distances the smallest tie rank.
 fn nearest_available<R: MatchingRecord>(
     anchor: &R,
@@ -501,15 +501,15 @@ fn nearest_available<R: MatchingRecord>(
 /// Pair the units of each stratum one to one, as `k2k = TRUE` does in
 /// `matchit(method = "cem")`.
 ///
-/// Each anchor takes the nearest candidate of its stratum by the distance, no
-/// candidate twice. The anchors are taken in the order `order`: the order of
+/// Each case takes the nearest control of its stratum by the distance, no
+/// control twice. The cases are taken in the order `order`: the order of
 /// the slice, an order drawn from `seed`, or by the distance of the pairs,
 /// nearest first for [`MatchOrder::Closest`] and farthest first for
-/// [`MatchOrder::Farthest`], where an anchor whose candidate has gone takes the
-/// next nearest and its place in the order by the new distance. Candidates at
+/// [`MatchOrder::Farthest`], where an case whose control has gone takes the
+/// next nearest and its place in the order by the new distance. Controls at
 /// the same distance rank by their place in the slice. With no `distance`
-/// every candidate of a stratum is equally near, and the candidates rank in an
-/// order drawn from `seed`. An anchor with no candidate left stays unmatched.
+/// every control of a stratum is equally near, and the controls rank in an
+/// order drawn from `seed`. An case with no control left stays unmatched.
 ///
 /// A pair distance with no value for a pair, as a forbidden entry of a
 /// distance matrix, rules the pair out.

@@ -98,7 +98,7 @@ const DEVIANCE_CLIP: f64 = 1e-5;
 #[derive(Debug, Clone)]
 pub struct CrossValidation {
     /// The fold of each row, from 0, in the order of the design matrix: the
-    /// anchors, then the candidates.
+    /// cases, then the controls.
     pub fold_ids: Vec<usize>,
     /// The penalties of the path, largest first.
     pub lambda: Vec<f64>,
@@ -140,7 +140,7 @@ impl CrossValidation {
 /// The fold of each of `n` rows, from 0 to `nfolds - 1`: the rows are dealt to
 /// the folds in turn and the assignment is shuffled with a stream of
 /// `epistat-rng` seeded with `seed`. The rows are those of the design matrix,
-/// the anchors first and then the candidates.
+/// the cases first and then the controls.
 ///
 /// # Errors
 ///

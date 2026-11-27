@@ -229,7 +229,7 @@ pub struct RoleTransitionRecord<R = BaseRecord> {
     /// Shared core record attributes used for matching constraints.
     #[serde(flatten)]
     pub record: R,
-    /// Date when the record transitions from comparison risk set to anchor group.
+    /// Date when the record transitions from comparison risk set to case group.
     pub transition_date: Option<NaiveDate>,
 }
 

@@ -7,7 +7,7 @@ readme = "README.md"
 # The R references are about 8 MB of JSON that only this repository's tests read;
 # the R scripts that write them stay in the package as their provenance.
 exclude = ["tests/data/*.json"]
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

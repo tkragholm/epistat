@@ -6,7 +6,7 @@
 //! into a data frame without looking at a hash map. They are built from a
 //! [`MatchOutcome`] and the units the match was run on, in input order, which
 //! the outcome does not keep: it holds the pairs and only the count of
-//! anchors that found no control.
+//! cases that found no control.
 //!
 //! The ordered views at the end of the module give the map-based outputs of
 //! the crate in the order of their keys.
@@ -14,10 +14,10 @@
 //! # Algorithm
 //!
 //! Units are numbered by their position in the data, and each output is built
-//! by one pass over the pairs. A row of the match matrix is an anchor, in the
+//! by one pass over the pairs. A row of the match matrix is an case, in the
 //! order of the units, with its controls in the order they were assigned. In
-//! the long shape an anchor row weighs 1 and a control row weighs the
-//! reciprocal of the number of controls its anchor got. Weights are rescaled to
+//! the long shape an case row weighs 1 and a control row weighs the
+//! reciprocal of the number of controls its case got. Weights are rescaled to
 //! a mean of 1 in each group when the options ask for it, as `normalize = TRUE`
 //! does in `matchit()`. No random number is drawn.
 //!
@@ -38,7 +38,7 @@ use std::collections::{HashMap, HashSet};
 
 /// The units of a match in input order, with the group of each.
 ///
-/// The anchors are the focal group of the match, the treated units for the
+/// The cases are the focal group of the match, the treated units for the
 /// effect in the treated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Units {
@@ -48,11 +48,11 @@ pub struct Units {
 }
 
 impl Units {
-    /// The units, in the order of the data, and whether each is an anchor.
+    /// The units, in the order of the data, and whether each is an case.
     ///
     /// # Errors
     ///
-    /// [`Error::LengthMismatch`] when the two lists differ in length and
+    /// an [`Error::Input`] when the two lists differ in length and
     /// [`Error::DuplicateId`] when an id occurs twice.
     pub fn new(ids: Vec<String>, anchor: Vec<bool>) -> Result<Self, Error> {
         if ids.len() != anchor.len() {
@@ -76,7 +76,7 @@ impl Units {
     ///
     /// Risk-set matching is one, since a future case is a control in the pairs
     /// of earlier cases. The role of a unit is read from each pair. Only
-    /// [`get_matches`] takes these units, and it cannot list the anchors that
+    /// [`get_matches`] takes these units, and it cannot list the cases that
     /// found no control, since the outcome does not name them.
     ///
     /// # Errors
@@ -90,7 +90,7 @@ impl Units {
     }
 
     /// Whether each unit has one group in every pair. False for units made
-    /// with [`Units::without_fixed_roles`], whose anchor flags are all false
+    /// with [`Units::without_fixed_roles`], whose case flags are all false
     /// and mean nothing.
     #[must_use]
     pub const fn has_fixed_roles(&self) -> bool {
@@ -111,7 +111,7 @@ impl Units {
         &self.ids
     }
 
-    /// Whether each unit is an anchor, in input order.
+    /// Whether each unit is an case, in input order.
     #[must_use]
     pub fn case_flags(&self) -> &[bool] {
         &self.anchor
@@ -129,7 +129,7 @@ impl Units {
         self.ids.is_empty()
     }
 
-    /// The anchors' ids in input order.
+    /// The cases' ids in input order.
     #[must_use]
     pub fn case_ids(&self) -> Vec<&str> {
         self.ids
@@ -149,19 +149,19 @@ impl Units {
     }
 }
 
-/// MatchIt's `match.matrix`: one row per anchor, in input order, holding its
+/// MatchIt's `match.matrix`: one row per case, in input order, holding its
 /// controls in the order they were assigned.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MatchMatrix {
-    /// The anchor of each row.
+    /// The case of each row.
     pub case_id: Vec<String>,
-    /// Column `j` holds the `j`-th control of each anchor, `None` where the
-    /// anchor has fewer.
+    /// Column `j` holds the `j`-th control of each case, `None` where the
+    /// case has fewer.
     pub columns: Vec<Vec<Option<String>>>,
 }
 
 impl MatchMatrix {
-    /// Number of rows, one per anchor.
+    /// Number of rows, one per case.
     #[must_use]
     pub fn nrow(&self) -> usize {
         self.case_id.len()
@@ -185,14 +185,14 @@ impl MatchMatrix {
 
 /// The match matrix of an outcome.
 ///
-/// Every anchor has a row, in the order of `units`. An anchor that found no
+/// Every case has a row, in the order of `units`. An case that found no
 /// control has a row of `None`, as `match.matrix` has a row of `NA`. The
 /// matrix has `ratio` columns, as MatchIt's has, or as many as the most any
-/// anchor got when that is more.
+/// case got when that is more.
 ///
 /// # Errors
 ///
-/// [`Error::UnknownCase`] when a pair's anchor is not an anchor in
+/// [`Error::UnknownCase`] when a pair's case is not an case in
 /// `units`.
 pub fn match_matrix(
     outcome: &MatchOutcome,
@@ -235,10 +235,10 @@ pub fn match_matrix(
 pub struct LongMatches {
     /// The unit of each row.
     pub id: Vec<String>,
-    /// Whether the unit is the anchor or a control of its pair.
+    /// Whether the unit is the case or a control of its pair.
     pub role: Vec<UnitRole>,
-    /// The pair, numbered from 1 in the order of the anchors. `None` for an
-    /// anchor that found no control.
+    /// The pair, numbered from 1 in the order of the cases. `None` for an
+    /// case that found no control.
     pub pair_id: Vec<Option<usize>>,
     /// The weight of the unit in the pair.
     pub weight: Vec<f64>,
@@ -260,31 +260,31 @@ impl LongMatches {
 
 /// The long form of an outcome.
 ///
-/// Each anchor with controls is a pair, numbered from 1 in the order of
-/// `units`. A pair has one row for the anchor and one for each of its controls,
-/// the anchor first. Pairs follow in order of their number. With
-/// `include_unmatched`, an anchor without controls follows the pairs with no
+/// Each case with controls is a pair, numbered from 1 in the order of
+/// `units`. A pair has one row for the case and one for each of its controls,
+/// the case first. Pairs follow in order of their number. With
+/// `include_unmatched`, an case without controls follows the pairs with no
 /// pair number and weight 0, where MatchIt leaves it out.
 ///
 /// The controls of a pair are in the order MatchIt's `get_matches()` lists
-/// them. Going through the anchors in order and each anchor's controls in the
+/// them. Going through the cases in order and each case's controls in the
 /// order they were assigned, a control takes its place from the first time it
 /// is met. Without replacement that is the order of assignment. With
 /// replacement a control that an earlier pair used comes before one that is
 /// new to this pair.
 ///
-/// An anchor row weighs 1 and a control row its pair weight, the reciprocal of
-/// the number of controls its anchor got. These are the weights of
+/// An case row weighs 1 and a control row its pair weight, the reciprocal of
+/// the number of controls its case got. These are the weights of
 /// `get_matches()` without rescaling. With replacement a control has a row in
 /// each pair it is in.
 ///
 /// MatchIt's table puts the treated unit of a pair first, which is the
-/// control when the anchors are the controls. Here the anchor is always first.
+/// control when the cases are the controls. Here the case is always first.
 ///
 /// With units made by [`Units::without_fixed_roles`], as in risk-set matching,
-/// the anchors are the units that are the anchor of some pair, numbered in the
+/// the cases are the units that are the case of some pair, numbered in the
 /// order of `units`, and a unit that is a control in one pair can be the
-/// anchor of another. The `role` of each row says which it is in that pair.
+/// case of another. The `role` of each row says which it is in that pair.
 ///
 /// # Errors
 ///
@@ -352,14 +352,14 @@ pub fn get_matches(
 }
 
 /// The pairs of an outcome as positions in the units, with the controls of
-/// each anchor listed together.
+/// each case listed together.
 struct PairLayout {
-    /// The pairs as (anchor position, control position), in the order of the
+    /// The pairs as (case position, control position), in the order of the
     /// outcome.
     pairs: Vec<(usize, usize)>,
-    /// The number of pairs of each unit as an anchor.
+    /// The number of pairs of each unit as an case.
     count: Vec<usize>,
-    /// The controls of the anchor at position `p` are
+    /// The controls of the case at position `p` are
     /// `controls[start[p]..start[p + 1]]`, in the order of the pairs.
     start: Vec<usize>,
     controls: Vec<usize>,
@@ -414,7 +414,7 @@ impl PairLayout {
         &self.controls[self.start[anchor]..self.start[anchor + 1]]
     }
 
-    /// The order in which each control is first met going through `anchors` and
+    /// The order in which each control is first met going through `cases` and
     /// the controls of each in the order of the pairs.
     fn first_met(&self, anchors: &[usize]) -> Vec<usize> {
         let mut first_met = vec![usize::MAX; self.count.len()];
@@ -435,7 +435,7 @@ impl PairLayout {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MatchDataOptions {
     /// The weighting. The default is the weighting of the effect in the
-    /// anchors, MatchIt's for `estimand = "ATT"`.
+    /// cases, MatchIt's for `estimand = "ATT"`.
     pub method: MatchWeightMethod,
     /// Rescale the weights of each group to a mean of 1, as `normalize = TRUE`
     /// does in `matchit()`. The default.
@@ -466,11 +466,11 @@ impl Default for MatchDataOptions {
 pub struct MatchData {
     /// The unit of each row.
     pub id: Vec<String>,
-    /// Whether the unit is an anchor or a candidate.
+    /// Whether the unit is an case or a control.
     pub role: Vec<UnitRole>,
     /// The weight of the unit.
     pub weight: Vec<f64>,
-    /// The pair the unit is in, numbered from 1 in the order of the anchors,
+    /// The pair the unit is in, numbered from 1 in the order of the cases,
     /// as MatchIt's `subclass`. `None` for a unit with no pair and, with
     /// replacement, for every unit.
     pub subclass: Vec<Option<usize>>,
@@ -704,10 +704,10 @@ pub fn match_data_from_weights(
 ///
 /// `pair` holds the pair label of each unit of `units`, `None` for a unit that
 /// is not selected, and `weights` the weight of each unit. Labels may be of any
-/// size and have gaps. Each pair has one row per unit, the anchors first and
-/// then the candidates, each in the order of `units`. Pairs follow in
+/// size and have gaps. Each pair has one row per unit, the cases first and
+/// then the controls, each in the order of `units`. Pairs follow in
 /// increasing order of their label and are numbered from 1, as
-/// [`match_data_from_weights`] numbers them. With `include_unmatched`, the anchors that are not
+/// [`match_data_from_weights`] numbers them. With `include_unmatched`, the cases that are not
 /// selected follow the pairs with no pair number and weight 0.
 ///
 /// # Errors
@@ -785,13 +785,13 @@ fn sorted_by_key<'a, V: Copy + 'a>(
 }
 
 impl UnitWeightSet {
-    /// The anchors' weights sorted by id, as parallel vectors.
+    /// The cases' weights sorted by id, as parallel vectors.
     #[must_use]
     pub fn case_sorted(&self) -> (Vec<&str>, Vec<f64>) {
         sorted_by_key(self.case.iter())
     }
 
-    /// The candidates' weights sorted by id, as parallel vectors.
+    /// The controls' weights sorted by id, as parallel vectors.
     #[must_use]
     pub fn control_sorted(&self) -> (Vec<&str>, Vec<f64>) {
         sorted_by_key(self.control.iter())
@@ -827,13 +827,13 @@ impl SubclassedUnits {
         )))
     }
 
-    /// The weights for the effect in the anchors, sorted by id.
+    /// The weights for the effect in the cases, sorted by id.
     #[must_use]
     pub fn att_weights_sorted(&self) -> (Vec<&str>, Vec<f64>) {
         self.weights_sorted(Estimand::Att).unwrap_or_default()
     }
 
-    /// The weights for the effect in the candidates, sorted by id.
+    /// The weights for the effect in the controls, sorted by id.
     #[must_use]
     pub fn atc_weights_sorted(&self) -> (Vec<&str>, Vec<f64>) {
         self.weights_sorted(Estimand::Atc).unwrap_or_default()

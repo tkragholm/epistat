@@ -399,7 +399,7 @@ impl<'a> ArrowRecords<'a> {
     }
 
     /// The event date of risk-set matching, `Date32`: the date a record
-    /// moves from the comparison risk set to the anchor group, which is the
+    /// moves from the comparison risk set to the case group, which is the
     /// index date of the matching. Read only by
     /// [`risk_set_records`](Self::risk_set_records).
     pub fn event_date(mut self, dates: &'a dyn Array) -> Self {
@@ -490,7 +490,7 @@ impl<'a> ArrowRecords<'a> {
     /// # Errors
     ///
     /// As [`balance_records`](Self::balance_records), and
-    /// [`Error::Cohort`] when two strata, two numeric fields or two
+    /// the error of the cohort when two strata, two numeric fields or two
     /// covariates have one name.
     pub fn cohort(&self) -> Result<Cohort> {
         let len = self.id.len();

@@ -1,4 +1,4 @@
-//! The engine behind standard pair matching: for each anchor it builds the
+//! The engine behind standard pair matching: for each case it builds the
 //! pool of eligible controls and the selection strategy chooses among them.
 //!
 //! # Algorithm
@@ -8,30 +8,30 @@
 //! is refused, and its outcome has no pairs and one count of the reason.
 //!
 //! Common support is applied before any pair is formed. The interval is the
-//! overlap of the anchors' and the candidates' score ranges, and a unit
+//! overlap of the cases' and the controls' score ranges, and a unit
 //! outside it is trimmed according to the policy. Alternatively the caller
 //! lists the units to leave out.
 //!
-//! The pool of an anchor is the candidates that agree on the required strata,
-//! lie inside the birth-date or distance caliper, are not the anchor itself,
+//! The pool of an case is the controls that agree on the required strata,
+//! lie inside the birth-date or distance caliper, are not the case itself,
 //! are unused when matching is without replacement and pass every constraint.
-//! Candidates are found through indexes on the strata and on the distance
+//! Controls are found through indexes on the strata and on the distance
 //! where the distance allows it, and the rest are tested one by one. Each
 //! refusal is counted under the reason of the constraint that refused it.
 //! The pool is kept in the order of the controls' ids so that the result does
 //! not depend on how the work is split over threads.
 //!
-//! With replacement and no unique key the anchors are independent and run in
-//! parallel. Otherwise the anchors are grouped by their strata and the groups
+//! With replacement and no unique key the cases are independent and run in
+//! parallel. Otherwise the cases are grouped by their strata and the groups
 //! run in parallel, since controls of different strata are never
 //! interchangeable. With a unique key the groups share the used values and
-//! run in order. The anchors of one group run in order. A selection strategy
-//! that assigns in rounds gives every anchor its first control before any gets
+//! run in order. The cases of one group run in order. A selection strategy
+//! that assigns in rounds gives every case its first control before any gets
 //! a second.
 //!
-//! An anchor that finds fewer controls than the ratio tries the fallback
+//! An case that finds fewer controls than the ratio tries the fallback
 //! ratios in turn. The diagnostics record the exclusions, the unmatched
-//! anchors and, when the realised estimand differs from the requested one,
+//! cases and, when the realised estimand differs from the requested one,
 //! why.
 
 use super::constraints::{
@@ -134,7 +134,7 @@ pub struct MatchEngine<'a, R: MatchingRecord, S: SelectionStrategy<R>> {
     id_order: OnceLock<Option<Cow<'a, IdOrder>>>,
 }
 
-/// Unified request for standard anchor-to-candidate matching.
+/// Unified request for standard case-to-control matching.
 #[derive(Clone, Copy)]
 pub(crate) struct StandardMatchRequest<'a, S, G: ?Sized> {
     /// The criteria of the job.
@@ -152,7 +152,7 @@ pub(crate) struct StandardMatchRequest<'a, S, G: ?Sized> {
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-/// Internal candidate-pool request used by role-transition and engine helpers.
+/// Internal control-pool request used by role-transition and engine helpers.
 #[derive(Clone, Copy)]
 pub struct CandidatePoolRequest<'a, R: MatchingRecord, D: DistanceMetric<R>> {
     pub case: &'a R,
@@ -199,7 +199,7 @@ fn intersect_candidate_indices(candidate_indices: &mut Vec<usize>, indexed_indic
     }
 }
 
-/// What stopped a control from being a candidate: a constraint of the run, or the
+/// What stopped a control from being a control: a constraint of the run, or the
 /// distance caliper, which is recorded as a distance-caliper exclusion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Blocker {
@@ -331,7 +331,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
 
     /// The controls that may be matched to `case`, in the order of their ids.
     ///
-    /// A `Wide` scan splits a long candidate list over the rayon pool and sorts
+    /// A `Wide` scan splits a long control list over the rayon pool and sorts
     /// by a precomputed id rank. Both produce the pool a `Narrow` scan does,
     /// element for element.
     fn candidate_pool_inner<F, D: DistanceMetric<R> + Sync, G: ConstraintGroup<R> + ?Sized>(
@@ -470,7 +470,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
     /// Exclusions are tallied by reason string here and entered into the
     /// diagnostics once per pool. `ConstraintReason::from_reason_str`
     /// allocates for every string it has no variant for, which is most of
-    /// the built-in ones, and this loop runs once per candidate.
+    /// the built-in ones, and this loop runs once per control.
     fn scan_candidates<F, D: DistanceMetric<R> + Sync, G: ConstraintGroup<R> + ?Sized>(
         &self,
         chunk: &[usize],
@@ -983,17 +983,17 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
 ///
 /// This is `matchit()`'s `discard` as a list: the caller decides which units
 /// go, for instance from a first propensity fit, and matches the others on a
-/// distance fitted again. Ids that belong to no anchor or candidate are
+/// distance fitted again. Ids that belong to no case or control are
 /// ignored.
 #[derive(Debug, Clone, Default)]
 pub struct DiscardedUnits {
-    /// Ids of the anchors to leave out.
+    /// Ids of the cases to leave out.
     pub cases: HashSet<String>,
-    /// Ids of the candidates to leave out.
+    /// Ids of the controls to leave out.
     pub controls: HashSet<String>,
 }
 
-/// Run anchor/candidate matching with an explicit control selection strategy.
+/// Run case/control matching with an explicit control selection strategy.
 #[must_use]
 pub(crate) fn match_standard<
     R: MatchingRecord,
@@ -1216,11 +1216,11 @@ fn finite_score_bounds<R: MatchingRecord>(rows: &[R], scores: &ScoreTable) -> Op
     finite_bounds(rows.iter().filter_map(|row| scores.get(row.id()).copied()))
 }
 
-/// Trim to the region where the anchors' and the candidates' scores overlap.
+/// Trim to the region where the cases' and the controls' scores overlap.
 ///
 /// The region is the interval from the larger of the two minima to the smaller
-/// of the two maxima, with its ends inside. `Treated` removes the anchors and
-/// `Control` the candidates outside it, which for each group is the same as
+/// of the two maxima, with its ends inside. `Treated` removes the cases and
+/// `Control` the controls outside it, which for each group is the same as
 /// removing the units outside the other group's range. `Both` removes both.
 /// A unit without a finite score lies outside the region. This is MatchIt's
 /// documented `discard` rule: a unit is discarded when its distance is outside
@@ -1266,8 +1266,8 @@ pub(crate) fn standard_common_support<R: MatchingRecord>(
     })
 }
 
-/// Partition `anchors` by strata key, returning one `Vec<usize>` of anchor indices per group.
-/// Anchors trimmed by `trimmed_indices` are excluded.
+/// Partition `cases` by strata key, returning one `Vec<usize>` of case indices per group.
+/// Cases trimmed by `trimmed_indices` are excluded.
 fn group_anchors_by_strata<R: MatchingRecord>(
     anchors: &[R],
     required_strata: &[String],
@@ -1396,15 +1396,15 @@ fn digit_key_by_digits(id: &str) -> Option<u64> {
     Some(word)
 }
 
-/// Candidates per task when a pool is scanned in parallel.
+/// Controls per task when a pool is scanned in parallel.
 const SCAN_CHUNK: usize = 1024;
 
-/// How a candidate pool is scanned and ordered.
+/// How a control pool is scanned and ordered.
 #[derive(Clone, Copy)]
 enum PoolScan {
     /// One thread, ordered by comparing ids.
     Narrow,
-    /// Long candidate lists are split over the rayon pool and ordered by rank.
+    /// Long control lists are split over the rayon pool and ordered by rank.
     Wide,
 }
 
@@ -1450,7 +1450,7 @@ impl<R: MatchingRecord, D: DistanceMetric<R>, G: ?Sized> Clone for ScanContext<'
 
 impl<R: MatchingRecord, D: DistanceMetric<R>, G: ?Sized> Copy for ScanContext<'_, R, D, G> {}
 
-/// The outcome of scanning a run of candidates.
+/// The outcome of scanning a run of controls.
 #[derive(Default)]
 struct ScanTally {
     eligible: Vec<usize>,
@@ -1540,7 +1540,7 @@ fn usize_to_f64(n: usize) -> f64 {
     n as f64
 }
 
-/// The outcome of a job refused for `reason`, with no pairs and every anchor
+/// The outcome of a job refused for `reason`, with no pairs and every case
 /// unmatched.
 pub fn refused_outcome(case_count: usize, reason: impl Into<ExclusionReason>) -> MatchOutcome {
     let reason = reason.into();
@@ -1578,7 +1578,7 @@ mod strata_group_order_tests {
     ///
     /// A hash-ordered grouping would differ between processes, and one process
     /// cannot see that by running twice. The test asserts the order of the
-    /// anchors instead, with three interleaved strata.
+    /// cases instead, with three interleaved strata.
     #[test]
     fn groups_follow_first_appearance_of_their_strata() {
         // Interleaved on purpose: first appearances are b, a, c.

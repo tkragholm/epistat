@@ -89,7 +89,7 @@ pub struct MatchedSet {
 ///
 /// # Errors
 ///
-/// [`Error::Unit`] for a unit not in `units`, [`Error::NotOneTreated`]
+/// [`Error::UnknownUnit`] for a unit not in `units`, [`Error::NotOneTreated`]
 /// and [`Error::NoControl`] for a set that is not one treated unit with
 /// controls, [`Error::ReusedUnit`] for a unit that appears in more than one row
 /// with a pair number, in one set or in several, and
@@ -311,7 +311,7 @@ pub fn m_statistic_interval(
 /// The strata of matched sets whose outcomes are 0 or 1.
 fn binary_strata(sets: &[MatchedSet]) -> Result<Vec<BinaryStratum>, Error> {
     if sets.is_empty() {
-        return Err(Error::NoSets.into());
+        return Err(Error::NoSets);
     }
     #[expect(clippy::float_cmp, reason = "a binary outcome is exactly 0 or 1")]
     let case = |v: f64| -> Result<bool, Error> {
@@ -399,7 +399,7 @@ pub struct CensoredSet {
 
 fn gehan(sets: &[CensoredSet], direction: EventDirection) -> Result<Vec<Vec<f64>>, Error> {
     if sets.is_empty() {
-        return Err(Error::NoSets.into());
+        return Err(Error::NoSets);
     }
     let units: Vec<Vec<Censored>> = sets
         .iter()

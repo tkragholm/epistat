@@ -1046,7 +1046,7 @@ mod tests {
     type Member = RoleTransitionRecord<BaseRecord>;
 
     /// The default policy's rules without its token, so that matching scans
-    /// every candidate as it does for a policy of the caller's.
+    /// every control as it does for a policy of the caller's.
     struct Scanned;
 
     impl<R: RoleIndexedRecord> RiskSetPolicy<R> for Scanned {}

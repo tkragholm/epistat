@@ -21,7 +21,7 @@
 //! cohort for each case. Both give the same matches.
 //!
 //! With common support set, a case whose score is strictly outside the range
-//! of the scores at risk on its date is not matched, and a candidate whose
+//! of the scores at risk on its date is not matched, and a control whose
 //! score is outside the range of the cases' scores is not used.
 //!
 //! The age of a person on a date is the civil age in whole years, from
@@ -61,7 +61,7 @@ use std::collections::{BTreeSet, HashSet};
 ///
 /// This allows downstream orchestrators to inject study-specific entry/exit logic
 /// (e.g. alive/resident checks) while keeping matching mechanics generic.
-/// Candidate lists are scanned on several threads, so a policy is `Sync`.
+/// Control lists are scanned on several threads, so a policy is `Sync`.
 pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
     /// Whether a record should be treated as an eligible case.
     ///
@@ -70,9 +70,9 @@ pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
         is_case_before_age_limit(row, age_limit_years)
     }
 
-    /// Whether a record is at risk (eligible as a candidate) at the case event date.
+    /// Whether a record is at risk (eligible as a control) at the case event date.
     ///
-    /// Default behavior allows candidates that have entered on or before the
+    /// Default behavior allows controls that have entered on or before the
     /// case event date (a record without an entry date has always been at risk)
     /// and that have no event date or an event date strictly after the case
     /// event date.
@@ -84,7 +84,7 @@ pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
     /// reads only the entry and event dates of the control. Common-support
     /// trimming then finds the scores at risk on each case date in one sweep,
     /// and so does the matching where the job allows it (see
-    /// [`match_transition`]).
+    /// risk-set matching).
     ///
     /// [`DefaultAtRiskRule`] can only be made inside this crate, so only
     /// [`DefaultRiskSetPolicy`] answers `Some` and a policy of your own cannot
@@ -104,7 +104,7 @@ pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
     /// `is_control_at_risk(case, control, date)` is
     /// `control_at_risk_span(control).contains(date)` for every case. Matching
     /// then keeps the risk sets by a sweep over the case dates, as it does
-    /// under the default rule (see [`match_transition`]), and gives the pairs
+    /// under the default rule (see risk-set matching), and gives the pairs
     /// and diagnostics of the scan. A policy that answers `None` for any
     /// record is scanned.
     fn control_at_risk_span(&self, _control: &R) -> Option<AtRiskSpan> {
@@ -203,7 +203,7 @@ pub(crate) struct TransitionMatchRequest<'a, S, G: ?Sized, P> {
 /// configuration decide the trimming: a case whose score is strictly outside
 /// the range of the scores of the records at risk on its event date (by the
 /// risk-set rule and the alive and resident checks) is not matched, and a
-/// candidate whose score is outside the range of the cases' scores is not
+/// control whose score is outside the range of the cases' scores is not
 /// used. See [`CommonSupport`].
 ///
 /// Cases are matched in order of event date. The risk sets are kept by a
@@ -216,8 +216,8 @@ pub(crate) struct TransitionMatchRequest<'a, S, G: ?Sized, P> {
 /// ([`MatchJob::with_resident_spells`](crate::MatchJob::with_resident_spells))
 /// or a caliper on a numeric field. Without a caliper the sweep takes time
 /// close to linear in the cohort; a caliper is tested on the controls of each
-/// case's window. Any other job scans the candidates of each case's stratum
-/// and birth window, in time proportional to the cases times the candidates
+/// case's window. Any other job scans the controls of each case's stratum
+/// and birth window, in time proportional to the cases times the controls
 /// per case. Both give the same pairs and diagnostics.
 ///
 /// With `order`, the order of the cohort's ids when the caller has it, the
@@ -459,7 +459,7 @@ fn at_risk_score_ranges<
 
 /// Common-support trimming of a risk-set match.
 ///
-/// A candidate is trimmed under `Control` or `Both` when its score is outside
+/// A control is trimmed under `Control` or `Both` when its score is outside
 /// the range of the scores of all cases. A case is trimmed under `Treated` or
 /// `Both` when its score is strictly outside the range of the scores of the
 /// records at risk on its event date. At risk means the risk-set rule and, as
@@ -467,7 +467,7 @@ fn at_risk_score_ranges<
 /// Strata, the birth window and every other matching constraint are not read.
 /// A score equal to an end of the range is kept. A case with nobody at risk is
 /// not trimmed, since it has no range to be outside of, and is counted among
-/// the cases without candidates. A record without a finite score lies outside
+/// the cases without controls. A record without a finite score lies outside
 /// every range.
 fn transition_common_support_filters<
     R: RoleIndexedRecord,
@@ -837,7 +837,7 @@ fn run_transition_case_loop<
 }
 
 /// The sweep of [`super::sweep`], when it gives what the scan of every
-/// candidate gives: an at-risk rule given as a span of each control (the
+/// control gives: an at-risk rule given as a span of each control (the
 /// default rule, or a policy's [`RiskSetPolicy::control_at_risk_span`]), the
 /// birth-date index with the date distance (whose caliper is the birth window,
 /// so it refuses nobody the index returns), no unique key, no common-support

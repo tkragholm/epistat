@@ -20,7 +20,7 @@
 //! ATE   w_i = 1 / (p_i - 1 + T_i)                   T/p - (1-T)/(1-p)
 //! ```
 //!
-//! The treated are the anchors. With the ATT weights the balance conditions set
+//! The treated are the cases. With the ATT weights the balance conditions set
 //! the weighted mean of every covariate in the controls to its mean in the
 //! treated. With the ATE weights they set both groups' weighted means to the
 //! full-sample mean.
@@ -460,7 +460,7 @@ impl Problem<'_> {
 }
 
 /// Fits the covariate balancing propensity score to the design `matrix` and
-/// the treatment `labels` (1 for the anchors), with prior weights `weights`
+/// the treatment `labels` (1 for the cases), with prior weights `weights`
 /// (1 when `None`).
 ///
 /// # Errors

@@ -145,7 +145,7 @@ impl<R: MatchingRecord> Constraint<R> for AntiExact {
 ///
 /// A caliper of `k` standard deviations on the field is
 /// `caliper_on_field(field, k * sd)`. Units that common-support trimming
-/// removes should be left out of `anchors` and `candidates` first, as
+/// removes should be left out of `cases` and `controls` first, as
 /// `matchit()` leaves out discarded units.
 #[must_use]
 pub fn numeric_field_sd<R: MatchingRecord>(

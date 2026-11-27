@@ -7,7 +7,7 @@
 //!
 //! # Propensity scores
 //!
-//! The anchors are the treated group, coded 1, and the candidates the
+//! The cases are the treated group, coded 1, and the controls the
 //! comparison group, coded 0. The score is the fitted probability, or the
 //! linear predictor when [`PropensityScoreOutputScale::LinearPredictor`] is
 //! asked for. The estimator is one of
@@ -87,7 +87,7 @@ use std::sync::{Arc, OnceLock};
 /// Propensity-score estimation output.
 #[derive(Debug, Clone)]
 pub struct PropensityScoreEstimate {
-    /// The ids of the units, the anchors first and then the candidates, each
+    /// The ids of the units, the cases first and then the controls, each
     /// in the order it was given. The three score columns below are in this
     /// order.
     pub ids: Arc<[String]>,
@@ -133,10 +133,10 @@ pub struct PropensityScoreEstimate {
     pub cross_validation: Option<CrossValidation>,
     /// The statistics of a covariate balancing propensity score fit.
     pub cbps: Option<CbpsFit>,
-    /// Anchor ids discarded by common-support trimming before the refit, when
+    /// Case ids discarded by common-support trimming before the refit, when
     /// the model was re-estimated. Their scores are those of the first fit.
     pub discarded_cases: Vec<String>,
-    /// Candidate ids discarded by common-support trimming before the refit.
+    /// Control ids discarded by common-support trimming before the refit.
     pub discarded_controls: Vec<String>,
 }
 
@@ -561,7 +561,7 @@ const GENERALISED_INVERSE_TOLERANCE: f64 = 1e-8;
 
 /// Prepare Euclidean vectors directly from covariates.
 ///
-/// Anchors are the first group and candidates the second, which matters only
+/// Cases are the first group and controls the second, which matters only
 /// for [`EuclideanScale::PooledWithinGroupSd`]. The covariates of units left
 /// out of the matching, for instance trimmed to common support, should not be
 /// passed: they would enter the standard deviations.

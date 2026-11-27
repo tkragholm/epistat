@@ -17,14 +17,14 @@
 //!
 //! # Weights
 //!
-//! With `p` the share of anchors among the units of a subclass, an anchor
+//! With `p` the share of cases among the units of a subclass, an case
 //! weighs
 //!
 //! ```text
 //! ATT: 1        ATC: (1 - p) / p        ATE: 1 / p
 //! ```
 //!
-//! and a candidate weighs
+//! and a control weighs
 //!
 //! ```text
 //! ATT: p / (1 - p)        ATC: 1        ATE: 1 / (1 - p)
@@ -53,11 +53,11 @@ use std::hash::BuildHasher;
 /// Reference population used to derive subclass cutpoints.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SubclassReferenceGroup {
-    /// Derive quantiles from anchor scores.
+    /// Derive quantiles from case scores.
     Cases,
-    /// Derive quantiles from candidate scores.
+    /// Derive quantiles from control scores.
     Controls,
-    /// Derive quantiles from pooled anchor + candidate scores.
+    /// Derive quantiles from pooled case + control scores.
     Pooled,
 }
 
@@ -73,8 +73,8 @@ pub struct SubclassificationConfig {
     /// Optional reference group used for cutpoints.
     ///
     /// Defaults by estimand:
-    /// - ATT: `Anchors`
-    /// - ATC: `Candidates`
+    /// - ATT: `Cases`
+    /// - ATC: `Controls`
     /// - ATE and ATM: `Pooled`
     pub reference_group: Option<SubclassReferenceGroup>,
     /// Smallest number of units of each group a subclass may hold.
@@ -105,20 +105,20 @@ impl Default for SubclassificationConfig {
 pub struct SubclassSummary {
     /// Subclass index.
     pub subclass: usize,
-    /// Number of anchor units in subclass.
+    /// Number of case units in subclass.
     pub case_count: usize,
-    /// Number of candidate units in subclass.
+    /// Number of control units in subclass.
     pub control_count: usize,
-    /// Anchor share in subclass (`case_count / total`) when total > 0.
+    /// Case share in subclass (`case_count / total`) when total > 0.
     pub subclass_propensity: Option<f64>,
 }
 
 /// Result of propensity-score subclassification.
 ///
-/// Units are numbered by position: the anchors in the order given, then the
-/// candidates in the order given. [`subclass`](Self::subclass) is indexed by
+/// Units are numbered by position: the cases in the order given, then the
+/// controls in the order given. [`subclass`](Self::subclass) is indexed by
 /// that position. A unit that is dropped has no subclass and no weight. The
-/// weights are not stored; each is derived from the anchor share of the unit's
+/// weights are not stored; each is derived from the case share of the unit's
 /// subclass in [`subclasses`](Self::subclasses) when asked for.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SubclassificationOutcome {
@@ -136,7 +136,7 @@ pub struct SubclassificationOutcome {
     pub quantile_cuts: Vec<f64>,
     /// The id of each unit.
     pub ids: Vec<String>,
-    /// Number of anchors. The units before this position are anchors.
+    /// Number of cases. The units before this position are cases.
     pub case_count: usize,
     /// Subclass of each unit, `None` for a unit that is dropped because its
     /// score is missing or not finite or because its subclass lacks a group.
@@ -174,7 +174,7 @@ impl SubclassificationOutcome {
         &self.ids[position]
     }
 
-    /// Whether the unit at `position` is an anchor.
+    /// Whether the unit at `position` is an case.
     #[must_use]
     pub const fn is_case(&self, position: usize) -> bool {
         position < self.case_count
@@ -284,7 +284,7 @@ pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + S
 /// group's quantiles.
 ///
 /// `set_aside_anchors` and `set_aside_candidates` are the finite scores of the
-/// trimmed anchors and candidates. They are not subclassified and get no
+/// trimmed cases and controls. They are not subclassified and get no
 /// weight. `matchit()` takes the cutpoints over every unit of the reference
 /// group, discarded ones included, and this reproduces that. Non-finite scores
 /// are ignored.
@@ -418,7 +418,7 @@ fn resolve_reference_group(
 
 /// The finite scores of the reference group, sorted. `scores` holds the score
 /// of every unit by position, with `None` for a score that is missing or not
-/// finite, and the first `case_count` units are the anchors.
+/// finite, and the first `case_count` units are the cases.
 fn sorted_reference_scores(
     scores: &[Option<f64>],
     case_count: usize,

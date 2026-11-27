@@ -1,9 +1,9 @@
 //! Fine, near-fine and refined balance in optimal pair matching.
 //!
-//! The pairs minimise the total distance among those whose matched candidates
-//! have the anchors' distribution of a nominal variable. With `ratio` candidates
-//! per anchor, the candidates of a category should number `ratio` times the
-//! anchors in it. This is fine balance (Rosenbaum, Ross and Silber \[1\]). When
+//! The pairs minimise the total distance among those whose matched controls
+//! have the cases' distribution of a nominal variable. With `ratio` controls
+//! per case, the controls of a category should number `ratio` times the
+//! cases in it. This is fine balance (Rosenbaum, Ross and Silber \[1\]). When
 //! that is impossible, the least total deviation from it is wanted first and the
 //! least distance second, which is near-fine balance (Yang, Small, Silber and
 //! Rosenbaum \[2\]). A list of balance variables, each nested in the one before
@@ -13,16 +13,16 @@
 //! # Network
 //!
 //! The network is that of pair matching, with the flow running from the sink to
-//! the anchors. The sink supplies `ratio` times the anchors. A category node has
+//! the cases. The sink supplies `ratio` times the cases. A category node has
 //! two arcs from the sink, or from its category one level up. The first has room
 //! for the number of units the category is meant to receive and costs nothing.
 //! The second has room for all units and costs a penalty per unit. The leaf
-//! category node has an arc to each of its candidates, and a candidate has an
-//! arc to each anchor it may be matched with, which carries one unit when the
-//! pair is matched and costs the distance. Each anchor demands `ratio` units.
-//! Candidates beyond the target of their category use the second arc, so the
-//! penalties add up to the number of candidates above target. Since the targets
-//! and the number of candidates both sum to `ratio` times the anchors, that
+//! category node has an arc to each of its controls, and a control has an
+//! arc to each case it may be matched with, which carries one unit when the
+//! pair is matched and costs the distance. Each case demands `ratio` units.
+//! Controls beyond the target of their category use the second arc, so the
+//! penalties add up to the number of controls above target. Since the targets
+//! and the number of controls both sum to `ratio` times the cases, that
 //! equals the number below target, and the total deviation is twice the
 //! penalised units.
 //!
@@ -35,7 +35,7 @@
 //! penalties, which only approximates it.
 //!
 //! The balance is global. When the request has exact strata, pairs cannot cross
-//! them, but the targets are those of all the anchors, so the balance is over
+//! them, but the targets are those of all the cases, so the balance is over
 //! the whole match, not within each stratum.
 //!
 //! # Costs
@@ -49,21 +49,21 @@
 //! # Solving
 //!
 //! The network has an arc for every admissible pair, which for a few hundred
-//! units per stratum is hundreds of arcs per anchor. The solver starts from far
+//! units per stratum is hundreds of arcs per case. The solver starts from far
 //! fewer and adds the rest only if they can improve the result. The strata
 //! touch only through the category nodes, so each stratum is solved as a block
 //! of its own and the blocks are coupled through those nodes.
 //!
 //! 1. The pairs are listed one stratum at a time and never held together. In
-//!    the first pass, the pairs of each anchor with its `3 * ratio` nearest
-//!    candidates in each category of the finest level become the first arcs,
-//!    found by selection, and for each anchor and category with pairs left
+//!    the first pass, the pairs of each case with its `3 * ratio` nearest
+//!    controls in each category of the finest level become the first arcs,
+//!    found by selection, and for each case and category with pairs left
 //!    out the cost of the last pair kept is recorded. No pair left out costs
 //!    less.
 //! 2. Every block is solved on its own as a flow from a root through one entry
 //!    per finest-level category, with the arc into the entry of category `k`
 //!    costing `price[k]`. The prices are moved (resilient propagation, each
-//!    price with its own step) until the number of candidates taken per
+//!    price with its own step) until the number of controls taken per
 //!    category is near its target, each round starting from the final tree of
 //!    the round before. The blocks keep the flow of the round nearest the
 //!    targets.
@@ -73,7 +73,7 @@
 //!    cycle of the network has a negative cost, and the flow left over at
 //!    category nodes is moved by successive shortest paths \[4, ch. 9\]
 //!    between category nodes. A path through a block moves one matched
-//!    candidate from one category to another along the block's cheapest
+//!    control from one category to another along the block's cheapest
 //!    exchange, so the shortest paths are found on the category nodes alone,
 //!    with each pair of categories joined by the cheapest exchange over the
 //!    blocks. Each block keeps its exchange costs, from one shortest-path
@@ -82,7 +82,7 @@
 //!    cost, so the flow ends optimal for the pairs kept.
 //! 4. Potentials for the whole network are the shortest distances from the
 //!    category nodes, and every pair left out is priced against them. A pair
-//!    whose reduced cost is negative could improve the flow. Only the anchors
+//!    whose reduced cost is negative could improve the flow. Only the cases
 //!    for which the recorded costs of step 1 do not already show that none of
 //!    their pairs left out prices negatively have their pairs listed again.
 //!    The pairs that do price negatively are
@@ -92,8 +92,8 @@
 //!    the potentials are feasible for the full network, so the flow is optimal
 //!    for it by complementary slackness: the optimal value, and so the
 //!    deviation at every level and the total distance, is that of the network
-//!    with all pairs. If the arcs so far leave some anchor without enough
-//!    candidates, the lists are widened fourfold until it is feasible.
+//!    with all pairs. If the arcs so far leave some case without enough
+//!    controls, the lists are widened fourfold until it is feasible.
 //!
 //! The pairs returned can differ from those of the full network only among
 //! matches of equal cost. Nothing depends on the number of threads: the blocks
@@ -101,7 +101,7 @@
 //! paths are found on one thread with ties settled by node number.
 //!
 //! The work is one listing of the admissible pairs, linear in their number,
-//! and the sweeps, which list the pairs of the few anchors not ruled out,
+//! and the sweeps, which list the pairs of the few cases not ruled out,
 //! plus the price rounds, each a warm-started solve of every block, plus for
 //! each unit of flow moved in step 3 a shortest-path search on the category
 //! nodes and `L` searches of each block crossed, `L` being its number of
@@ -146,7 +146,7 @@ pub enum BalanceMode {
     Near,
     /// Require fine balance on every level. When it cannot be met the result is
     /// [`Error::Infeasible`], and its message gives the least deviation.
-    /// Fine balance matches one set of anchors, so the stratum in that error is
+    /// Fine balance matches one set of cases, so the stratum in that error is
     /// always 0.
     Exact,
 }
@@ -195,10 +195,10 @@ pub struct BalanceCategory {
     /// The value of each key of the level, in the order of the keys. `None` for
     /// a unit without the key.
     pub values: Vec<Option<String>>,
-    /// The number of candidates the category should have: `ratio` times the
-    /// anchors in it.
+    /// The number of controls the category should have: `ratio` times the
+    /// cases in it.
     pub target: usize,
-    /// The number of candidates matched in it.
+    /// The number of controls matched in it.
     pub matched: usize,
 }
 
@@ -213,7 +213,7 @@ pub struct BalanceLevel {
 
 impl BalanceLevel {
     /// The sum over categories of the absolute difference between the matched
-    /// candidates and the target. It is twice the number of candidates above
+    /// controls and the target. It is twice the number of controls above
     /// target, and 0 for fine balance.
     #[must_use]
     pub fn total_deviation(&self) -> usize {
@@ -239,11 +239,11 @@ struct LevelData {
     keys: Vec<String>,
     /// Categories in order of their values.
     categories: Vec<Key>,
-    /// The category of each unit, anchors first and then candidates.
+    /// The category of each unit, cases first and then controls.
     of_unit: Vec<usize>,
     /// The category one level up of each category, for levels after the first.
     parent: Vec<usize>,
-    /// Anchors in each category.
+    /// Cases in each category.
     anchors: Vec<usize>,
 }
 
@@ -385,7 +385,7 @@ fn costs(max_distance: f64, n: usize, levels: usize, nodes: usize) -> Option<Cos
 /// Which pairs enter the network.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Arcs {
-    /// The nearest candidates of each anchor in each category of the finest
+    /// The nearest controls of each case in each category of the finest
     /// level, then every pair that prices negatively against the potentials of
     /// the solution. The optimum is that of the network with every pair.
     Pruned,
@@ -394,7 +394,7 @@ enum Arcs {
     All,
 }
 
-/// Candidates kept per anchor and finest-level category at the start, as a
+/// Controls kept per case and finest-level category at the start, as a
 /// multiple of the match ratio.
 const FIRST_PER_CATEGORY: usize = 3;
 
@@ -426,7 +426,7 @@ impl Pairs<'_> {
     }
 
     /// The pairs of the rows `rows` (increasing) of stratum `s` as (number,
-    /// anchor, candidate, distance), numbered as in the list of all its pairs.
+    /// case, control, distance), numbered as in the list of all its pairs.
     fn of_rows(&self, s: usize, rows: &[usize]) -> Vec<(usize, usize, usize, f64)> {
         let stratum = &self.strata[s];
         let starts = &self.row_start[s];
@@ -451,8 +451,8 @@ impl Pairs<'_> {
             .collect()
     }
 
-    /// The pairs of stratum `s` as (anchor, candidate, distance), by position
-    /// in the anchor and candidate slices.
+    /// The pairs of stratum `s` as (case, control, distance), by position
+    /// in the case and control slices.
     fn of(&self, s: usize) -> Vec<(usize, usize, f64)> {
         let stratum = &self.strata[s];
         (self.list)(stratum, None)
@@ -534,34 +534,34 @@ struct Search {
     /// The node before each node on its path, `NONE` at a seed.
     pred: Vec<u32>,
     /// The pair whose arc reached the node, `NONE` for an arc between an
-    /// entry and a candidate.
+    /// entry and a control.
     via: Vec<u32>,
 }
 
 /// One stratum's part of the network, with local node numbers: an entry for
-/// each finest-level category of its candidates, then the candidates, then
-/// the anchors. The entry of category `k` is joined to the category's node by
+/// each finest-level category of its controls, then the controls, then
+/// the cases. The entry of category `k` is joined to the category's node by
 /// an arc of unbounded capacity and no cost; the entry has an arc to each of
-/// its candidates, and a candidate has an arc to each anchor it is kept with.
+/// its controls, and a control has an arc to each case it is kept with.
 struct Block {
     /// The finest-level category of each entry, increasing.
     leaf: Vec<usize>,
-    /// Anchors by position in the anchor slice, increasing.
+    /// Cases by position in the case slice, increasing.
     anchors: Vec<usize>,
-    /// Candidates by position in the candidate slice, increasing.
+    /// Controls by position in the control slice, increasing.
     candidates: Vec<usize>,
-    /// The entry of each candidate.
+    /// The entry of each control.
     entry_of: Vec<u32>,
     /// The pairs, in order of their numbers.
     arcs: Vec<Kept>,
-    /// The local candidate and anchor of each pair.
+    /// The local control and case of each pair.
     from: Vec<u32>,
     to: Vec<u32>,
     /// Whether each pair is matched.
     on: Vec<bool>,
-    /// Whether each candidate is matched.
+    /// Whether each control is matched.
     taken: Vec<bool>,
-    /// Matched candidates of each entry.
+    /// Matched controls of each entry.
     count: Vec<i64>,
     /// Node potentials for which every arc of the block with room for flow has
     /// a non-negative reduced cost.
@@ -689,10 +689,10 @@ impl Block {
     }
 
     /// The block as a flow problem of its own, with a root that supplies
-    /// every anchor through the entries. The arc from the root to the entry of
+    /// every case through the entries. The arc from the root to the entry of
     /// category `k` costs `price[k]`, less the least price of the block's
     /// entries, and has room for more than all the flow. The arcs are those
-    /// to the entries, then those to the candidates, then the pairs.
+    /// to the entries, then those to the controls, then the pairs.
     fn problem(&self, ratio: usize, price: &[i64]) -> MinCostFlow {
         let (e, c, a) = (self.entries(), self.candidates.len(), self.anchors.len());
         let root = e + c + a;
@@ -818,7 +818,7 @@ impl Block {
         path
     }
 
-    /// The least cost of moving one matched candidate from category `j` to
+    /// The least cost of moving one matched control from category `j` to
     /// category `k` in this block, for every pair of entries: one unit enters
     /// at the entry of `k` and leaves at the entry of `j`. The result is
     /// `(k, j, cost)` by finest-level category.
@@ -849,13 +849,13 @@ impl Block {
         hold
     }
 
-    /// The anchors of the block, by position in the anchor slice, that may
+    /// The cases of the block, by position in the case slice, that may
     /// have a pair left out with a negative reduced cost against the
-    /// potentials `d` of [`Self::network_potentials`]. A pair of an anchor
-    /// and category left out costs at least the bound of that anchor and
-    /// category, every candidate of the category has at least the least
-    /// potential among the block's candidates of the category, its entry, or
-    /// (without an entry) the category node `hub[k]`, and the anchors and
+    /// potentials `d` of [`Self::network_potentials`]. A pair of an case
+    /// and category left out costs at least the bound of that case and
+    /// category, every control of the category has at least the least
+    /// potential among the block's controls of the category, its entry, or
+    /// (without an entry) the category node `hub[k]`, and the cases and
     /// categories without a bound have no pair left out.
     fn wanting(&self, bounds: &[(usize, usize, i64)], d: &[i64], hub: &[i64]) -> Vec<usize> {
         let mut least: Vec<i64> = d[..self.entries()].to_vec();
@@ -1361,14 +1361,14 @@ impl Coupled {
 }
 
 /// The pairs of a stratum kept at the start, as (position in the stratum's
-/// list, anchor, candidate, distance), and for every anchor and finest-level category with pairs left
+/// list, case, control, distance), and for every case and finest-level category with pairs left
 /// out, the distance of the last pair kept, which no pair left out is below.
 struct Nearest {
     pairs: Vec<(usize, usize, usize, f64)>,
     bounds: Vec<(usize, usize, f64)>,
 }
 
-/// For anchors and finest-level categories with pairs left out: (anchor,
+/// For cases and finest-level categories with pairs left out: (case,
 /// category, least cost of a pair left out).
 type Bounds = Vec<(usize, usize, i64)>;
 
@@ -1378,9 +1378,9 @@ struct Near {
     bounds: Bounds,
 }
 
-/// The `per` nearest pairs of every anchor and finest-level category among
-/// the pairs of a stratum, ties by candidate, in the order of the stratum's
-/// list. The list is grouped by anchor, so each anchor's pairs are split by
+/// The `per` nearest pairs of every case and finest-level category among
+/// the pairs of a stratum, ties by control, in the order of the stratum's
+/// list. The list is grouped by case, so each case's pairs are split by
 /// category and the nearest of each category found by selection, in time
 /// linear in the pairs.
 fn nearest(pairs: &[(usize, usize, f64)], per: usize, leaf_of: &[usize]) -> Nearest {
@@ -1449,7 +1449,7 @@ impl Network<'_> {
         &self.levels[self.levels.len() - 1]
     }
 
-    /// The finest-level category of each candidate.
+    /// The finest-level category of each control.
     fn leaf_of(&self) -> &[usize] {
         &self.leaf().of_unit[self.na..]
     }
@@ -1517,7 +1517,7 @@ impl Network<'_> {
     }
 
     /// The prices of the start and the blocks' flows at those prices. Each
-    /// round solves every block on its own with the candidates of category
+    /// round solves every block on its own with the controls of category
     /// `k` costing `price[k]` more, from the final tree of the round before,
     /// and moves the prices (resilient propagation, each price with its own
     /// step) until the numbers taken per category meet their targets or
@@ -1947,11 +1947,11 @@ impl Network<'_> {
 
 /// Optimal pair matching with fine, near-fine or refined balance.
 ///
-/// The anchors are the focal group, as in [`super::match_optimal`]. Every anchor
-/// gets `ratio` candidates: where the admissible pairs or the number of
-/// candidates do not allow it, the result is [`Error::Infeasible`]
+/// The cases are the focal group, as in [`super::match_optimal`]. Every case
+/// gets `ratio` controls: where the admissible pairs or the number of
+/// controls do not allow it, the result is [`Error::Infeasible`]
 /// (`rcbalance`'s `exclude.treated` is not available). The targets are those of
-/// the anchors, so the balance is that of the anchors' distribution of each
+/// the cases, so the balance is that of the cases' distribution of each
 /// level, whatever the estimand.
 ///
 /// Among the matches with the least deviation, the one with the least total
@@ -2112,7 +2112,7 @@ where
 struct Summary {
     pairs: usize,
     max_distance: f64,
-    /// Anchors with a pair, by position in the anchor slice.
+    /// Cases with a pair, by position in the case slice.
     anchors: Vec<usize>,
     near: Nearest,
     /// The position of the first pair of each row, and the count at the end.
@@ -2231,7 +2231,7 @@ mod tests {
         scores: RapidHashMap<String, f64>,
     }
 
-    /// Anchors and candidates in a few exact strata, each with a coarse and a
+    /// Cases and controls in a few exact strata, each with a coarse and a
     /// fine category. The scores are multiples of `1 / grid`, so that many
     /// distances are exactly equal.
     fn case(rng: &mut Lcg, anchors: usize, candidates: usize, strata: usize, grid: usize) -> Case {
@@ -2514,7 +2514,7 @@ mod tests {
         use rayon::prelude::*;
         use std::collections::BTreeMap;
 
-        /// Candidates kept per anchor and finest-level category at the start, as a
+        /// Controls kept per case and finest-level category at the start, as a
         /// multiple of the match ratio.
         const FIRST_PER_CATEGORY: usize = 3;
 
@@ -2533,13 +2533,13 @@ mod tests {
             candidates: usize,
             from: Vec<usize>,
             to: Vec<usize>,
-            /// Finest-level category of each local candidate.
+            /// Finest-level category of each local control.
             category: Vec<usize>,
         }
 
         impl Local {
             /// The positions of the pairs of the cheapest assignment and the number of
-            /// candidates it takes in each category (indexed as the prices are).
+            /// controls it takes in each category (indexed as the prices are).
             fn assign(
                 &self,
                 ratio: usize,
@@ -2572,12 +2572,12 @@ mod tests {
             }
         }
 
-        /// Node numbers for the anchors and candidates, in the order of the strata, so
+        /// Node numbers for the cases and controls, in the order of the strata, so
         /// that the pairs of one stratum touch nearby nodes.
         struct Ids {
             anchor: Vec<usize>,
             candidate: Vec<usize>,
-            /// Candidates in node order.
+            /// Controls in node order.
             candidate_order: Vec<usize>,
         }
 
@@ -2649,7 +2649,7 @@ mod tests {
             }
 
             /// For each stratum run of `pairs`, the positions of the `per` cheapest
-            /// pairs of every anchor and finest-level category, ties by candidate.
+            /// pairs of every case and finest-level category, ties by control.
             fn nearest(
                 &self,
                 pairs: &[(usize, usize, f64)],
@@ -2789,7 +2789,7 @@ mod tests {
             }
 
             /// Pairs for the start: the cheapest assignment in each stratum when the
-            /// candidates of finest-level category `k` cost `price[k]` more, with the
+            /// controls of finest-level category `k` cost `price[k]` more, with the
             /// prices moved until the number taken per category is near its target.
             /// Which pairs the start uses does not change the optimum. `None` when some
             /// stratum has no assignment.

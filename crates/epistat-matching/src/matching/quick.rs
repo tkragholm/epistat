@@ -43,11 +43,11 @@
 //! end of the run of its new count, which changes the order among equal counts.
 //!
 //! The partition depends on the order of the units, and for the updating method
-//! on the order of the arcs out of a unit. Units are taken anchors first, then
-//! candidates, each in the order given. The arcs out of a unit go to the
-//! nearest candidates, then the nearest anchors, then the nearest of either to
+//! on the order of the arcs out of a unit. Units are taken cases first, then
+//! controls, each in the order given. The arcs out of a unit go to the
+//! nearest controls, then the nearest cases, then the nearest of either to
 //! fill the size constraint, each nearest first. With the treated units as
-//! anchors and the data ordered treated first this is the order in which
+//! cases and the data ordered treated first this is the order in which
 //! `quickmatch` meets them under `matchit()`, where the factor level of the
 //! controls comes before that of the treated. The tie order among units at
 //! exactly equal distance is not reproduced: `quickmatch` leaves it to the
@@ -80,8 +80,8 @@
 //! does not depend on the number of threads.
 //!
 //! The weights are those of full matching and subclassification: for the effect
-//! in the anchors an anchor weighs 1 and a candidate weighs the anchor share of
-//! its subclass over the candidate share, and likewise for the other effects.
+//! in the cases an case weighs 1 and a control weighs the case share of
+//! its subclass over the control share, and likewise for the other effects.
 //! MatchIt rescales the weights of each group to sum to the number of its kept
 //! units.
 
@@ -606,7 +606,7 @@ fn choose_seeds(graph: &Graph, n: usize, method: SeedMethod) -> (Vec<u32>, Vec<u
 /// each holds, or `None` for a unit that fits no subclass.
 ///
 /// `points` holds `dim` coordinates per unit in unit order and `anchor` says
-/// which units are anchors. Distances are Euclidean.
+/// which units are cases. Distances are Euclidean.
 ///
 /// # Errors
 ///
@@ -760,7 +760,7 @@ enum StratumLabels {
     Lost(Error),
 }
 
-/// Generalised full matching of anchors and candidates.
+/// Generalised full matching of cases and controls.
 ///
 /// `coordinates` gives the point of a unit: one number for a score, or the
 /// coordinates of a covariate distance made Euclidean, all of length
@@ -1221,7 +1221,7 @@ mod tests {
         assert!(agreed >= 12, "only {agreed} runs produced an outcome");
     }
 
-    /// Records with a stratum "g" and one coordinate each, anchors first.
+    /// Records with a stratum "g" and one coordinate each, cases first.
     fn grouped(
         groups: &[(&str, usize, usize)],
     ) -> (

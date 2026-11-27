@@ -193,14 +193,14 @@ fn dummy_date() -> NaiveDate {
 /// Matches each focal unit to the nearest other unit in its cluster by score,
 /// with replacement, and returns the pairs.
 ///
-/// `is_focal` marks the units to match, the rest are the candidates. A focal
-/// unit is matched to the candidate of its cluster with the nearest `score`,
-/// the lowest position on a tie, unless that candidate is further than
+/// `is_focal` marks the units to match, the rest are the controls. A focal
+/// unit is matched to the control of its cluster with the nearest `score`,
+/// the lowest position on a tie, unless that control is further than
 /// `caliper` standard deviations away. The standard deviation, with divisor
 /// `n`, is that of the scores of all units in the cluster, as
 /// `Matching::Match()` takes it over the units it is given. (`matchit()`
 /// divides by `n - 1`.) A focal unit with
-/// no candidate in its cluster or within the caliper is not matched. Pairs are
+/// no control in its cluster or within the caliper is not matched. Pairs are
 /// listed by cluster, in order of the cluster label, then in the order the
 /// matching assigns them.
 ///
@@ -210,7 +210,7 @@ fn dummy_date() -> NaiveDate {
 ///
 /// # Errors
 ///
-/// [`Error::Length`] for lists of different lengths and
+/// [`Error::Input`] for lists of different lengths and
 /// [`Error::InvalidCaliper`] for a caliper that is not positive and finite.
 ///
 /// # Panics
@@ -332,7 +332,7 @@ pub struct GroupMatch {
     /// order.
     pub cluster: Vec<usize>,
     /// The pairs of the final cohort, focal unit first. The match is with
-    /// replacement, so a candidate can be in several pairs.
+    /// replacement, so a control can be in several pairs.
     pub outcome: MatchOutcome,
 }
 
@@ -563,7 +563,7 @@ pub fn vector_match<R: CovariateRecord>(
     })
 }
 
-/// An outcome of with-replacement pairs of `focal_total` anchors, 1:1.
+/// An outcome of with-replacement pairs of `focal_total` cases, 1:1.
 fn outcome_of(pairs: Vec<MatchedPair>, focal_total: usize) -> MatchOutcome {
     let matched: HashSet<&str> = pairs
         .iter()

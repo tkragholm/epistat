@@ -82,7 +82,7 @@ pub enum LossSpec {
 ///
 /// The matching variables are the covariates and, when the distance is a
 /// score, the score, as `matchit()` takes them. Strata keys of `exact` and the
-/// sex key of `match_sex` are matched on equal values. The anchors are the
+/// sex key of `match_sex` are matched on equal values. The cases are the
 /// focal group, which takes its controls in the order of `m_order`. The search
 /// is seeded by the spec's `seed`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,7 +118,7 @@ pub struct GeneticSpec {
     /// `matchit()`, which sets the width of ties in the distance and has no
     /// counterpart here, where ties go to the earlier unit.
     pub tolerance: f64,
-    /// The order in which anchors take their controls, `m.order`. Largest and
+    /// The order in which cases take their controls, `m.order`. Largest and
     /// smallest order by the score, which the distance must give. The default
     /// is largest with a score and the order of the data without one.
     pub m_order: Option<OrderSpec>,
@@ -149,7 +149,7 @@ impl Default for GeneticSpec {
 /// "cardinality")`.
 ///
 /// The covariates are balanced as indicator columns, one per level of a
-/// categorical covariate. The anchors are the treated group. With a `ratio`
+/// categorical covariate. The cases are the treated group. With a `ratio`
 /// the largest subset is selected in which the groups are in that ratio and
 /// the covariate means differ by at most the tolerances. Without one (profile
 /// matching) the target is the mean of the focal group for the effect in the
@@ -202,15 +202,15 @@ impl Default for CardinalitySpec {
 pub struct CardinalityMatch {
     /// The weights, selection and pairs, by position in `ids`.
     pub outcome: CardinalityOutcome,
-    /// The ids of the units, the anchors first and then the candidates, each in
+    /// The ids of the units, the cases first and then the controls, each in
     /// the order given.
     pub ids: Vec<String>,
-    /// Whether each unit is an anchor.
+    /// Whether each unit is an case.
     pub anchor: Vec<bool>,
 }
 
 impl CardinalityMatch {
-    /// The units, for [`get_matches`](crate::get_matches) and the other
+    /// The units, for [`get_matches`](crate::output::get_matches) and the other
     /// outputs.
     ///
     /// # Errors
@@ -450,7 +450,7 @@ impl MatchSpec {
     }
 }
 
-/// The value of a strata key of each unit, anchors first.
+/// The value of a strata key of each unit, cases first.
 fn strata_values<R: MatchingRecord>(
     option: &'static str,
     key: &str,

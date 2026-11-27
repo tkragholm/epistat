@@ -20,12 +20,17 @@
 //! ```rust,ignore
 //! use epistat_matching::prelude::*;
 //!
-//! let outcome = MatchJob::new_standard(&anchors, &candidates, 42)
+//! let outcome = MatchJob::new_standard(&cases, &controls, 42)
 //!     .with_ratio(MatchRatio::new(4).expect("non-zero ratio"))
 //!     .with_birth_window(BirthDateWindowDays::new(30).expect("non-negative birth window"))
 //!     .with_gender_match()
-//!     .run();
+//!     .run()?;
 //! ```
+//!
+//! A job returns [`Error`] for input it cannot use: two units with one id, a
+//! case whose event is before its birth, a caliper window that is negative or
+//! not finite, criteria that contradict each other. A case that finds no
+//! control is not an error; the outcome counts it.
 //!
 //! [`MatchSpec`] describes any of the methods as plain values with serde, and
 //! [`run_spec`] checks it and runs it. It suits a caller that reads its
@@ -34,6 +39,10 @@
 //! invalid option are errors that name the option or the unit.
 //!
 //! ## Large cohorts
+//!
+//! The units are cases and controls throughout: the pairs, the weights, the
+//! diagnostics and the outputs use the two words, whatever the design calls
+//! them (treated and untreated, exposed and unexposed).
 //!
 //! The matchers take any type that implements [`MatchingRecord`], and the
 //! covariate methods [`CovariateRecord`]. [`BalanceRecord`] owns its values

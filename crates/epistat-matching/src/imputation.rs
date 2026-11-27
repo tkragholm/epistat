@@ -1,8 +1,8 @@
 //! Matching after multiple imputation, and the pooled effect.
 //!
 //! The caller imputes the missing values and gives the `m` completed data
-//! sets. Nothing here imputes. Each set is an [`ImputedSet`], the anchors and
-//! the candidates with their imputed covariates, with the same ids in every
+//! sets. Nothing here imputes. Each set is an [`ImputedSet`], the cases and
+//! the controls with their imputed covariates, with the same ids in every
 //! set. Two approaches to matching follow the documentation of
 //! `MatchThem::matchthem()` \[1\] and Leyrat et al. \[2\]:
 //!
@@ -74,13 +74,13 @@ pub enum ImputationApproach {
     Across,
 }
 
-/// One completed data set: the anchors and the candidates with imputed
+/// One completed data set: the cases and the controls with imputed
 /// covariates.
 #[derive(Debug)]
 pub struct ImputedSet<'a, R> {
-    /// The anchors, the treated units for the effect in the treated.
+    /// The cases, the treated units for the effect in the treated.
     pub cases: &'a [R],
-    /// The candidates.
+    /// The controls.
     pub controls: &'a [R],
 }
 
@@ -142,7 +142,6 @@ where
                             extra_constraints,
                             config,
                         )
-                        .map_err(Error::from)
                     })
                     .collect(),
             )?;
@@ -160,7 +159,6 @@ where
                     .map(|set| {
                         prepare_propensity_distance_config(set.cases, set.controls, config, None)
                             .map(|prepared| prepared.estimate)
-                            .map_err(Error::from)
                     })
                     .collect(),
             )?;
@@ -406,7 +404,7 @@ fn estimate_set<R: MatchingRecord>(
     let units = Units::new(ids, anchor)?;
     let md = match_data(&matched.outcome, &units, options)?;
     let sample = MatchedSample::from_match_data(&md, units_data)?;
-    Ok(estimate_effects(&sample, spec)?)
+    estimate_effects(&sample, spec)
 }
 
 /// The results of the sets in the order of the sets, or the error of the

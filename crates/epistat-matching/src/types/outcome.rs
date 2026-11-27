@@ -93,11 +93,11 @@ impl From<CommonSupportFailureReason> for ExclusionReason {
 /// Typed estimand drift reason recorded by matching diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum EstimandDriftReason {
-    /// Anchors were dropped as outside common support.
+    /// Cases were dropped as outside common support.
     CommonSupportTrimming,
-    /// Some anchors found no control.
+    /// Some cases found no control.
     UnmatchedCases,
-    /// Some anchors found fewer controls than the ratio.
+    /// Some cases found fewer controls than the ratio.
     RatioShortfall,
     /// A distance caliper removed pairs.
     DistanceCaliperExclusion,
@@ -126,13 +126,13 @@ impl Display for EstimandDriftReason {
 pub enum ConstraintReason {
     /// The control was already used and replacement is off.
     ReplacementDisallowed,
-    /// The control is the anchor itself.
+    /// The control is the case itself.
     NoSelfMatch,
-    /// The control differs from the anchor on a required stratum.
+    /// The control differs from the case on a required stratum.
     StrataMismatch,
     /// The control's unique value was already used.
     UniqueKeyReused,
-    /// The control's sex differs from the anchor's.
+    /// The control's sex differs from the case's.
     GenderMismatch,
     /// A numeric caliper on a field is exceeded.
     CaliperExceeded,
@@ -276,7 +276,7 @@ impl InvalidCriteriaReason {
 pub enum CommonSupportFailureReason {
     /// Common support was asked for without propensity scores.
     RequiresPropensityScoreMap,
-    /// The anchors' scores and the candidates' scores do not overlap.
+    /// The cases' scores and the controls' scores do not overlap.
     NoOverlap,
 }
 
@@ -304,15 +304,15 @@ impl Display for ExclusionReason {
     }
 }
 
-/// The ids of the units that common-support trimming left out, anchors and
-/// candidates apart, each in the order of the units given.
+/// The ids of the units that common-support trimming left out, cases and
+/// controls apart, each in the order of the units given.
 ///
 /// Both lists are empty when nothing was trimmed.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TrimmedUnits {
-    /// Ids of the trimmed anchors.
+    /// Ids of the trimmed cases.
     pub cases: Vec<String>,
-    /// Ids of the trimmed candidates.
+    /// Ids of the trimmed controls.
     pub controls: Vec<String>,
 }
 
@@ -347,15 +347,15 @@ impl MatchedPair {
 /// Matching summary statistics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchOutcome {
-    /// Selected anchor/candidate pairs.
+    /// Selected case/control pairs.
     pub pairs: Vec<MatchedPair>,
-    /// Number of unmatched eligible anchors.
+    /// Number of unmatched eligible cases.
     pub unmatched_cases: usize,
-    /// Number of unique candidates used (0 when matching with replacement).
+    /// Number of unique controls used (0 when matching with replacement).
     pub used_controls: usize,
-    /// Number of anchors with at least one match.
+    /// Number of cases with at least one match.
     pub matched_cases: usize,
-    /// Average number of selected candidates among matched anchors, `None` when no anchor
+    /// Average number of selected controls among matched cases, `None` when no case
     /// is matched.
     pub avg_controls_per_case: Option<f64>,
     /// Structured run diagnostics.
@@ -364,7 +364,7 @@ pub struct MatchOutcome {
 }
 
 impl MatchDiagnostics {
-    /// Count `count` more units or candidates excluded for `reason`.
+    /// Count `count` more units or controls excluded for `reason`.
     pub fn add_exclusion(&mut self, reason: ExclusionReason, count: usize) {
         *self.exclusion_counts.entry(reason).or_insert(0) += count;
     }
@@ -401,22 +401,22 @@ impl MatchDiagnostics {
 #[non_exhaustive]
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct MatchDiagnostics {
-    /// Total anchors evaluated by the engine.
+    /// Total cases evaluated by the engine.
     pub total_cases_evaluated: usize,
-    /// Anchors with no eligible candidates after filtering.
+    /// Cases with no eligible controls after filtering.
     pub cases_with_no_controls: usize,
-    /// Anchors that did not get the ratio asked for and have no declared
-    /// fallback tier to account for it: without fallback tiers, the anchors
-    /// with some candidates but fewer than the ratio, and with them, the
-    /// anchors with fewer candidates than the lowest tier, which get none. An
-    /// anchor matched on a declared lower tier is not counted here; see
+    /// Cases that did not get the ratio asked for and have no declared
+    /// fallback tier to account for it: without fallback tiers, the cases
+    /// with some controls but fewer than the ratio, and with them, the
+    /// cases with fewer controls than the lowest tier, which get none. An
+    /// case matched on a declared lower tier is not counted here; see
     /// [`Self::cases_on_lower_tier`].
     pub cases_below_required_ratio: usize,
-    /// With declared fallback tiers, the anchors matched on a tier below the
+    /// With declared fallback tiers, the cases matched on a tier below the
     /// primary ratio.
     #[serde(default)]
     pub cases_on_lower_tier: usize,
-    /// Matched anchor count.
+    /// Matched case count.
     pub matched_cases: usize,
     /// Number of selected pairs.
     pub pairs_selected: usize,
@@ -428,10 +428,10 @@ pub struct MatchDiagnostics {
     /// Realized estimand after trimming/matching exclusions.
     #[serde(default)]
     pub realized_estimand: Estimand,
-    /// Number of anchors discarded by common-support trimming.
+    /// Number of cases discarded by common-support trimming.
     #[serde(default)]
     pub common_support_trimmed_cases: usize,
-    /// Number of candidates discarded by common-support trimming.
+    /// Number of controls discarded by common-support trimming.
     #[serde(default)]
     pub common_support_trimmed_controls: usize,
     /// Ids of the units that common-support trimming discarded. The debug
@@ -445,10 +445,10 @@ pub struct MatchDiagnostics {
     /// Applied common-support policy when configured.
     #[serde(default)]
     pub common_support_policy: Option<CommonSupport>,
-    /// Anchor score bounds used to compute common-support overlap when available.
+    /// Case score bounds used to compute common-support overlap when available.
     #[serde(default)]
     pub common_support_case_score_bounds: Option<(f64, f64)>,
-    /// Candidate score bounds used to compute common-support overlap when available.
+    /// Control score bounds used to compute common-support overlap when available.
     #[serde(default)]
     pub common_support_control_score_bounds: Option<(f64, f64)>,
     /// Structured machine-readable drift reasons.

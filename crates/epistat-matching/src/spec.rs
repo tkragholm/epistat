@@ -65,12 +65,12 @@ use rapidhash::RapidHashMap;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Standard matching of a set of anchors to a set of candidates, or risk-set
+/// Standard matching of a set of cases to a set of controls, or risk-set
 /// matching within one cohort.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchMode {
-    /// Fixed anchors and candidates.
+    /// Fixed cases and controls.
     #[default]
     Standard,
     /// Each case takes controls from the units still at risk on its index
@@ -93,14 +93,14 @@ pub enum MatchMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchMethod {
-    /// A random eligible candidate, from the spec's seed.
+    /// A random eligible control, from the spec's seed.
     #[default]
     Random,
-    /// The eligible candidate that comes first in the data.
+    /// The eligible control that comes first in the data.
     LowestIndex,
-    /// The eligible candidate whose birth date is nearest the anchor's.
+    /// The eligible control whose birth date is nearest the case's.
     NearestBirthDate,
-    /// The nearest candidate by the distance, as `matchit(method = "nearest")`.
+    /// The nearest control by the distance, as `matchit(method = "nearest")`.
     /// Standard mode only.
     Nearest,
     /// Everyone in a shared stratum of the `exact` keys, with weights, as
@@ -117,16 +117,16 @@ pub enum MatchMethod {
     /// `matchit(method = "quick")`. Standard mode only.
     Quick,
     /// Pairs that minimise the total distance, as
-    /// `matchit(method = "optimal")`. Standard mode only. The anchors are the
+    /// `matchit(method = "optimal")`. Standard mode only. The cases are the
     /// focal group.
     Optimal,
-    /// Subclasses of one anchor with several candidates or the reverse that
+    /// Subclasses of one case with several controls or the reverse that
     /// minimise the total distance, as `matchit(method = "full")`. Standard
-    /// mode only. The anchors are the focal group.
+    /// mode only. The cases are the focal group.
     Full,
     /// The weights of a genetic search, then nearest neighbour matching on the
     /// weighted distance, as `matchit(method = "genetic")`. Standard mode only.
-    /// The anchors are the focal group.
+    /// The cases are the focal group.
     Genetic,
     /// The largest subset that satisfies balance constraints, selected by an
     /// integer program, as `matchit(method = "cardinality")`. Standard mode
@@ -134,14 +134,14 @@ pub enum MatchMethod {
     Cardinality,
 }
 
-/// The order in which anchors take their controls.
+/// The order in which cases take their controls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssignmentSpec {
-    /// Each anchor takes all its controls before the next anchor starts.
+    /// Each case takes all its controls before the next case starts.
     #[default]
     Sequential,
-    /// Every anchor takes a first control before any takes a second.
+    /// Every case takes a first control before any takes a second.
     Rounds,
 }
 
@@ -154,7 +154,7 @@ impl From<AssignmentSpec> for Assignment {
     }
 }
 
-/// The order in which anchors are matched, `m.order` of `matchit()`.
+/// The order in which cases are matched, `m.order` of `matchit()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrderSpec {
@@ -330,7 +330,7 @@ impl CovariatesSpec {
     }
 }
 
-/// The distance between an anchor and a candidate.
+/// The distance between an case and a control.
 ///
 /// The `caliper` of each variant is the widest distance a pair may have, in
 /// the units of the distance.
@@ -403,14 +403,14 @@ pub enum DistanceSpec {
         caliper: Option<f64>,
     },
     /// A distance for every pair, given by the caller, as `distance` given as
-    /// a matrix in `matchit()`. Rows are anchors and columns candidates. An
+    /// a matrix in `matchit()`. Rows are cases and columns controls. An
     /// entry of `None` forbids the pair, as an infinite entry does in R.
     Matrix {
         /// Ids of the rows.
         case_ids: Vec<String>,
         /// Ids of the columns.
         control_ids: Vec<String>,
-        /// The distances, one row per anchor.
+        /// The distances, one row per case.
         values: Vec<Vec<Option<f64>>>,
         /// Widest distance.
         #[serde(default)]
@@ -455,9 +455,9 @@ pub enum TransformSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscardSpec {
-    /// Anchors outside the overlap of the scores.
+    /// Cases outside the overlap of the scores.
     Treated,
-    /// Candidates outside the overlap of the scores.
+    /// Controls outside the overlap of the scores.
     Control,
     /// Both.
     Both,
@@ -473,16 +473,16 @@ impl From<DiscardSpec> for CommonSupport {
     }
 }
 
-/// A variable number of controls per anchor, `ratio`, `min.controls` and
+/// A variable number of controls per case, `ratio`, `min.controls` and
 /// `max.controls` of `matchit()`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VariableRatioSpec {
-    /// The mean number of controls per anchor.
+    /// The mean number of controls per case.
     pub average: f64,
-    /// The fewest controls an anchor gets.
+    /// The fewest controls an case gets.
     pub min: usize,
-    /// The most controls an anchor gets.
+    /// The most controls an case gets.
     pub max: usize,
 }
 
@@ -559,15 +559,15 @@ impl StdCaliperSpec {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct NearestSpec {
-    /// The order in which anchors are matched. The default is `matchit()`'s:
+    /// The order in which cases are matched. The default is `matchit()`'s:
     /// largest score first for a score distance, and the order of the data
     /// otherwise.
     pub m_order: Option<OrderSpec>,
-    /// Rank the candidates by this distance, usually Mahalanobis, and use the
-    /// spec's distance as a caliper and for the order of anchors, as
+    /// Rank the controls by this distance, usually Mahalanobis, and use the
+    /// spec's distance as a caliper and for the order of cases, as
     /// `mahvars` does.
     pub mahvars: Option<DistanceSpec>,
-    /// A variable number of controls per anchor in place of `ratio`. Needs a
+    /// A variable number of controls per case in place of `ratio`. Needs a
     /// score distance and no fallback ratios.
     pub variable_ratio: Option<VariableRatioSpec>,
 }
@@ -664,11 +664,11 @@ pub enum CemVariableSpec {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct K2kSpec {
-    /// The distance that ranks the candidates of a stratum. Without one the
-    /// candidates are taken in an order drawn from the seed. A caliper is not
+    /// The distance that ranks the controls of a stratum. Without one the
+    /// controls are taken in an order drawn from the seed. A caliper is not
     /// used.
     pub distance: Option<DistanceSpec>,
-    /// The order in which anchors take their candidate. The default is the
+    /// The order in which cases take their control. The default is the
     /// order of the data.
     pub m_order: Option<OrderSpec>,
 }
@@ -711,9 +711,9 @@ impl Default for SubclassSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReferenceSpec {
-    /// The anchors.
+    /// The cases.
     Cases,
-    /// The candidates.
+    /// The controls.
     Controls,
     /// Both groups together.
     Pooled,
@@ -762,8 +762,8 @@ impl Default for QuickSpec {
 
 /// Everything a match can be configured with.
 ///
-/// The defaults are those of [`MatchJob`]: random choice among the candidates
-/// within 30 days of birth, one control per anchor, no replacement.
+/// The defaults are those of [`MatchJob`]: random choice among the controls
+/// within 30 days of birth, one control per case, no replacement.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 #[expect(
@@ -775,7 +775,7 @@ pub struct MatchSpec {
     pub mode: MatchMode,
     /// How controls are chosen.
     pub method: MatchMethod,
-    /// The distance between an anchor and a candidate.
+    /// The distance between an case and a control.
     pub distance: DistanceSpec,
     /// Options of the nearest method.
     pub nearest: NearestSpec,
@@ -798,16 +798,16 @@ pub struct MatchSpec {
     /// the rest) apply inside each trial. Every trial draws with a seed
     /// derived from `seed` and the period of the trial.
     pub trials: TrialOptions,
-    /// How anchors share the candidates when each takes more than one. The
+    /// How cases share the controls when each takes more than one. The
     /// default is sequential, and rounds for the nearest method as in
     /// `matchit()`. Risk-set matching is always sequential.
     pub assignment: Option<AssignmentSpec>,
-    /// Controls per anchor.
+    /// Controls per case.
     pub ratio: usize,
-    /// Descending ratios to fall back to when an anchor finds fewer controls
+    /// Descending ratios to fall back to when an case finds fewer controls
     /// than the ratio. Not available with the nearest method or rounds.
     pub ratio_fallback: Vec<usize>,
-    /// Let a candidate serve several anchors.
+    /// Let a control serve several cases.
     pub replace: bool,
     /// Widest difference in days between the birth dates of a pair.
     pub birth_window_days: i32,
@@ -899,15 +899,15 @@ impl Default for MatchSpec {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct FullSpec {
-    /// Fewest candidates per anchor in a subclass. A number below 1 allows
-    /// several anchors per candidate.
+    /// Fewest controls per case in a subclass. A number below 1 allows
+    /// several cases per control.
     pub min_controls: f64,
-    /// Most candidates per anchor in a subclass. Absent for no limit.
+    /// Most controls per case in a subclass. Absent for no limit.
     pub max_controls: Option<f64>,
-    /// Fraction of the candidates (positive) or anchors (negative) to leave
+    /// Fraction of the controls (positive) or cases (negative) to leave
     /// out. Not with `mean_controls`.
     pub omit_fraction: Option<f64>,
-    /// Candidates per anchor to use on average. Not with `omit_fraction`.
+    /// Controls per case to use on average. Not with `omit_fraction`.
     pub mean_controls: Option<f64>,
 }
 
@@ -925,7 +925,7 @@ impl Default for FullSpec {
 /// The units a spec is run on.
 #[derive(Debug, Clone, Copy)]
 pub enum SpecInput<'a, R> {
-    /// Anchors and candidates, for [`MatchMode::Standard`].
+    /// Cases and controls, for [`MatchMode::Standard`].
     Standard {
         /// The cases.
         cases: &'a [R],
@@ -948,7 +948,7 @@ pub enum SpecInput<'a, R> {
 /// What a spec produced.
 #[derive(Debug, Clone)]
 pub enum SpecOutput {
-    /// Pairs of anchors and controls.
+    /// Pairs of cases and controls.
     Pairs {
         /// The pairs and their diagnostics.
         outcome: Box<MatchOutcome>,
@@ -1000,7 +1000,7 @@ impl DistanceSpec {
         }
     }
 
-    /// Whether the distance is one number per unit, which anchors can be
+    /// Whether the distance is one number per unit, which cases can be
     /// ordered by.
     const fn is_score(&self) -> bool {
         matches!(
@@ -1621,8 +1621,8 @@ fn propensity_config(
             lambda,
             standardize,
         } => PropensityEstimator::ElasticNetLogit(ElasticNetLogisticConfig {
-            alpha,
             lambda,
+            alpha,
             standardize,
             ..ElasticNetLogisticConfig::default()
         }),
@@ -1822,7 +1822,7 @@ fn run_quick<R: MatchingRecord>(
     exact: &[String],
     options: &QuickMatchOptions,
 ) -> Result<SubclassedUnits, Error> {
-    let outcome = match config {
+    match config {
         DistanceConfig::PropensityScoreMap { scores, .. } => quick_match_subclasses(
             anchors,
             candidates,
@@ -1869,21 +1869,16 @@ fn run_quick<R: MatchingRecord>(
                 options,
             )
         }
-        DistanceConfig::Date { .. } => {
-            return Err(Error::option(
-                "distance",
-                "the quick method needs a score or a covariate distance",
-            ));
-        }
-        DistanceConfig::Matrix { .. } => {
-            return Err(Error::option(
-                "distance",
-                "the quick method clusters points and cannot take a distance matrix; \
-                 give it a score or the covariates",
-            ));
-        }
-    };
-    Ok(outcome?)
+        DistanceConfig::Date { .. } => Err(Error::option(
+            "distance",
+            "the quick method needs a score or a covariate distance",
+        )),
+        DistanceConfig::Matrix { .. } => Err(Error::option(
+            "distance",
+            "the quick method clusters points and cannot take a distance matrix; \
+             give it a score or the covariates",
+        )),
+    }
 }
 
 /// The scores of a distance for subclassification.
@@ -1942,7 +1937,7 @@ fn field_calipers<R: MatchingRecord>(
         .collect()
 }
 
-/// The anchors and candidates that common-support trimming leaves, by the
+/// The cases and controls that common-support trimming leaves, by the
 /// engine's own rule (`standard_common_support`), so the units a field caliper
 /// is scaled over are the units the matcher keeps. When the ranges do not
 /// overlap, or a group has no finite score, nothing is trimmed here, and the
@@ -1981,11 +1976,11 @@ struct StandardPlan<'a, R> {
 }
 
 fn typed_ratio(spec: &MatchSpec) -> Result<MatchRatio, Error> {
-    Ok(MatchRatio::new(spec.ratio).ok_or(Error::ZeroMatchRatio)?)
+    MatchRatio::new(spec.ratio).ok_or(Error::ZeroMatchRatio)
 }
 
 fn typed_window(spec: &MatchSpec) -> Result<BirthDateWindowDays, Error> {
-    Ok(BirthDateWindowDays::new(spec.birth_window_days).ok_or(Error::NegativeBirthDateWindow)?)
+    BirthDateWindowDays::new(spec.birth_window_days).ok_or(Error::NegativeBirthDateWindow)
 }
 
 fn typed_fallback(spec: &MatchSpec) -> Vec<MatchRatio> {

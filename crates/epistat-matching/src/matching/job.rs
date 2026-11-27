@@ -78,14 +78,14 @@ type WithResidentConstraint<Mode, R, S, G, P> =
 ///     record.strata.insert("sex".to_string(), sex.to_string());
 ///     record
 /// };
-/// let anchors = vec![person("case1", "F", 3), person("case2", "M", 10)];
-/// let candidates = vec![
+/// let cases = vec![person("case1", "F", 3), person("case2", "M", 10)];
+/// let controls = vec![
 ///     person("control1", "F", 5),
 ///     person("control2", "M", 12),
 ///     person("control3", "F", 28),
 /// ];
 ///
-/// let job = MatchJob::new_standard(&anchors, &candidates, 42)
+/// let job = MatchJob::new_standard(&cases, &controls, 42)
 ///     .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
 ///     .with_birth_window(BirthDateWindowDays::new(30).expect("non-negative birth window"))
 ///     .with_gender_match();
@@ -141,7 +141,7 @@ impl<'a, R: RoleIndexedRecord>
 impl<'a, R: MatchingRecord>
     MatchJob<StandardMode<'a, R>, R, RandomSelection, (), DefaultRiskSetPolicy>
 {
-    /// Create a new matching job for standard anchor-to-candidate matching.
+    /// Create a new matching job for standard case-to-control matching.
     #[must_use]
     pub fn new_standard(anchors: &'a [R], candidates: &'a [R], seed: u64) -> Self {
         Self {
@@ -167,14 +167,14 @@ where
 {
     /// Set the matching ratio (number of controls per case).
     ///
-    /// Without replacement, anchors take their controls one anchor at a time
+    /// Without replacement, cases take their controls one case at a time
     /// by default: each takes all its controls before the next starts. When
-    /// controls run short this leaves the last anchors with fewer controls or
-    /// none. `matchit()` gives every anchor one control before any gets a
-    /// second, which leaves every anchor with at least one for as long as
+    /// controls run short this leaves the last cases with fewer controls or
+    /// none. `matchit()` gives every case one control before any gets a
+    /// second, which leaves every case with at least one for as long as
     /// controls last. That order is the default in nearest mode
     /// (`with_nearest`) and can be chosen with
-    /// `with_round_assignment`. An anchor that finds fewer than the ratio gets
+    /// `with_round_assignment`. An case that finds fewer than the ratio gets
     /// what is available.
     #[must_use]
     pub const fn with_ratio(mut self, ratio: MatchRatio) -> Self {
@@ -184,7 +184,7 @@ where
 
     /// Set the birth date caliper window in days.
     ///
-    /// Candidates must have a birth date within `+/- days` of the case.
+    /// Controls must have a birth date within `+/- days` of the case.
     ///
     /// The window also holds when a distance configuration is set, where it
     /// is applied as a constraint on top of the distance. A job that never
@@ -202,7 +202,7 @@ where
 
     /// Add a required exact-match strata key.
     ///
-    /// The engine will only consider candidates that have the same value for this
+    /// The engine will only consider controls that have the same value for this
     /// strata key as the case. A record with no value for the key has the
     /// value "absent", and matches another record with none.
     #[must_use]
@@ -226,9 +226,9 @@ where
         self
     }
 
-    /// Enable or disable replacement (candidate reuse).
+    /// Enable or disable replacement (control reuse).
     ///
-    /// If `true`, a candidate can be matched to multiple cases.
+    /// If `true`, a control can be matched to multiple cases.
     #[must_use]
     pub const fn with_replacement(mut self, allow: bool) -> Self {
         self.criteria.allow_replacement = allow;
@@ -365,14 +365,14 @@ impl<'a, R: MatchingRecord, S, G, P> MatchJob<StandardMode<'a, R>, R, S, G, P>
 where
     G: ConstraintGroup<R>,
 {
-    /// Give every anchor a first control before any gets a second, and so on
+    /// Give every case a first control before any gets a second, and so on
     /// up to the ratio, as `matchit()` does.
     ///
     /// This applies to standard matching without replacement at a ratio above
     /// 1, with the strategy still choosing each control. It cannot be combined
     /// with ratio fallbacks, and a job that does so returns an
     /// [`InvalidCriteriaReason::NearestOptions`](crate::InvalidCriteriaReason)
-    /// outcome. Each round builds every anchor's candidate pool again, so the
+    /// outcome. Each round builds every case's control pool again, so the
     /// cost is the ratio times that of the default order.
     #[must_use]
     pub fn with_round_assignment(self) -> MatchJob<StandardMode<'a, R>, R, Rounds<S>, G, P> {
@@ -391,12 +391,12 @@ impl<'a, R: MatchingRecord, G, P> MatchJob<StandardMode<'a, R>, R, RandomSelecti
 where
     G: ConstraintGroup<R>,
 {
-    /// Rank candidates by the distance instead of choosing among them, as
+    /// Rank controls by the distance instead of choosing among them, as
     /// `matchit(method = "nearest")` does. See [`NearestSelection`] for the
-    /// rules. The job's seed is used for the random order of anchors.
+    /// rules. The job's seed is used for the random order of cases.
     ///
     /// The distance is the one set with [`Self::with_distance_config`], or the
-    /// birth date. Anchors take their controls in rounds unless
+    /// birth date. Cases take their controls in rounds unless
     /// [`Self::with_assignment`] says otherwise.
     #[must_use]
     pub fn with_nearest(self) -> MatchJob<StandardMode<'a, R>, R, NearestSelection, G, P> {
@@ -409,7 +409,7 @@ impl<R: MatchingRecord, G, P> MatchJob<StandardMode<'_, R>, R, NearestSelection,
 where
     G: ConstraintGroup<R>,
 {
-    /// Set the order in which anchors are matched (`m.order`).
+    /// Set the order in which cases are matched (`m.order`).
     #[must_use]
     pub fn with_m_order(mut self, order: MatchOrder) -> Self {
         self.strategy = self.strategy.with_order(order);
@@ -431,7 +431,7 @@ where
         self
     }
 
-    /// Match a variable number of controls to each anchor, between the
+    /// Match a variable number of controls to each case, between the
     /// ratio's minimum and maximum, with the ratio's average as the mean
     /// (`ratio`, `min.controls` and `max.controls`). The job's own ratio is
     /// not used. See [`VariableRatio`](crate::VariableRatio). It cannot be
@@ -442,8 +442,8 @@ where
         self
     }
 
-    /// Rank candidates by this distance and use the job's distance as a
-    /// caliper and for the order of anchors (`mahvars`).
+    /// Rank controls by this distance and use the job's distance as a
+    /// caliper and for the order of cases (`mahvars`).
     #[must_use]
     pub fn with_mahvars(mut self, ranking: DistanceConfig) -> Self {
         self.strategy = self.strategy.with_mahvars(ranking);
@@ -566,7 +566,7 @@ where
         self
     }
 
-    /// Trim cases and candidates outside the common support of the scores
+    /// Trim cases and controls outside the common support of the scores
     /// of the distance configuration. A case is judged against the people at
     /// risk on its event date; see [`CommonSupport`](crate::CommonSupport).
     /// Needs a score distance; without one the job returns an invalid outcome.

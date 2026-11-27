@@ -8,8 +8,11 @@
 //!
 //! # The expansion
 //!
-//! The panel holds one row per person and period, with the eligibility, the
-//! treatment and whether the outcome occurred. The expansion follows the
+//! The panel, a [`TrialPanel`], holds one row per person and period, keyed by
+//! `epistat_core::Panel` as the person-period data of every epistat crate
+//! are, with the eligibility, the treatment and whether the outcome occurred.
+//! [`expand_trial_columns`] gives the rows of every trial. The expansion
+//! follows the
 //! documented behaviour of the R package TrialEmulation (version 0.0.5):
 //!
 //! * rows before the first eligible period of a person and rows after the
@@ -56,7 +59,7 @@
 //!
 //! By default every person has the same date for the same period, and the
 //! sets of a trial have that date as their index date. With
-//! [`PeriodDates::PerPerson`] (through [`match_trials`]) the periods are a
+//! [`PeriodDates::PerPerson`] (in [`TrialMatching`]) the periods are a
 //! time scale of each person's own, such as months since diagnosis, and each
 //! person gives the calendar date of each of their periods. The index date of a
 //! set is then the date of its initiator's period: the controls are at risk,
@@ -69,8 +72,7 @@
 //! trial starts. The matching reads such a key before the record's own, so the
 //! job's exact matches name the keys of both alike.
 //!
-//! With shared dates and no period strata, [`match_trials`] is
-//! [`match_trials`].
+//! [`TrialMatching::default`] is shared dates and no period strata.
 //!
 //! The output gives, for each trial, the sets, the start of the follow-up of
 //! every matched person and the period of the deviation. The analysis censors

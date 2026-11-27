@@ -61,7 +61,7 @@ use std::sync::Arc;
 /// The cases are the treated group and the controls the comparison group.
 /// "Pre" statistics use every record passed in with weight one. "Post"
 /// statistics weight each record by the unit weights the outcome gives for its
-/// realised estimand (see [`MatchOutcome::match_weights_for_realized_estimand`]),
+/// realised estimand (see [`MatchOutcome::match_weights`] with [`MatchWeightMethod::for_estimand`](crate::MatchWeightMethod::for_estimand)),
 /// so a record of weight zero does not enter them. This is
 /// [`balance_summary`] on [`BalanceWeights::from_outcome`].
 ///

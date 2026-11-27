@@ -6,11 +6,11 @@
 //! The values of each variable are numbered by first appearance, and the
 //! columns of numbers are combined into one stratum number per unit, so two
 //! units share a stratum when they agree on every variable. A unit with no
-//! value for a variable is an error. The anchors and candidates of each
+//! value for a variable is an error. The cases and controls of each
 //! stratum are counted, and a stratum without both groups drops its units.
 //! The weights of a subclass are those of
-//! [`subclassification`](super::subclassification): with `p` the anchor share
-//! of the stratum, an anchor weighs 1 and a candidate `p / (1 - p)` for the
+//! [`subclassification`](super::subclassification): with `p` the case share
+//! of the stratum, an case weighs 1 and a control `p / (1 - p)` for the
 //! ATT, and the reverse for the ATC.
 //!
 //! The work is `O(n v)` for `n` units and `v` variables.
@@ -33,22 +33,22 @@ use serde::{Deserialize, Serialize};
 /// Units sorted into subclasses, with the weights of each subclass.
 ///
 /// The result of exact, coarsened exact and quick matching. Units are
-/// numbered by position: the anchors in the order given, then the candidates
+/// numbered by position: the cases in the order given, then the controls
 /// in the order given. Every column is indexed by that position. A unit that
 /// fits no subclass has no subclass and no weight.
 ///
-/// The weights are not stored. Each is derived from the anchor share of the
+/// The weights are not stored. Each is derived from the case share of the
 /// unit's subclass in [`subclasses`](Self::subclasses) when asked for, so the
 /// result holds one id and one subclass number per unit and nothing else.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct SubclassedUnits {
     /// The id of each unit.
     pub ids: Vec<String>,
-    /// Number of anchors. The units before this position are anchors.
+    /// Number of cases. The units before this position are cases.
     pub case_count: usize,
     /// Subclass of each unit, `None` for a unit that is dropped.
     pub subclass: Vec<Option<usize>>,
-    /// Counts and anchor share of each subclass.
+    /// Counts and case share of each subclass.
     pub subclasses: Vec<SubclassSummary>,
     /// The units that common-support trimming left out before matching, empty
     /// when the match did not trim. They are not among the units above.
@@ -79,7 +79,7 @@ impl SubclassedUnits {
         &self.ids[position]
     }
 
-    /// Whether the unit at `position` is an anchor.
+    /// Whether the unit at `position` is an case.
     #[must_use]
     pub const fn is_case(&self, position: usize) -> bool {
         position < self.case_count
@@ -99,7 +99,7 @@ impl SubclassedUnits {
             .filter_map(|(id, subclass)| subclass.map(|subclass| (id.as_str(), subclass)))
     }
 
-    /// Ids of the units that fit no subclass, anchors first, each group in the
+    /// Ids of the units that fit no subclass, cases first, each group in the
     /// order given.
     #[must_use]
     pub fn dropped_ids(&self) -> Vec<&str> {
@@ -134,7 +134,7 @@ impl SubclassedUnits {
     /// The weights of all units for an estimand, by position, with 0 for a
     /// dropped unit, or `None` for the matched-sample effect.
     ///
-    /// Subclass weights for the effect in the anchor group, in the candidate
+    /// Subclass weights for the effect in the case group, in the control
     /// group or in the whole population. They are not rescaled. MatchIt
     /// rescales the weights of each group to sum to the number of its kept
     /// units.
@@ -152,7 +152,7 @@ impl SubclassedUnits {
     }
 }
 
-/// Ids of the anchors and then the candidates.
+/// Ids of the cases and then the controls.
 pub(super) fn unit_ids<R: MatchingRecord>(anchors: &[R], candidates: &[R]) -> Vec<String> {
     anchors
         .par_iter()
@@ -164,31 +164,31 @@ pub(super) fn unit_ids<R: MatchingRecord>(anchors: &[R], candidates: &[R]) -> Ve
 /// Match exactly on the named strata fields.
 ///
 /// A stratum is a combination of the values of `variables` in
-/// [`MatchingRecord::strata`]. Every unit in a stratum that holds both anchors
-/// and candidates is kept and the stratum is a subclass. Units in a stratum
+/// [`MatchingRecord::strata`]. Every unit in a stratum that holds both cases
+/// and controls is kept and the stratum is a subclass. Units in a stratum
 /// that holds one group only are dropped. This is MatchIt's
 /// `method = "exact"`, which differs from
 /// [`with_exact_matches`](crate::MatchJob::with_exact_matches) in keeping all
 /// units of a stratum, with weights, rather than pairing them.
 ///
 /// The weights of each subclass are those of propensity-score
-/// subclassification, with the anchor share of the subclass in the place of
-/// the propensity: for the anchor effect an anchor weighs 1 and a candidate the
-/// ratio of anchors to candidates in its subclass, for the candidate effect the
-/// reverse, and for the whole population an anchor weighs the subclass size over
-/// its anchors and a candidate the subclass size over its candidates. They are
+/// subclassification, with the case share of the subclass in the place of
+/// the propensity: for the case effect an case weighs 1 and a control the
+/// ratio of cases to controls in its subclass, for the control effect the
+/// reverse, and for the whole population an case weighs the subclass size over
+/// its cases and a control the subclass size over its controls. They are
 /// not rescaled. MatchIt rescales the weights of each group to sum to the
 /// number of its kept units.
 ///
 /// MatchIt numbers the subclasses in the order of first appearance within the
-/// group of the first row of its data, where this function uses the anchors.
+/// group of the first row of its data, where this function uses the cases.
 /// The strata and weights are the same.
 ///
 /// # Algorithm
 ///
 /// The values of each variable are numbered by first appearance, and the
 /// columns of numbers are joined into one stratum number per unit, as
-/// described in the module `codes`. Counting the anchors and candidates of each
+/// described in the module `codes`. Counting the cases and controls of each
 /// stratum then gives the subclasses. The work is `O(n * v)` for `n` units and
 /// `v` variables, in parallel apart from the merge of distinct values, and the
 /// outcome holds one string and one number per unit.
@@ -224,7 +224,7 @@ pub(super) fn unit_at<'a, R>(anchors: &'a [R], candidates: &'a [R], position: us
     }
 }
 
-/// The stratum number of every unit, anchors then candidates, numbered from 0
+/// The stratum number of every unit, cases then controls, numbered from 0
 /// in order of first appearance, and the number of strata. The error is the
 /// position of the first unit that lacks a value, with the index of the first
 /// variable it lacks.
@@ -262,8 +262,8 @@ pub(super) fn stratum_numbers<R: MatchingRecord, V: AsRef<str>>(
 
 /// Subclasses and weights of units that already have a stratum number.
 ///
-/// `numbers` holds the stratum of the anchors and then of the candidates, from
-/// 0 in order of first appearance, anchors first, as `exact_match_subclasses`
+/// `numbers` holds the stratum of the cases and then of the controls, from
+/// 0 in order of first appearance, cases first, as `exact_match_subclasses`
 /// numbers them, and `strata` is their count. The subclasses are the strata
 /// that hold both groups, and they keep that order. Coarsened exact matching
 /// uses this with strata from binned values.
@@ -506,7 +506,7 @@ pub(super) mod reference {
         }
     }
 
-    /// Anchors and candidates with `sex`, `area` and `region` strata and a
+    /// Cases and controls with `sex`, `area` and `region` strata and a
     /// numeric `x` taken from few values, so that many units tie exactly.
     /// With `holes`, about 1 in 60 values is missing.
     pub fn records(

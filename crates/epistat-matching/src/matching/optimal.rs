@@ -2,15 +2,15 @@
 //!
 //! These are `matchit(method = "optimal")` and `matchit(method = "full")`.
 //! Both minimise the sum of the distances of the matched pairs. They differ in
-//! what a matched set may look like. In pair matching every anchor gets
-//! `ratio` candidates (or fewer where the candidates run out), and no candidate
-//! is used twice. In full matching every unit is in a subclass of one anchor
-//! with several candidates or one candidate with several anchors, within
-//! limits on the number of candidates per anchor.
+//! what a matched set may look like. In pair matching every case gets
+//! `ratio` controls (or fewer where the controls run out), and no control
+//! is used twice. In full matching every unit is in a subclass of one case
+//! with several controls or one control with several cases, within
+//! limits on the number of controls per case.
 //!
 //! # Network
 //!
-//! A stratum of anchors (rows) and candidates (columns) with the admissible
+//! A stratum of cases (rows) and controls (columns) with the admissible
 //! pairs as arcs is solved as a minimum-cost flow on the network of
 //! Rosenbaum \[1\] and Hansen and Klopfer \[2\]. Each row node supplies `mxc`
 //! units, and each column node can pass flow on to a sink. An arc from a row to
@@ -55,15 +55,15 @@
 //! in the order of row and then column. See
 //! [`epistat_optim::min_cost_flow`]. The result does not depend on the number
 //! of threads, since each exact stratum is solved on its own and the strata are
-//! put together in order of their first anchor.
+//! put together in order of their first case.
 //!
 //! # Cost of solving
 //!
 //! The network has one node per unit and one arc per admissible pair, and the
-//! solver is the network simplex method. A stratum of 2,000 anchors and 8,000
-//! candidates within a caliper that leaves a few hundred candidates per anchor
+//! solver is the network simplex method. A stratum of 2,000 cases and 8,000
+//! controls within a caliper that leaves a few hundred controls per case
 //! has a few hundred thousand arcs. A stratum without a caliper has one arc for
-//! every pair of an anchor and a candidate, which takes memory in proportion to
+//! every pair of an case and a control, which takes memory in proportion to
 //! their product (about 100 bytes per pair).
 //!
 //! # References
@@ -96,35 +96,35 @@ use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
-/// How many of the candidates a full match uses.
+/// How many of the controls a full match uses.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub enum Retain {
-    /// Every candidate that has an admissible anchor.
+    /// Every control that has an admissible case.
     #[default]
     All,
-    /// Leave out up to this fraction of the candidates, a number in `[0, 1]`.
-    /// A number in `[-1, 0)` leaves out that fraction of the anchors.
+    /// Leave out up to this fraction of the controls, a number in `[0, 1]`.
+    /// A number in `[-1, 0)` leaves out that fraction of the cases.
     OmitFraction(f64),
-    /// Use this many candidates per anchor on average (`mean.controls`), or
-    /// all the candidates that have an admissible anchor when there are fewer.
+    /// Use this many controls per case on average (`mean.controls`), or
+    /// all the controls that have an admissible case when there are fewer.
     MeanControls(f64),
 }
 
 /// The limits of a full match, those of `optmatch::fullmatch`.
 ///
-/// The defaults are `fullmatch`'s: any number of candidates per anchor and any
-/// number of anchors per candidate, and every candidate used.
+/// The defaults are `fullmatch`'s: any number of controls per case and any
+/// number of cases per control, and every control used.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FullMatchConfig {
-    /// Fewest candidates per anchor in a subclass (`min.controls`). A number
-    /// below 1 allows subclasses of several anchors with one candidate, down to
-    /// one candidate per `1 / min_controls` anchors. 0 allows any number.
+    /// Fewest controls per case in a subclass (`min.controls`). A number
+    /// below 1 allows subclasses of several cases with one control, down to
+    /// one control per `1 / min_controls` cases. 0 allows any number.
     pub min_controls: f64,
-    /// Most candidates per anchor in a subclass (`max.controls`). Infinity
-    /// allows any number. A number below 1 limits the anchors per candidate to
+    /// Most controls per case in a subclass (`max.controls`). Infinity
+    /// allows any number. A number below 1 limits the cases per control to
     /// the reciprocal.
     pub max_controls: f64,
-    /// How many candidates are used.
+    /// How many controls are used.
     pub retain: Retain,
 }
 
@@ -201,7 +201,7 @@ fn round_half_even(value: f64) -> i64 {
     to_i64(value.round_ties_even())
 }
 
-/// The limits and the number of candidates to use, before orientation.
+/// The limits and the number of controls to use, before orientation.
 #[derive(Clone, Copy)]
 struct Restrictions {
     min_controls: f64,
@@ -290,7 +290,7 @@ impl Restrictions {
     }
 }
 
-/// The number of candidates to match, before the stratum's admissible units
+/// The number of controls to match, before the stratum's admissible units
 /// are known.
 #[derive(Clone, Copy)]
 enum Target {
@@ -544,13 +544,13 @@ fn connected_groups(matched: &[(usize, usize)], rows: usize, cols: usize) -> Vec
     groups
 }
 
-/// Pair matching of one stratum with `ratio` candidates per anchor, as
+/// Pair matching of one stratum with `ratio` controls per case, as
 /// MatchIt arranges `optmatch::fullmatch` for `method = "optimal"`.
 ///
-/// With fewer candidates than anchors the problem is solved with the groups
-/// exchanged, so each candidate gets one anchor. With more than 1 and fewer
-/// than `ratio` candidates per anchor, every candidate is used and an anchor
-/// gets between the whole number of candidates per anchor, rounded down, and
+/// With fewer controls than cases the problem is solved with the groups
+/// exchanged, so each control gets one case. With more than 1 and fewer
+/// than `ratio` controls per case, every control is used and an case
+/// gets between the whole number of controls per case, rounded down, and
 /// `ratio`.
 fn pair_match_stratum(
     rows: usize,
@@ -605,9 +605,9 @@ fn pair_match_stratum(
 
 /// The groups of the stratum with their units in the order of the slices.
 pub(super) struct Stratum {
-    /// Positions in the anchor slice, in slice order.
+    /// Positions in the case slice, in slice order.
     pub(super) anchors: Vec<usize>,
-    /// Positions in the candidate slice, in slice order.
+    /// Positions in the control slice, in slice order.
     pub(super) candidates: Vec<usize>,
 }
 
@@ -624,8 +624,8 @@ struct PairBuilder<'a, R: MatchingRecord, G: ?Sized> {
 }
 
 impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> PairBuilder<'_, R, G> {
-    /// The distance of an anchor and a candidate, by their positions in the
-    /// anchor and candidate slices, or `None` when the pair has none. Every
+    /// The distance of an case and a control, by their positions in the
+    /// case and control slices, or `None` when the pair has none. Every
     /// cost of the network is read here.
     fn pair_distance(
         &self,
@@ -738,7 +738,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> PairBuilder<'_, R, G> {
     }
 }
 
-/// Group the units into exact strata, numbered in order of the first anchor.
+/// Group the units into exact strata, numbered in order of the first case.
 /// Strata without both groups are left out.
 fn exact_strata<R: MatchingRecord>(
     anchors: &[R],
@@ -769,11 +769,11 @@ fn exact_strata<R: MatchingRecord>(
     strata
 }
 
-/// Solves one stratum from its numbers of anchors and candidates and its pairs.
+/// Solves one stratum from its numbers of cases and controls and its pairs.
 type StratumSolver<'a> =
     dyn Fn(usize, usize, &[Edge]) -> Result<Vec<Group>, StratumError> + Sync + 'a;
 
-/// A solved stratum: its matched sets by position in the anchor and candidate
+/// A solved stratum: its matched sets by position in the case and control
 /// slices.
 pub(super) type Solved = Vec<Vec<(usize, usize)>>;
 
@@ -908,22 +908,22 @@ where
     Ok(solved)
 }
 
-/// Optimal pair matching: the assignment of `ratio` candidates to each anchor
+/// Optimal pair matching: the assignment of `ratio` controls to each case
 /// that minimises the sum of the distances of the pairs, as
 /// `matchit(method = "optimal")`.
 ///
-/// The anchors are the focal group, as in the nearest neighbour method, so a
-/// match for the effect in the controls is made with the controls as anchors.
-/// The pairs are in the order of the anchors, and an anchor's candidates in the
-/// order of the candidate slice. An anchor gets `ratio` candidates unless there
-/// are fewer than `ratio` candidates per anchor in its exact stratum, and then
-/// the candidates are shared out as evenly as the limits allow. With fewer
-/// candidates than anchors in a stratum, each candidate gets one anchor
-/// instead, so some anchors have none.
+/// The cases are the focal group, as in the nearest neighbour method, so a
+/// match for the effect in the controls is made with the controls as cases.
+/// The pairs are in the order of the cases, and an case's controls in the
+/// order of the control slice. An case gets `ratio` controls unless there
+/// are fewer than `ratio` controls per case in its exact stratum, and then
+/// the controls are shared out as evenly as the limits allow. With fewer
+/// controls than cases in a stratum, each control gets one case
+/// instead, so some cases have none.
 ///
 /// Pairs outside the caliper or blocked by a constraint are forbidden. Where
-/// they leave a stratum with no assignment that gives every anchor with an
-/// admissible candidate its candidates, the result is
+/// they leave a stratum with no assignment that gives every case with an
+/// admissible control its controls, the result is
 /// [`Error::Infeasible`]. `matchit(method = "optimal")` itself ignores
 /// calipers.
 ///
@@ -1003,13 +1003,13 @@ pub(super) fn pair_outcome<R: MatchingRecord>(
     build_outcome(pairs, matched_cases, anchors.len(), used, diagnostics)
 }
 
-/// Optimal full matching: subclasses of one anchor with several candidates or
-/// one candidate with several anchors that minimise the sum of the distances
+/// Optimal full matching: subclasses of one case with several controls or
+/// one control with several cases that minimise the sum of the distances
 /// of the matched pairs, within the limits of `config`, as
 /// `matchit(method = "full")`.
 ///
-/// The anchors are the focal group. The limits count candidates per anchor, so
-/// a match for the effect in the controls is made with the controls as anchors.
+/// The cases are the focal group. The limits count controls per case, so
+/// a match for the effect in the controls is made with the controls as cases.
 /// A unit with no admissible pair is in no subclass. The weights are the
 /// subclass weights of [`SubclassedUnits`], before MatchIt's rescaling, which
 /// [`SubclassedUnits::match_data`] applies on request.
@@ -1046,7 +1046,7 @@ where
 }
 
 /// The subclasses of a full match as columns by unit position: the sets are
-/// the pairs of (anchor position, candidate position) of each subclass.
+/// the pairs of (case position, control position) of each subclass.
 fn subclassed_by_sets<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],

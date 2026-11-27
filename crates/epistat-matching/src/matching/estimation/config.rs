@@ -354,7 +354,7 @@ impl Default for MahalanobisPreparationConfig {
 /// Covariance strategy used for Mahalanobis preparation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MahalanobisCovarianceStrategy {
-    /// Average of the anchor and candidate covariance matrices, each with the
+    /// Average of the case and control covariance matrices, each with the
     /// same weight, whatever the group sizes.
     PooledWithinGroups,
     /// Pooled within-group covariance: the sums of squares and cross-products
@@ -396,7 +396,7 @@ pub enum EuclideanScale {
     #[default]
     None,
     /// Each column divided by its pooled within-group standard deviation, the
-    /// two groups being the anchors and the candidates. This is MatchIt's
+    /// two groups being the cases and the controls. This is MatchIt's
     /// `scaled_euclidean_dist()`: a column of only 0 and 1 has the variance
     /// `sum_g n_g p_g (1 - p_g) / n`, any other column the sum of squares about
     /// its group mean over `n - 2`.

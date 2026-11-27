@@ -2,10 +2,10 @@
 //!
 //! # Weights
 //!
-//! For the ATT every matched anchor weighs 1 and a candidate weighs the sum,
-//! over the pairs it is in, of `1 / m` with `m` the number of candidates of the
-//! pair's anchor. For the ATC the roles are reversed. A candidate used by two
-//! anchors that each have two candidates weighs `1/2 + 1/2 = 1`. For the ATE
+//! For the ATT every matched case weighs 1 and a control weighs the sum,
+//! over the pairs it is in, of `1 / m` with `m` the number of controls of the
+//! pair's case. For the ATC the roles are reversed. A control used by two
+//! cases that each have two controls weighs `1/2 + 1/2 = 1`. For the ATE
 //! and the ATM every pair adds 1 to both its units. These are the raw weights
 //! of `matchit(normalize = FALSE)`; [`UnitWeightSet::normalized`] divides each
 //! group's positive weights by their mean, as `matchit()` does by default.
@@ -46,21 +46,21 @@ pub enum MatchWeightMethod {
     /// Every pair contributes +1 to both its case and its control.
     ///
     /// `matchit()` has no such weighting. Its weights for `estimand = "ATE"`
-    /// are stratum weights, which equal these only when every anchor has the
+    /// are stratum weights, which equal these only when every case has the
     /// same number of controls and both are normalized.
     PairCount,
     /// Every matched case has weight 1, and a control has `1 / m` from each
     /// case with `m` controls it was drawn for.
     ///
     /// This is `matchit()`'s weighting for the estimand whose focal group is
-    /// the anchors, with or without replacement.
+    /// the cases, with or without replacement.
     CaseUnitControlFractional,
     /// Every matched control has weight 1, and a case has `1 / m` from each
     /// control drawn `m` times.
     ///
     /// This is `matchit()`'s weighting for the estimand whose focal group is
-    /// the candidates, applied to pairs that were formed from the anchors'
-    /// side. `matchit()` itself would form the pairs from the candidates'
+    /// the controls, applied to pairs that were formed from the cases'
+    /// side. `matchit()` itself would form the pairs from the controls'
     /// side.
     ControlUnitCaseFractional,
 }
@@ -141,9 +141,9 @@ impl PairWeightSet {
 /// Flat row for pair-level table outputs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PairWeightRow {
-    /// Anchor-side unit identifier.
+    /// Case-side unit identifier.
     pub case_id: String,
-    /// Candidate-side unit identifier.
+    /// Control-side unit identifier.
     pub control_id: String,
     /// Pair-level weight.
     pub pair_weight: f64,
@@ -196,7 +196,7 @@ impl UnitRole {
 pub struct UnitWeightRow {
     /// Unit identifier.
     pub unit_id: String,
-    /// Anchor/candidate role.
+    /// Case/control role.
     pub role: UnitRole,
     /// Pure matching-derived unit weight.
     pub match_weight: f64,
@@ -284,7 +284,7 @@ impl UnitWeightSet {
 
     /// Rescale the weights of each group so that their mean is 1.
     ///
-    /// Within the anchor group and within the candidate group separately,
+    /// Within the case group and within the control group separately,
     /// every positive weight is divided by the mean of the positive weights of
     /// that group, so that the weights of a group sum to the number of its
     /// units that have one. This is the rule of `matchit()` with
@@ -302,7 +302,7 @@ impl UnitWeightSet {
         }
     }
 
-    /// Effective sample size for anchor weights, summed in the order of the
+    /// Effective sample size for case weights, summed in the order of the
     /// unit identifiers. See [`effective_sample_size`].
     ///
     /// # Errors
@@ -312,7 +312,7 @@ impl UnitWeightSet {
         kish(in_id_order(&self.case))
     }
 
-    /// Effective sample size for candidate weights, summed in the order of the
+    /// Effective sample size for control weights, summed in the order of the
     /// unit identifiers. See [`effective_sample_size`].
     ///
     /// # Errors
@@ -322,21 +322,21 @@ impl UnitWeightSet {
         kish(in_id_order(&self.control))
     }
 
-    /// Sum of all anchor-side unit weights, in the order of the unit
+    /// Sum of all case-side unit weights, in the order of the unit
     /// identifiers.
     #[must_use]
     pub fn case_total_weight(&self) -> f64 {
         in_id_order(&self.case).into_iter().sum()
     }
 
-    /// Sum of all candidate-side unit weights, in the order of the unit
+    /// Sum of all control-side unit weights, in the order of the unit
     /// identifiers.
     #[must_use]
     pub fn control_total_weight(&self) -> f64 {
         in_id_order(&self.control).into_iter().sum()
     }
 
-    /// Combined anchor + candidate total weight.
+    /// Combined case + control total weight.
     #[must_use]
     pub fn total_weight(&self) -> f64 {
         self.case_total_weight() + self.control_total_weight()

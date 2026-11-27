@@ -1,4 +1,4 @@
-//! Distances between an anchor and a candidate, and the tables they read.
+//! Distances between an case and a control, and the tables they read.
 //!
 //! A distance is a number for a pair, smaller for a closer match, or `None`
 //! for a pair that has none. [`DistanceMetric`] is the trait the matchers use.
@@ -33,7 +33,7 @@
 //! eigenvalue, since its form is not a distance.
 //!
 //! A [`PairDistanceMatrix`] holds distances that the caller computed, one for
-//! each anchor and candidate. An infinite entry forbids the pair.
+//! each case and control. An infinite entry forbids the pair.
 //!
 //! Every sum runs in a fixed order and without fused multiply-add, so a
 //! distance has the same bits on any CPU and any number of threads.
@@ -63,7 +63,7 @@ use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 
-/// Distance metric used to compare an anchor and a candidate.
+/// Distance metric used to compare an case and a control.
 ///
 /// Returning `None` indicates the pair is ineligible for this metric.
 pub trait DistanceMetric<R: MatchingRecord> {
@@ -73,7 +73,7 @@ pub trait DistanceMetric<R: MatchingRecord> {
     /// Compute pair distance. Smaller values indicate closer matches.
     fn distance(&self, anchor: &R, candidate: &R) -> Option<f64>;
 
-    /// Optional candidate pre-filtering by caliper using an internal index.
+    /// Optional control pre-filtering by caliper using an internal index.
     /// Returns `None` if this metric does not support indexed queries.
     #[must_use]
     fn candidate_indices(&self, _anchor: &R, _caliper: f64) -> Option<Vec<usize>> {
@@ -100,7 +100,7 @@ impl<R: MatchingRecord, D: DistanceMetric<R>> Clone for DistanceChannel<'_, R, D
 /// One score for each unit, held by the unit's position.
 ///
 /// The units are listed once, in the order the scores were made in: for a
-/// propensity score, the anchors and then the candidates. A matcher that is
+/// propensity score, the cases and then the controls. A matcher that is
 /// given the same units in the same order reads the scores by position and
 /// never looks an id up. A matcher given other units, or the same ones in
 /// another order, finds each id once. Ids and scores are shared between
@@ -418,7 +418,7 @@ pub enum DistanceConfig {
         /// The reason recorded when the caliper refuses a pair.
         reason: &'static str,
     },
-    /// Distances between every anchor and every candidate, given by the
+    /// Distances between every case and every control, given by the
     /// caller.
     Matrix {
         /// The distances.
@@ -554,7 +554,7 @@ impl DistanceConfig {
         })
     }
 
-    /// A distance given as a table of anchor-by-candidate values, as a matrix
+    /// A distance given as a table of case-by-control values, as a matrix
     /// given as `distance` to `matchit()`.
     #[must_use]
     pub const fn matrix(matrix: PairDistanceMatrix, caliper: Option<DistanceCaliper>) -> Self {
@@ -590,7 +590,7 @@ impl DistanceConfig {
         }
     }
 
-    /// The distance of the anchor in row `anchor` and the candidate in column
+    /// The distance of the case in row `anchor` and the control in column
     /// `candidate` of a matrix configuration, in the order of the matrix.
     ///
     /// `None` when this is not a matrix configuration, when a position is out
@@ -784,12 +784,12 @@ impl<R: MatchingRecord> DistanceMetric<R> for ConfiguredMetric<'_> {
     }
 }
 
-/// Distances between every anchor and every candidate, as the matrix a caller
+/// Distances between every case and every control, as the matrix a caller
 /// gives as `distance` to `matchit()`.
 ///
-/// Rows are anchors and columns are candidates, named by their ids. An
-/// infinite value forbids the pair, as in `matchit()`. A pair whose anchor or
-/// candidate is not in the table has no distance and is never matched.
+/// Rows are cases and columns are controls, named by their ids. An
+/// infinite value forbids the pair, as in `matchit()`. A pair whose case or
+/// control is not in the table has no distance and is never matched.
 #[derive(Debug, Clone)]
 pub struct PairDistanceMatrix {
     case_ids: Vec<String>,
@@ -800,7 +800,7 @@ pub struct PairDistanceMatrix {
 }
 
 impl PairDistanceMatrix {
-    /// Build the table from row-major values, one row per anchor.
+    /// Build the table from row-major values, one row per case.
     ///
     /// # Errors
     ///
@@ -864,13 +864,13 @@ impl PairDistanceMatrix {
         &self.control_ids
     }
 
-    /// Row of an anchor.
+    /// Row of an case.
     #[must_use]
     pub fn case_position(&self, id: &str) -> Option<usize> {
         self.case_position.get(id).copied()
     }
 
-    /// Column of a candidate.
+    /// Column of a control.
     #[must_use]
     pub fn control_position(&self, id: &str) -> Option<usize> {
         self.control_position.get(id).copied()
@@ -887,7 +887,7 @@ impl PairDistanceMatrix {
         value.is_finite().then_some(value)
     }
 
-    /// The row of each anchor and the column of each candidate of a job, by
+    /// The row of each case and the column of each control of a job, by
     /// id. A unit not in the table has no position.
     #[must_use]
     pub fn positions_of<R: MatchingRecord>(
@@ -1668,7 +1668,7 @@ mod tests {
         }
     }
 
-    /// The nearest candidate of every anchor is the same under the matrix
+    /// The nearest control of every case is the same under the matrix
     /// form and the whitened form of the distance, on data with many exact ties
     /// (integer covariates, repeated rows). Exact duplicates have identical transformed vectors, so their
     /// distances are equal in both forms and a first-index tie-break agrees.
