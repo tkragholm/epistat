@@ -44,51 +44,11 @@
 
 use super::gamma::ln_gamma;
 
-const MAX_TERMS: usize = 10_000;
-const FLOOR: f64 = 1e-300;
-
-/// The continued fraction of the incomplete beta function, or `None` when it
-/// has not converged in `MAX_TERMS` terms.
+/// The continued fraction of DLMF 8.17.22 for `I_x(a, b)`, the factor that
+/// multiplies `x^a y^b / (a B(a, b))`, or `None` when it has not converged.
 pub(super) fn beta_fraction(a: f64, b: f64, x: f64) -> Option<f64> {
-    let (qab, qap, qam) = (a + b, a + 1.0, a - 1.0);
-    let mut c = 1.0;
-    let mut d = 1.0 - qab * x / qap;
-    if d.abs() < FLOOR {
-        d = FLOOR;
-    }
-    d = 1.0 / d;
-    let mut h = d;
-    for m in 1..=MAX_TERMS {
-        let m = m as f64;
-        let m2 = 2.0 * m;
-        let even = m * (b - m) * x / ((qam + m2) * (a + m2));
-        d = 1.0 + even * d;
-        if d.abs() < FLOOR {
-            d = FLOOR;
-        }
-        c = 1.0 + even / c;
-        if c.abs() < FLOOR {
-            c = FLOOR;
-        }
-        d = 1.0 / d;
-        h *= d * c;
-        let odd = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2));
-        d = 1.0 + odd * d;
-        if d.abs() < FLOOR {
-            d = FLOOR;
-        }
-        c = 1.0 + odd / c;
-        if c.abs() < FLOOR {
-            c = FLOOR;
-        }
-        d = 1.0 / d;
-        let delta = d * c;
-        h *= delta;
-        if (delta - 1.0).abs() <= f64::EPSILON {
-            return Some(h);
-        }
-    }
-    None
+    let _ = (a, b, x);
+    unimplemented!("the continued fraction of DLMF 8.17.22")
 }
 
 /// `P(X <= x)` for `X` beta with shapes `a` and `b`, R's `pbeta(x, a, b)`:
@@ -114,24 +74,14 @@ pub fn cdf(x: f64, a: f64, b: f64) -> f64 {
 /// freedom.
 #[must_use]
 pub fn regularised(a: f64, b: f64, x: f64, y: f64) -> f64 {
-    regularised_with(a, b, x, y, ln_beta(a, b))
+    let _ = (a, b, x, y);
+    unimplemented!("I_x(a, b) from the continued fraction and its prefactor")
 }
 
 /// [`regularised`] with `ln B(a, b)` given.
 fn regularised_with(a: f64, b: f64, x: f64, y: f64, ln_beta: f64) -> f64 {
-    if x <= 0.0 {
-        return 0.0;
-    }
-    if y <= 0.0 {
-        return 1.0;
-    }
-    let front = (a * x.ln() + b * y.ln() - ln_beta).exp();
-    if x < (a + 1.0) / (a + b + 2.0) {
-        beta_fraction(a, b, x).map_or(f64::NAN, |cf| front * cf / a)
-    } else {
-        let front = (b * y.ln() + a * x.ln() - ln_beta).exp();
-        beta_fraction(b, a, y).map_or(f64::NAN, |cf| 1.0 - front * cf / b)
-    }
+    let _ = (a, b, x, y, ln_beta);
+    unimplemented!("the prefactor x^a y^b / (a B(a, b)) times the continued fraction")
 }
 
 /// The tails of the beta distribution at the logit `t`: `(ln x, ln y, F, S)`
