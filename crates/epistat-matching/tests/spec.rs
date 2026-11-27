@@ -143,7 +143,7 @@ fn same(left: &MatchOutcome, right: &MatchOutcome) {
 fn spec_reproduces_golden_standard_without_replacement_with_fallback() {
     let (anchors, candidates) = standard_inputs(18);
     let spec = MatchSpec {
-        seed: 4,
+        seed: Some(4),
         ratio: 5,
         ratio_fallback: vec![3, 1],
         birth_window_days: 20,
@@ -169,7 +169,7 @@ fn spec_reproduces_golden_standard_without_replacement_with_fallback() {
 fn spec_reproduces_golden_standard_with_replacement() {
     let (anchors, candidates) = standard_inputs(19);
     let spec = MatchSpec {
-        seed: 8,
+        seed: Some(8),
         ratio: 2,
         birth_window_days: 30,
         exact: vec!["sex".into(), "municipality".into()],
@@ -184,7 +184,7 @@ fn spec_reproduces_golden_standard_with_replacement() {
 fn spec_reproduces_golden_standard_unique_by_key() {
     let (anchors, candidates) = standard_inputs(20);
     let spec = MatchSpec {
-        seed: 6,
+        seed: Some(6),
         ratio: 3,
         birth_window_days: 40,
         exact: vec!["sex".into()],
@@ -200,7 +200,7 @@ fn spec_reproduces_golden_lowest_index() {
     let (anchors, candidates) = standard_inputs(21);
     let spec = MatchSpec {
         method: MatchMethod::LowestIndex,
-        seed: 6,
+        seed: Some(6),
         ratio: 2,
         birth_window_days: 10,
         ..MatchSpec::default()
@@ -216,7 +216,7 @@ fn spec_reproduces_golden_risk_set_nearest_birth_date() {
     let spec = MatchSpec {
         mode: MatchMode::RiskSet,
         method: MatchMethod::NearestBirthDate,
-        seed: 99,
+        seed: Some(99),
         ratio: 3,
         birth_window_days: 60,
         age_limit_years: Some(6),
@@ -253,7 +253,7 @@ fn spec_reproduces_golden_risk_set_unique_by_family() {
     let cohort_records = transition_cohort(&people, true);
     let spec = MatchSpec {
         mode: MatchMode::RiskSet,
-        seed: 99,
+        seed: Some(99),
         ratio: 3,
         birth_window_days: 60,
         age_limit_years: Some(6),
@@ -282,7 +282,7 @@ fn spec_with_sex_antiexact_and_caliper_matches_the_typed_job() {
         record.core.numerics.insert("x".into(), (index % 17) as f64);
     }
     let spec = MatchSpec {
-        seed: 3,
+        seed: Some(3),
         ratio: 2,
         birth_window_days: 25,
         exact: vec!["municipality".into()],
@@ -310,7 +310,7 @@ fn spec_with_sex_antiexact_and_caliper_matches_the_typed_job() {
 fn spec_with_rounds_and_each_selection_matches_the_typed_job() {
     let (anchors, candidates) = standard_inputs(23);
     let base = MatchSpec {
-        seed: 11,
+        seed: Some(11),
         ratio: 3,
         birth_window_days: 40,
         exact: vec!["sex".into()],
@@ -425,7 +425,7 @@ fn spec_nearest_on_a_propensity_score_matches_the_typed_job() {
         std_caliper: true.into(),
         ratio: 2,
         birth_window_days: wide_window(),
-        seed: 5,
+        seed: Some(5),
         ..MatchSpec::default()
     };
     let SpecOutput::Pairs {
@@ -485,7 +485,7 @@ fn spec_nearest_on_mahalanobis_with_replacement_matches_the_typed_job() {
         },
         replace: true,
         birth_window_days: wide_window(),
-        seed: 9,
+        seed: Some(9),
         ..MatchSpec::default()
     };
     let by_spec = run_pairs(&spec, &anchors, &candidates);
@@ -539,6 +539,7 @@ fn spec_nearest_with_mahvars_and_euclidean_match_the_typed_jobs() {
             ..NearestSpec::default()
         },
         birth_window_days: wide_window(),
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let by_spec = run_pairs(&spec, &anchors, &candidates);
@@ -592,6 +593,7 @@ fn spec_nearest_with_mahvars_and_euclidean_match_the_typed_jobs() {
             caliper: None,
         },
         birth_window_days: wide_window(),
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let by_spec = run_pairs(&euclidean, &anchors, &candidates);
@@ -623,6 +625,7 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
     let spec = MatchSpec {
         method: MatchMethod::Exact,
         exact: vec!["sex".into(), "municipality".into()],
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let SpecOutput::Exact(outcome) = run_spec(
@@ -663,6 +666,7 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
             min_n: 1,
             reference: None,
         },
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let SpecOutput::Subclass { outcome, .. } = run_spec(
@@ -727,6 +731,7 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
             sampling_weights: None,
             caliper: None,
         },
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let SpecOutput::Quick(outcome) = run_spec(
@@ -802,11 +807,15 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
     assert!(
         message(MatchSpec {
             method: MatchMethod::Quick,
+            seed: Some(0),
             ..MatchSpec::default()
         })
         .contains("distance")
     );
-    let mut with_size = MatchSpec::default();
+    let mut with_size = MatchSpec {
+        seed: Some(0),
+        ..MatchSpec::default()
+    };
     with_size.quick.size = Some(5);
     assert!(message(with_size).contains("quick"));
     assert!(
@@ -814,6 +823,7 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
             method: MatchMethod::Quick,
             distance: spec.distance.clone(),
             ratio: 2,
+            seed: Some(0),
             ..MatchSpec::default()
         })
         .contains("`ratio`")
@@ -841,6 +851,7 @@ fn a_spec_round_trips_through_json() {
         },
         calipers: BTreeMap::from([("age".to_string(), 2.0)]),
         estimand: Estimand::Atc,
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let text = serde_json::to_string(&spec).unwrap();
@@ -848,6 +859,12 @@ fn a_spec_round_trips_through_json() {
     assert_eq!(spec, back);
     let defaults: MatchSpec = serde_json::from_str("{}").unwrap();
     assert_eq!(defaults, MatchSpec::default());
+    // A spec without a seed reads, and is refused before it runs.
+    assert_eq!(defaults.seed, None);
+    assert!(matches!(
+        defaults.validate(),
+        Err(Error::Option { option: "seed", .. })
+    ));
     let named: MatchSpec = serde_json::from_str(
         r#"{"method": "nearest", "distance": {"kind": "mahalanobis", "covariates": {"names": ["a"]}},
             "nearest": {"m_order": "closest"}, "ratio": 2}"#,
@@ -878,6 +895,7 @@ fn invalid_specs_are_errors_that_name_the_option() {
     assert!(
         message(&MatchSpec {
             ratio: 0,
+            seed: Some(0),
             ..defaults()
         })
         .contains("ratio is 0")
@@ -885,6 +903,7 @@ fn invalid_specs_are_errors_that_name_the_option() {
     assert!(
         message(&MatchSpec {
             birth_window_days: -1,
+            seed: Some(0),
             ..defaults()
         })
         .contains("negative")
@@ -892,6 +911,7 @@ fn invalid_specs_are_errors_that_name_the_option() {
     assert!(
         message(&MatchSpec {
             ratio_fallback: vec![2, 0],
+            seed: Some(0),
             ..defaults()
         })
         .contains("ratio_fallback")
@@ -899,6 +919,7 @@ fn invalid_specs_are_errors_that_name_the_option() {
     assert!(
         message(&MatchSpec {
             calipers: BTreeMap::from([("x".to_string(), -1.0)]),
+            seed: Some(0),
             ..defaults()
         })
         .contains("calipers")
@@ -910,6 +931,7 @@ fn invalid_specs_are_errors_that_name_the_option() {
                 mahvars: None,
                 ..NearestSpec::default()
             },
+            seed: Some(0),
             ..defaults()
         })
         .contains("set the method to nearest")
@@ -923,6 +945,7 @@ fn invalid_specs_are_errors_that_name_the_option() {
                 mahvars: None,
                 ..NearestSpec::default()
             },
+            seed: Some(0),
             ..defaults()
         })
         .contains("set assignment to rounds")
@@ -931,6 +954,7 @@ fn invalid_specs_are_errors_that_name_the_option() {
         message(&MatchSpec {
             method: MatchMethod::Nearest,
             ratio_fallback: vec![1],
+            seed: Some(0),
             ..defaults()
         })
         .contains("no fallback ratios")
@@ -938,6 +962,7 @@ fn invalid_specs_are_errors_that_name_the_option() {
     assert!(
         message(&MatchSpec {
             method: MatchMethod::Exact,
+            seed: Some(0),
             ..defaults()
         })
         .contains("strata keys")
@@ -947,6 +972,7 @@ fn invalid_specs_are_errors_that_name_the_option() {
             method: MatchMethod::Exact,
             exact: vec!["sex".into()],
             ratio: 2,
+            seed: Some(0),
             ..defaults()
         })
         .contains("`ratio`")
@@ -954,6 +980,7 @@ fn invalid_specs_are_errors_that_name_the_option() {
     assert!(
         message(&MatchSpec {
             method: MatchMethod::Subclass,
+            seed: Some(0),
             ..defaults()
         })
         .contains("propensity")
@@ -961,6 +988,7 @@ fn invalid_specs_are_errors_that_name_the_option() {
     assert!(
         message(&MatchSpec {
             require_alive: true,
+            seed: Some(0),
             ..defaults()
         })
         .contains("risk_set")
@@ -968,6 +996,7 @@ fn invalid_specs_are_errors_that_name_the_option() {
     assert!(
         message(&MatchSpec {
             mode: MatchMode::RiskSet,
+            seed: Some(0),
             ..defaults()
         })
         .contains("one cohort")
@@ -984,6 +1013,7 @@ fn a_covariate_that_is_missing_from_the_units_is_a_distance_error() {
             scaled: false,
             caliper: None,
         },
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let error = run_spec(
@@ -1017,6 +1047,7 @@ fn the_typed_jobs_invalid_outcome_is_an_error_from_the_spec() {
             mahvars: None,
             ..NearestSpec::default()
         },
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let error = run_spec(
@@ -1091,6 +1122,7 @@ fn a_configuration_the_matcher_refuses_is_an_error_not_an_empty_match() {
             ..NearestSpec::default()
         },
         birth_window_days: wide_window(),
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let error = run_spec(
@@ -1117,7 +1149,7 @@ fn spec_risk_set_with_resident_check_and_caliper_matches_the_typed_job() {
     }
     let spec = MatchSpec {
         mode: MatchMode::RiskSet,
-        seed: 7,
+        seed: Some(7),
         ratio: 2,
         ratio_fallback: vec![1],
         birth_window_days: 45,
@@ -1195,6 +1227,7 @@ fn spec_cem_matches_the_functions_it_wraps() {
             variables: cem_variables(),
             k2k: None,
         },
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let SpecOutput::Exact(outcome) = run_spec(&spec, input.clone()).expect("valid spec") else {
@@ -1225,6 +1258,7 @@ fn spec_cem_matches_the_functions_it_wraps() {
                 m_order: Some(OrderSpec::Closest),
             }),
         },
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let SpecOutput::Pairs { outcome, .. } = run_spec(&spec, input.clone()).expect("valid spec")
@@ -1292,6 +1326,7 @@ fn spec_nearest_on_a_distance_matrix_matches_the_typed_job() {
         },
         ratio: 2,
         birth_window_days: wide_window(),
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let SpecOutput::Pairs { outcome, .. } = run_spec(
@@ -1331,6 +1366,7 @@ fn invalid_cem_and_matrix_specs_are_errors_that_name_the_option() {
     let cem = |cem: CemSpec| MatchSpec {
         method: MatchMethod::Cem,
         cem,
+        seed: Some(0),
         ..defaults()
     };
     assert!(message(&cem(CemSpec::default())).contains("cem.variables"));
@@ -1340,6 +1376,7 @@ fn invalid_cem_and_matrix_specs_are_errors_that_name_the_option() {
                 variables: cem_variables(),
                 k2k: None,
             },
+            seed: Some(0),
             ..defaults()
         })
         .contains("cem")
@@ -1382,6 +1419,7 @@ fn invalid_cem_and_matrix_specs_are_errors_that_name_the_option() {
             values: vec![vec![Some(1.0)]],
             caliper: None,
         },
+        seed: Some(0),
         ..defaults()
     };
     assert!(message(&ragged).contains("one value for each candidate"));
@@ -1398,6 +1436,7 @@ fn invalid_cem_and_matrix_specs_are_errors_that_name_the_option() {
             mahvars: None,
             ..NearestSpec::default()
         },
+        seed: Some(0),
         ..defaults()
     };
     assert!(message(&scored).contains("nearest.m_order"));
@@ -1456,6 +1495,7 @@ fn optimal_and_full_specs_equal_the_typed_calls() {
     let base = MatchSpec {
         distance,
         birth_window_days: 36_500,
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let criteria = MatchingCriteria {
@@ -1564,7 +1604,7 @@ fn spec_nearest_with_a_variable_ratio_matches_the_typed_job() {
             ..NearestSpec::default()
         },
         birth_window_days: wide_window(),
-        seed: 5,
+        seed: Some(5),
         ..MatchSpec::default()
     };
     let by_spec = run_pairs(&spec, &anchors, &candidates);
@@ -1610,7 +1650,7 @@ fn spec_discard_matches_the_typed_job_with_common_support() {
                 distance: propensity_spec(None),
                 discard: Some(spec_policy),
                 birth_window_days: wide_window(),
-                seed: 5,
+                seed: Some(5),
                 ..MatchSpec::default()
             };
             let by_spec = run_pairs(&spec, &anchors, &candidates);
@@ -1657,7 +1697,7 @@ fn spec_reestimate_matches_estimate_propensity_and_match() {
                 assignment: rounds.then_some(AssignmentSpec::Rounds),
                 ratio: 2,
                 birth_window_days: wide_window(),
-                seed: 5,
+                seed: Some(5),
                 ..MatchSpec::default()
             };
             let SpecOutput::Pairs {
@@ -1762,7 +1802,7 @@ fn spec_elastic_net_with_a_penalty_ratio_matches_the_typed_job() {
                 caliper: None,
             },
             birth_window_days: wide_window(),
-            seed: 5,
+            seed: Some(5),
             ..MatchSpec::default()
         };
         let SpecOutput::Pairs {
@@ -1827,7 +1867,7 @@ fn spec_cbps_matches_the_typed_job() {
                 caliper: None,
             },
             birth_window_days: wide_window(),
-            seed: 5,
+            seed: Some(5),
             estimand,
             ..MatchSpec::default()
         };
@@ -1896,6 +1936,7 @@ fn spec_cbps_refuses_an_estimand_it_does_not_define() {
         },
         birth_window_days: wide_window(),
         estimand: Estimand::Atc,
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let result = run_spec(
@@ -1940,7 +1981,7 @@ fn spec_std_caliper_can_be_set_for_each_caliper() {
         std_caliper,
         ratio: 2,
         birth_window_days: wide_window(),
-        seed: 5,
+        seed: Some(5),
         ..MatchSpec::default()
     };
     let each = |distance: bool, age: bool| {
@@ -2000,6 +2041,7 @@ fn invalid_support_and_ratio_options_are_errors_that_name_the_option() {
     let nearest = MatchSpec {
         method: MatchMethod::Nearest,
         distance: propensity_spec(None),
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let named = |name: &str, text: String| {
@@ -2097,7 +2139,7 @@ fn a_risk_set_outcome_has_a_long_form_with_a_role_in_each_pair() {
     let spec = MatchSpec {
         mode: MatchMode::RiskSet,
         method: MatchMethod::NearestBirthDate,
-        seed: 99,
+        seed: Some(99),
         ratio: 3,
         birth_window_days: 60,
         age_limit_years: Some(6),
@@ -2209,6 +2251,7 @@ fn fine_balance_spec_equals_the_typed_call() {
         birth_window_days: 36_500,
         ratio: 2,
         fine_balance: Some(balance.clone()),
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let SpecOutput::Pairs { outcome, .. } = run_spec(&spec, input.clone()).expect("valid spec")
@@ -2228,6 +2271,7 @@ fn fine_balance_spec_equals_the_typed_call() {
     let bad = MatchSpec {
         method: MatchMethod::Full,
         fine_balance: Some(balance),
+        seed: Some(0),
         ..MatchSpec::default()
     };
     assert!(matches!(run_spec(&bad, input), Err(Error::Option { .. })));
@@ -2252,7 +2296,7 @@ fn spec_discard_in_risk_set_mode_matches_the_typed_job_with_common_support() {
             caliper: None,
         },
         discard: Some(DiscardSpec::Both),
-        seed: 3,
+        seed: Some(3),
         ratio: 2,
         birth_window_days: 60,
         age_limit_years: Some(6),
@@ -2359,7 +2403,7 @@ fn spec_genetic_equals_the_direct_search() {
         method: MatchMethod::Genetic,
         distance: age_income_propensity(),
         genetic: short_genetic(),
-        seed: 5,
+        seed: Some(5),
         ..MatchSpec::default()
     };
     let SpecOutput::Genetic { outcome, search } = run_spec(
@@ -2418,8 +2462,7 @@ fn spec_genetic_equals_the_direct_search() {
                 max_generations: 3,
                 wait_generations: 2,
                 hard_generation_limit: true,
-                seed: 5,
-                ..GeneticSearch::default()
+                ..GeneticSearch::new(5)
             },
         )
         .unwrap();
@@ -2480,6 +2523,7 @@ fn spec_genetic_constraints_hold_in_the_pairs() {
         exact: vec!["g".into()],
         antiexact: vec!["h".into()],
         calipers: BTreeMap::from([("age".to_string(), 6.0)]),
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let SpecOutput::Genetic { outcome, .. } = run_spec(
@@ -2518,6 +2562,7 @@ fn spec_genetic_rejects_invalid_options() {
     let base = MatchSpec {
         method: MatchMethod::Genetic,
         genetic: short_genetic(),
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let with = |edit: &dyn Fn(&mut MatchSpec)| {
@@ -2574,6 +2619,7 @@ fn spec_genetic_rejects_invalid_options() {
             MatchSpec {
                 method: MatchMethod::Random,
                 genetic: short_genetic(),
+                seed: Some(0),
                 ..MatchSpec::default()
             },
         ),
@@ -2599,6 +2645,7 @@ fn spec_genetic_feeds_effects_and_balance() {
         method: MatchMethod::Genetic,
         distance: age_income_propensity(),
         genetic: short_genetic(),
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let SpecOutput::Genetic { outcome, .. } = run_spec(
@@ -2661,6 +2708,7 @@ fn cardinality_spec() -> MatchSpec {
             nodes: Some(2_000),
             ..CardinalitySpec::default()
         },
+        seed: Some(0),
         ..MatchSpec::default()
     }
 }
@@ -2823,6 +2871,7 @@ fn spec_cardinality_profile_and_errors() {
             "cardinality",
             MatchSpec {
                 cardinality: cardinality_spec().cardinality,
+                seed: Some(0),
                 ..MatchSpec::default()
             },
         ),
@@ -2865,6 +2914,7 @@ fn spec_cardinality_profile_and_errors() {
             time: None,
             ..CardinalitySpec::default()
         },
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let error = run_spec(

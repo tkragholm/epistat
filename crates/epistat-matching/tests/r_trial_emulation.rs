@@ -602,7 +602,7 @@ fn spec_mode_matches_the_function() {
     let spec = MatchSpec {
         mode: MatchMode::SequentialTrials,
         method: MatchMethod::Random,
-        seed: 31,
+        seed: Some(31),
         ratio: 2,
         replace: true,
         birth_window_days: 30_000,
@@ -639,6 +639,7 @@ fn spec_mode_needs_a_panel() {
     let panel = simulated_panel(&reference);
     let spec = MatchSpec {
         mode: MatchMode::SequentialTrials,
+        seed: Some(0),
         ..MatchSpec::default()
     };
     assert!(matches!(

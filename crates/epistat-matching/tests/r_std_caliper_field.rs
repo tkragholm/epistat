@@ -107,6 +107,7 @@ fn pairs_from_spec(
             _ => None,
         },
         birth_window_days: 100_000,
+        seed: Some(0),
         ..Default::default()
     };
     let output = run_spec(

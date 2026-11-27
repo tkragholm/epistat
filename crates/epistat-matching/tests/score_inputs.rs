@@ -143,8 +143,7 @@ fn a_population_too_small_for_every_operator_is_an_error() {
             &GeneticFit::default(),
             &GeneticSearch {
                 population,
-                seed: 1,
-                ..GeneticSearch::default()
+                ..GeneticSearch::new(1)
             },
         );
         assert!(r.is_err(), "population {population} accepted");
@@ -154,8 +153,7 @@ fn a_population_too_small_for_every_operator_is_an_error() {
             &GeneticFit::default(),
             &GeneticSearch {
                 population: 9,
-                seed: 1,
-                ..GeneticSearch::default()
+                ..GeneticSearch::new(1)
             },
         )
         .unwrap();
@@ -184,7 +182,7 @@ fn default_start_outside_the_weight_range_is_an_error() {
         &GeneticSearch {
             population: 0,
             min_weight: 2.0,
-            ..GeneticSearch::default()
+            ..GeneticSearch::new(0)
         },
     );
     assert!(out.is_err());

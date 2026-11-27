@@ -356,9 +356,14 @@ fn standard_specs() -> Vec<(&'static str, MatchSpec)> {
         method: MatchMethod::Nearest,
         distance: propensity(None),
         birth_window_days: 36_500,
+        seed: Some(0),
         ..MatchSpec::default()
     };
-    let unwindowed = MatchSpec::default().birth_window_days;
+    let unwindowed = MatchSpec {
+        seed: Some(0),
+        ..MatchSpec::default()
+    }
+    .birth_window_days;
     let mut field_caliper = BTreeMap::new();
     field_caliper.insert("x2".to_string(), 1.0);
     vec![
@@ -402,7 +407,7 @@ fn standard_specs() -> Vec<(&'static str, MatchSpec)> {
                 distance: DistanceSpec::default(),
                 exact: vec!["s".into()],
                 birth_window_days: 3,
-                seed: 9,
+                seed: Some(9),
                 ..base.clone()
             },
         ),
@@ -583,7 +588,7 @@ fn risk_set_specs() -> Vec<(&'static str, MatchSpec)> {
         birth_window_days: 4,
         require_alive: true,
         age_limit_years: Some(6),
-        seed: 7,
+        seed: Some(7),
         ..MatchSpec::default()
     };
     let mut field_caliper = BTreeMap::new();
@@ -736,7 +741,7 @@ fn sequential_trials_are_the_same_on_rows() {
                 require_alive: true,
                 age_limit_years: Some(8),
                 replace,
-                seed,
+                seed: Some(seed),
                 ..MatchSpec::default()
             };
             let on_owned = run_spec(

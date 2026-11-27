@@ -1073,8 +1073,7 @@ mod tests {
             population: 20,
             max_generations: 5,
             hard_generation_limit: true,
-            seed: 3,
-            ..GeneticSearch::default()
+            ..GeneticSearch::new(3)
         };
         let first = problem.search(&fit, &search).unwrap();
         let second = problem.search(&fit, &search).unwrap();

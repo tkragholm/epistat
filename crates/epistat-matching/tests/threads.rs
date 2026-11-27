@@ -347,7 +347,7 @@ fn exposure_density_sampling() {
                 .collect();
         let spec = MatchSpec {
             mode: MatchMode::ExposureDensity,
-            seed: 99,
+            seed: Some(99),
             ratio: 3,
             replace: true,
             birth_window_days: 60,
@@ -415,7 +415,7 @@ fn sequential_trials() {
         let mut d = Digest::default();
         let spec = MatchSpec {
             mode: MatchMode::SequentialTrials,
-            seed: 5,
+            seed: Some(5),
             ratio: 2,
             replace: false,
             birth_window_days: 365,

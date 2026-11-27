@@ -177,6 +177,7 @@ fn spec_of(run: &Run) -> MatchSpec {
             other => panic!("policy {other}"),
         }),
         reestimate: run.reestimate,
+        seed: Some(0),
         ..MatchSpec::default()
     };
     if let Some(count) = run

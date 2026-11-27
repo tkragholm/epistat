@@ -2135,6 +2135,7 @@ mod tests {
                         birth_window_days: if seed == 2 { 10 } else { 36_500 },
                         replace,
                         ratio,
+                        seed: Some(0),
                         ..MatchSpec::default()
                     };
                     let run = |mode: u8, threads: usize| {

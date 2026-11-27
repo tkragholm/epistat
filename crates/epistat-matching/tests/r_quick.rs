@@ -525,6 +525,7 @@ fn mahalanobis_spec_equals_matchit() {
                 transform: epistat_matching::spec::TransformSpec::default(),
                 caliper: None,
             },
+            seed: Some(0),
             ..MatchSpec::default()
         };
         spec.quick.seed_method = seed_method(&run.seed_method);
