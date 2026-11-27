@@ -1368,13 +1368,13 @@ mod tests {
         let ci_a = crate::inference::multiplier_bootstrap_ci(
             1.0,
             &influence,
-            config.inference(),
+            config.confidence_level,
             config.bootstrap(),
         );
         let ci_b = crate::inference::multiplier_bootstrap_ci(
             1.0,
             &influence,
-            config.inference(),
+            config.confidence_level,
             config.bootstrap(),
         );
         assert_eq!(ci_a, ci_b);

@@ -192,4 +192,3 @@ pub use methods::two_period;
 pub use methods::two_period::{TwoPeriodData, TwoPeriodDataBuilder};
 pub use methods::two_stage;
 pub use methods::two_stage::{TwoStage, TwoStageOptions, TwoStageSpec, TwoStageTerm};
-pub use types::*;

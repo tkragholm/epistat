@@ -6,7 +6,7 @@ pub mod did_clusters;
 
 use epistat_core::{Estimate, Interval, Level, Scale};
 
-use crate::types::{BootstrapConfig, InferenceConfig};
+use crate::types::BootstrapConfig;
 
 /// An estimate with its standard error, interval at `level` and normal
 /// p-value; a part that is not finite is `None`.
@@ -67,7 +67,7 @@ pub(crate) fn standard_error_from_influence(influence_function: &[f64]) -> f64 {
 
 /// Percentile interval of the Rademacher multiplier bootstrap of an estimate
 /// with the given influence function: the `alpha / 2` and `1 - alpha / 2`
-/// quantiles of the replicates, with `alpha = 1 - inference.confidence_level`.
+/// quantiles of the replicates, with `alpha = 1 - confidence_level`.
 /// Replicate `r` is seeded with `replicate_seed(seed, r)`, so the interval does
 /// not depend on the number of threads. An empty influence function gives
 /// `(NaN, NaN)`.
@@ -75,7 +75,7 @@ pub(crate) fn standard_error_from_influence(influence_function: &[f64]) -> f64 {
 pub(crate) fn multiplier_bootstrap_ci(
     estimate: f64,
     influence_function: &[f64],
-    inference: InferenceConfig,
+    confidence_level: f64,
     bootstrap: BootstrapConfig,
 ) -> (f64, f64) {
     let Ok(mut draws) = epistat_inference::bootstrap::multiplier(
@@ -86,7 +86,7 @@ pub(crate) fn multiplier_bootstrap_ci(
         return (f64::NAN, f64::NAN);
     };
 
-    let alpha = (1.0 - inference.confidence_level).clamp(0.0, 1.0);
+    let alpha = (1.0 - confidence_level).clamp(0.0, 1.0);
     let lower = quantile_unsorted(&mut draws, alpha / 2.0);
     let upper = quantile_unsorted(&mut draws, 1.0 - alpha / 2.0);
     (lower, upper)
@@ -112,7 +112,7 @@ mod tests {
     fn multiplier_bootstrap_ci_sorted_reference(
         estimate: f64,
         influence_function: &[f64],
-        inference: InferenceConfig,
+        confidence_level: f64,
         bootstrap: BootstrapConfig,
     ) -> (f64, f64) {
         let n_f = usize_to_f64(influence_function.len());
@@ -126,7 +126,7 @@ mod tests {
         }
         draws.sort_by(f64::total_cmp);
 
-        let alpha = (1.0 - inference.confidence_level).clamp(0.0, 1.0);
+        let alpha = (1.0 - confidence_level).clamp(0.0, 1.0);
         let lower = quantile_sorted(&draws, alpha / 2.0);
         let upper = quantile_sorted(&draws, 1.0 - alpha / 2.0);
         (lower, upper)
@@ -182,13 +182,12 @@ mod tests {
     #[test]
     fn bootstrap_is_reproducible() {
         let influence = [1.0, -1.0, 2.0, -2.0];
-        let inference = InferenceConfig::new(0.95);
         let bootstrap = BootstrapConfig {
             reps: 200,
             seed: 42,
         };
-        let ci_a = multiplier_bootstrap_ci(1.0, &influence, inference, bootstrap);
-        let ci_b = multiplier_bootstrap_ci(1.0, &influence, inference, bootstrap);
+        let ci_a = multiplier_bootstrap_ci(1.0, &influence, 0.95, bootstrap);
+        let ci_b = multiplier_bootstrap_ci(1.0, &influence, 0.95, bootstrap);
         assert_eq!(ci_a, ci_b);
     }
 
@@ -220,7 +219,6 @@ mod tests {
                 0.4f64.mul_add((0.13 * index_f).cos(), (0.07 * index_f).sin())
             })
             .collect::<Vec<_>>();
-        let inference = InferenceConfig::new(0.95);
         for bootstrap in [
             BootstrapConfig { reps: 19, seed: 11 },
             BootstrapConfig {
@@ -233,8 +231,8 @@ mod tests {
             },
         ] {
             let expected =
-                multiplier_bootstrap_ci_sorted_reference(0.7, &influence, inference, bootstrap);
-            let actual = multiplier_bootstrap_ci(0.7, &influence, inference, bootstrap);
+                multiplier_bootstrap_ci_sorted_reference(0.7, &influence, 0.95, bootstrap);
+            let actual = multiplier_bootstrap_ci(0.7, &influence, 0.95, bootstrap);
             assert_eq!(actual.0.to_bits(), expected.0.to_bits());
             assert_eq!(actual.1.to_bits(), expected.1.to_bits());
         }
@@ -245,14 +243,13 @@ mod tests {
         let influence = (0..5_000usize)
             .map(|index| usize_to_f64(index % 13) - 6.0)
             .collect::<Vec<_>>();
-        let inference = InferenceConfig::new(0.95);
         let bootstrap = BootstrapConfig { reps: 300, seed: 5 };
         let on = |threads: usize| {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(threads)
                 .build()
                 .unwrap()
-                .install(|| multiplier_bootstrap_ci(0.2, &influence, inference, bootstrap))
+                .install(|| multiplier_bootstrap_ci(0.2, &influence, 0.95, bootstrap))
         };
         let one = on(1);
         let four = on(4);

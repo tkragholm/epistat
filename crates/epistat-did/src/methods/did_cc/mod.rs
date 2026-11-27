@@ -1010,7 +1010,7 @@ fn build_did_cc_estimate(
         multiplier_bootstrap_ci(
             att,
             &influence_function,
-            config.drdid.inference(),
+            config.drdid.confidence_level,
             config.drdid.bootstrap(),
         )
     } else {

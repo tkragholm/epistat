@@ -36,30 +36,6 @@ impl TimePeriod {
     }
 }
 
-/// Confidence level shared by the inference procedures of this crate.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct InferenceConfig {
-    /// Confidence level as a probability strictly between 0 and 1, such as 0.95.
-    /// The default is 0.95.
-    pub confidence_level: f64,
-}
-
-impl Default for InferenceConfig {
-    fn default() -> Self {
-        Self {
-            confidence_level: 0.95,
-        }
-    }
-}
-
-impl InferenceConfig {
-    /// Builds a configuration with the given confidence level.
-    #[must_use]
-    pub const fn new(confidence_level: f64) -> Self {
-        Self { confidence_level }
-    }
-}
-
 /// Settings of the multiplier bootstrap behind bootstrap confidence intervals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BootstrapConfig {
@@ -255,7 +231,7 @@ pub(crate) struct DrDidConfig {
 impl Default for DrDidConfig {
     fn default() -> Self {
         Self {
-            confidence_level: InferenceConfig::default().confidence_level,
+            confidence_level: 0.95,
             propensity_clip: 1e-6,
             ridge: 1e-8,
             max_iter: 200,
@@ -268,14 +244,6 @@ impl Default for DrDidConfig {
 }
 
 impl DrDidConfig {
-    /// The confidence level as an [`InferenceConfig`].
-    #[must_use]
-    pub const fn inference(self) -> InferenceConfig {
-        InferenceConfig {
-            confidence_level: self.confidence_level,
-        }
-    }
-
     /// The bootstrap settings as a [`BootstrapConfig`].
     #[must_use]
     pub const fn bootstrap(self) -> BootstrapConfig {

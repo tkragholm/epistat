@@ -36,6 +36,6 @@ pub(crate) fn confidence_interval(
     if config.bootstrap_reps == 0 {
         normal_interval(att, se, config.confidence_level)
     } else {
-        multiplier_bootstrap_ci(att, influence, config.inference(), config.bootstrap())
+        multiplier_bootstrap_ci(att, influence, config.confidence_level, config.bootstrap())
     }
 }
