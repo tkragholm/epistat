@@ -90,8 +90,8 @@ fn distinct(ids: &[u64]) -> Vec<u64> {
 /// unit of resampling.
 ///
 /// The persons are the distinct ids in increasing order. Replicate `r` draws
-/// its counts with `resample_counts(n, replicate_seed(bootstrap.seed, r))`,
-/// the draws of `epistat_inference::bootstrap::unit_counts`, one replicate at
+/// its counts with `epistat_inference::bootstrap::unit_counts_of`, that is
+/// `resample_counts(n, replicate_seed(bootstrap.seed, r))`, one replicate at
 /// a time so that the counts of every replicate are not held at once. The
 /// replicates run in parallel and each depends on its seed only, so the
 /// results do not depend on the number of threads; they are in replicate
@@ -102,15 +102,12 @@ pub fn bootstrap_trials<T: Send>(
     analysis: impl Fn(&PersonCounts) -> Result<T> + Sync,
 ) -> Vec<Result<T>> {
     let persons = distinct(ids);
-    (0..bootstrap.replicates as u64)
+    (0..bootstrap.replicates)
         .into_par_iter()
         .map(|r| {
             let counts = PersonCounts {
                 persons: persons.clone(),
-                counts: epistat_rng::resample_counts(
-                    persons.len(),
-                    epistat_rng::replicate_seed(bootstrap.seed, r),
-                ),
+                counts: epistat_inference::bootstrap::unit_counts_of(persons.len(), bootstrap, r),
             };
             analysis(&counts)
         })
