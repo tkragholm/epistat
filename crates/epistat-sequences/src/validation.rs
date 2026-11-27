@@ -167,11 +167,14 @@ pub struct Typology {
 /// Agreement between two partitions of the same weighted sequences.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Agreement {
-    /// Weighted adjusted Rand index, NaN when undefined.
-    pub adjusted_rand: f64,
+    /// Weighted adjusted Rand index, or [`None`] when it is undefined: no
+    /// sequences, no positive total weight, or a ceiling equal to the expected
+    /// index, as when both partitions are a single type.
+    pub adjusted_rand: Option<f64>,
     /// Weighted share of sequences whose types correspond after the greedy
-    /// relabelling.
-    pub share_agreeing: f64,
+    /// relabelling, or [`None`] when there are no sequences or no positive
+    /// total weight.
+    pub share_agreeing: Option<f64>,
     /// `(type in first, type in second)` in the order the greedy relabelling
     /// matched them.
     pub correspondence: Vec<(u32, u32)>,
@@ -218,12 +221,15 @@ fn pairs(value: f64) -> f64 {
 /// Compare two labellings of the same weighted sequences.
 ///
 /// The weighted adjusted Rand index and the greedy share agreeing, as defined in
-/// the module documentation. NaN for both when the inputs are empty or the
-/// total weight is not positive.
+/// the module documentation. Both are [`None`] when the inputs are empty or the
+/// total weight is not positive. The adjusted Rand index alone is [`None`] when
+/// the index is undefined, as when both partitions are a single type; the share
+/// agreeing is defined there.
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the three inputs differ in length.
+/// [`Error::Input`] when the three inputs differ in length or a weight is
+/// negative or NaN.
 #[expect(
     clippy::float_cmp,
     reason = "a zero pair count and a ceiling equal to the expected value are the undefined cases"
@@ -235,10 +241,11 @@ pub fn partition_agreement(
 ) -> Result<Agreement, Error> {
     length("second", first.len(), second.len())?;
     length("weights", first.len(), weights.len())?;
+    check_weight_values("weights", weights)?;
     if first.is_empty() {
         return Ok(Agreement {
-            adjusted_rand: f64::NAN,
-            share_agreeing: f64::NAN,
+            adjusted_rand: None,
+            share_agreeing: None,
             correspondence: Vec::new(),
             k_first: 0,
             k_second: 0,
@@ -258,8 +265,8 @@ pub fn partition_agreement(
     let (k_first, k_second) = (rows.keys.len(), columns.keys.len());
     if total <= 0.0 {
         return Ok(Agreement {
-            adjusted_rand: f64::NAN,
-            share_agreeing: f64::NAN,
+            adjusted_rand: None,
+            share_agreeing: None,
             correspondence: Vec::new(),
             k_first,
             k_second,
@@ -281,9 +288,9 @@ pub fn partition_agreement(
     )]
     let ceiling = (row_pairs + column_pairs) / 2.0;
     let adjusted_rand = if ceiling == expected {
-        f64::NAN
+        None
     } else {
-        (agreements - expected) / (ceiling - expected)
+        Some((agreements - expected) / (ceiling - expected))
     };
 
     // Heaviest cell first, ties by the pair of types, and a cell is kept when
@@ -315,7 +322,7 @@ pub fn partition_agreement(
 
     Ok(Agreement {
         adjusted_rand,
-        share_agreeing: matched / total,
+        share_agreeing: Some(matched / total),
         correspondence,
         k_first,
         k_second,
@@ -722,6 +729,10 @@ pub fn null_silhouettes(
     })
 }
 
+/// One replicate of [`refit_agreements`]: the adjusted Rand index and the share
+/// agreeing, or [`None`] when the replicate was not refitted.
+pub type AgreementPair = Option<(Option<f64>, Option<f64>)>;
+
 /// Agreement of refits under replicate weights with a reference partition.
 ///
 /// `replicate_weights` holds one weight per sequence of `panel` for each
@@ -729,13 +740,14 @@ pub fn null_silhouettes(
 /// sequences of positive weight derives its costs from its weights, refits
 /// with `seed` in the order heaviest first, ties by the sequence, and is
 /// compared with `reference` under the full-data `weights`. Returns one entry
-/// per replicate, in order: the adjusted Rand index and the share agreeing, or
-/// `None` when the replicate had too few sequences of positive weight.
+/// per replicate, in order: the adjusted Rand index and the share agreeing, each
+/// as in [`Agreement`] (`None` when undefined), or `None` for the whole entry
+/// when the replicate had too few sequences of positive weight.
 ///
 /// # Errors
 ///
 /// [`Error::Input`] when the weights, the reference or the replicate
-/// weights do not match the panel, a replicate weight is negative or NaN, or
+/// weights do not match the panel, a weight or replicate weight is negative or NaN, or
 /// `k` is zero or more than the sequences.
 pub fn refit_agreements(
     panel: &Panel<'_>,
@@ -744,7 +756,7 @@ pub fn refit_agreements(
     reference: &[u32],
     settings: FitSettings,
     seed: u64,
-) -> Result<Vec<Option<(f64, f64)>>, Error> {
+) -> Result<Vec<AgreementPair>, Error> {
     let count = panel.count;
     length("weights", count, weights.len())?;
     length("reference", count, reference.len())?;
@@ -803,8 +815,8 @@ mod tests {
     fn identical_partitions_agree_fully() {
         let agreement =
             partition_agreement(&[0, 0, 1, 1], &[5, 5, 7, 7], &[1.0, 2.0, 3.0, 4.0]).unwrap();
-        assert!((agreement.adjusted_rand - 1.0).abs() < 1e-12);
-        assert!((agreement.share_agreeing - 1.0).abs() < 1e-12);
+        assert!((agreement.adjusted_rand.unwrap() - 1.0).abs() < 1e-12);
+        assert!((agreement.share_agreeing.unwrap() - 1.0).abs() < 1e-12);
         assert_eq!(agreement.correspondence, vec![(1, 7), (0, 5)]);
         assert_eq!((agreement.k_first, agreement.k_second), (2, 2));
     }
@@ -812,11 +824,30 @@ mod tests {
     #[test]
     fn empty_and_weightless_partitions_are_undefined() {
         let empty = partition_agreement(&[], &[], &[]).unwrap();
-        assert!(empty.adjusted_rand.is_nan() && empty.share_agreeing.is_nan());
+        assert_eq!((empty.adjusted_rand, empty.share_agreeing), (None, None));
         let weightless = partition_agreement(&[0, 1], &[1, 0], &[0.0, 0.0]).unwrap();
-        assert!(weightless.adjusted_rand.is_nan());
+        assert_eq!(
+            (weightless.adjusted_rand, weightless.share_agreeing),
+            (None, None)
+        );
         assert_eq!((weightless.k_first, weightless.k_second), (2, 2));
         assert!(partition_agreement(&[0], &[0, 1], &[1.0]).is_err());
+    }
+
+    #[test]
+    fn a_single_type_in_both_partitions_leaves_only_the_rand_index_undefined() {
+        let agreement = partition_agreement(&[3, 3, 3], &[9, 9, 9], &[1.0, 2.0, 3.0]).unwrap();
+        assert_eq!(agreement.adjusted_rand, None);
+        assert_eq!(agreement.share_agreeing, Some(1.0));
+        assert_eq!(agreement.correspondence, vec![(3, 9)]);
+    }
+
+    #[test]
+    fn negative_and_nan_weights_are_input_errors() {
+        for bad in [-1.0, f64::NAN] {
+            let result = partition_agreement(&[0, 1], &[0, 1], &[1.0, bad]);
+            assert!(matches!(result, Err(crate::Error::Input(_))), "{bad}");
+        }
     }
 
     #[test]
@@ -943,8 +974,8 @@ mod tests {
         assert_eq!(result.len(), 2);
         for entry in result {
             let (rand, share) = entry.expect("enough sequences");
-            assert!((rand - 1.0).abs() < 1e-12);
-            assert!((share - 1.0).abs() < 1e-12);
+            assert!((rand.unwrap() - 1.0).abs() < 1e-12);
+            assert!((share.unwrap() - 1.0).abs() < 1e-12);
         }
         // Fewer positive weights than types gives no entry.
         let sparse = [vec![1.0], vec![0.0; 9]].concat();
@@ -958,6 +989,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(none, vec![None]);
+        // Zero full-data weight leaves both measures undefined, not the entry.
+        let weightless = refit_agreements(
+            &panel,
+            &[0.0; 10],
+            &replicate_weights,
+            &reference,
+            settings(Distance::Hamming, 2),
+            3,
+        )
+        .unwrap();
+        assert_eq!(weightless, vec![Some((None, None)); 2]);
     }
 
     /// The restart seeds of a null replicate are `Restarts::from_seed(seed, n)`

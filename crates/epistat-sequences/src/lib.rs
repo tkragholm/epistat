@@ -125,8 +125,8 @@ pub use optimal_matching::{CondensedMatrix, condensed};
 pub use positionwise::Panel;
 pub use restarts::Restarts;
 pub use validation::{
-    Agreement, Distance, FitSettings, Typology, fit_typology, indel_for, null_silhouettes,
-    partition_agreement, refit_agreements, substitution_costs, transition_costs,
+    Agreement, AgreementPair, Distance, FitSettings, Typology, fit_typology, indel_for,
+    null_silhouettes, partition_agreement, refit_agreements, substitution_costs, transition_costs,
 };
 
 /// What one seeding and its alternating loop settle.
