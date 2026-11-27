@@ -216,6 +216,7 @@ impl<'a> ProcessNuisance<'a> {
                     })?);
                 }
                 let v: Vec<f64> = covariance
+                    .as_slice()
                     .iter()
                     .map(|c| {
                         c.ok_or_else(|| {

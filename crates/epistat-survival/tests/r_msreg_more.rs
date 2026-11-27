@@ -388,7 +388,7 @@ fn check_profile(
                 assert_eq!(slices[0], slices[1], "{label}: first slice");
             }
             let covariance = got.covariance.as_ref().unwrap();
-            for ti in 0..rows {
+            for (ti, matrix) in covariance.iter().enumerate().take(rows) {
                 let expected: Option<&Vec<Vec<f64>>> = if fixed {
                     slices.get(ti + 1)
                 } else {
@@ -397,7 +397,7 @@ fn check_profile(
                 for r in 0..n {
                     for c in 0..n {
                         let e = expected.map_or(0.0, |m| m[r][c]);
-                        let g = covariance[ti * n * n + r * n + c];
+                        let g = matrix.get(r, c).unwrap();
                         worst.prob_covariance =
                             worst.prob_covariance.max((g - e).abs() / var_bound);
                     }
@@ -549,7 +549,7 @@ fn time_varying_fits_match_coxph() {
         for a in 0..p {
             for b in 0..p {
                 let scale = (vcov[a][a] * vcov[b][b]).sqrt();
-                let g = model.fit.covariance[a * p + b].unwrap();
+                let g = model.fit.covariance.get(a, b).unwrap();
                 covariance = covariance.max((g - vcov[a][b]).abs() / (p as f64 * bound * scale));
             }
         }

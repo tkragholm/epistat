@@ -112,10 +112,13 @@ fn case_cohort_outputs_are_recorded() {
         .unwrap();
         let flat = |v: &[Option<f64>]| v.iter().copied().map(absent).collect::<Vec<f64>>();
         check(&format!("{name}/coefficients"), &flat(&model.coefficients));
-        check(&format!("{name}/covariance"), &flat(&model.covariance));
+        check(
+            &format!("{name}/covariance"),
+            &flat(model.covariance.as_slice()),
+        );
         check(
             &format!("{name}/phase2"),
-            &flat(&model.phase_two_covariance),
+            &flat(model.phase_two_covariance.as_slice()),
         );
         if let Some(opt) = &model.optimal_allocation {
             check(&format!("{name}/allocation"), &flat(opt));

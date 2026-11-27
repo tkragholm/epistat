@@ -121,9 +121,9 @@ fn an_interval_without_events_is_at_the_boundary() {
         let cov = fit.covariance.as_ref().unwrap();
         let d = cuts.len();
         for k in 0..d {
-            assert!(cov[d + k].is_none() && cov[k * d + 1].is_none());
+            assert!(cov.get(1, k).is_none() && cov.get(k, 1).is_none());
         }
-        assert!(cov[0].unwrap() > 0.0);
+        assert!(cov.get(0, 0).unwrap() > 0.0);
         assert_eq!(fit.events[1].to_bits(), 0.0_f64.to_bits());
         assert!(fit.expected_events[1] > 0.0);
     }

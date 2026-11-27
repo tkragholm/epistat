@@ -157,11 +157,13 @@ mod start;
 
 use std::collections::HashSet;
 
+use epistat_core::Covariance;
 use epistat_inference::sandwich::sandwich_with_inverse;
 use epistat_linalg::{Mat, MatRef, row_scaled_gram};
 
 use self::design::{Design, Spline, TvcTerm};
 use self::model::{Model, Work, maximise};
+use crate::covariance;
 use crate::error::{Error, Result};
 use crate::ldl;
 use crate::surv::SurvData;
@@ -256,8 +258,8 @@ pub struct TimeVaryingFit {
 ///
 /// The parameters are ordered as `gamma` (the intercept and the `df` baseline
 /// coefficients), then `beta`, then the coefficients of each time-varying term
-/// in turn. The covariances are square matrices of that dimension in row-major
-/// order, with `None` in the rows and columns of aliased covariates.
+/// in turn. The covariances are square matrices of that dimension, with
+/// `None` in the rows and columns of aliased covariates.
 #[derive(Clone, Debug)]
 pub struct FlexParFit {
     /// The intercept and the baseline spline coefficients, `df + 1` values.
@@ -270,10 +272,10 @@ pub struct FlexParFit {
     pub tvc: Vec<TimeVaryingFit>,
     /// The inverse of the observed information, or `None` where it is not
     /// positive definite.
-    pub covariance: Option<Vec<Option<f64>>>,
+    pub covariance: Option<Covariance>,
     /// The cluster-robust covariance, with clusters in the data and a
     /// positive definite information.
-    pub robust_covariance: Option<Vec<Option<f64>>>,
+    pub robust_covariance: Option<Covariance>,
     /// The log likelihood at the estimate.
     pub log_likelihood: f64,
     /// The log likelihood of the model without covariates and time-varying
@@ -611,8 +613,13 @@ pub fn fit(
         design,
         theta,
     };
-    result.covariance = inverse.map(|v| expand(&result, &v));
-    result.robust_covariance = robust.map(|v| expand(&result, &v));
+    let d = result.dimension();
+    result.covariance = inverse
+        .map(|v| covariance::from_options(d, expand(&result, &v)))
+        .transpose()?;
+    result.robust_covariance = robust
+        .map(|v| covariance::from_options(d, expand(&result, &v)))
+        .transpose()?;
     Ok(result)
 }
 

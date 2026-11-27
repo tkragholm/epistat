@@ -291,10 +291,8 @@ fn run(reference: &Reference, c: &Case) -> Output {
         for ti in 0..t {
             for g in 0..2 {
                 for h in 0..2 {
-                    adjusted[g * t + ti][h * t + ti] =
-                        est.covariance[(ti * 2 + g) * 2 + h].unwrap();
-                    known[g * t + ti][h * t + ti] =
-                        est.covariance_known[(ti * 2 + g) * 2 + h].unwrap();
+                    adjusted[g * t + ti][h * t + ti] = est.covariance[ti].get(g, h).unwrap();
+                    known[g * t + ti][h * t + ti] = est.covariance_known[ti].get(g, h).unwrap();
                 }
             }
         }
@@ -317,9 +315,9 @@ fn run(reference: &Reference, c: &Case) -> Output {
         };
         let fit = wcox::fit(&data, x.as_ref(), &opts, &estimated).unwrap();
         let p = 3;
-        let flat = |v: &[f64]| {
+        let flat = |v: &epistat_survival::Covariance| {
             (0..p)
-                .map(|i| (0..p).map(|j| v[i * p + j]).collect())
+                .map(|i| (0..p).map(|j| v.get(i, j).unwrap()).collect())
                 .collect()
         };
         Output {

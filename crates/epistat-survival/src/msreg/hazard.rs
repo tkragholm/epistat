@@ -1,8 +1,10 @@
 //! The cumulative hazards of a covariate profile, `mstate::msfit`.
 
+use epistat_core::Covariance;
 use rayon::prelude::*;
 
 use super::MsModel;
+use crate::covariance;
 use crate::cox::predict::{
     Baseline, BaselineOptions, Centring, FittedModel, HazardType, StratumBaseline, Variance,
     basehaz,
@@ -86,15 +88,19 @@ pub struct CumulativeHazards {
     pub time: Vec<f64>,
     /// The cumulative hazard of each transition at each time, by transition.
     pub cumulative_hazard: Vec<Vec<f64>>,
-    /// The covariance of the cumulative hazards at each time, by pair of
-    /// transitions `(a, b)` with `a <= b` in the order of `a` and then `b`, see
-    /// [`pair_index`](Self::pair_index). `None` without variances.
-    pub covariance: Option<Vec<Vec<f64>>>,
+    /// The covariance of the cumulative hazards at each time, one matrix over
+    /// the transitions for each entry of `time`, in the order of
+    /// `transitions`. `None` without variances.
+    pub covariance: Option<Vec<Covariance>>,
 }
 
 impl CumulativeHazards {
-    /// The index of the pair `(a, b)` of transitions in
-    /// [`covariance`](Self::covariance), for `a <= b`.
+    /// The position of the pair `(a, b)` of transitions, for `a <= b`, in
+    /// the pairs taken in the order of `a` and then `b`.
+    #[deprecated(
+        since = "0.4.0",
+        note = "the covariance is one matrix per time: use `covariance[t].get(a, b)` or `covariance_of`"
+    )]
     #[must_use]
     pub fn pair_index(&self, a: usize, b: usize) -> usize {
         let k = self.transitions.len();
@@ -103,13 +109,34 @@ impl CumulativeHazards {
     }
 
     /// The covariance of the cumulative hazards of transitions `a` and `b` at
-    /// each time, `None` without variances. With `a == b` it is the variance.
+    /// each time, `None` without variances, for a transition out of range and
+    /// where an entry is undefined. With `a == b` it is the variance.
     #[must_use]
-    pub fn covariance_of(&self, a: usize, b: usize) -> Option<&[f64]> {
+    pub fn covariance_of(&self, a: usize, b: usize) -> Option<Vec<f64>> {
         self.covariance
-            .as_ref()
-            .map(|c| c[self.pair_index(a, b)].as_slice())
+            .as_ref()?
+            .iter()
+            .map(|matrix| matrix.get(a, b))
+            .collect()
     }
+}
+
+/// The covariance matrices at each of `n_t` times of the pairs of `k`
+/// transitions `(a, b)`, `a <= b`, taken in the order of `a` and then `b`,
+/// each pair holding its `n_t` covariances.
+fn by_time(pairs: &[Vec<f64>], k: usize, n_t: usize) -> Result<Vec<Covariance>> {
+    let mut values = vec![0.0; n_t * k * k];
+    let mut pair = 0;
+    for a in 0..k {
+        for b in a..k {
+            for (t, &value) in pairs[pair].iter().enumerate() {
+                values[(t * k + a) * k + b] = value;
+                values[(t * k + b) * k + a] = value;
+            }
+            pair += 1;
+        }
+    }
+    covariance::blocks(n_t, k, &values)
 }
 
 /// The covariance matrix of the coefficients, row-major with zeros for aliased
@@ -122,7 +149,7 @@ fn covariance_matrix(fit: &CoxModelFit, variance: Variance) -> Result<Vec<f64>> 
         })?,
         Variance::Auto => fit.robust_covariance.as_ref().unwrap_or(&fit.covariance),
     };
-    Ok(matrix.iter().map(|v| v.unwrap_or(0.0)).collect())
+    Ok(matrix.as_slice().iter().map(|v| v.unwrap_or(0.0)).collect())
 }
 
 /// What one covariance evaluation needs of the model, computed once for any
@@ -390,6 +417,9 @@ impl MsModel {
                 pairs
             })
         };
+        let covariance = covariance
+            .map(|pairs| by_time(&pairs, k_n, time.len()))
+            .transpose()?;
         Ok(CumulativeHazards {
             transitions: self.transitions.iter().map(|t| (t.from, t.to)).collect(),
             n_states: self.n_states,
@@ -400,7 +430,7 @@ impl MsModel {
     }
 
     /// The Greenwood covariances of the cumulative hazards on the grid, by pair
-    /// of transitions in the order of [`CumulativeHazards::pair_index`].
+    /// of transitions `(a, b)`, `a <= b`, in the order of `a` and then `b`.
     fn greenwood_covariance(
         &self,
         strata: &[Option<&StratumBaseline>],

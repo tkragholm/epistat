@@ -164,7 +164,7 @@ fn null_cox_matches_r() {
 
         // The fit.
         assert_eq!(model.coefficients.len() + model.se.len(), 0);
-        assert_eq!(model.covariance.len(), 0);
+        assert_eq!(model.covariance.dim(), 0);
         assert_eq!(model.robust_covariance.is_some(), r.cluster, "{name}");
         assert_eq!(model.rank, 0);
         assert_eq!(model.iterations, 0);

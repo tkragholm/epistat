@@ -227,7 +227,11 @@ fn probabilities(
     let opts = CoxOptions::default();
     let mut model = fit(data, x.as_ref(), &opts).unwrap();
     model.coefficients = coefficients.iter().copied().map(Some).collect();
-    model.covariance = vec![None; coefficients.len() * coefficients.len()];
+    model.covariance = epistat_survival::Covariance::new(
+        coefficients.len(),
+        vec![None; coefficients.len() * coefficients.len()],
+    )
+    .unwrap();
     model.robust_covariance = None;
     let fitted = FittedModel {
         data,

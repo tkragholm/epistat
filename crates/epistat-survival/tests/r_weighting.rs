@@ -331,8 +331,8 @@ fn cox_case(reference: &Reference, c: &RCox) -> (f64, f64) {
     // when it recorded one, otherwise from the covariance of the fit.
     let kappa = c.kappa.unwrap_or_else(|| {
         let v = &fit.fit.covariance;
-        let diag: Vec<f64> = (0..p).map(|i| v[i * p + i].unwrap().sqrt()).collect();
-        let scaled = Mat::from_fn(p, p, |i, j| v[i * p + j].unwrap() / (diag[i] * diag[j]));
+        let diag: Vec<f64> = (0..p).map(|i| v.get(i, i).unwrap().sqrt()).collect();
+        let scaled = Mat::from_fn(p, p, |i, j| v.get(i, j).unwrap() / (diag[i] * diag[j]));
         let inv = epistat_linalg::inverse(scaled.as_ref(), &epistat_linalg::Attempt::SYMMETRIC)
             .unwrap()
             .x;
@@ -396,12 +396,12 @@ fn cox_case(reference: &Reference, c: &RCox) -> (f64, f64) {
                     .as_ref()
                     .map_or(0.0, |q| (q[i][j] - theirs[i][j]).abs());
                 let tol = rel * scale + 2.0 * fd + if slot == 0 { numeric * scale } else { 0.0 };
-                let dev = (mine[i * p + j] - theirs[i][j]).abs() / tol;
+                let dev = (mine.get(i, j).unwrap() - theirs[i][j]).abs() / tol;
                 assert!(
                     dev <= 1.0,
                     "{} {label} covariance ({i},{j}): {} against {} (tolerance {tol:e})",
                     c.name,
-                    mine[i * p + j],
+                    mine.get(i, j).unwrap(),
                     theirs[i][j]
                 );
                 if slot == 0 {
@@ -437,7 +437,8 @@ fn cox_case(reference: &Reference, c: &RCox) -> (f64, f64) {
                     "{}: WeightIt's covariance is not the unit-weight form ({weightit} against {explained})",
                     c.name
                 );
-                worst_gap = worst_gap.max((fit.covariance[i * p + j] - weightit).abs() / scale);
+                worst_gap =
+                    worst_gap.max((fit.covariance.get(i, j).unwrap() - weightit).abs() / scale);
             }
         }
         println!(

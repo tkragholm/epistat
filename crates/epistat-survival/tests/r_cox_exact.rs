@@ -267,7 +267,7 @@ fn fits_match_r() {
                 1.0,
                 NanRule::Coincide,
             );
-            let covariance = covariance_deviation(&model.covariance, &r.vcov, p * bound);
+            let covariance = covariance_deviation(model.covariance.as_slice(), &r.vcov, p * bound);
             let loglik = worst_deviation(
                 &[model.log_partial_likelihood.unwrap()],
                 &[r.loglik],

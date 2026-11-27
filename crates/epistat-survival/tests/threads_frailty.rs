@@ -19,7 +19,7 @@ fn flat(f: &FrailtyFit) -> Vec<f64> {
         &f.diagonal_covariance,
         &f.diagonal_covariance_sandwich,
     ] {
-        out.extend(m.iter().map(|v| v.unwrap_or(f64::NAN)));
+        out.extend(m.as_slice().iter().map(|v| v.unwrap_or(f64::NAN)));
     }
     out.extend(f.frailties.iter().map(|v| v.unwrap_or(f64::NAN)));
     out.extend(f.frailty_variances.iter().map(|v| v.unwrap_or(f64::NAN)));

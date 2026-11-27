@@ -72,7 +72,8 @@ fn the_new_estimators_on_threads() {
     let plain_expected = late.expected(&t, &plain);
     assert_same_on_pools(&POOLS, || {
         let r = net_survival_test(&plain, &late.group, &plain_expected, Some(1.0)).unwrap();
-        [vec![r.statistic], r.z, r.covariance].concat()
+        let covariance: Vec<f64> = r.covariance.as_slice().iter().map(|v| v.unwrap()).collect();
+        [vec![r.statistic], r.z, covariance].concat()
     });
 }
 

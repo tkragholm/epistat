@@ -8,16 +8,16 @@
 )]
 
 use epistat_linalg::Mat;
-use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
     BaselineOptions, Centring, ConfType, FittedModel, HazardType, NewData, PredictOptions,
     PredictType, Reference, SurvfitOptions, Variance, basehaz, predict, predict_terms, survfit,
 };
 use epistat_survival::cox::{CoxModelFit, CoxOptions, Ties, fit};
+use epistat_survival::{Covariance, SurvData};
 
 fn with_coefficients(mut model: CoxModelFit, beta: &[f64], variance: &[f64]) -> CoxModelFit {
     model.coefficients = beta.iter().copied().map(Some).collect();
-    model.covariance = variance.iter().copied().map(Some).collect();
+    model.covariance = Covariance::from_values(beta.len(), variance).unwrap();
     model
 }
 

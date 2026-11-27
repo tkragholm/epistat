@@ -1,8 +1,10 @@
 //! The transition probabilities of a multi-state model, `mstate::probtrans`.
 
+use epistat_core::Covariance;
 use rayon::prelude::*;
 
 use super::CumulativeHazards;
+use crate::covariance;
 use crate::error::{Error, Result};
 
 /// The form of the variance of the transition probabilities, `method` of
@@ -89,14 +91,14 @@ pub struct ProbTrans {
     /// The outer `None` is without `se`.
     pub se: Option<Vec<Option<f64>>>,
     /// The covariance of the entries of `probability` at each time, for
-    /// `covariance` in the options: `n_states^4` values for each time, the
-    /// entry `r * n_states^2 + c` of a time being the covariance of the entries
-    /// `r` and `c` of that time's matrix of probabilities, each numbered in the
-    /// order of the columns, `from + n_states * to`. The covariances are aligned
-    /// to the rows of `time`. `mstate`'s `varMatrix` of a fixed horizon holds
-    /// the matrix of row `k` in slice `k + 1`, and repeats the first one in the
-    /// first slice.
-    pub covariance: Option<Vec<f64>>,
+    /// `covariance` in the options: one matrix of `n_states^2` by
+    /// `n_states^2` for each time, whose entry `(r, c)` is the covariance of
+    /// the entries `r` and `c` of that time's matrix of probabilities, each
+    /// numbered in the order of the columns, `from + n_states * to`. The
+    /// matrices are aligned to the rows of `time`. `mstate`'s `varMatrix` of a
+    /// fixed horizon holds the matrix of row `k` in slice `k + 1`, and repeats
+    /// the first one in the first slice.
+    pub covariance: Option<Vec<Covariance>>,
 }
 
 impl ProbTrans {
@@ -130,11 +132,8 @@ impl ProbTrans {
     }
 
     /// The covariance at time index `t` of the probabilities `(from1, to1)` and
-    /// `(from2, to2)`, `None` without `covariance`.
-    ///
-    /// # Panics
-    ///
-    /// When an index is out of range.
+    /// `(from2, to2)`, `None` without `covariance` and for an index out of
+    /// range.
     #[must_use]
     pub fn covariance_of(
         &self,
@@ -143,8 +142,13 @@ impl ProbTrans {
         (from2, to2): (usize, usize),
     ) -> Option<f64> {
         let s = self.n_states;
-        let n = s * s;
-        Some(self.covariance.as_ref()?[t * n * n + (from1 + s * to1) * n + (from2 + s * to2)])
+        if from1 >= s || to1 >= s || from2 >= s || to2 >= s {
+            return None;
+        }
+        self.covariance
+            .as_ref()?
+            .get(t)?
+            .get(from1 + s * to1, from2 + s * to2)
     }
 }
 
@@ -215,7 +219,7 @@ fn cov_matrix(h: &CumulativeHazards, j: usize, s: usize) -> Vec<f64> {
     let k_n = h.transitions.len();
     for a in 0..k_n {
         for b in a..k_n {
-            let value = cov[h.pair_index(a, b)][j];
+            let value = cov[j].get(a, b).unwrap_or(f64::NAN);
             let (f1, t1) = (
                 h.transitions[a].0 as usize - 1,
                 h.transitions[a].1 as usize - 1,
@@ -427,7 +431,9 @@ fn forward(
         time,
         probability,
         se: std_err,
-        covariance,
+        covariance: covariance
+            .map(|c| covariance::blocks(c.len() / (n * n), n, &c))
+            .transpose()?,
     })
 }
 
@@ -527,6 +533,8 @@ fn fixed_horizon(
         time,
         probability,
         se: std_err,
-        covariance,
+        covariance: covariance
+            .map(|c| covariance::blocks(c.len() / (n * n), n, &c))
+            .transpose()?,
     })
 }

@@ -518,15 +518,15 @@ fn test_of_equal_net_survival_against_rs_diff() {
             want.statistic,
             1e-10,
         );
-        let g = got.df + 1;
         let r = got.df;
         for a in 0..r {
             worst.rel(&format!("{name} z"), got.z[a], want.z[a], 1e-10);
             for b in 0..r {
-                let diag = (got.covariance[a * g + a] * got.covariance[b * g + b]).sqrt();
+                let diag =
+                    (got.covariance.get(a, a).unwrap() * got.covariance.get(b, b).unwrap()).sqrt();
                 worst.abs(
                     &format!("{name} covariance"),
-                    got.covariance[a * g + b],
+                    got.covariance.get(a, b).unwrap(),
                     want.covariance[a * r + b],
                     1e-11 * diag,
                 );

@@ -299,9 +299,14 @@ fn propensity_weights_alone_give_the_propensity_only_variance() {
             (&old.covariance, &new.covariance),
             (&old.robust_covariance, &new.robust_covariance),
         ] {
-            for (u, v) in a.iter().zip(b) {
-                let scale = old.covariance[0].abs().max(old.covariance[3].abs());
-                worst = worst.max((u - v).abs() / scale);
+            for (u, v) in a.as_slice().iter().zip(b.as_slice()) {
+                let scale = old
+                    .covariance
+                    .get(0, 0)
+                    .unwrap()
+                    .abs()
+                    .max(old.covariance.get(1, 1).unwrap().abs());
+                worst = worst.max((u.unwrap() - v.unwrap()).abs() / scale);
             }
         }
         let old = km::estimate(
@@ -313,7 +318,16 @@ fn propensity_weights_alone_give_the_propensity_only_variance() {
         .unwrap();
         let new = km::estimate(&arms, &times, &KmOptions::default(), &est).unwrap();
         assert_eq!(old.surv, new.surv);
-        for (a, b) in old.covariance.iter().zip(&new.covariance) {
+        for (a, b) in old
+            .covariance
+            .iter()
+            .flat_map(epistat_survival::Covariance::as_slice)
+            .zip(
+                new.covariance
+                    .iter()
+                    .flat_map(epistat_survival::Covariance::as_slice),
+            )
+        {
             let (a, b) = (a.unwrap(), b.unwrap());
             worst = worst.max((a - b).abs() / a.abs().max(1e-12));
         }

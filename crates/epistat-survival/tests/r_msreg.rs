@@ -224,9 +224,10 @@ fn fits_match_coxph() {
             / (bound * r.loglik.abs().max(1.0) + sums);
         let null = (model.fit.null_log_partial_likelihood.unwrap() - r.loglik_null).abs()
             / (bound * r.loglik_null.abs().max(1.0) + sums);
-        let covariance = covariance_deviation(&model.fit.covariance, &r.vcov_model, p * bound);
+        let covariance =
+            covariance_deviation(model.fit.covariance.as_slice(), &r.vcov_model, p * bound);
         let robust = covariance_deviation(
-            model.fit.robust_covariance.as_ref().unwrap(),
+            model.fit.robust_covariance.as_ref().unwrap().as_slice(),
             &r.vcov_robust,
             4.0 * p * bound + 2.0 * d.stop.len() as f64 * f64::EPSILON,
         );

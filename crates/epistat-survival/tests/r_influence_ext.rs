@@ -186,9 +186,13 @@ fn run_case(case: &Case, std_err: bool, influence: InfluenceForm) -> Standardise
         };
         fit.coefficients = case.coefficients[m].iter().copied().map(Some).collect();
         let p = case.coefficients[m].len();
-        fit.covariance = (0..p * p)
-            .map(|i| Some(case.var[m][i / p][i % p]))
-            .collect();
+        fit.covariance = epistat_survival::Covariance::new(
+            p,
+            (0..p * p)
+                .map(|i| Some(case.var[m][i / p][i % p]))
+                .collect(),
+        )
+        .unwrap();
         fits.push(fit);
     }
     let sets: Vec<Vec<(usize, f64)>> = (0..case.nlevels)
@@ -292,7 +296,15 @@ fn standardised_risks_match_r() {
                 .as_ref()
                 .unwrap()
                 .iter()
-                .zip(exact.covariance.as_ref().unwrap())
+                .flat_map(epistat_survival::Covariance::as_slice)
+                .zip(
+                    exact
+                        .covariance
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .flat_map(epistat_survival::Covariance::as_slice),
+                )
             {
                 let (a, b) = (a.unwrap(), b.unwrap());
                 if a != 0.0 {

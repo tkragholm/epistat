@@ -244,7 +244,7 @@ fn flexpar_against_r() {
         let f = &out.fit;
         let q = f.dimension();
         let cov = f.covariance.as_ref().unwrap();
-        let se = |k: usize| cov[k * q + k].unwrap().sqrt();
+        let se = |k: usize| cov.get(k, k).unwrap().sqrt();
         // the log likelihood
         // The packages stop their optimisers at a relative change of 1e-14 in the
         // log likelihood, which fixes it to about 1e-11 relative. flexsurv's probit
@@ -396,20 +396,20 @@ fn flexpar_against_r() {
             }
             let rc = r.cov.as_ref().unwrap();
             let scale_cov: f64 = (0..q).map(|k| rc[k * q + k]).fold(0.0, f64::max);
-            for k in 0..q * q {
+            for (c, want) in cov.as_slice().iter().zip(rc) {
                 worst.note(
                     "transcription covariance",
-                    (cov[k].unwrap() - rc[k]).abs() / scale_cov,
+                    (c.unwrap() - want).abs() / scale_cov,
                     1e-7,
                 );
             }
             let rob = f.robust_covariance.as_ref().unwrap();
             let rr = r.robust_cov.as_ref().unwrap();
             let scale_rob: f64 = (0..q).map(|k| rr[k * q + k]).fold(0.0, f64::max);
-            for k in 0..q * q {
+            for (c, want) in rob.as_slice().iter().zip(rr) {
                 worst.note(
                     "transcription robust covariance",
-                    (rob[k].unwrap() - rr[k]).abs() / scale_rob,
+                    (c.unwrap() - want).abs() / scale_rob,
                     1e-7,
                 );
             }

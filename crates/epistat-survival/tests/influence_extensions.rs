@@ -231,11 +231,11 @@ fn check_covariance(name: &str, unit: &Standardised, num: &Numeric, scale: &[f64
     let t = unit.n_times;
     let cov = unit.covariance.as_ref().unwrap();
     let mut worst = 0.0f64;
-    for k in 0..t {
+    for (k, block) in cov.iter().enumerate().take(t) {
         for a in 0..l {
             for b in 0..l {
                 let (direct, bound) = product(num, a * t + k, b * t + k, scale);
-                let got = cov[k * l * l + a * l + b].unwrap();
+                let got = block.get(a, b).unwrap();
                 worst = worst.max((got - direct).abs() / bound);
                 assert!(
                     (got - direct).abs() <= bound,

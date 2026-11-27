@@ -301,8 +301,7 @@ pub fn estimate(data: &SurvData<'_>, eta: &[f64], opts: &RoystonOptions) -> Resu
             ..CoxOptions::default()
         },
     )?;
-    if let (Some(&Some(b)), Some(&Some(v))) = (refit.coefficients.first(), refit.covariance.first())
-    {
+    if let (Some(&Some(b)), Some(v)) = (refit.coefficients.first(), refit.covariance.get(0, 0)) {
         out.beta = Some(b);
         let kappa = (8.0 / PI).sqrt();
         let mut d = b * kappa;

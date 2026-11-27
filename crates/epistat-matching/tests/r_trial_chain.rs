@@ -279,7 +279,13 @@ fn the_chain_agrees_with_trial_emulation() {
         let tol = if a.estimand == "ITT" { 1e-9 } else { 1e-6 };
         let what = format!("{} censoring {}", a.estimand, a.use_censor);
         assert!(worst(&msm.coefficients, &a.msm_coef) < tol, "{what}");
-        assert!(worst(&msm.covariance, &a.msm_vcov) < tol, "{what}");
+        let covariance: Vec<f64> = msm
+            .covariance
+            .as_slice()
+            .iter()
+            .map(|v| v.unwrap())
+            .collect();
+        assert!(worst(&covariance, &a.msm_vcov) < tol, "{what}");
         assert!(
             worst(&risk(&msm, p, &t, false), &a.cum_inc_0) < tol,
             "{what}"

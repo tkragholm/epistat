@@ -24,6 +24,10 @@ use epistat_survival::weighting::clone::{
 };
 use epistat_survival::weighting::trials::bootstrap_trials;
 
+fn dense(c: &epistat_survival::Covariance) -> Vec<f64> {
+    c.as_slice().iter().map(|v| v.unwrap()).collect()
+}
+
 fn worst(a: &[f64], b: &[f64]) -> f64 {
     assert_eq!(a.len(), b.len());
     a.iter()
@@ -48,7 +52,7 @@ fn the_clones_the_weights_and_the_outcome_model_agree_with_the_reference() {
     assert!(worst(&o.probability, &k.pd) < 1e-10);
     assert!(worst(&o.weight, &k.weight) < 1e-9);
     assert!(worst(&o.msm.coefficients, &r.msm_coef) < 1e-8);
-    assert!(worst(&o.msm.covariance, &r.msm_vcov) < 1e-8);
+    assert!(worst(&dense(&o.msm.covariance), &r.msm_vcov) < 1e-8);
     assert!(worst(&o.risk[0], &r.cum_inc_0) < 1e-8);
     assert!(worst(&o.risk[1], &r.cum_inc_1) < 1e-8);
 }

@@ -114,7 +114,7 @@ fn cox_censoring_contrasts_and_calibration() {
         for scale in [RecalibrationScale::Logit, RecalibrationScale::Cloglog] {
             let r = slope_intercept(&one, &risk, 2.0, &RecalibrationOptions::new(scale)).unwrap();
             out.extend([r.intercept, r.slope, r.information_condition]);
-            out.extend(r.covariance);
+            out.extend(r.covariance.as_slice().iter().map(|v| v.unwrap()));
         }
         out
     });

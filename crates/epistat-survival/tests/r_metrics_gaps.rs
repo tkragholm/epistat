@@ -145,7 +145,7 @@ fn condition(x: &Mat<f64>, data: &SurvData<'_>) -> f64 {
         },
     )
     .unwrap();
-    let v = Mat::from_fn(p, p, |i, j| model.covariance[i * p + j].unwrap());
+    let v = Mat::from_fn(p, p, |i, j| model.covariance.get(i, j).unwrap());
     let inv = inverse(v.as_ref(), &Attempt::SYMMETRIC).unwrap().x;
     let norm = |m: &Mat<f64>| {
         (0..p)

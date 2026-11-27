@@ -137,7 +137,12 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
             .iter()
             .map(|x| x.unwrap_or(f64::NAN))
             .collect();
-        v.extend(f.covariance.iter().flatten().map(|x| x.unwrap_or(f64::NAN)));
+        v.extend(
+            f.covariance
+                .iter()
+                .flat_map(epistat_survival::Covariance::as_slice)
+                .map(|x| x.unwrap_or(f64::NAN)),
+        );
         v.extend([
             f.log_likelihood,
             f.deviance,

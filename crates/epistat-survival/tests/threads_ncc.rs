@@ -99,6 +99,7 @@ fn nested_case_control_pipeline() {
                 .robust_covariance
                 .as_ref()
                 .unwrap()
+                .as_slice()
                 .iter()
                 .copied()
                 .map(absent),

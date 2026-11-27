@@ -168,7 +168,7 @@ fn main() {
         });
         for j in 0..2 {
             lines.push_opt(&format!("coef{j}"), f.coefficients[j]);
-            lines.push_opt(&format!("se{j}"), f.covariance[j * 2 + j].map(f64::sqrt));
+            lines.push_opt(&format!("se{j}"), f.covariance.get(j, j).map(f64::sqrt));
         }
         times
     } else {
@@ -211,9 +211,9 @@ fn main() {
                     fit_weighted(&data, x.as_ref(), &w, &CoxOptions::default()).expect("fit")
                 });
                 let robust = model.robust_covariance.expect("robust covariance");
-                for j in 0..2 {
-                    lines.push_opt(&format!("coef{j}"), model.coefficients[j]);
-                    lines.push_opt(&format!("se{j}"), robust[j * 2 + j].map(f64::sqrt));
+                for (j, &coefficient) in model.coefficients.iter().enumerate().take(2) {
+                    lines.push_opt(&format!("coef{j}"), coefficient);
+                    lines.push_opt(&format!("se{j}"), robust.get(j, j).map(f64::sqrt));
                 }
                 times
             }

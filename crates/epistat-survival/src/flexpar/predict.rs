@@ -1,6 +1,6 @@
 //! Predictions and contrasts with delta-method intervals.
 
-use epistat_core::Level;
+use epistat_core::{Covariance, Level};
 use epistat_linalg::MatRef;
 use epistat_stats::dist::normal;
 
@@ -77,7 +77,7 @@ fn covariance<'a>(fit: &'a FlexParFit, opts: &PredictOptions) -> Result<&'a [Opt
     } else {
         fit.covariance.as_ref()
     };
-    c.map(Vec::as_slice).ok_or_else(|| {
+    c.map(Covariance::as_slice).ok_or_else(|| {
         Error::invalid(if opts.robust {
             "the fit has no robust covariance: it needs clusters and a positive definite information"
         } else {

@@ -68,9 +68,11 @@
 //!    censored, perturbed, or curtailed post-event exposures. Biostatistics
 //!    2009;10(1):3-16.
 
+use epistat_core::Covariance;
 use epistat_linalg::{Attempt, Mat, Method, inverse};
 
 use super::{SccsData, SccsOptions, WindowSpec, fit};
+use crate::covariance;
 use crate::error::{Error, Result};
 
 /// The cases, their first events and doses for [`fit_event_dependent`].
@@ -131,8 +133,8 @@ pub struct EventDependentFit {
     /// first. `None` for all when the last fit has no estimate or a column is
     /// aliased.
     pub coefficients: Vec<Option<f64>>,
-    /// The sandwich covariance, `p * p` row-major, `None` without estimate.
-    pub covariance: Vec<Option<f64>>,
+    /// The sandwich covariance, `p` by `p`, `None` without estimate.
+    pub covariance: Covariance,
     /// The square roots of its diagonal.
     pub se: Vec<Option<f64>>,
     /// The number of exposure columns, before the age columns.
@@ -419,7 +421,7 @@ pub fn fit_event_dependent(
     };
     let mut result = EventDependentFit {
         coefficients: vec![None; p],
-        covariance: vec![None; p * p],
+        covariance: covariance::undefined(p)?,
         se: vec![None; p],
         n_exposure_columns: n_expo,
         n_cases: n,
@@ -517,6 +519,7 @@ pub fn fit_event_dependent(
             }
         }
     }
+    let mut sandwich = vec![None; p * p];
     for j in 0..p {
         for l in 0..p {
             let mut v = 0.0;
@@ -527,12 +530,11 @@ pub fn fit_event_dependent(
                 }
                 v += inv[(j, u)] * t;
             }
-            result.covariance[j * p + l] = Some(v);
+            sandwich[j * p + l] = Some(v);
         }
         result.coefficients[j] = Some(estimate[j]);
     }
-    result.se = (0..p)
-        .map(|j| result.covariance[j * p + j].map(f64::sqrt))
-        .collect();
+    result.se = (0..p).map(|j| sandwich[j * p + j].map(f64::sqrt)).collect();
+    result.covariance = covariance::from_options(p, sandwich)?;
     Ok(result)
 }

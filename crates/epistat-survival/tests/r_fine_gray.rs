@@ -796,7 +796,7 @@ fn check_multi(
         for c in 0..4 {
             let tolerance = b.dv[a][c] + p * b.solve * (r.vcov[a][a] * r.vcov[c][c]).sqrt();
             covariance = covariance.max(units(
-                model.covariance[a * 4 + c].unwrap(),
+                model.covariance.get(a, c).unwrap(),
                 r.vcov[a][c],
                 tolerance,
             ));
@@ -825,7 +825,7 @@ fn check_multi(
             for c in 0..4 {
                 let scale = (r.vcov_robust[a][a] * r.vcov_robust[c][c]).sqrt();
                 worst_robust = worst_robust.max(units(
-                    robust[a * 4 + c].unwrap(),
+                    robust.get(a, c).unwrap(),
                     r.vcov_robust[a][c],
                     relative * scale,
                 ));

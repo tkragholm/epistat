@@ -48,7 +48,7 @@
 //! dependent censoring using surrogate markers. In: AIDS Epidemiology,
 //! Birkhauser 1992:297-331.
 
-use epistat_core::InputError;
+use epistat_core::{Covariance, InputError};
 use epistat_linalg::MatRef;
 
 use crate::cox::{
@@ -137,7 +137,7 @@ pub(super) struct Parts<'a> {
     /// the Kaplan-Meier model.
     pub x: Option<MatRef<'a, f64>>,
     pub coefficients: Option<Vec<Option<f64>>>,
-    pub covariance: Option<Vec<Option<f64>>>,
+    pub covariance: Option<Covariance>,
     pub ties: Ties,
     pub stabilise: bool,
     /// The first start of the subject of each row.

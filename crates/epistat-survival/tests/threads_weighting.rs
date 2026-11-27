@@ -134,9 +134,16 @@ fn weighting_is_the_same_on_every_pool() {
             )
             .unwrap();
             out.extend(&cox.coefficients);
-            out.extend(&cox.covariance);
-            out.extend(&cox.robust_covariance);
-            out.extend(cox.weight_covariance.as_deref().unwrap());
+            out.extend(cox.covariance.as_slice().iter().map(|v| v.unwrap()));
+            out.extend(cox.robust_covariance.as_slice().iter().map(|v| v.unwrap()));
+            out.extend(
+                cox.weight_covariance
+                    .as_ref()
+                    .unwrap()
+                    .as_slice()
+                    .iter()
+                    .map(|v| v.unwrap()),
+            );
             let curves = km::estimate(
                 &arms,
                 &times,
@@ -145,13 +152,9 @@ fn weighting_is_the_same_on_every_pool() {
             )
             .unwrap();
             out.extend(&curves.surv);
-            out.extend(curves.covariance.iter().map(|v| v.unwrap_or(f64::NAN)));
-            out.extend(
-                curves
-                    .covariance_known
-                    .iter()
-                    .map(|v| v.unwrap_or(f64::NAN)),
-            );
+            for matrix in curves.covariance.iter().chain(&curves.covariance_known) {
+                out.extend(matrix.as_slice().iter().map(|v| v.unwrap_or(f64::NAN)));
+            }
             out
         });
     }

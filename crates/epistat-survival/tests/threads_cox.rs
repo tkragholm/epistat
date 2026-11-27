@@ -82,8 +82,10 @@ fn cox_fit_and_residuals() {
                 f64::from(u8::from(model.converged)),
             ]);
             out.extend(model.monotone_columns.iter().map(|&c| c as f64));
-            out.extend(absent_all(&model.covariance));
-            out.extend(absent_all(model.robust_covariance.as_ref().unwrap()));
+            out.extend(absent_all(model.covariance.as_slice()));
+            out.extend(absent_all(
+                model.robust_covariance.as_ref().unwrap().as_slice(),
+            ));
             let residuals =
                 score_residuals(&data, x.as_ref(), &model.coefficients, &options).unwrap();
             for column in residuals {

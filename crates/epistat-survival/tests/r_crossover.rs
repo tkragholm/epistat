@@ -239,7 +239,7 @@ fn the_analysis_equals_clogit_on_the_same_windows() {
         );
         for j in 0..p {
             for k in 0..p {
-                let got = exact.covariance[j * p + k].unwrap();
+                let got = exact.covariance.get(j, k).unwrap();
                 let want = c.fit.vcov[j][k];
                 let scale = (c.fit.vcov[j][j] * c.fit.vcov[k][k]).sqrt();
                 assert!(
@@ -264,7 +264,7 @@ fn the_analysis_equals_clogit_on_the_same_windows() {
         let rcov = robust.robust_covariance.as_ref().unwrap();
         for j in 0..p {
             for k in 0..p {
-                let got = rcov[j * p + k].unwrap();
+                let got = rcov.get(j, k).unwrap();
                 let want = c.fit.approx_robust_vcov[j][k];
                 let scale =
                     (c.fit.approx_robust_vcov[j][j] * c.fit.approx_robust_vcov[k][k]).sqrt();

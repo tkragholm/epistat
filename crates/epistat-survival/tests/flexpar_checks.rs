@@ -188,9 +188,8 @@ fn an_aliased_column_has_no_coefficient_and_changes_nothing_else() {
         assert!((full.beta[j].unwrap() - base.beta[j].unwrap()).abs() < 1e-6);
     }
     let cov = full.covariance.as_ref().unwrap();
-    let q = full.dimension();
     let (i2, i3) = (full.gamma.len() + 2, full.gamma.len() + 3);
-    assert!(cov[i2 * q + i2].is_none() && cov[i3 * q + i3].is_none());
+    assert!(cov.get(i2, i2).is_none() && cov.get(i3, i3).is_none());
     // predictions ignore the aliased columns
     let x = Mat::from_fn(1, 4, |_, j| [0.2, 1.0, 5.0, -7.0][j]);
     let xb = Mat::from_fn(1, 2, |_, j| [0.2, 1.0][j]);

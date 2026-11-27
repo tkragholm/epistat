@@ -156,7 +156,7 @@ impl Outputs {
         let mut v = self.weight.clone();
         v.extend(&self.probability);
         v.extend(&self.msm.coefficients);
-        v.extend(&self.msm.covariance);
+        v.extend(self.msm.covariance.as_slice().iter().map(|x| x.unwrap()));
         v.extend(&self.risk[0]);
         v.extend(&self.risk[1]);
         v

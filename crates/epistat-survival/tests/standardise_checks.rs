@@ -145,7 +145,7 @@ fn check(
                     direct += ia[i] * ib[i];
                     bound += ia[i].abs() * tb[i] + ib[i].abs() * ta[i] + ta[i] * tb[i];
                 }
-                let got = cov[k * l * l + a * l + b].unwrap();
+                let got = cov[k].get(a, b).unwrap();
                 worst_cov = worst_cov.max((got - direct).abs() / bound);
                 assert!(
                     (got - direct).abs() <= bound,

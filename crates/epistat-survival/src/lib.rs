@@ -155,6 +155,7 @@ mod check;
 pub mod clogit;
 pub mod concordance;
 pub mod condense;
+mod covariance;
 pub mod cox;
 pub mod crossover;
 mod error;
@@ -193,7 +194,7 @@ pub mod timefix;
 pub mod tmerge;
 pub mod weighting;
 
-pub use epistat_core::{Bootstrap, Level};
+pub use epistat_core::{Bootstrap, Covariance, Level};
 pub use error::{Error, Result};
 pub use surv::{
     Cause, IntervalDataBuilder, IntervalKind, IntervalSurv, Levels, Outcome, Surv, SurvBuf,

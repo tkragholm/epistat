@@ -300,9 +300,9 @@ fn variances_match_the_jackknife_of_refits() {
             .map(|(a, b)| (a - b).abs() / b)
             .fold(0.0, f64::max);
         let m = 2;
-        let flat = |v: &[f64]| -> Vec<Vec<f64>> {
+        let flat = |v: &epistat_survival::Covariance| -> Vec<Vec<f64>> {
             (0..m)
-                .map(|i| (0..m).map(|j| v[i * m + j]).collect())
+                .map(|i| (0..m).map(|j| v.get(i, j).unwrap()).collect())
                 .collect()
         };
         let mut worst = [0.0f64; 3];
@@ -339,8 +339,8 @@ fn variances_match_the_jackknife_of_refits() {
             worst[2] = worst[2].max(dev);
         }
         let differs = (0..m).any(|i| {
-            (fit.covariance[i * m + i] - fit.robust_covariance[i * m + i]).abs()
-                > 1e-6 * fit.robust_covariance[i * m + i]
+            (fit.covariance.get(i, i).unwrap() - fit.robust_covariance.get(i, i).unwrap()).abs()
+                > 1e-6 * fit.robust_covariance.get(i, i).unwrap()
         });
         assert!(
             differs,

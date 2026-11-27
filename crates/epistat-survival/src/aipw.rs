@@ -147,6 +147,7 @@ use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::MatRef;
 use rayon::prelude::*;
 
+use crate::covariance;
 use crate::cox::{
     BaselineOptions, Centring, CoxOptions, FittedModel, HazardType, Ties, Variance, basehaz,
     fit as cox_fit,
@@ -1240,7 +1241,7 @@ impl Model {
                 se: Some(std_err),
                 lower: Some(lower),
                 upper: Some(upper),
-                covariance: Some(covariance),
+                covariance: Some(covariance::option_blocks(k, 2, &covariance)?),
                 level: opts.level,
             },
             times: self.times.clone(),

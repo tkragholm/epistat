@@ -199,14 +199,14 @@ fn recalibration_against_r() {
             for j in 0..2 {
                 let tv = (32.0 * kappa * (nf + 2.0) * eps + 8.0 * t_c)
                     * (case.vcov[3 * i] * case.vcov[3 * j]).sqrt();
-                let dev = (got.covariance[i * 2 + j] - case.vcov[i * 2 + j]).abs() / tv;
+                let dev = (got.covariance.get(i, j).unwrap() - case.vcov[i * 2 + j]).abs() / tv;
                 assert!(
                     dev <= 1.0,
                     "{} {} {}: covariance ({i}, {j}) {} against {}, bound {tv}",
                     case.kind,
                     case.link,
                     case.j,
-                    got.covariance[i * 2 + j],
+                    got.covariance.get(i, j).unwrap(),
                     case.vcov[i * 2 + j]
                 );
                 worst_v = worst_v.max(dev);

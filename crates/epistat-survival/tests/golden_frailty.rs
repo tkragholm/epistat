@@ -19,11 +19,11 @@ fn hash(f: &FrailtyFit) -> u64 {
         .coefficients
         .iter()
         .chain(&f.se)
-        .chain(&f.covariance)
-        .chain(&f.covariance_sandwich)
+        .chain(f.covariance.as_slice())
+        .chain(f.covariance_sandwich.as_slice())
         .chain(&f.diagonal_se)
-        .chain(&f.diagonal_covariance)
-        .chain(&f.diagonal_covariance_sandwich)
+        .chain(f.diagonal_covariance.as_slice())
+        .chain(f.diagonal_covariance_sandwich.as_slice())
         .chain(&f.frailties)
         .chain(&f.frailty_variances)
     {

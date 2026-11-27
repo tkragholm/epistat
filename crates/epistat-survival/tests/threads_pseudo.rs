@@ -146,7 +146,7 @@ fn regression_does_not_depend_on_the_number_of_threads() {
             gee.max_iterations = 200;
             let fit = p.regress(Some(covariate.as_ref()), true, &gee).unwrap();
             let mut out = fit.coefficients.clone();
-            out.extend_from_slice(&fit.covariance);
+            out.extend(fit.covariance.as_slice().iter().map(|v| v.unwrap()));
             out.extend_from_slice(&fit.fitted);
             out.extend([fit.information_condition, fit.iterations as f64]);
             out

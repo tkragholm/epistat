@@ -236,6 +236,7 @@ mod engine;
 
 use std::borrow::Cow;
 
+use epistat_core::Covariance;
 use epistat_linalg::{Mat, MatRef};
 use epistat_optim::brent;
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
@@ -243,6 +244,7 @@ use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use self::em::{EmInput, fit_em};
 use self::engine::{Eval, Failure, Layout, Penalty, Rows, State};
 use crate::check::{check_lengths, refuse_non_finite_matrix};
+use crate::covariance;
 use crate::cox::Ties;
 use crate::error::{Error, Result};
 use crate::ldl;
@@ -395,21 +397,21 @@ pub struct FrailtyFit {
     /// Standard errors from `covariance`.
     pub se: Vec<Option<f64>>,
     /// The coefficient block of the inverse of the whole penalised
-    /// information, row-major `p * p`, `var` of `coxph(sparse = FALSE)`.
+    /// information, `p` by `p`, `var` of `coxph(sparse = FALSE)`.
     /// `None` in an entry of an aliased column, and everywhere when the
     /// iterative solve did not meet its tolerance.
-    pub covariance: Vec<Option<f64>>,
+    pub covariance: Covariance,
     /// The covariance with the penalty's curvature taken out,
     /// `H^-1 (H - P) H^-1`, `var2` of `coxph(sparse = FALSE)`.
-    pub covariance_sandwich: Vec<Option<f64>>,
+    pub covariance_sandwich: Covariance,
     /// Standard errors from `diagonal_covariance`.
     pub diagonal_se: Vec<Option<f64>>,
     /// The covariance with the frailty block of the information replaced by
     /// its diagonal, `var` of `coxph(sparse = TRUE)`, the default for more
     /// than five clusters.
-    pub diagonal_covariance: Vec<Option<f64>>,
+    pub diagonal_covariance: Covariance,
     /// `var2` of `coxph(sparse = TRUE)`.
-    pub diagonal_covariance_sandwich: Vec<Option<f64>>,
+    pub diagonal_covariance_sandwich: Covariance,
     /// The log frailty of each cluster of the data, `frail` of `coxph`,
     /// centred so that the frailties have mean 1. `None` for a cluster whose
     /// rows all have weight zero.
@@ -1132,14 +1134,18 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Re
     } else {
         None
     };
+    let width = x.ncols();
     Ok(FrailtyFit {
         se: diagonal(&covariance),
         diagonal_se: diagonal(&diagonal_covariance),
         coefficients,
-        covariance,
-        covariance_sandwich,
-        diagonal_covariance,
-        diagonal_covariance_sandwich,
+        covariance: covariance::from_options(width, covariance)?,
+        covariance_sandwich: covariance::from_options(width, covariance_sandwich)?,
+        diagonal_covariance: covariance::from_options(width, diagonal_covariance)?,
+        diagonal_covariance_sandwich: covariance::from_options(
+            width,
+            diagonal_covariance_sandwich,
+        )?,
         frailties,
         frailty_variances,
         theta: chosen.theta,

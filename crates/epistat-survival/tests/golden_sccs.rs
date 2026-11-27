@@ -115,10 +115,10 @@ fn sccs_bits_are_recorded() {
     };
     let f = fit(&pieces.data(&length), x.as_ref(), &opts).unwrap();
     check("fit/coefficients", &absent_all(&f.coefficients));
-    check("fit/covariance", &absent_all(&f.covariance));
+    check("fit/covariance", &absent_all(f.covariance.as_slice()));
     check(
         "fit/robust",
-        &absent_all(f.robust_covariance.as_ref().unwrap()),
+        &absent_all(f.robust_covariance.as_ref().unwrap().as_slice()),
     );
     check("fit/log_likelihood", &[f.log_likelihood.unwrap()]);
     check("fit/null_log_likelihood", &[f.null_log_likelihood.unwrap()]);

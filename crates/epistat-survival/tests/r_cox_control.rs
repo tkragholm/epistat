@@ -252,7 +252,7 @@ fn fits_match_r() {
                 1.0,
                 NanRule::Coincide,
             );
-            let covariance = covariance_deviation(&model.covariance, &r.vcov, p * bound);
+            let covariance = covariance_deviation(model.covariance.as_slice(), &r.vcov, p * bound);
             let robust = if r.use_cluster {
                 worst_deviation(
                     &none_as_nan(model.robust_se.as_ref().unwrap()),

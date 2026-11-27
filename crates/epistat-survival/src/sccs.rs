@@ -157,9 +157,10 @@ pub use event_dependent::{
 pub use sample_size::{SampleSizeSpec, sample_size};
 pub use semiparametric::{SemiparametricPieces, semiparametric_pieces};
 
-use epistat_core::Level;
+use epistat_core::{Covariance, Level};
 use epistat_linalg::{Mat, MatRef, congruence};
 
+use crate::covariance;
 use crate::error::{Error, Result};
 use crate::ldl;
 use crate::par::ordered_reduce;
@@ -213,12 +214,12 @@ pub struct SccsFit {
     /// The log relative incidences, one per column, `None` for an aliased
     /// column and for every column when the fit has no estimate.
     pub coefficients: Vec<Option<f64>>,
-    /// The model-based covariance, `p * p` row-major, `None` where its row or
+    /// The model-based covariance, `p` by `p`, `None` where its row or
     /// column is a coefficient that is `None`.
-    pub covariance: Vec<Option<f64>>,
+    pub covariance: Covariance,
     /// The person-level sandwich covariance, laid out as `covariance`, when
     /// [`SccsOptions::robust`] was set and there is an estimate.
-    pub robust_covariance: Option<Vec<Option<f64>>>,
+    pub robust_covariance: Option<Covariance>,
     /// The standard errors of the coefficients, the square roots of the
     /// diagonal of `covariance`.
     pub se: Vec<Option<f64>>,
@@ -507,7 +508,7 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
     }
     let mut result = SccsFit {
         coefficients: vec![None; n_cols],
-        covariance: vec![None; n_cols * n_cols],
+        covariance: covariance::undefined(n_cols)?,
         robust_covariance: None,
         se: vec![None; n_cols],
         robust_se: None,
@@ -607,13 +608,15 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
     result.converged = converged;
     result.log_likelihood = Some(current.ll);
     let inverse = ldl::inverse(&factored, p);
+    let mut model = vec![None; n_cols * n_cols];
     for (a, &ca) in cols.iter().enumerate() {
         result.coefficients[ca] = Some(beta[a]);
         for (b, &cb) in cols.iter().enumerate() {
-            result.covariance[ca * n_cols + cb] = Some(inverse[a * p + b]);
+            model[ca * n_cols + cb] = Some(inverse[a * p + b]);
         }
     }
-    result.se = diagonal_roots(&result.covariance, n_cols);
+    result.se = diagonal_roots(&model, n_cols);
+    result.covariance = covariance::from_options(n_cols, model)?;
     if opts.robust {
         let meat = blocked(data, x, &cols, &persons, &beta, true).meat;
         let sandwich = sandwich(&inverse, &meat, p)?;
@@ -624,7 +627,7 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
             }
         }
         result.robust_se = Some(diagonal_roots(&full, n_cols));
-        result.robust_covariance = Some(full);
+        result.robust_covariance = Some(covariance::from_options(n_cols, full)?);
     }
     Ok(result)
 }

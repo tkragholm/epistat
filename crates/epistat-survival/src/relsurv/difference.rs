@@ -9,13 +9,16 @@
     reason = "times are compared with the values they were copied from, counts of rows are far below 2^53, and the number of grid steps is a floor of a non-negative quotient"
 )]
 
+use epistat_core::Covariance;
+use epistat_linalg::cholesky::{Pivot, cholesky_lower};
+use epistat_stats::dist::chi_square::sf as chi_square_sf;
+
 use super::ExpectedHazard;
 use super::cohort::{SWEEP_LIMIT, rows_by_stratum};
+use crate::covariance;
 use crate::error::{Error, Result};
 use crate::par;
 use crate::surv::SurvData;
-use epistat_linalg::cholesky::{Pivot, cholesky_lower};
-use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
 const BLOCK: usize = 1024;
 const WAVE: usize = 64;
@@ -32,8 +35,8 @@ pub struct NetSurvivalTest {
     /// The weighted observed minus expected excess deaths of every group,
     /// summed over the strata; they sum to 0.
     pub z: Vec<f64>,
-    /// The covariance of `z` over all `G` groups, row-major `G x G`.
-    pub covariance: Vec<f64>,
+    /// The covariance of `z` over all `G` groups, `G` by `G`.
+    pub covariance: Covariance,
 }
 
 /// The test of Grafféo, Castell, Belot and Giorgi that the net survival of
@@ -243,6 +246,6 @@ pub fn net_survival_test(
         df: r,
         p_value: chi_square_sf(statistic, r as f64),
         z,
-        covariance,
+        covariance: covariance::from_values(g, &covariance)?,
     })
 }

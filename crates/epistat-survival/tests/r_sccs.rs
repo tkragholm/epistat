@@ -232,16 +232,15 @@ fn fits_match_glm_with_person_dummies_and_scca() {
             assert!(f.coefficients[p].is_none());
             assert_eq!(f.rank, p);
         }
-        let n_cols = f.coefficients.len();
         // Compare on the columns of the reference, drop the aliased one.
         let coef: Vec<Option<f64>> = f.coefficients[..p].to_vec();
         let cov: Vec<Option<f64>> = (0..p)
             .flat_map(|j| (0..p).map(move |k| (j, k)))
-            .map(|(j, k)| f.covariance[j * n_cols + k])
+            .map(|(j, k)| f.covariance.get(j, k))
             .collect();
         let rob: Vec<Option<f64>> = (0..p)
             .flat_map(|j| (0..p).map(move |k| (j, k)))
-            .map(|(j, k)| f.robust_covariance.as_ref().unwrap()[j * n_cols + k])
+            .map(|(j, k)| f.robust_covariance.as_ref().unwrap().get(j, k))
             .collect();
         let (db, dc) = deviations(&coef, &cov, &g.beta, &g.cov);
         assert!(db <= 4e-8, "{}: coefficients {db} s", case.label);

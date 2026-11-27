@@ -254,7 +254,7 @@ fn fits_match_r() {
         );
         // The deviations in absolute terms, relative to the value or to 1.
         let p = r.columns.len() as f64;
-        let covariance = covariance_deviation(&fit.covariance, &r.vcov, p * bound);
+        let covariance = covariance_deviation(fit.covariance.as_slice(), &r.vcov, p * bound);
         let rows_used = if r.use_weights {
             reference.weight.iter().filter(|&&w| w > 0.0).count()
         } else {
@@ -262,7 +262,7 @@ fn fits_match_r() {
         } as f64;
         let robust_covariance = if r.use_cluster {
             covariance_deviation(
-                fit.robust_covariance.as_ref().unwrap(),
+                fit.robust_covariance.as_ref().unwrap().as_slice(),
                 &r.vcov_robust,
                 4.0 * p * bound + 2.0 * rows_used * f64::EPSILON,
             )

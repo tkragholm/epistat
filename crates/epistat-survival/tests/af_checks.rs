@@ -3,9 +3,9 @@
 //! that are not numbers.
 
 use epistat_glm::attributable::IntervalScale;
-use epistat_survival::Level;
 use epistat_survival::standardise::Standardised;
 use epistat_survival::standardise::attributable::af_from_standardised;
+use epistat_survival::{Covariance, Level};
 
 /// Two levels at three times: the unexposed risks, then the observed.
 fn risks(cov: bool) -> Standardised {
@@ -20,10 +20,14 @@ fn risks(cov: bool) -> Standardised {
     // Per time the 2 x 2 covariance, unexposed first.
     let block = |a: f64, b: f64, c: f64| vec![Some(a), Some(c), Some(c), Some(b)];
     let covariance = cov.then(|| {
-        let mut v = block(1e-5, 4e-5, 1.5e-5);
-        v.extend(block(2e-5, 8e-5, 3e-5));
-        v.extend(vec![None; 4]);
-        v
+        [
+            block(1e-5, 4e-5, 1.5e-5),
+            block(2e-5, 8e-5, 3e-5),
+            vec![None; 4],
+        ]
+        .into_iter()
+        .map(|v| Covariance::new(2, v).unwrap())
+        .collect()
     });
     Standardised {
         n_levels: 2,

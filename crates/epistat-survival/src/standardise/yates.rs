@@ -86,11 +86,13 @@
 //! 3. Therneau TM. Population contrasts. Vignette of the survival package,
 //!    version 3.8.
 
+use epistat_core::Covariance;
 use epistat_linalg::eigen::pinv_quadratic_form;
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use epistat_stats::dist::normal;
 
 use super::{Counterfactual, ordered_reduce};
+use crate::covariance;
 use crate::error::{Error, Result};
 
 /// The inverse of a link function: how the linear predictor becomes the
@@ -208,7 +210,7 @@ pub struct Yates {
     /// Its standard error.
     pub se: Vec<f64>,
     /// The covariance of the means, `n_levels` by `n_levels`.
-    pub covariance: Vec<f64>,
+    pub covariance: Covariance,
     /// The tests.
     pub tests: Vec<WaldTest>,
 }
@@ -289,7 +291,7 @@ pub fn yates(
     Ok(Yates {
         estimate,
         se: std_err,
-        covariance: cov,
+        covariance: covariance::from_values(n_levels, &cov)?,
         tests,
     })
 }

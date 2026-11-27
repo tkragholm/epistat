@@ -828,7 +828,7 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FineGrayOptions) -> R
         });
         let with_clusters = clusters.is_some();
         if !expansion.event.contains(&expansion.cause) {
-            return Ok(CoxModelFit::degenerate(p, n_events, n, with_clusters));
+            return CoxModelFit::degenerate(p, n_events, n, with_clusters);
         }
         let (model, factor) = prepare(expansion, x, &source, opts.ties, clusters);
         let summary = with_clusters
@@ -1079,6 +1079,7 @@ fn prepare(
 
 #[cfg(test)]
 mod tests {
+    use epistat_core::Covariance;
     use epistat_linalg::Mat;
 
     use epistat_linalg::MatRef;
@@ -1440,7 +1441,12 @@ mod tests {
         for (a, b) in plain.coefficients.iter().zip(&clustered.coefficients) {
             assert!(close(a.unwrap(), b.unwrap(), 1e-9), "{plain:?}");
         }
-        for (a, b) in plain.covariance.iter().zip(&clustered.covariance) {
+        for (a, b) in plain
+            .covariance
+            .as_slice()
+            .iter()
+            .zip(clustered.covariance.as_slice())
+        {
             assert!(close(a.unwrap(), b.unwrap(), 1e-9));
         }
         assert!(close(
@@ -1449,7 +1455,7 @@ mod tests {
             1e-9
         ));
         let robust = clustered.robust_covariance.as_ref().unwrap();
-        assert_eq!(robust.len(), 9);
+        assert_eq!(robust.dim(), 3);
         assert!(clustered.tests.robust_wald.is_some());
         assert!(plain.tests.wald.is_some() && plain.tests.robust_wald.is_none());
         assert!(plain.n_events > 0.0);
@@ -1664,7 +1670,12 @@ mod tests {
 
     fn bounds(reference: &CoxModelFit, x: MatRef<'_, f64>, rows: usize, n: usize) -> Bounds {
         let p = x.ncols();
-        let v: Vec<f64> = reference.covariance.iter().map(|c| c.unwrap()).collect();
+        let v: Vec<f64> = reference
+            .covariance
+            .as_slice()
+            .iter()
+            .map(|c| c.unwrap())
+            .collect();
         let mut factor = v.clone();
         let pivots = crate::ldl::factorise(&mut factor, p, 0.0);
         assert_eq!(pivots.rank, p);
@@ -1728,7 +1739,7 @@ mod tests {
         let p = x.ncols();
         let b = bounds(want, x, rows, n);
         let units = |g: f64, w: f64, tolerance: f64| (g - w).abs() / tolerance;
-        let v = |a: usize, c: usize| want.covariance[a * p + c].unwrap();
+        let v = |a: usize, c: usize| want.covariance.get(a, c).unwrap();
         let mut worst = [0.0f64; 5];
         for a in 0..p {
             let beta = want.coefficients[a].unwrap();
@@ -1745,7 +1756,7 @@ mod tests {
             ));
             for c in 0..p {
                 worst[2] = worst[2].max(units(
-                    got.covariance[a * p + c].unwrap(),
+                    got.covariance.get(a, c).unwrap(),
                     v(a, c),
                     b.dv[a * p + c] + p as f64 * b.solve * (v(a, a) * v(c, c)).sqrt(),
                 ));
@@ -1762,8 +1773,8 @@ mod tests {
                 + 2.0 * rows as f64 * f64::EPSILON
                 + 2.0 * b.kappa * relative_v
                 + 4.0 * b.f;
-            let r = |a: usize, c: usize| reference[a * p + c].unwrap();
-            for (ac, value) in robust.iter().enumerate() {
+            let r = |a: usize, c: usize| reference.get(a, c).unwrap();
+            for (ac, value) in robust.as_slice().iter().enumerate() {
                 let (a, c) = (ac / p, ac % p);
                 worst[3] = worst[3].max(units(
                     value.unwrap(),
@@ -1839,14 +1850,19 @@ mod tests {
                                     .map(|(a, b)| (a.unwrap() / b.unwrap() - 1.0).abs())
                                     .fold(0.0, f64::max),
                                 got.covariance
+                                    .as_slice()
                                     .iter()
-                                    .zip(&want.covariance)
+                                    .zip(want.covariance.as_slice())
                                     .map(|(a, b)| (a.unwrap() - b.unwrap()).abs())
                                     .fold(0.0, f64::max),
                                 got.robust_covariance
                                     .iter()
-                                    .flatten()
-                                    .zip(want.robust_covariance.iter().flatten())
+                                    .flat_map(Covariance::as_slice)
+                                    .zip(
+                                        want.robust_covariance
+                                            .iter()
+                                            .flat_map(Covariance::as_slice),
+                                    )
                                     .map(|(a, b)| (a.unwrap() - b.unwrap()).abs())
                                     .fold(0.0, f64::max),
                                 (got.log_partial_likelihood.unwrap()

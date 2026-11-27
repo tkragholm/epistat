@@ -31,13 +31,13 @@ fn hash_fit(fit: &CoxModelFit) -> Fingerprint {
     let mut h = Fingerprint::new();
     h = opts(h, &fit.coefficients);
     h = opts(h, &fit.se);
-    h = opts(h, &fit.covariance);
+    h = opts(h, fit.covariance.as_slice());
     h = match &fit.robust_se {
         Some(v) => opts(h.u64(1), v),
         None => h.u64(0),
     };
     h = match &fit.robust_covariance {
-        Some(v) => opts(h.u64(1), v),
+        Some(v) => opts(h.u64(1), v.as_slice()),
         None => h.u64(0),
     };
     h = h.option_f64(fit.log_partial_likelihood);

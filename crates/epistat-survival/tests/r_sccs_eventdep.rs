@@ -93,7 +93,7 @@ fn event_dependent_fits_match_eventdepenexp() {
             db = db.max((f.coefficients[j].unwrap() - want.coef[j]).abs() / s);
             for k in 0..p {
                 let scale = (want.vcov[j][j] * want.vcov[k][k]).sqrt();
-                dc = dc.max((f.covariance[j * p + k].unwrap() - want.vcov[j][k]).abs() / scale);
+                dc = dc.max((f.covariance.get(j, k).unwrap() - want.vcov[j][k]).abs() / scale);
             }
         }
         eprintln!(

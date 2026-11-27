@@ -43,7 +43,7 @@ fn adjusted_rmst_does_not_depend_on_the_number_of_threads() {
         for f in [&r.difference, &r.ratio, &r.loss_ratio] {
             out.extend_from_slice(&f.coefficients);
             out.extend_from_slice(&f.se);
-            out.extend_from_slice(&f.covariance);
+            out.extend(f.covariance.as_slice().iter().map(|v| v.unwrap()));
             out.extend_from_slice(&f.p_value);
             out.extend_from_slice(&f.lower);
             out.extend_from_slice(&f.upper);

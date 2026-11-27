@@ -130,9 +130,11 @@
 //! 6. Therneau TM, Li H. Computing the Cox model for case-cohort designs.
 //!    Lifetime Data Anal 1999;5(2):99-112.
 
+use epistat_core::Covariance;
 use epistat_linalg::{Mat, MatRef};
 
 use crate::check::{check_lengths, refuse_non_finite, refuse_non_finite_matrix};
+use crate::covariance;
 use crate::cox::{
     Collapse, CoxModelFit, CoxOptions, ResidualKind, ResidualOptions, Ties, fit as cox_fit,
     residuals,
@@ -215,7 +217,7 @@ impl<'a> CaseCohortOptions<'a> {
 
 /// A case-cohort fit.
 ///
-/// Matrices are row-major with `p * p` entries, `None` where the row or the
+/// The covariance matrices are `p` by `p`, `None` where the row or the
 /// column is a coefficient that is `None`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CaseCohortFit {
@@ -224,12 +226,12 @@ pub struct CaseCohortFit {
     pub coefficients: Vec<Option<f64>>,
     /// The covariance matrix of the coefficients, `var` of `cch`: the model
     /// part plus the sampling part, or Barlow's for `robust`.
-    pub covariance: Vec<Option<f64>>,
+    pub covariance: Covariance,
     /// The model-based covariance of the fit that gives the variance, before
     /// the sampling part is added. `cch` stores the sum in `naive.var`.
-    pub naive_covariance: Vec<Option<f64>>,
+    pub naive_covariance: Covariance,
     /// The part of the variance for sampling the subcohort, `phase2var`.
-    pub phase_two_covariance: Vec<Option<f64>>,
+    pub phase_two_covariance: Covariance,
     /// For Borgan's methods, the proportion of the subcohort to take from each
     /// stratum to minimise the variance of each coefficient, `opt` of `cch`: one
     /// row per stratum and one column per coefficient, row-major. `None`
@@ -436,12 +438,13 @@ fn gather(columns: &[Option<Vec<f64>>], kept: &[usize], rows: &[usize]) -> Resul
 
 /// The covariance of a fit over the kept columns.
 fn kept_covariance(model: &CoxModelFit, kept: &[usize]) -> Result<Dense> {
-    let p = model.coefficients.len();
     let mut out = Vec::with_capacity(kept.len() * kept.len());
     for &a in kept {
         for &b in kept {
             out.push(
-                model.covariance[a * p + b]
+                model
+                    .covariance
+                    .get(a, b)
                     .ok_or_else(|| Error::invalid("fit: the model covariance has no value"))?,
             );
         }
@@ -622,11 +625,12 @@ pub fn fit(
             borgan(&sample, control, opts, stratum)?
         }
     };
+    let p = pieces.coefficients.len();
     Ok(CaseCohortFit {
+        covariance: covariance::from_options(p, pieces.covariance)?,
+        naive_covariance: covariance::from_options(p, pieces.naive)?,
+        phase_two_covariance: covariance::from_options(p, pieces.phase_two)?,
         coefficients: pieces.coefficients,
-        covariance: pieces.covariance,
-        naive_covariance: pieces.naive,
-        phase_two_covariance: pieces.phase_two,
         optimal_allocation: pieces.optimal,
         method: opts.method,
         n_cohort: opts.cohort_size.iter().sum(),

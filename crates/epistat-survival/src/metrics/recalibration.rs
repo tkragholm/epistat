@@ -92,7 +92,7 @@
     reason = "tied predictions are equal values, which is the definition of a tie"
 )]
 
-use epistat_core::InputError;
+use epistat_core::{Covariance, InputError};
 use epistat_linalg::Mat;
 
 use super::prepare::{check_times, sort_rows};
@@ -433,8 +433,8 @@ pub struct Recalibration {
     pub intercept: f64,
     /// The slope `b`: 1 for predictions that are right at every level.
     pub slope: f64,
-    /// The sandwich covariance of `(a, b)`, row-major.
-    pub covariance: [f64; 4],
+    /// The sandwich covariance of `(a, b)`, 2 by 2.
+    pub covariance: Covariance,
     /// The information matrix `A` of the fit, row-major.
     pub information: [f64; 4],
     /// The condition number of `A` in the 1-norm. The coefficients lose about
@@ -453,30 +453,32 @@ pub struct Recalibration {
 }
 
 impl Recalibration {
-    /// The standard error of the intercept.
+    /// The standard error of the intercept, `None` where its variance is
+    /// undefined.
     #[must_use]
-    pub fn se_intercept(&self) -> f64 {
-        self.covariance[0].max(0.0).sqrt()
+    pub fn se_intercept(&self) -> Option<f64> {
+        self.covariance.get(0, 0).map(|v| v.max(0.0).sqrt())
     }
 
-    /// The standard error of the slope.
+    /// The standard error of the slope, `None` where its variance is
+    /// undefined.
     #[must_use]
-    pub fn se_slope(&self) -> f64 {
-        self.covariance[3].max(0.0).sqrt()
+    pub fn se_slope(&self) -> Option<f64> {
+        self.covariance.get(1, 1).map(|v| v.max(0.0).sqrt())
     }
 
     /// The standard error of the intercept, under its name in 0.3.
     #[deprecated(since = "0.4.0", note = "use `se_intercept`")]
     #[must_use]
     pub fn std_err_intercept(&self) -> f64 {
-        self.se_intercept()
+        self.se_intercept().unwrap_or(f64::NAN)
     }
 
     /// The standard error of the slope, under its name in 0.3.
     #[deprecated(since = "0.4.0", note = "use `se_slope`")]
     #[must_use]
     pub fn std_err_slope(&self) -> f64 {
-        self.se_slope()
+        self.se_slope().unwrap_or(f64::NAN)
     }
 }
 
@@ -531,7 +533,7 @@ pub fn slope_intercept(
 
 struct Gee {
     beta: [f64; 2],
-    covariance: [f64; 4],
+    covariance: Covariance,
     information: [f64; 4],
     condition: f64,
     converged: bool,
@@ -564,11 +566,10 @@ fn gee(
         ..PseudoRegressionOptions::new(link)
     };
     let fit = regression::fit(x.as_ref(), y, &cluster, None, None, None, &options)?;
-    let c = &fit.covariance;
     let a = &fit.information;
     Ok(Gee {
         beta: [fit.coefficients[0], fit.coefficients[1]],
-        covariance: [c[0], c[1], c[2], c[3]],
+        covariance: fit.covariance,
         information: [a[0], a[1], a[2], a[3]],
         condition: fit.information_condition,
         converged: fit.converged,

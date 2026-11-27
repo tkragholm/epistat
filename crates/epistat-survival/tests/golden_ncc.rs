@@ -136,7 +136,7 @@ fn nested_case_control_outputs_are_recorded() {
         check(&format!("{name}/coefficients"), &flat(&model.coefficients));
         check(
             &format!("{name}/robust_covariance"),
-            &flat(model.robust_covariance.as_ref().unwrap()),
+            &flat(model.robust_covariance.as_ref().unwrap().as_slice()),
         );
         let base = baseline(&model, &data, x.as_ref(), &w, &opts).unwrap();
         check(&format!("{name}/baseline"), &base.cumulative_hazard);

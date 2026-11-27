@@ -26,8 +26,11 @@ fn push(out: &mut Vec<f64>, values: &[Option<f64>]) {
 fn bits_of(model: &MsModel, profile: &[f64]) -> Vec<f64> {
     let mut out = Vec::new();
     push(&mut out, &model.fit.coefficients);
-    push(&mut out, &model.fit.covariance);
-    push(&mut out, model.fit.robust_covariance.as_ref().unwrap());
+    push(&mut out, model.fit.covariance.as_slice());
+    push(
+        &mut out,
+        model.fit.robust_covariance.as_ref().unwrap().as_slice(),
+    );
     out.push(model.fit.log_partial_likelihood.unwrap());
     let h = model.msfit(profile, &MsFitOptions::default()).unwrap();
     out.extend_from_slice(&h.time);
@@ -35,7 +38,7 @@ fn bits_of(model: &MsModel, profile: &[f64]) -> Vec<f64> {
         out.extend_from_slice(c);
     }
     for c in h.covariance.as_ref().unwrap() {
-        out.extend_from_slice(c);
+        out.extend(c.as_slice().iter().map(|v| v.unwrap()));
     }
     for predt in [0.0, 5.0] {
         let pt = probtrans(&h, predt, &ProbTransOptions::default()).unwrap();

@@ -133,10 +133,15 @@ fn weights_fit_and_absolute_risk_match_r() {
             coefficient = coefficient.max((g.unwrap() - e).abs() / (bound * e.abs().max(1.0)));
         }
         let cov_bound = 3.0 * 2.0 * bound;
-        let model_cov = matrix_deviation(&s.name, &model.covariance, &s.var_model, cov_bound);
+        let model_cov = matrix_deviation(
+            &s.name,
+            model.covariance.as_slice(),
+            &s.var_model,
+            cov_bound,
+        );
         let robust = matrix_deviation(
             &s.name,
-            model.robust_covariance.as_ref().unwrap(),
+            model.robust_covariance.as_ref().unwrap().as_slice(),
             &s.var_robust,
             cov_bound,
         );

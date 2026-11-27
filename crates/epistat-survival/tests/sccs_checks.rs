@@ -208,7 +208,7 @@ fn the_estimate_of_two_pieces_per_person_is_the_log_odds_ratio_of_the_counts() {
     // Window rows are the odd ones: 8 events there, 12 in the baseline.
     let beta = f.coefficients[0].unwrap();
     assert!((beta - (8.0f64 / 12.0).ln()).abs() < 1e-9);
-    let var = f.covariance[0].unwrap();
+    let var = f.covariance.get(0, 0).unwrap();
     assert!((var - (1.0 / 8.0 + 1.0 / 12.0)).abs() < 1e-9);
     // The interval and test follow from the closed form. The fit stops within
     // 1e-10 relative in the log likelihood, so beta and var are within about

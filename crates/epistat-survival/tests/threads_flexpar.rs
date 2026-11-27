@@ -14,11 +14,16 @@ fn flat(f: &FlexParFit) -> Vec<f64> {
     let mut out = f.gamma.clone();
     out.extend(f.beta.iter().map(|b| b.unwrap_or(f64::NAN)));
     out.extend(f.tvc_coefficients.iter().flatten());
-    out.extend(f.covariance.iter().flatten().map(|v| v.unwrap_or(f64::NAN)));
+    out.extend(
+        f.covariance
+            .iter()
+            .flat_map(epistat_survival::Covariance::as_slice)
+            .map(|v| v.unwrap_or(f64::NAN)),
+    );
     out.extend(
         f.robust_covariance
             .iter()
-            .flatten()
+            .flat_map(epistat_survival::Covariance::as_slice)
             .map(|v| v.unwrap_or(f64::NAN)),
     );
     out.extend([

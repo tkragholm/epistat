@@ -76,12 +76,13 @@
 //!    object-oriented implementation of clustered covariances in R. J Stat Softw
 //!    2020;95(1):1-36.
 
-use epistat_core::InputError;
+use epistat_core::{Covariance, InputError};
 use epistat_inference::Clusters;
 use epistat_inference::sandwich::SmallSample;
 use epistat_linalg::{Attempt, Mat, inverse};
 
-use super::{Msm, MsmInput, check_design, fit_msm, quadratic_form};
+use super::{Msm, MsmInput, check_design, dense, fit_msm, quadratic_form};
+use crate::covariance;
 use crate::error::{Error, Result};
 
 /// The two outcome models of the stacked trials with a competing event.
@@ -91,9 +92,13 @@ pub struct MsmCompeting {
     pub event: Msm,
     /// The model of the competing event, fitted on every row.
     pub competing: Msm,
-    /// The clustered covariance of the coefficients of the event model (rows)
-    /// with those of the competing model (columns), `p * p` values in row order.
-    pub cross_covariance: Vec<f64>,
+    /// The clustered covariance of the coefficients of both models,
+    /// `(beta, gamma)`, `2p` by `2p`: the event model's `p` coefficients, then
+    /// the competing model's. Its diagonal blocks are the covariances of
+    /// `event` and `competing`, entry `(i, p + j)` the covariance of the
+    /// event model's coefficient `i` with the competing model's coefficient
+    /// `j`.
+    pub covariance: Covariance,
 }
 
 /// Fit the outcome model of the event and that of the competing event, with
@@ -179,11 +184,15 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
         .ok_or_else(|| Error::invalid("outcome model: at least two persons are needed"))?;
     let am = product(&a_inv, &meat);
     let cross = product(&am, &b_inv);
-    let cross_covariance = (0..p * p).map(|k| cross[(k / p, k % p)] * factor).collect();
+    let cross_covariance: Vec<f64> = (0..p * p).map(|k| cross[(k / p, k % p)] * factor).collect();
+    let covariance = covariance::from_values(
+        2 * p,
+        &stacked_covariance(&event, &competing_fit, &cross_covariance)?,
+    )?;
     Ok(MsmCompeting {
         event,
         competing: competing_fit,
-        cross_covariance,
+        covariance,
     })
 }
 
@@ -239,7 +248,8 @@ pub struct CompetingIncidence {
 /// # Errors
 ///
 /// An input error for no time, no row, models of different numbers of
-/// coefficients, and a design value that is not finite.
+/// coefficients, a covariance that is not `2p` by `2p` or has an undefined
+/// entry, and a design value that is not finite.
 pub fn cumulative_incidence_competing(
     fit: &MsmCompeting,
     rows: usize,
@@ -247,9 +257,9 @@ pub fn cumulative_incidence_competing(
     design: &(dyn Fn(usize, usize, &mut [f64]) + Sync),
 ) -> Result<CompetingIncidence> {
     let p = fit.event.coefficients.len();
-    if fit.competing.coefficients.len() != p || fit.cross_covariance.len() != p * p {
+    if fit.competing.coefficients.len() != p || fit.covariance.dim() != 2 * p {
         return Err(Error::invalid(
-            "the two models need the same number of coefficients",
+            "the two models need the same number of coefficients, and the covariance 2p by 2p",
         ));
     }
     if times == 0 {
@@ -314,7 +324,7 @@ pub fn cumulative_incidence_competing(
             }
         }
     }
-    let covariance = stacked_covariance(fit);
+    let covariance = dense(&fit.covariance, "fit")?;
     let nf = rows as f64;
     let mut out = CompetingIncidence {
         risk: Vec::with_capacity(times),
@@ -334,18 +344,23 @@ pub fn cumulative_incidence_competing(
     Ok(out)
 }
 
-/// The `2p * 2p` covariance of `(beta, gamma)` in row order.
-fn stacked_covariance(fit: &MsmCompeting) -> Vec<f64> {
-    let p = fit.event.coefficients.len();
+/// The `2p * 2p` covariance of `(beta, gamma)` in row order, from the
+/// covariances of the two models and the `p * p` cross-covariance `cross` of
+/// the event model's coefficients (rows) with the competing model's
+/// (columns).
+fn stacked_covariance(event: &Msm, competing: &Msm, cross: &[f64]) -> Result<Vec<f64>> {
+    let p = event.coefficients.len();
     let k = 2 * p;
+    let event = dense(&event.covariance, "event model")?;
+    let competing = dense(&competing.covariance, "competing model")?;
     let mut v = vec![0.0; k * k];
     for i in 0..p {
         for j in 0..p {
-            v[i * k + j] = fit.event.covariance[i * p + j];
-            v[(p + i) * k + p + j] = fit.competing.covariance[i * p + j];
-            v[i * k + p + j] = fit.cross_covariance[i * p + j];
-            v[(p + j) * k + i] = fit.cross_covariance[i * p + j];
+            v[i * k + j] = event[i * p + j];
+            v[(p + i) * k + p + j] = competing[i * p + j];
+            v[i * k + p + j] = cross[i * p + j];
+            v[(p + j) * k + i] = cross[i * p + j];
         }
     }
-    v
+    Ok(v)
 }

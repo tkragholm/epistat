@@ -94,7 +94,11 @@ fn martingale_form_matches_r() {
         };
         let mut model = fit(&data, x.as_ref(), &opts).unwrap();
         model.coefficients = r.coefficients.iter().copied().map(Some).collect();
-        model.covariance = r.naive_var.iter().flatten().copied().map(Some).collect();
+        model.covariance = epistat_survival::Covariance::new(
+            r.naive_var.len(),
+            r.naive_var.iter().flatten().copied().map(Some).collect(),
+        )
+        .unwrap();
         let fitted = FittedModel {
             data: &data,
             x: x.as_ref(),

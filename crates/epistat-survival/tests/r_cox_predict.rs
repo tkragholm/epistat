@@ -186,8 +186,9 @@ struct RMeans {
     strata: Vec<usize>,
 }
 
-fn flatten(m: &[Vec<f64>]) -> Vec<Option<f64>> {
-    m.iter().flatten().copied().map(Some).collect()
+fn flatten(m: &[Vec<f64>]) -> epistat_survival::Covariance {
+    epistat_survival::Covariance::new(m.len(), m.iter().flatten().copied().map(Some).collect())
+        .unwrap()
 }
 
 /// The reference curves are R's with `censor = FALSE`, at the event times.

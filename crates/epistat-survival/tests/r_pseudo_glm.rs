@@ -129,13 +129,13 @@ fn run(case: &Case, worst: &mut (f64, f64, String, f64)) {
         for j in 0..p {
             let tv = (32.0 * kappa * (n + p) as f64 * EPS + 8.0 * tc)
                 * (case.vcov[i * p + i] * case.vcov[j * p + j]).sqrt();
-            let diff = (got.covariance[i * p + j] - case.vcov[i * p + j]).abs();
+            let diff = (got.covariance.get(i, j).unwrap() - case.vcov[i * p + j]).abs();
             let ratio = diff / tv;
             assert!(
                 ratio <= 1.0,
                 "{} covariance ({i}, {j}): got {:e}, R {:e}, tolerance {tv:e}",
                 case.name,
-                got.covariance[i * p + j],
+                got.covariance.get(i, j).unwrap(),
                 case.vcov[i * p + j]
             );
             if ratio >= worst.1 {
@@ -168,12 +168,12 @@ fn run(case: &Case, worst: &mut (f64, f64, String, f64)) {
                 let tv = (32.0 * kappa * (n + p) as f64 * EPS + 8.0 * tc)
                     * amplification
                     * (want[i * p + i] * want[j * p + j]).sqrt();
-                let ratio = (got.covariance[i * p + j] - want[i * p + j]).abs() / tv;
+                let ratio = (got.covariance.get(i, j).unwrap() - want[i * p + j]).abs() / tv;
                 assert!(
                     ratio <= 1.0,
                     "{} HC3 covariance ({i}, {j}): got {:e}, R {:e}, tolerance {tv:e}",
                     case.name,
-                    got.covariance[i * p + j],
+                    got.covariance.get(i, j).unwrap(),
                     want[i * p + j]
                 );
                 if ratio >= worst.3 {

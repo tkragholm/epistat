@@ -111,14 +111,16 @@
 //!    standardized effects. J Stat Softw 2021;99(6):1-20.
 //!    doi:10.18637/jss.v099.i06
 
-use epistat_core::Level as ConfidenceLevel;
 use std::ops::Range;
+
+use epistat_core::{Covariance, Level as ConfidenceLevel};
 
 use epistat_linalg::MatRef;
 use epistat_stats::dist::normal;
 
 use crate::absrisk::{CscOptions, SurvType, overall_data};
 use crate::check::{check_lengths, refuse_non_finite};
+use crate::covariance;
 use crate::cox::{CoxModelFit, CoxOptions};
 use crate::error::{Error, Result};
 use crate::par;
@@ -214,7 +216,7 @@ pub struct Standardised {
     pub upper: Option<Vec<Option<f64>>>,
     /// The covariance of the standardised risks of the levels at each time,
     /// `n_times` matrices of `n_levels` by `n_levels`, with `se`.
-    pub covariance: Option<Vec<Option<f64>>>,
+    pub covariance: Option<Vec<Covariance>>,
     /// The confidence level of the limits.
     pub level: ConfidenceLevel,
 }
@@ -265,7 +267,7 @@ impl Standardised {
         }
         let l = self.n_levels;
         let estimate: Option<Vec<f64>> = (0..l).map(|a| self.risk[a * self.n_times + k]).collect();
-        let block: Option<Vec<f64>> = cov[k * l * l..(k + 1) * l * l].iter().copied().collect();
+        let block: Option<Vec<f64>> = cov[k].as_slice().iter().copied().collect();
         match (estimate, block) {
             (Some(e), Some(b)) => yates::wald_tests(&e, &b, kind),
             _ => Err(Error::invalid(format!("time {k}: a risk is not defined"))),
@@ -303,8 +305,8 @@ impl Standardised {
                 let z = normal::quantile(self.level.upper_probability());
                 let mut d_se = Vec::with_capacity(t);
                 let mut r_se = Vec::with_capacity(t);
-                for k in 0..t {
-                    let c = |a: usize, b: usize| cov[k * l * l + a * l + b];
+                for (k, block) in cov.iter().enumerate().take(t) {
+                    let c = |a: usize, b: usize| block.get(a, b);
                     let (Some(va), Some(vb), Some(vab)) =
                         (c(first, first), c(second, second), c(first, second))
                     else {
@@ -753,7 +755,9 @@ fn run(
         se: std_err,
         lower,
         upper,
-        covariance,
+        covariance: covariance
+            .map(|values| covariance::option_blocks(n_times, n_levels, &values))
+            .transpose()?,
         level: opts.level,
     })
 }

@@ -120,8 +120,11 @@ fn fields() -> Vec<(String, Vec<f64>)> {
         };
         let cox = wcox::fit(&data, x.as_ref(), &CoxOptions::default(), &estimated).unwrap();
         out.push((format!("{name}/coefficients"), cox.coefficients.clone()));
-        out.push((format!("{name}/covariance"), cox.covariance.clone()));
-        out.push((format!("{name}/robust"), cox.robust_covariance.clone()));
+        let dense = |c: &epistat_survival::Covariance| -> Vec<f64> {
+            c.as_slice().iter().map(|x| x.unwrap()).collect()
+        };
+        out.push((format!("{name}/covariance"), dense(&cox.covariance)));
+        out.push((format!("{name}/robust"), dense(&cox.robust_covariance)));
     }
     out
 }

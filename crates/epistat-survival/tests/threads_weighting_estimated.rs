@@ -4,7 +4,6 @@
 
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
-use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::ipcw::{CensoringModel, IpcwOptions};
@@ -14,6 +13,7 @@ use epistat_survival::weighting::pooled;
 use epistat_survival::weighting::pooled::PooledEvent;
 use epistat_survival::weighting::pooled::PooledOptions;
 use epistat_survival::weighting::{Censoring, WeightAt, Weights};
+use epistat_survival::{Covariance, SurvData};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
 struct Simulated {
@@ -162,8 +162,8 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
             for est in &cox_cases {
                 let fit = wcox::fit(&plain, x_out.as_ref(), &cox_opts, est).unwrap();
                 out.extend(&fit.coefficients);
-                out.extend(&fit.covariance);
-                out.extend(&fit.robust_covariance);
+                out.extend(fit.covariance.as_slice().iter().map(|v| v.unwrap()));
+                out.extend(fit.robust_covariance.as_slice().iter().map(|v| v.unwrap()));
             }
             let km_cases = [
                 Weights {
@@ -187,11 +187,18 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
             for est in &km_cases {
                 let curves = km::estimate(&arms, &times, &KmOptions::default(), est).unwrap();
                 out.extend(&curves.surv);
-                out.extend(curves.covariance.iter().map(|v| v.unwrap_or(f64::NAN)));
+                out.extend(
+                    curves
+                        .covariance
+                        .iter()
+                        .flat_map(Covariance::as_slice)
+                        .map(|v| v.unwrap_or(f64::NAN)),
+                );
                 out.extend(
                     curves
                         .covariance_known
                         .iter()
+                        .flat_map(Covariance::as_slice)
                         .map(|v| v.unwrap_or(f64::NAN)),
                 );
             }

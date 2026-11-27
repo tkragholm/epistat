@@ -177,9 +177,13 @@ fn run_case(
         let mut fit = cox::fit(&data, *design, &options).unwrap();
         fit.coefficients = case.coefficients[m].iter().copied().map(Some).collect();
         let p = case.coefficients[m].len();
-        fit.covariance = (0..p * p)
-            .map(|i| Some(case.var[m][i / p][i % p]))
-            .collect();
+        fit.covariance = epistat_survival::Covariance::new(
+            p,
+            (0..p * p)
+                .map(|i| Some(case.var[m][i / p][i % p]))
+                .collect(),
+        )
+        .unwrap();
         fits.push(fit);
     }
     let sets: Vec<Vec<(usize, f64)>> = (0..case.nlevels)
@@ -284,7 +288,15 @@ fn standardised_risks_match_r() {
                 .as_ref()
                 .unwrap()
                 .iter()
-                .zip(exact.covariance.as_ref().unwrap())
+                .flat_map(epistat_survival::Covariance::as_slice)
+                .zip(
+                    exact
+                        .covariance
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .flat_map(epistat_survival::Covariance::as_slice),
+                )
             {
                 let (a, b) = (a.unwrap(), b.unwrap());
                 if a != 0.0 {
@@ -442,7 +454,11 @@ fn stdreg_check(reference: &StdReg, case: &Case, b_se: f64) {
     };
     let mut fit = cox::fit(&data, design.as_ref(), &options).unwrap();
     fit.coefficients = reference.coefficients.iter().copied().map(Some).collect();
-    fit.covariance = (0..9).map(|i| Some(reference.var[i / 3][i % 3])).collect();
+    fit.covariance = epistat_survival::Covariance::new(
+        3,
+        (0..9).map(|i| Some(reference.var[i / 3][i % 3])).collect(),
+    )
+    .unwrap();
     let set0 = [(0, 0.0)];
     let set1 = [(0, 1.0)];
     let levels = [
@@ -470,11 +486,10 @@ fn stdreg_check(reference: &StdReg, case: &Case, b_se: f64) {
             let r = out.risk[l * t + k].unwrap();
             worst_risk = worst_risk.max((1.0 - r - reference.survival[k][l]).abs());
         }
-        let cov = out.covariance.as_ref().unwrap();
-        for a in 0..2 {
-            for b in 0..2 {
-                let ours = cov[k * 4 + a * 2 + b].unwrap();
-                let theirs = reference.vcov[k][a][b];
+        let cov = &out.covariance.as_ref().unwrap()[k];
+        for (a, row) in reference.vcov[k].iter().enumerate().take(2) {
+            for (b, &theirs) in row.iter().enumerate().take(2) {
+                let ours = cov.get(a, b).unwrap();
                 // stdReg's covariance is ours times n / (n - 1).
                 let scaled = ours * n as f64 / (n as f64 - 1.0);
                 let dev = (scaled - theirs).abs() / theirs.abs();

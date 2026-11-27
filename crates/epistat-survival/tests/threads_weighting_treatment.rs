@@ -97,8 +97,8 @@ fn treatment_weights_are_the_same_on_every_pool() {
             };
             let cox = wcox::fit(&data, x.as_ref(), &CoxOptions::default(), &estimated).unwrap();
             out.extend(&cox.coefficients);
-            out.extend(&cox.covariance);
-            out.extend(&cox.robust_covariance);
+            out.extend(cox.covariance.as_slice().iter().map(|v| v.unwrap()));
+            out.extend(cox.robust_covariance.as_slice().iter().map(|v| v.unwrap()));
             out
         });
     }

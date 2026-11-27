@@ -85,11 +85,16 @@ pub fn model_pieces(
         ..options.clone()
     };
     let scores = score_residuals(data, x.as_ref(), &coefficients, &breslow).unwrap();
-    let v: Vec<f64> = fit.covariance.iter().map(|v| v.unwrap()).collect();
+    let v: Vec<f64> = fit
+        .covariance
+        .as_slice()
+        .iter()
+        .map(|v| v.unwrap())
+        .collect();
     let v = fit
         .robust_covariance
         .as_ref()
-        .map_or(v, |r| r.iter().map(|v| v.unwrap()).collect());
+        .map_or(v, |r| r.as_slice().iter().map(|v| v.unwrap()).collect());
     let n = x.nrows();
     let mut if_beta = vec![vec![0.0; p]; n];
     for i in 0..n {

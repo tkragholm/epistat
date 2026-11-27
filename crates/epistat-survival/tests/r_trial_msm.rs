@@ -94,7 +94,7 @@ fn the_standard_error_of_the_incidence_is_the_delta_method() {
         let mut var = 0.0;
         for i in 0..p {
             for j in 0..p {
-                var += g[i] * o.msm.covariance[i * p + j] * g[j];
+                var += g[i] * o.msm.covariance.get(i, j).unwrap() * g[j];
             }
         }
         let se = var.sqrt();

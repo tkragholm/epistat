@@ -211,12 +211,12 @@ fn compare_fit(f: &RFit, got: &FrailtyFit) -> Worst {
     };
     let scale = f.var[0].abs().max(f.var[3].abs());
     let var_bound = if f.transcribed { 1e-5 } else { b + 1e-10 };
-    for (c, &want) in cov.iter().zip(&f.var) {
+    for (c, &want) in cov.as_slice().iter().zip(&f.var) {
         worst.check("var", (c.unwrap() - want).abs() / scale, var_bound);
     }
     if let Some(var2) = &f.var2 {
         let scale2 = var2[0].abs().max(var2[3].abs());
-        for (c, &want) in cov2.iter().zip(var2) {
+        for (c, &want) in cov2.as_slice().iter().zip(var2) {
             worst.check("var2", (c.unwrap() - want).abs() / scale2, b + 1e-10);
         }
     }

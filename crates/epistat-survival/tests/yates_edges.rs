@@ -185,7 +185,13 @@ fn weights_columns_and_matrices_agree() {
         );
         assert!((weighted.se[l] - repeated.se[l]).abs() <= bound * repeated.se[l]);
     }
-    for (a, b) in weighted.covariance.iter().zip(&repeated.covariance) {
+    for (a, b) in weighted
+        .covariance
+        .as_slice()
+        .iter()
+        .zip(repeated.covariance.as_slice())
+    {
+        let (a, b) = (a.unwrap(), b.unwrap());
         assert!((a - b).abs() <= bound * b.abs());
     }
 }

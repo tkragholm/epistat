@@ -31,7 +31,12 @@ fn flat_excess(f: &ExcessFit) -> Vec<f64> {
         .iter()
         .map(|v| v.unwrap_or(f64::NAN))
         .collect();
-    out.extend(f.covariance.iter().flatten().map(|v| v.unwrap_or(f64::NAN)));
+    out.extend(
+        f.covariance
+            .iter()
+            .flat_map(epistat_survival::Covariance::as_slice)
+            .map(|v| v.unwrap_or(f64::NAN)),
+    );
     out.extend([f.log_likelihood, f.deviance]);
     out.extend(&f.expected_events);
     out
@@ -105,7 +110,12 @@ fn flexible_excess_model_on_threads() {
         let f = flexpar::fit(&data, x.as_ref(), &opts).unwrap();
         let mut out = f.gamma.clone();
         out.extend(f.beta.iter().map(|b| b.unwrap_or(f64::NAN)));
-        out.extend(f.covariance.iter().flatten().map(|v| v.unwrap_or(f64::NAN)));
+        out.extend(
+            f.covariance
+                .iter()
+                .flat_map(epistat_survival::Covariance::as_slice)
+                .map(|v| v.unwrap_or(f64::NAN)),
+        );
         out.push(f.log_likelihood);
         out
     });

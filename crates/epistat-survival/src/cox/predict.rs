@@ -657,10 +657,10 @@ impl<'a> Model<'a> {
                 Error::invalid("variance: the fit has no cluster-robust covariance")
             })?,
         };
-        if chosen.len() != p * p {
+        if chosen.dim() != p {
             return Err(Error::invalid("fit: the covariance is not p by p"));
         }
-        let variance: Vec<f64> = chosen.iter().map(|v| v.unwrap_or(0.0)).collect();
+        let variance: Vec<f64> = chosen.as_slice().iter().map(|v| v.unwrap_or(0.0)).collect();
         let data = m.data.clone().with_timefix(m.options.timefix)?;
         let surv = data.followup()?;
         let code = match (m.options.cause, surv.n_codes()) {

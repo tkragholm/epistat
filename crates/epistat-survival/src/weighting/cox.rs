@@ -64,6 +64,7 @@
 //! robust inference for the Cox proportional hazards model. J Am Stat Assoc
 //! 1989;84:1074-8.
 
+use epistat_core::Covariance;
 use epistat_inference::Clusters;
 use epistat_inference::sandwich::{meat, sandwich};
 use epistat_linalg::{Attempt, Mat, MatRef, inverse};
@@ -71,6 +72,7 @@ use epistat_linalg::{Attempt, Mat, MatRef, inverse};
 use super::estimated::{Weights, prepare};
 use super::iptw::Iptw;
 use super::stack::{GENERAL, check_subjects, units, with_weights};
+use crate::covariance;
 use crate::cox::{CoxModelFit, CoxOptions, fit as cox_fit, score_residuals};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
@@ -174,6 +176,7 @@ fn fit_iptw(
         .collect::<Result<_>>()?;
     let v: Vec<f64> = model
         .covariance
+        .as_slice()
         .iter()
         .map(|c| c.ok_or_else(|| Error::undefined("the covariance of the fit is undefined")))
         .collect::<Result<_>>()?;
@@ -246,9 +249,9 @@ fn fit_iptw(
         coefficients,
         se: se(&covariance),
         robust_se: se(&robust_covariance),
-        covariance,
-        robust_covariance,
-        weight_covariance: Some(flat(&stacked, 0, k)),
+        covariance: covariance::from_values(p, &covariance)?,
+        robust_covariance: covariance::from_values(p, &robust_covariance)?,
+        weight_covariance: Some(covariance::from_values(k, &flat(&stacked, 0, k))?),
         n_units,
         fit: model,
     })
@@ -262,19 +265,19 @@ pub struct EstimatedCox {
     /// The coefficients.
     pub coefficients: Vec<f64>,
     /// The covariance of the coefficients that accounts for the estimation of
-    /// every model of the weights, `p x p` row-major.
-    pub covariance: Vec<f64>,
+    /// every model of the weights, `p` by `p`.
+    pub covariance: Covariance,
     /// The standard errors from `covariance`.
     pub se: Vec<f64>,
     /// The covariance that takes the weights as known, over the same units.
-    pub robust_covariance: Vec<f64>,
+    pub robust_covariance: Covariance,
     /// The standard errors from `robust_covariance`.
     pub robust_se: Vec<f64>,
     /// For propensity weights alone, the covariance of the parameters of the
     /// weights from the stacked sandwich: the propensity coefficients, then
     /// the marginal probability of treatment for stabilised weights.
-    /// Row-major. `None` otherwise.
-    pub weight_covariance: Option<Vec<f64>>,
+    /// `None` otherwise.
+    pub weight_covariance: Option<Covariance>,
     /// The number of units the estimating functions were summed over.
     pub n_units: usize,
 }
@@ -306,6 +309,7 @@ fn fit_general(
         .collect::<Result<_>>()?;
     let v: Vec<f64> = model
         .covariance
+        .as_slice()
         .iter()
         .map(|c| c.ok_or_else(|| Error::undefined("the covariance of the fit is undefined")))
         .collect::<Result<_>>()?;
@@ -348,8 +352,8 @@ fn fit_general(
         coefficients,
         se: se(&covariance),
         robust_se: se(&robust_covariance),
-        covariance,
-        robust_covariance,
+        covariance: covariance::from_values(p, &covariance)?,
+        robust_covariance: covariance::from_values(p, &robust_covariance)?,
         weight_covariance: None,
         n_units: prepared.n_units,
         fit: model,

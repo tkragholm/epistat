@@ -72,7 +72,7 @@ fn ipcw_pseudo_values_do_not_depend_on_the_number_of_threads() {
         gee.covariance = SandwichType::Hc3;
         let fit = p.regress(Some(z.as_ref()), false, &gee).unwrap();
         let mut out = fit.coefficients.clone();
-        out.extend_from_slice(&fit.covariance);
+        out.extend(fit.covariance.as_slice().iter().map(|v| v.unwrap()));
         out.extend_from_slice(fit.leverage.as_ref().unwrap());
         out
     });

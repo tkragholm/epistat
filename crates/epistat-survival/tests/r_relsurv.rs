@@ -526,7 +526,7 @@ fn compare_glm(worst: &mut Worst, kind: &str, fit: &epistat_survival::relsurv::E
         for k in 0..d {
             worst.rel(
                 &format!("{kind} covariance"),
-                cov[j * d + k].unwrap(),
+                cov.get(j, k).unwrap(),
                 g.vcov[j][k],
                 (g.vcov[j][j] * g.vcov[k][k]).sqrt(),
                 1e-9,
@@ -621,7 +621,6 @@ fn flexible_excess_model_matches_stpm2() {
             1.0,
             1e-10,
         );
-        let q = f.dimension();
         let cov = f.covariance.as_ref().unwrap();
         for j in 0..2 {
             let bj = s.coef[1 + j];
@@ -634,7 +633,7 @@ fn flexible_excess_model_matches_stpm2() {
             let k = f.beta_index(j).unwrap();
             worst.rel(
                 &format!("{label} beta se"),
-                cov[k * q + k].unwrap().sqrt(),
+                cov.get(k, k).unwrap().sqrt(),
                 sj,
                 1e-300,
                 1e-4,

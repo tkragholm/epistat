@@ -266,8 +266,9 @@ fn sparse_cluster_codes_change_only_the_order_of_a_sum() {
     for (u, v) in a
         .robust_covariance
         .unwrap()
+        .as_slice()
         .iter()
-        .zip(b.robust_covariance.unwrap())
+        .zip(b.robust_covariance.unwrap().as_slice())
     {
         let (u, v) = (u.unwrap(), v.unwrap());
         assert!((u - v).abs() <= 1e-12 * u.abs().max(v.abs()));

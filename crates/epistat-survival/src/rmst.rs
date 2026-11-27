@@ -109,11 +109,12 @@
 //!    time with the subject's baseline covariates in survival analysis,
 //!    Biostatistics 15: 222-233.
 
-use epistat_core::Level;
+use epistat_core::{Covariance, Level};
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::sandwich::sandwich;
 use epistat_linalg::{Attempt, Mat, MatRef, weighted_gram};
 
+use crate::covariance;
 use crate::error::{Error, Result};
 use crate::metrics::censoring::CensoringKm;
 use crate::surv::SurvData;
@@ -400,8 +401,8 @@ pub struct RmstRegression {
     pub coefficients: Vec<f64>,
     /// Their standard errors.
     pub se: Vec<f64>,
-    /// The covariance matrix, row-major, `p` by `p`.
-    pub covariance: Vec<f64>,
+    /// The covariance matrix, `p` by `p`.
+    pub covariance: Covariance,
     /// `coefficient / se`.
     pub z: Vec<f64>,
     /// The two-sided normal p-value of each coefficient.
@@ -637,10 +638,13 @@ pub fn rmst2_regression(
             .map(|j| scale(beta[j] + z_value * std_err[j]))
             .collect(),
         ratio: log_link.then(|| beta.iter().map(|b| b.exp()).collect()),
-        covariance: (0..p)
-            .flat_map(|i| (0..p).map(move |j| (i, j)))
-            .map(|(i, j)| covariance[(i, j)])
-            .collect(),
+        covariance: covariance::from_values(
+            p,
+            &(0..p)
+                .flat_map(|i| (0..p).map(move |j| (i, j)))
+                .map(|(i, j)| covariance[(i, j)])
+                .collect::<Vec<_>>(),
+        )?,
         coefficients: beta,
         se: std_err,
         z,

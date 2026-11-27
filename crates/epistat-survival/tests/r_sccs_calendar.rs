@@ -174,7 +174,7 @@ fn several_series_seasons_and_calendar_periods_match_r() {
         assert_eq!(x.ncols(), case.coef.len(), "{}", case.label);
         let f = fit(&pieces.data(&length), x.as_ref(), &opts).unwrap();
         assert!(f.converged, "{}", case.label);
-        let (db, dc) = deviations(&f.coefficients, &f.covariance, case);
+        let (db, dc) = deviations(&f.coefficients, f.covariance.as_slice(), case);
         let ll = f.log_likelihood.unwrap();
         if let Some(loglik) = &case.loglik {
             // standardsccs, through clogit.

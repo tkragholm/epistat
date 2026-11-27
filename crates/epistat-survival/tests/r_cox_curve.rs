@@ -193,8 +193,9 @@ fn matrix(rows: &[Vec<f64>]) -> Mat<f64> {
     Mat::from_fn(rows.len(), rows[0].len(), |i, j| rows[i][j])
 }
 
-fn flatten(m: &[Vec<f64>]) -> Vec<Option<f64>> {
-    m.iter().flatten().copied().map(Some).collect()
+fn flatten(m: &[Vec<f64>]) -> epistat_survival::Covariance {
+    epistat_survival::Covariance::new(m.len(), m.iter().flatten().copied().map(Some).collect())
+        .unwrap()
 }
 
 /// The root `a` in (0, 1) of `sum w r / (1 - a^r) = s0` by bisection.

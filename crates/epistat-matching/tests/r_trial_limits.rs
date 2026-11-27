@@ -280,7 +280,13 @@ fn truncated_weights_agree_with_trial_emulation() {
         .expect("outcome model");
         let what = &a.analysis_weights;
         assert!(worst(&msm.coefficients, &a.msm_coef) < 1e-6, "{what}");
-        assert!(worst(&msm.covariance, &a.msm_vcov) < 1e-6, "{what}");
+        let covariance: Vec<f64> = msm
+            .covariance
+            .as_slice()
+            .iter()
+            .map(|v| v.unwrap())
+            .collect();
+        assert!(worst(&covariance, &a.msm_vcov) < 1e-6, "{what}");
         assert!(
             worst(&risk(&msm, p, &t, false), &a.cum_inc_0) < 1e-6,
             "{what}"

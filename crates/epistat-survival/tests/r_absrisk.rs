@@ -254,9 +254,13 @@ fn absolute_risk_matches_r() {
         for (fit, &m) in fits.iter_mut().zip(&order) {
             fit.coefficients = case.coefficients[m].iter().copied().map(Some).collect();
             let p = case.coefficients[m].len();
-            fit.covariance = (0..p * p)
-                .map(|i| Some(case.var[m][i / p][i % p]))
-                .collect();
+            fit.covariance = epistat_survival::Covariance::new(
+                p,
+                (0..p * p)
+                    .map(|i| Some(case.var[m][i / p][i % p]))
+                    .collect(),
+            )
+            .unwrap();
             // The fitted values agree with R's to the convergence of the fit.
         }
         let model = CauseSpecificCox::from_fits(&data, &design_refs, fits.clone(), &opts).unwrap();

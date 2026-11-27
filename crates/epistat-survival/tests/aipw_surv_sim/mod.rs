@@ -91,12 +91,11 @@ pub fn run(s: &Simulated, estimator: Estimator, km: bool, times: &[f64]) -> Aipw
 
 pub fn flatten(r: &AipwSurv) -> Vec<f64> {
     let mut v = Vec::new();
-    for x in [&r.risks.risk]
-        .into_iter()
-        .chain(r.risks.se.as_ref())
-        .chain(r.risks.covariance.as_ref())
-    {
+    for x in [&r.risks.risk].into_iter().chain(r.risks.se.as_ref()) {
         v.extend(x.iter().map(|o| o.unwrap_or(f64::NAN)));
+    }
+    for c in r.risks.covariance.iter().flatten() {
+        v.extend(c.as_slice().iter().map(|o| o.unwrap_or(f64::NAN)));
     }
     v.extend(&r.influence[0]);
     v.extend(&r.influence[1]);

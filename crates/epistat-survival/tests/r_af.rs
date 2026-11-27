@@ -133,8 +133,8 @@ fn the_attributable_fraction_function_matches_afcoxph() {
             worst[0] = worst[0].max((af - c.af[k]).abs() / c.af[k].abs());
             let var = curve.se[k].unwrap().powi(2);
             worst[1] = worst[1].max((var - c.jk_af_var[k]).abs() / c.jk_af_var[k]);
-            let v1 = cov[k * 4 + 3].unwrap();
-            let v0 = cov[k * 4].unwrap();
+            let v1 = cov[k].get(1, 1).unwrap();
+            let v0 = cov[k].get(0, 0).unwrap();
             worst[2] = worst[2].max((v1 - c.jk_s_var[k]).abs() / c.jk_s_var[k]);
             worst[3] = worst[3].max((v0 - c.jk_s0_var[k]).abs() / c.jk_s0_var[k]);
             let ratio = c.af_var[k] / var;

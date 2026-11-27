@@ -299,6 +299,7 @@ fn influence_of_coefficients(
     let scores = score_residuals(data, x, &model.coefficients, &breslow)?;
     let v: Vec<f64> = model
         .covariance
+        .as_slice()
         .iter()
         .map(|c| c.ok_or_else(|| Error::invalid("the censoring model's covariance is not defined")))
         .collect::<Result<_>>()?;

@@ -56,6 +56,11 @@ struct Reference {
     arm1: Arm,
 }
 
+/// The entries of a covariance, row-major, every one defined.
+fn values(c: &epistat_survival::Covariance) -> Vec<f64> {
+    c.as_slice().iter().map(|v| v.unwrap()).collect()
+}
+
 fn worst(a: &[f64], b: &[f64], scale: f64) -> f64 {
     assert_eq!(a.len(), b.len());
     a.iter()
@@ -90,18 +95,27 @@ fn the_two_models_and_the_risks_agree_with_r() {
     let fit = fit_msm_competing(&input, &competing).expect("fits");
     assert!(worst(&fit.event.coefficients, &r.event_coef, 1.0) < 1e-10);
     assert!(worst(&fit.competing.coefficients, &r.competing_coef, 1.0) < 1e-10);
-    assert!(worst(&fit.event.covariance, &r.event_vcov, largest(&r.event_vcov)) < 1e-8);
     assert!(
         worst(
-            &fit.competing.covariance,
+            &values(&fit.event.covariance),
+            &r.event_vcov,
+            largest(&r.event_vcov)
+        ) < 1e-8
+    );
+    assert!(
+        worst(
+            &values(&fit.competing.covariance),
             &r.competing_vcov,
             largest(&r.competing_vcov)
         ) < 1e-8
     );
+    let p = fit.event.coefficients.len();
+    let cross: Vec<f64> = (0..p * p)
+        .map(|k| fit.covariance.get(k / p, p + k % p).unwrap())
+        .collect();
     assert!(
-        worst(&fit.cross_covariance, &r.cross, largest(&r.cross)) < 1e-8,
-        "{:?} against {:?}",
-        fit.cross_covariance,
+        worst(&cross, &r.cross, largest(&r.cross)) < 1e-8,
+        "{cross:?} against {:?}",
         r.cross
     );
     // The competing model is fit_msm on every row with the competing event as

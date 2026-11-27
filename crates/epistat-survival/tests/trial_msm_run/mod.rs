@@ -192,7 +192,12 @@ pub fn run(a: &Analysis) -> Outputs {
         row_weight,
         trial_weight,
         coefficients: msm.coefficients.clone(),
-        covariance: msm.covariance.clone(),
+        covariance: msm
+            .covariance
+            .as_slice()
+            .iter()
+            .map(|x| x.unwrap())
+            .collect(),
         risk: [ci[0].risk.clone(), ci[1].risk.clone()],
         std_err: [ci[0].se.clone(), ci[1].se.clone()],
         msm,

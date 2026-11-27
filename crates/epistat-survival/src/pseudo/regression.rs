@@ -93,6 +93,7 @@ use epistat_inference::Clusters;
 use epistat_inference::sandwich::{meat, sandwich};
 use epistat_linalg::{Attempt, Mat, MatRef, inverse, weighted_gram};
 
+use crate::covariance;
 use crate::error::{Error, Result};
 
 /// Whether the mean `mu` lies in the range of `link`, for the links the
@@ -148,8 +149,8 @@ impl PseudoRegressionOptions {
 pub struct PseudoRegression {
     /// The coefficients, one per column of the design.
     pub coefficients: Vec<f64>,
-    /// The sandwich covariance, row-major, `p` by `p`.
-    pub covariance: Vec<f64>,
+    /// The sandwich covariance, `p` by `p`.
+    pub covariance: epistat_core::Covariance,
     /// The fitted means.
     pub fitted: Vec<f64>,
     /// Whether the iteration stopped on its tolerance.
@@ -183,12 +184,13 @@ pub type GeeFit = PseudoRegression;
 
 impl PseudoRegression {
     /// The standard errors, the square roots of the diagonal of the
-    /// covariance.
+    /// covariance, `None` where a variance is undefined.
     #[must_use]
-    pub fn se(&self) -> Vec<f64> {
-        let p = self.coefficients.len();
-        (0..p)
-            .map(|i| self.covariance[i * p + i].max(0.0).sqrt())
+    pub fn se(&self) -> Vec<Option<f64>> {
+        self.covariance
+            .variances()
+            .into_iter()
+            .map(|v| v.map(|v| v.max(0.0).sqrt()))
             .collect()
     }
 
@@ -197,6 +199,9 @@ impl PseudoRegression {
     #[must_use]
     pub fn standard_errors(&self) -> Vec<f64> {
         self.se()
+            .into_iter()
+            .map(|s| s.unwrap_or(f64::NAN))
+            .collect()
     }
 }
 
@@ -427,7 +432,7 @@ pub fn fit(
     };
     Ok(PseudoRegression {
         coefficients: beta,
-        covariance: row_major(&covariance),
+        covariance: covariance::from_values(p, &row_major(&covariance))?,
         fitted,
         converged,
         iterations,

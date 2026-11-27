@@ -53,6 +53,7 @@
 //! Cole SR, Hernan MA. Adjusted survival curves with inverse probability
 //! weights. Comput Methods Programs Biomed 2004;75(1):45-49.
 
+use epistat_core::Covariance;
 use epistat_linalg::{Factor, Mat};
 use epistat_stats::sum::Compensated;
 
@@ -60,6 +61,7 @@ use super::adjust::Nuisance;
 use super::estimated::{Weights, prepare};
 use super::iptw::Iptw;
 use super::stack::{GENERAL, check_subjects, units, with_weights};
+use crate::covariance;
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
@@ -86,31 +88,34 @@ pub struct WeightedKm {
     /// before the first event of its group.
     pub surv: Vec<f64>,
     /// The covariance between the curves of the groups at each time that
-    /// accounts for the estimation of the weights, `[(t * G + g) * G + h]`.
-    /// `None` for a group whose curve is 0.
-    pub covariance: Vec<Option<f64>>,
+    /// accounts for the estimation of the weights, one matrix over the groups
+    /// for each entry of `times`. `None` in the row and column of a group
+    /// whose curve is 0.
+    pub covariance: Vec<Covariance>,
     /// The same with the weights taken as known.
-    pub covariance_known: Vec<Option<f64>>,
+    pub covariance_known: Vec<Covariance>,
 }
 
 impl WeightedKm {
-    fn index(&self, group: usize, time: usize, other: usize) -> usize {
-        let g = self.groups.len();
-        (time * g + group) * g + other
-    }
-
     /// The standard error of the curve of `group` (a position in `groups`) at
-    /// `times[time]`, accounting for the estimation of the weights.
+    /// `times[time]`, accounting for the estimation of the weights. `None`
+    /// where the variance is undefined and for a group or time out of range.
     #[must_use]
     pub fn se(&self, group: usize, time: usize) -> Option<f64> {
-        self.covariance[self.index(group, time, group)].map(|v| v.max(0.0).sqrt())
+        self.covariance
+            .get(time)?
+            .get(group, group)
+            .map(|v| v.max(0.0).sqrt())
     }
 
     /// The standard error with the weights taken as known, as
     /// `survfit(robust = TRUE)`.
     #[must_use]
     pub fn se_known(&self, group: usize, time: usize) -> Option<f64> {
-        self.covariance_known[self.index(group, time, group)].map(|v| v.max(0.0).sqrt())
+        self.covariance_known
+            .get(time)?
+            .get(group, group)
+            .map(|v| v.max(0.0).sqrt())
     }
 
     /// The standard error of the curve of `group` at `times[time]`.
@@ -127,10 +132,11 @@ impl WeightedKm {
         self.se_known(group, time)
     }
 
-    /// The covariance of the curves of two groups at `times[time]`.
+    /// The covariance of the curves of two groups at `times[time]`, `None`
+    /// where it is undefined and for a group or time out of range.
     #[must_use]
     pub fn covariance_between(&self, group: usize, other: usize, time: usize) -> Option<f64> {
-        self.covariance[self.index(group, time, other)]
+        self.covariance.get(time)?.get(group, other)
     }
 
     /// The difference of the risks `(1 - S_group) - (1 - S_other)` at
@@ -155,10 +161,11 @@ impl WeightedKm {
             "group {group}, other {other} or time {time} beyond {} groups and {m} times",
             self.groups.len()
         );
-        let se = |v: &[Option<f64>]| -> Option<f64> {
-            let gg = v[self.index(group, time, group)]?;
-            let hh = v[self.index(other, time, other)]?;
-            let gh = v[self.index(group, time, other)]?;
+        let se = |v: &[Covariance]| -> Option<f64> {
+            let v = &v[time];
+            let gg = v.get(group, group)?;
+            let hh = v.get(other, other)?;
+            let gh = v.get(group, other)?;
             Some((gg + hh - 2.0 * gh).max(0.0).sqrt())
         };
         KmDifference {
@@ -613,7 +620,7 @@ fn curves(
         times: times.to_vec(),
         groups,
         surv: surv_out,
-        covariance: cov,
-        covariance_known: cov_known,
+        covariance: covariance::option_blocks(n_times, n_out, &cov)?,
+        covariance_known: covariance::option_blocks(n_times, n_out, &cov_known)?,
     })
 }

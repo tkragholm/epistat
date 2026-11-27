@@ -21,11 +21,11 @@ use epistat_testkit::{POOLS, assert_same_on_pools};
 
 fn flat(out: &Standardised) -> Vec<f64> {
     let mut all: Vec<f64> = out.risk.iter().map(|v| v.unwrap_or(-1.0)).collect();
-    for table in [&out.se, &out.lower, &out.upper, &out.covariance]
-        .into_iter()
-        .flatten()
-    {
+    for table in [&out.se, &out.lower, &out.upper].into_iter().flatten() {
         all.extend(table.iter().map(|v| v.unwrap_or(-1.0)));
+    }
+    for matrix in out.covariance.iter().flatten() {
+        all.extend(matrix.as_slice().iter().map(|v| v.unwrap_or(-1.0)));
     }
     all
 }

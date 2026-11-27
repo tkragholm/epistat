@@ -25,7 +25,7 @@ fn push_hazards(out: &mut Vec<f64>, h: &CumulativeHazards) {
         out.extend_from_slice(c);
     }
     for c in h.covariance.as_ref().unwrap() {
-        out.extend_from_slice(c);
+        out.extend(c.as_slice().iter().map(|v| v.unwrap()));
     }
 }
 
@@ -39,8 +39,8 @@ fn push_probabilities(out: &mut Vec<f64>, pt: &ProbTrans) {
             .iter()
             .map(|v| v.unwrap_or(f64::NAN)),
     );
-    if let Some(c) = &pt.covariance {
-        out.extend_from_slice(c);
+    for c in pt.covariance.iter().flatten() {
+        out.extend(c.as_slice().iter().map(|v| v.unwrap()));
     }
 }
 

@@ -26,7 +26,7 @@ fn hash_fit(f: &FlexParFit) -> Fingerprint {
     }
     for matrix in [&f.covariance, &f.robust_covariance] {
         h = match matrix {
-            Some(v) => v.iter().fold(h.u64(1), |h, &x| h.option_f64(x)),
+            Some(v) => v.as_slice().iter().fold(h.u64(1), |h, &x| h.option_f64(x)),
             None => h.u64(0),
         };
     }

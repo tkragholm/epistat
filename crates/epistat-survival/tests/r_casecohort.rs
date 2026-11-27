@@ -154,9 +154,19 @@ fn fits_match_cch() {
         // each `dfbeta` itself a product with the inverse information, so the
         // bound is `p` times three factors of `bound`.
         let cov_bound = 3.0 * (p as f64) * bound;
-        let model = matrix_deviation(&r.name, &got.naive_covariance, &r.model_var, cov_bound);
-        let phase2 = matrix_deviation(&r.name, &got.phase_two_covariance, &r.phase2var, cov_bound);
-        let var = matrix_deviation(&r.name, &got.covariance, &r.var, cov_bound);
+        let model = matrix_deviation(
+            &r.name,
+            got.naive_covariance.as_slice(),
+            &r.model_var,
+            cov_bound,
+        );
+        let phase2 = matrix_deviation(
+            &r.name,
+            got.phase_two_covariance.as_slice(),
+            &r.phase2var,
+            cov_bound,
+        );
+        let var = matrix_deviation(&r.name, got.covariance.as_slice(), &r.var, cov_bound);
         let opt = match (&got.optimal_allocation, &r.opt) {
             (Some(g), Some(e)) => {
                 let mut worst = 0.0f64;

@@ -192,7 +192,7 @@ fn the_semiparametric_fit_matches_semisccs() {
         db = db.max((f.coefficients[j].unwrap() - s.coef[j]).abs() / s.vcov[j][j].sqrt());
         for k in 0..p {
             let scale = (s.vcov[j][j] * s.vcov[k][k]).sqrt();
-            dc = dc.max((f.covariance[j * p + k].unwrap() - s.vcov[j][k]).abs() / scale);
+            dc = dc.max((f.covariance.get(j, k).unwrap() - s.vcov[j][k]).abs() / scale);
         }
     }
     eprintln!("semisccs: coef {db:e} s, cov {dc:e}");

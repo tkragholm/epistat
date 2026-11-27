@@ -76,11 +76,12 @@ fn sccs_does_not_depend_on_the_number_of_threads() {
         out.extend(&pieces.end);
         out.extend(&pieces.events);
         out.extend(f.coefficients.iter().map(|c| c.unwrap()));
-        out.extend(f.covariance.iter().map(|c| c.unwrap()));
+        out.extend(f.covariance.as_slice().iter().map(|c| c.unwrap()));
         out.extend(
             f.robust_covariance
                 .as_ref()
                 .unwrap()
+                .as_slice()
                 .iter()
                 .map(|c| c.unwrap()),
         );

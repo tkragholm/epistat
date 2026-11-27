@@ -563,7 +563,7 @@ pub fn residuals(
         ("x columns", p),
         ("fit coefficients", fit.coefficients.len()),
     ])?;
-    if fit.covariance.len() != p * p {
+    if fit.covariance.dim() != p {
         return Err(Error::invalid(
             "fit: the covariance matrix does not have one row and column per column of x",
         ));
@@ -849,7 +849,7 @@ fn dfbeta(
                 }
                 let mut total = 0.0f64;
                 for (k, s) in score.iter().enumerate() {
-                    if let (Some(s), Some(v)) = (s, fit.covariance[k * p + j]) {
+                    if let (Some(s), Some(v)) = (s, fit.covariance.get(k, j)) {
                         let r = if unweighted { s[i] / weight[i] } else { s[i] };
                         total += r * v;
                     }
@@ -857,7 +857,7 @@ fn dfbeta(
                 *out = total;
             }
             if scaled {
-                let se = fit.covariance[j * p + j]?.sqrt();
+                let se = fit.covariance.get(j, j)?.sqrt();
                 for v in &mut column {
                     *v /= se;
                 }
@@ -950,7 +950,7 @@ fn schoenfeld_residuals(
             let column: Vec<f64> = (0..events)
                 .map(|e| {
                     let r = compensated(prep.keep.iter().enumerate().map(|(d, &k)| {
-                        rows.values[d][e] * fit.covariance[k * p + j].unwrap_or(0.0)
+                        rows.values[d][e] * fit.covariance.get(k, j).unwrap_or(0.0)
                     }));
                     r * ndead + beta
                 })

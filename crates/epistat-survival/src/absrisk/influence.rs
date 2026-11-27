@@ -393,12 +393,13 @@ fn covariance(model: &ModelInput<'_>, m: usize) -> Result<Vec<f64>> {
         .as_ref()
         .unwrap_or(&model.fit.covariance);
     let p = model.x.ncols();
-    if chosen.len() != p * p {
+    if chosen.dim() != p {
         return Err(Error::invalid(format!(
             "model {m}: the covariance is not p by p"
         )));
     }
     chosen
+        .as_slice()
         .iter()
         .map(|v| {
             v.ok_or_else(|| Error::invalid(format!("model {m}: the covariance is not defined")))

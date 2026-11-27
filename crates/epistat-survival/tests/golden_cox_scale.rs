@@ -33,13 +33,15 @@ fn hash_options(h: Fingerprint, values: &[Option<f64>]) -> Fingerprint {
 fn hash_fit(fit: &CoxModelFit) -> Fingerprint {
     let mut h = hash_options(Fingerprint::new(), &fit.coefficients);
     h = hash_options(h, &fit.se);
-    h = hash_options(h, &fit.covariance);
-    for robust in [&fit.robust_se, &fit.robust_covariance] {
-        h = match robust {
-            Some(v) => hash_options(h.u64(1), v),
-            None => h.u64(0),
-        };
-    }
+    h = hash_options(h, fit.covariance.as_slice());
+    h = match &fit.robust_se {
+        Some(v) => hash_options(h.u64(1), v),
+        None => h.u64(0),
+    };
+    h = match &fit.robust_covariance {
+        Some(v) => hash_options(h.u64(1), v.as_slice()),
+        None => h.u64(0),
+    };
     for test in [
         fit.tests.wald,
         fit.tests.robust_wald,

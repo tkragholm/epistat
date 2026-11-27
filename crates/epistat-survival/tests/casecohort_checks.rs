@@ -123,6 +123,7 @@ fn a_fully_sampled_single_member_stratum_adds_nothing() {
     assert!(
         model
             .covariance
+            .as_slice()
             .iter()
             .all(|v| v.is_some_and(f64::is_finite))
     );
@@ -148,8 +149,8 @@ fn an_aliased_column_is_none() {
     let options = CaseCohortOptions::new(CaseCohortMethod::LinYing, &[100.0]);
     let model = fit(&data, x.as_ref(), &r.sub, None, &options).unwrap();
     assert!(model.coefficients[2].is_none());
-    assert!(model.covariance[2].is_none() && model.covariance[8].is_none());
-    assert!(model.covariance[0].is_some());
+    assert!(model.covariance.get(0, 2).is_none() && model.covariance.get(2, 2).is_none());
+    assert!(model.covariance.get(0, 0).is_some());
 }
 
 #[test]
@@ -190,7 +191,7 @@ fn a_case_without_a_subcohort_member_at_risk_adds_nothing() {
     for (u, v) in a.coefficients.iter().zip(&b.coefficients) {
         assert!((u.unwrap() - v.unwrap()).abs() < 1e-12);
     }
-    for (u, v) in a.covariance.iter().zip(&b.covariance) {
+    for (u, v) in a.covariance.as_slice().iter().zip(b.covariance.as_slice()) {
         assert!((u.unwrap() - v.unwrap()).abs() < 1e-12 * v.unwrap().abs().max(1.0));
     }
 }

@@ -240,7 +240,7 @@ fn cox_study(study: usize, with_outcome: bool) -> (f64, bool) {
             let model = fit(&surv, x.as_ref(), &CoxOptions::default())?;
             Ok::<_, Box<dyn std::error::Error + Send + Sync>>((
                 model.coefficients[0].unwrap(),
-                model.covariance[0].unwrap(),
+                model.covariance.get(0, 0).unwrap(),
             ))
         })
         .unwrap();

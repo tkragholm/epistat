@@ -349,8 +349,8 @@ fn cox_variances_match_finite_differences_of_refits() {
         let eta = eta_bounds(&z, &ri.coefficients, ri.kappa);
         let omega = eta.iter().map(|e| 2.0 * e + 4.0 * EPS).fold(0.0, f64::max);
         let v = &fit.fit.covariance;
-        let diag: Vec<f64> = (0..p).map(|i| v[i * p + i].unwrap().sqrt()).collect();
-        let scaled = Mat::from_fn(p, p, |i, j| v[i * p + j].unwrap() / (diag[i] * diag[j]));
+        let diag: Vec<f64> = (0..p).map(|i| v.get(i, i).unwrap().sqrt()).collect();
+        let scaled = Mat::from_fn(p, p, |i, j| v.get(i, j).unwrap() / (diag[i] * diag[j]));
         let inv = epistat_linalg::inverse(scaled.as_ref(), &epistat_linalg::Attempt::SYMMETRIC)
             .unwrap()
             .x;
@@ -388,12 +388,12 @@ fn cox_variances_match_finite_differences_of_refits() {
                 for j in 0..p {
                     let scale = (theirs[i][i] * theirs[j][j]).sqrt();
                     let tol = rel * scale + 2.0 * (plain[i][j] - theirs[i][j]).abs();
-                    let dev = (mine[i * p + j] - theirs[i][j]).abs() / tol;
+                    let dev = (mine.get(i, j).unwrap() - theirs[i][j]).abs() / tol;
                     assert!(
                         dev <= 1.0,
                         "{} covariance {slot} ({i},{j}): {} against {} (tolerance {tol:e})",
                         c.estimand,
-                        mine[i * p + j],
+                        mine.get(i, j).unwrap(),
                         theirs[i][j]
                     );
                     if slot == 0 {

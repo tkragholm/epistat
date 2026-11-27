@@ -145,7 +145,7 @@ fn aliased_columns_and_empty_clusters() {
     assert_eq!(a.coefficients[1], None);
     assert_eq!(a.coefficients[0], b.coefficients[0]);
     assert_eq!(a.coefficients[2], b.coefficients[1]);
-    assert!(a.covariance[3..6].iter().all(Option::is_none));
+    assert!((0..3).all(|j| a.covariance.get(1, j).is_none()));
 
     let mut w = s.weight.clone();
     for (i, wi) in w.iter_mut().enumerate() {
@@ -179,7 +179,7 @@ fn no_covariates() {
     let empty = Mat::<f64>::zeros(n, 0);
     let f = fit(&buf.as_data(), empty.as_ref(), &fixed(0.5, Ties::Efron)).unwrap();
     assert!(f.converged);
-    assert!(f.coefficients.is_empty() && f.covariance.is_empty());
+    assert!(f.coefficients.is_empty() && f.covariance.dim() == 0);
     let mean: f64 = f.frailties.iter().map(|w| w.unwrap().exp()).sum::<f64>() / 30.0;
     assert!((mean - 1.0).abs() <= 1e-12, "{mean}");
 }

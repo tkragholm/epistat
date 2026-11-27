@@ -170,13 +170,13 @@ fn weighted_curves_match_survfit_and_finite_differences() {
                 for h in 0..2 {
                     for (mine, theirs, plain, slot) in [
                         (
-                            est.covariance[(t * 2 + g) * 2 + h],
+                            est.covariance[t].get(g, h),
                             r.covariance[t][g][h],
                             r.covariance_plain[t][g][h],
                             1,
                         ),
                         (
-                            est.covariance_known[(t * 2 + g) * 2 + h],
+                            est.covariance_known[t].get(g, h),
                             r.known[t][g][h],
                             r.known_plain[t][g][h],
                             2,

@@ -68,10 +68,10 @@ fn case_cohort_methods() {
                 .unwrap_or_else(|e| panic!("{method:?}: {e}"));
             let mut out: Vec<f64> = Vec::new();
             for m in [
-                &model.coefficients,
-                &model.covariance,
-                &model.naive_covariance,
-                &model.phase_two_covariance,
+                model.coefficients.as_slice(),
+                model.covariance.as_slice(),
+                model.naive_covariance.as_slice(),
+                model.phase_two_covariance.as_slice(),
             ] {
                 out.extend(m.iter().copied().map(absent));
             }

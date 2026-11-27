@@ -253,7 +253,7 @@ fn population_means_match_r() {
             for b in 0..n_levels {
                 worst.put(
                     &format!("{name} covariance"),
-                    (out.covariance[a * n_levels + b] - want_var[a][b]).abs(),
+                    (out.covariance.get(a, b).unwrap() - want_var[a][b]).abs(),
                     b_cov[a][b],
                 );
             }

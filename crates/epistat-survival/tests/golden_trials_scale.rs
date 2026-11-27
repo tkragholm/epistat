@@ -86,7 +86,7 @@ fn periods(n: usize, length: usize, seed: u64) -> Periods {
 
 fn flatten(m: &Msm) -> Vec<f64> {
     let mut v = m.coefficients.clone();
-    v.extend(&m.covariance);
+    v.extend(m.covariance.as_slice().iter().map(|x| x.unwrap()));
     v.extend([m.n_rows as f64, m.n_persons as f64]);
     v
 }

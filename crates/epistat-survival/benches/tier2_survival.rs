@@ -243,7 +243,9 @@ fn main() {
             });
             lines.push("rows", m as f64);
             lines.push_all("coef", &msm.coefficients);
-            lines.push_all("se", &msm.se());
+            for (i, se) in msm.se().into_iter().enumerate() {
+                lines.push_opt(&format!("se{i}"), se);
+            }
             times
         }
         "ccw" => {
@@ -305,7 +307,9 @@ fn main() {
             });
             lines.push("rows", rows as f64);
             lines.push_all("coef", &msm.coefficients);
-            lines.push_all("se", &msm.se());
+            for (i, se) in msm.se().into_iter().enumerate() {
+                lines.push_opt(&format!("se{i}"), se);
+            }
             times
         }
         "trial_msm_rows" => {
@@ -369,7 +373,9 @@ fn main() {
             });
             lines.push("rows", m as f64);
             lines.push_all("coef", &msm.coefficients);
-            lines.push_all("se", &msm.se());
+            for (i, se) in msm.se().into_iter().enumerate() {
+                lines.push_opt(&format!("se{i}"), se);
+            }
             times
         }
         "ccw_rows" => {
@@ -435,7 +441,9 @@ fn main() {
             });
             lines.push("rows", rows as f64);
             lines.push_all("coef", &msm.coefficients);
-            lines.push_all("se", &msm.se());
+            for (i, se) in msm.se().into_iter().enumerate() {
+                lines.push_opt(&format!("se{i}"), se);
+            }
             times
         }
         other => panic!("unknown method {other}"),

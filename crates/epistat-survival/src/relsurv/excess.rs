@@ -5,8 +5,11 @@
     reason = "a weight of 0 or 1 and the end of a follow-up are compared with the values they were copied from"
 )]
 
+use epistat_core::Covariance;
+
 use super::ExpectedHazard;
 use super::expected::Reader;
+use crate::covariance;
 use crate::error::{Error, Result};
 use crate::ldl;
 use crate::par;
@@ -72,7 +75,7 @@ pub struct ExcessFit {
     /// The inverse of the Fisher information at the estimate, `None` in the
     /// rows and columns of an interval without person-time or at the boundary,
     /// and `None` as a whole when the fit did not converge.
-    pub covariance: Option<Vec<Option<f64>>>,
+    pub covariance: Option<Covariance>,
     /// The log likelihood `sum d ln(mu) - mu` over the cells, without the
     /// constant of the Poisson mass function.
     pub log_likelihood: f64,
@@ -602,7 +605,9 @@ pub fn excess_hazard(
         })
     } else {
         None
-    };
+    }
+    .map(|values| covariance::from_options(d, values))
+    .transpose()?;
     Ok(ExcessFit {
         coefficients,
         at_bound,

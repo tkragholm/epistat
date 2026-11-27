@@ -88,7 +88,7 @@
 //!    object-oriented implementation of clustered covariances in R. J Stat Softw
 //!    2020;95(1):1-36.
 
-use epistat_core::InputError;
+use epistat_core::{Covariance, InputError};
 use epistat_glm::robust::{SandwichType, robust_covariance};
 use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
@@ -547,8 +547,8 @@ pub struct MsmInput<'a> {
 pub struct Msm {
     /// The coefficients.
     pub coefficients: Vec<f64>,
-    /// The covariance of the coefficients clustered by person, `p * p` values.
-    pub covariance: Vec<f64>,
+    /// The covariance of the coefficients clustered by person, `p` by `p`.
+    pub covariance: Covariance,
     /// The number of rows.
     pub n_rows: usize,
     /// The number of persons.
@@ -556,12 +556,14 @@ pub struct Msm {
 }
 
 impl Msm {
-    /// The robust standard errors of the coefficients.
+    /// The robust standard errors of the coefficients, `None` where a
+    /// variance is undefined.
     #[must_use]
-    pub fn se(&self) -> Vec<f64> {
-        let p = self.coefficients.len();
-        (0..p)
-            .map(|i| self.covariance[i * p + i].max(0.0).sqrt())
+    pub fn se(&self) -> Vec<Option<f64>> {
+        self.covariance
+            .variances()
+            .into_iter()
+            .map(|v| v.map(|v| v.max(0.0).sqrt()))
             .collect()
     }
 }
@@ -613,15 +615,15 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
             "outcome model: at least two persons are needed",
         ));
     }
-    let covariance: Vec<f64> = cov
-        .as_slice()
-        .iter()
-        .map(|v| v.ok_or_else(|| Error::undefined("outcome model: the covariance is not defined")))
-        .collect::<Result<_>>()?;
-    debug_assert_eq!(covariance.len(), p * p);
+    if cov.as_slice().iter().any(Option::is_none) {
+        return Err(Error::undefined(
+            "outcome model: the covariance is not defined",
+        ));
+    }
+    debug_assert_eq!(cov.dim(), p);
     Ok(Msm {
         coefficients,
-        covariance,
+        covariance: cov,
         n_rows: n,
         n_persons: clusters.count(),
     })
@@ -869,14 +871,14 @@ pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Re
             "outcome model: at least two persons are needed",
         ));
     }
-    let covariance: Vec<f64> = cov
-        .as_slice()
-        .iter()
-        .map(|v| v.ok_or_else(|| Error::undefined("outcome model: the covariance is not defined")))
-        .collect::<Result<_>>()?;
+    if cov.as_slice().iter().any(Option::is_none) {
+        return Err(Error::undefined(
+            "outcome model: the covariance is not defined",
+        ));
+    }
     Ok(Msm {
         coefficients,
-        covariance,
+        covariance: cov,
         n_rows: n,
         n_persons: g,
     })
@@ -914,7 +916,8 @@ pub struct CumulativeIncidence {
 /// # Errors
 ///
 /// An input error for no time, designs with another number of columns than the
-/// model or of different numbers of rows, or no row.
+/// model or of different numbers of rows, no row, and a covariance that is not
+/// `p` by `p` or has an undefined entry.
 pub fn cumulative_incidence(msm: &Msm, designs: &[MatRef<'_, f64>]) -> Result<CumulativeIncidence> {
     let p = msm.coefficients.len();
     let Some(first) = designs.first() else {
@@ -950,8 +953,8 @@ pub fn cumulative_incidence(msm: &Msm, designs: &[MatRef<'_, f64>]) -> Result<Cu
 ///
 /// # Errors
 ///
-/// An input error for no time, no row, and a design value that is not
-/// finite.
+/// An input error for no time, no row, a design value that is not finite,
+/// and a covariance that is not `p` by `p` or has an undefined entry.
 pub fn cumulative_incidence_rows(
     msm: &Msm,
     rows: usize,
@@ -965,6 +968,10 @@ pub fn cumulative_incidence_rows(
     if rows == 0 {
         return Err(Error::from(InputError::Empty { what: "designs" }));
     }
+    if msm.covariance.dim() != p {
+        return Err(Error::invalid("msm: the covariance is not p by p"));
+    }
+    let covariance = dense(&msm.covariance, "msm")?;
     let mut mean = vec![0.0; times];
     let mut grad = vec![0.0; times * p];
     let mut x = vec![0.0; p];
@@ -1000,9 +1007,18 @@ pub fn cumulative_incidence_rows(
         risk.push(1.0 - mean[t] / nf);
         // The risk is 1 - mean S, so its derivative is + mean(S dlog).
         let g: Vec<f64> = grad[t * p..(t + 1) * p].iter().map(|v| v / nf).collect();
-        std_err.push(quadratic_form(&g, &msm.covariance).max(0.0).sqrt());
+        std_err.push(quadratic_form(&g, &covariance).max(0.0).sqrt());
     }
     Ok(CumulativeIncidence { risk, se: std_err })
+}
+
+/// The entries of `covariance`, row-major, refusing an undefined one.
+pub(crate) fn dense(covariance: &Covariance, what: &str) -> Result<Vec<f64>> {
+    covariance
+        .as_slice()
+        .iter()
+        .map(|v| v.ok_or_else(|| Error::invalid(format!("{what}: the covariance is not defined"))))
+        .collect()
 }
 
 /// `g' V g` for a `p * p` matrix `V` in row order, summed as `a` then `b`.

@@ -105,10 +105,15 @@ fn fine_gray_rows() {
 fn fit_bits(fit: &CoxModelFit) -> Vec<f64> {
     let mut out: Vec<f64> = fit.coefficients.iter().copied().map(absent).collect();
     out.extend(fit.se.iter().copied().map(absent));
-    out.extend(fit.covariance.iter().copied().map(absent));
-    for matrix in [&fit.robust_se, &fit.robust_covariance] {
-        out.extend(matrix.iter().flatten().copied().map(absent));
-    }
+    out.extend(fit.covariance.as_slice().iter().copied().map(absent));
+    out.extend(fit.robust_se.iter().flatten().copied().map(absent));
+    out.extend(
+        fit.robust_covariance
+            .iter()
+            .flat_map(epistat_survival::Covariance::as_slice)
+            .copied()
+            .map(absent),
+    );
     for value in [fit.log_partial_likelihood, fit.null_log_partial_likelihood] {
         out.push(absent(value));
     }

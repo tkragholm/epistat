@@ -387,6 +387,7 @@
     reason = "the entry point checks that the row count fits in u32"
 )]
 
+use epistat_core::Covariance;
 use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_linalg::{Mat, MatRef};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
@@ -395,6 +396,7 @@ use rayon::prelude::*;
 use super::sweep::{BLOCK_ROWS, Block, Moments, RiskSets, Sums, terms};
 use super::{Ties, moments};
 use crate::check::{check_lengths, refuse_non_finite, refuse_non_finite_matrix};
+use crate::covariance;
 use crate::error::{Error, Result};
 use crate::ldl;
 use crate::surv::SurvData;
@@ -417,17 +419,17 @@ pub struct CoxModelFit {
     pub coefficients: Vec<Option<f64>>,
     /// The model-based standard errors, `None` where the coefficient is.
     pub se: Vec<Option<f64>>,
-    /// The model-based covariance matrix of the coefficients, row-major with
-    /// `p * p` entries on the scale of the columns given. An entry is `None`
-    /// where its row or its column is a coefficient that is `None`.
-    pub covariance: Vec<Option<f64>>,
+    /// The model-based covariance matrix of the coefficients, `p` by `p` on
+    /// the scale of the columns given. An entry is `None` where its row or
+    /// its column is a coefficient that is `None`.
+    pub covariance: Covariance,
     /// Standard errors from the cluster-robust variance. `None` when no
     /// cluster was given or there are fewer than two clusters.
     pub robust_se: Option<Vec<Option<f64>>>,
     /// The cluster-robust covariance matrix, laid out as `covariance`. `None`
     /// exactly when `robust_se` is, and with every entry `None`
     /// when clusters were given and the fit has no robust variance.
-    pub robust_covariance: Option<Vec<Option<f64>>>,
+    pub robust_covariance: Option<Covariance>,
     /// The log partial likelihood at the estimate, `None` when there is no
     /// estimate.
     pub log_partial_likelihood: Option<f64>,
@@ -508,13 +510,20 @@ pub struct CoxTests {
 }
 
 impl CoxModelFit {
-    pub(crate) fn degenerate(p: usize, n_events: f64, n_rows: usize, with_clusters: bool) -> Self {
-        Self {
+    pub(crate) fn degenerate(
+        p: usize,
+        n_events: f64,
+        n_rows: usize,
+        with_clusters: bool,
+    ) -> Result<Self> {
+        Ok(Self {
             coefficients: vec![None; p],
             se: vec![None; p],
-            covariance: vec![None; p * p],
+            covariance: covariance::undefined(p)?,
             robust_se: with_clusters.then(|| vec![None; p]),
-            robust_covariance: with_clusters.then(|| vec![None; p * p]),
+            robust_covariance: with_clusters
+                .then(|| covariance::undefined(p))
+                .transpose()?,
             log_partial_likelihood: None,
             null_log_partial_likelihood: None,
             tests: CoxTests::default(),
@@ -525,7 +534,7 @@ impl CoxModelFit {
             iterations: 0,
             converged: false,
             monotone_columns: Vec::new(),
-        }
+        })
     }
 }
 
@@ -1805,7 +1814,7 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
     let with_clusters = input.cluster.is_some();
     let kept = input.kept();
     if kept.is_empty() {
-        return Ok(CoxModelFit::degenerate(p, 0.0, 0, with_clusters));
+        return CoxModelFit::degenerate(p, 0.0, 0, with_clusters);
     }
     let n_rows = kept.len();
     let n_events: f64 = kept
@@ -1814,7 +1823,7 @@ fn fit_checked(input: &Input<'_>) -> Result<CoxModelFit> {
         .map(|&i| input.weight(i as usize))
         .sum();
     if !kept.iter().any(|&i| input.is_event[i as usize]) {
-        return Ok(CoxModelFit::degenerate(p, n_events, n_rows, with_clusters));
+        return CoxModelFit::degenerate(p, n_events, n_rows, with_clusters);
     }
 
     let Prepared { model, factor } = prepare(input, &kept);
@@ -1896,7 +1905,7 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
                  likelihood that is not finite",
             ));
         }
-        return Ok(undefined());
+        return undefined();
     };
     let null_loglik = if init.is_some() {
         model.evaluate(&vec![0.0f64; p]).map(|e| e.loglik)
@@ -1910,9 +1919,11 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
         return Ok(CoxModelFit {
             coefficients: Vec::new(),
             se: Vec::new(),
-            covariance: Vec::new(),
+            covariance: covariance::undefined(0)?,
             robust_se: with_clusters.then(Vec::new),
-            robust_covariance: with_clusters.then(Vec::new),
+            robust_covariance: with_clusters
+                .then(|| covariance::undefined(0))
+                .transpose()?,
             log_partial_likelihood: Some(start.loglik),
             null_log_partial_likelihood: null_loglik,
             tests: CoxTests::default(),
@@ -1929,10 +1940,10 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
     let mut accepted_loglik = start.loglik;
     let mut matrix = start.information.clone();
     let Some(initial_rank) = factorise(&mut matrix, p) else {
-        return Ok(undefined());
+        return undefined();
     };
     if initial_rank == 0 {
-        return Ok(undefined());
+        return undefined();
     }
     let mut step = start.score.clone();
     ldl::solve(&matrix, p, &mut step);
@@ -2003,7 +2014,7 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
             beta.clone_from(&trial);
             matrix = e.information;
             if factorise(&mut matrix, p).is_none() {
-                let mut fit = undefined();
+                let mut fit = undefined()?;
                 fit.iterations = count;
                 return Ok(fit);
             }
@@ -2029,19 +2040,19 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
         }
     }
     let Some(last) = last else {
-        let mut fit = undefined();
+        let mut fit = undefined()?;
         fit.iterations = iterations;
         return Ok(fit);
     };
 
     let mut final_matrix = last.information.clone();
     let Some(rank) = factorise(&mut final_matrix, p) else {
-        let mut fit = undefined();
+        let mut fit = undefined()?;
         fit.iterations = iterations;
         return Ok(fit);
     };
     if rank == 0 {
-        let mut fit = undefined();
+        let mut fit = undefined()?;
         fit.iterations = iterations;
         return Ok(fit);
     }
@@ -2071,7 +2082,7 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
         Vec::new()
     };
     if !monotone_columns.is_empty() {
-        let mut fit = undefined();
+        let mut fit = undefined()?;
         fit.iterations = iterations;
         fit.null_log_partial_likelihood = null_loglik;
         fit.monotone_columns = monotone_columns;
@@ -2087,7 +2098,7 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
     let standard_errors: Vec<Option<f64>> = (0..p)
         .map(|a| (!aliased(a)).then(|| variance[a * p + a].sqrt() * factor[a]))
         .collect();
-    let covariance = on_input_scale(&variance, factor, &aliased);
+    let covariance = covariance::from_options(p, on_input_scale(&variance, factor, &aliased))?;
 
     let robust = cluster_meat(model, p, clusters, &trial).map(|meat| {
         let sandwich = sandwich(&variance, &meat, p);
@@ -2128,8 +2139,8 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
     };
 
     let (robust_standard_errors, robust_covariance) = match (with_clusters, robust) {
-        (true, None) => (Some(vec![None; p]), Some(vec![None; p * p])),
-        (_, Some((se, covariance, _))) => (Some(se), Some(covariance)),
+        (true, None) => (Some(vec![None; p]), Some(covariance::undefined(p)?)),
+        (_, Some((se, values, _))) => (Some(se), Some(covariance::from_options(p, values)?)),
         (false, None) => (None, None),
     };
 
@@ -2270,6 +2281,7 @@ fn score_residuals_checked(
 
 #[cfg(test)]
 mod tests {
+    use epistat_core::Covariance;
     use epistat_linalg::Mat;
 
     use super::{CoxOptions, fit, score_residuals};
@@ -2383,18 +2395,18 @@ mod tests {
         let robust_se = fit.robust_se.as_ref().unwrap();
         for a in 0..3 {
             for b in 0..3 {
-                assert_eq!(fit.covariance[a * 3 + b], fit.covariance[b * 3 + a]);
-                assert_eq!(robust[a * 3 + b], robust[b * 3 + a]);
+                assert_eq!(fit.covariance.get(a, b), fit.covariance.get(b, a));
+                assert_eq!(robust.get(a, b), robust.get(b, a));
                 assert_eq!(
-                    fit.covariance[a * 3 + b].is_none(),
+                    fit.covariance.get(a, b).is_none(),
                     a == 2 || b == 2,
                     "the constant column is aliased"
                 );
             }
-            if let (Some(variance), Some(se)) = (fit.covariance[a * 3 + a], fit.se[a]) {
+            if let (Some(variance), Some(se)) = (fit.covariance.get(a, a), fit.se[a]) {
                 assert!((variance.sqrt() - se).abs() <= 4.0 * f64::EPSILON * se);
             }
-            if let (Some(variance), Some(se)) = (robust[a * 3 + a], robust_se[a]) {
+            if let (Some(variance), Some(se)) = (robust.get(a, a), robust_se[a]) {
                 assert!((variance.sqrt() - se).abs() <= 4.0 * f64::EPSILON * se);
             }
         }
@@ -2404,7 +2416,10 @@ mod tests {
     fn one_cluster_has_no_robust_covariance() {
         let x = column([0.5, 1.5, -1.0, 0.2, 2.0, -0.7, 1.1, 0.3]);
         let fit = design(&x, Some(&[0; 8])).unwrap();
-        assert_eq!(fit.robust_covariance, Some(vec![None]));
+        assert_eq!(
+            fit.robust_covariance.map(Covariance::into_values),
+            Some(vec![None])
+        );
         assert!(design(&x, None).unwrap().robust_covariance.is_none());
     }
 
