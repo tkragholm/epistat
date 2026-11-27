@@ -142,32 +142,14 @@ Every bootstrap replicate is seeded from the caller's seed, and results do not
 depend on the number of threads. A fingerprint test pins the outputs of the
 main estimators.
 
-The `honest` feature adds the HonestDiD sensitivity analysis of Rambachan and
-Roth: smoothness and relative-magnitude restrictions on violations of
-parallel trends, fixed-length and conditional confidence sets, and regions for
-the whole post-treatment path. Its second-order cone programs are solved by
-[Clarabel](https://crates.io/crates/clarabel), a pure Rust solver and the
-only dependency the feature adds; its linear programs run on the crate's own
-dense simplex. An own cone solver may replace Clarabel later. An identified
-set that no violation path fits, as when the pre-period coefficients have a
-second difference larger than a smoothness bound `M`, is empty and reported
-as NaN; the confidence sets are computed there as in HonestDiD. The `nightly`
-feature enables faer's AVX-512 kernels through epistat-linalg.
-
-The `pretrends` module gives the power of the pre-trends test and the
-distortion after passing it (Roth, 2022). From event-study coefficients and
-their covariance, from any estimator, and a hypothesised violation of parallel
-trends, it returns the probability that no pre-period coefficient is
-significant, the means of the pre- and post-period coefficients given that the
-test passes, the Bayes factor and the likelihood ratio against parallel
-trends, and the slope of a linear violation that the test detects with a given
-power. The rectangle probabilities are computed by Genz's transformation on a
-fixed, randomly shifted Korobov lattice; every probability comes with the
-standard error of its evaluation, and the results are deterministic. The cost
-depends on the number of pre-period coefficients, not on the number of rows.
+The HonestDiD sensitivity analysis of Rambachan and Roth and the power of the
+pre-trends test (Roth, 2022) are in the crate `epistat-honestdid`, which takes
+the event study that `AttGt::event_study` and the fixed-effects estimators
+return. The `nightly` feature enables faer's AVX-512 kernels through
+epistat-linalg.
 
 The tests compare estimates, standard errors and influence functions with
-`did` 2.5.1, `DRDID` 1.3.0, `HonestDiD` 0.2.8, `pretrends` 0.1.0 (from its authors' repository), `triplediff`, `contdid`
+`did` 2.5.1, `DRDID` 1.3.0, `triplediff`, `contdid`
 0.1.2, `DIDmultiplegtDYN` 2.2.0, `synthdid` 0.0.9 (from its authors' repository, as it is not on CRAN), `didimputation` 0.5.1 and `did2s` 1.2.1, the continuous treatment's influence function with the
 infinitesimal jackknife of refits in R, and the efficient ATT(g,t) and its
 aggregations with the estimator written out in R and with the jackknife of the
