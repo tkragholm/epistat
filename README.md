@@ -23,4 +23,13 @@ Rust crates for statistics in epidemiology and register research.
 | [`epistat-survival`](crates/epistat-survival) | Cox, Fine-Gray and multi-state regression, Aalen-Johansen and multi-state occupation with cluster bootstraps, Kaplan-Meier, pseudo-observations and prediction metrics |
 | [`epistat-testkit`](crates/epistat-testkit) | Tolerances, bit fingerprints, thread-count checks and R reference files, for tests |
 
+## Contributing
+
+The golden, fingerprint and study-path tests assert their recorded hashes only
+on aarch64 macOS. On other targets they compute the hashes and assert nothing.
+To check that a change keeps every hash on any target, run
+`scripts/hashes.sh before.txt` on the base commit and `scripts/hashes.sh
+after.txt` on the head, then `diff before.txt after.txt`. Each line is
+`<crate>/<test-file>/<case> <hash>`, and a line that differs is a hash that moved.
+
 Licensed under either of MIT or Apache-2.0, at your option.

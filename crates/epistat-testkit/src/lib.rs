@@ -10,6 +10,7 @@ mod absent;
 mod deviation;
 mod fingerprint;
 mod generator;
+mod hash_out;
 mod invalid;
 mod reference;
 mod threads;
@@ -21,6 +22,7 @@ pub use deviation::{
 };
 pub use fingerprint::Fingerprint;
 pub use generator::SplitMix64;
+pub use hash_out::{RECORDED_PLATFORM, hash_out, hash_out_words};
 pub use invalid::{BadInput, assert_codes_unique, assert_input_error, assert_rejects_bad_input};
 pub use reference::{load_json, na_f64, na_f64_vec};
 pub use threads::{POOLS, assert_same_on_pools, assert_same_on_threads, on_threads};
