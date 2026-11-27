@@ -74,6 +74,15 @@ pub enum Error {
     /// A sandwich, an influence variance or a cluster sum could not be formed.
     #[error(transparent)]
     Inference(#[from] epistat_inference::Error),
+    /// The fit at a trial value of the frailty variance, tried by the search
+    /// for theta, failed.
+    #[error("the frailty fit at theta = {theta} failed: {source}")]
+    Frailty {
+        /// The trial variance.
+        theta: f64,
+        /// Why the fit failed.
+        source: Box<Error>,
+    },
     /// A root or a minimum could not be found.
     #[error(transparent)]
     Optim(#[from] epistat_optim::Error),
@@ -115,6 +124,7 @@ impl Classify for Error {
             Self::Model { source, .. } | Self::Glm(source) => source.kind(),
             Self::Linalg(error) => error.kind(),
             Self::Inference(error) => error.kind(),
+            Self::Frailty { source, .. } => source.kind(),
             Self::Optim(error) => error.kind(),
         }
     }
@@ -131,6 +141,7 @@ impl Classify for Error {
             Self::Model { source, .. } | Self::Glm(source) => source.code(),
             Self::Linalg(error) => error.code(),
             Self::Inference(error) => error.code(),
+            Self::Frailty { source, .. } => source.code(),
             Self::Optim(error) => error.code(),
         }
     }

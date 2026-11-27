@@ -64,7 +64,10 @@
 //! 2. The logistic regression of `T` on `U` gives `g0`. The scale factor `a` in
 //!    `[0.8, 1.1]` that minimises the over-identified `J(a g0)`, with `V`
 //!    recomputed at each `a`, is found by Brent's method with tolerance
-//!    `eps^(1/4)`, and `g_init = a g0`. `V` at `g_init` is the fixed `W`.
+//!    `eps^(1/4)`, and `g_init = a g0`. `V` at `g_init` is the fixed `W`. A
+//!    scale at which `V` cannot be formed counts as `+inf`, worse than every
+//!    other, and the search runs to its end; the fit then fails with the first
+//!    such error rather than start from a scale chosen around it.
 //! 3. BFGS minimises the balance loss from `g_init`, which gives the exact
 //!    estimate `g_bal`. For the exact estimator that is the result.
 //! 4. For the over-identified estimator BFGS minimises `J` with the fixed `W`
@@ -547,20 +550,27 @@ pub(super) fn fit_cbps(
         let w = problem.weight_matrix(&p)?;
         Ok(problem.j_value(&g, &w))
     };
+    // A scale at which the weight matrix cannot be formed counts as +inf, worse
+    // than any scale where it can, so the search runs on to its end on the
+    // bracket; the first such failure is then returned, since the start would
+    // rest on a search that met it.
     let mut failure = None;
-    let scale = epistat_optim::brent::minimize(
+    let options = epistat_optim::brent::Brent {
+        tolerance: f64::EPSILON.powf(0.25),
+        ..epistat_optim::brent::Brent::default()
+    };
+    let scale = epistat_optim::brent::minimize::<Error>(
         |a| match objective(a) {
-            Ok(value) => value,
+            Ok(value) => Ok(value),
             Err(error) => {
                 failure.get_or_insert(error);
-                f64::INFINITY
+                Ok(f64::INFINITY)
             }
         },
         SCALE_BRACKET.0,
         SCALE_BRACKET.1,
-        f64::EPSILON.powf(0.25),
-    )
-    .expect("the scale bracket and the tolerance are finite and positive")
+        &options,
+    )?
     .x;
     if let Some(error) = failure {
         return Err(error);

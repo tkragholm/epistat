@@ -48,6 +48,12 @@ pub enum Error {
     /// A search direction of BFGS is not a descent direction, as when a
     /// starting inverse Hessian is not positive definite.
     NotDescent,
+    /// A function returned a value at `x` that a search cannot use: NaN, or
+    /// `-inf` where a minimum is sought.
+    NonFinite {
+        /// The point at which the value was returned.
+        x: f64,
+    },
     /// An objective value of Nelder-Mead at a trial point cannot be ordered,
     /// such as NaN.
     Unordered,
@@ -74,6 +80,7 @@ impl fmt::Display for Error {
                 f.write_str("an integer solution broke a row by more than rounding explains")
             }
             Self::NotDescent => f.write_str("the search direction is not a descent direction"),
+            Self::NonFinite { x } => write!(f, "the function is not usable at {x}"),
             Self::Unordered => f.write_str("the objective returned a value that cannot be ordered"),
         }
     }
@@ -117,6 +124,7 @@ impl Classify for Error {
             Self::NoSolution { .. } => "optim.no_solution",
             Self::Numerical => "optim.numerical",
             Self::NotDescent => "optim.not_descent",
+            Self::NonFinite { .. } => "optim.non_finite",
             Self::Unordered => "optim.unordered",
         }
     }
@@ -152,6 +160,7 @@ mod tests {
             },
             Error::Numerical,
             Error::NotDescent,
+            Error::NonFinite { x: 0.5 },
             Error::Unordered,
         ];
         let mut codes: Vec<&str> = all.iter().map(Classify::code).collect();

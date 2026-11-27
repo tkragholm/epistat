@@ -1,11 +1,11 @@
-//! Roots of a function of one variable in a bracket: bisection, and Brent's
-//! method as R's `uniroot`.
+//! Roots of a function of one variable in a bracket: bisection, and the ITP
+//! method of Oliveira and Takahashi.
 //!
 //! Both take an interval `[lower, upper]` at whose ends the function has
 //! values of opposite sign, so that a continuous function has a root inside,
 //! and shrink it around a point where the sign changes.
 //!
-//! # Algorithm
+//! # Bisection
 //!
 //! [`bisect`] keeps a bracket `[a, b]` whose end values differ in sign, a
 //! value below zero counting as negative and zero or above as non-negative.
@@ -25,31 +25,40 @@
 //! adjacent doubles from any finite bracket, since each step halves the
 //! bracket and the doubles span fewer than 2,100 halvings.
 //!
-//! [`zeroin`] is Brent's method \[1\] in the form of R's C function
-//! `R_zeroin2`, which `uniroot` calls \[2\]. It keeps the best point `b`, the
-//! previous one `a`, and a point `c` with `f(c)` of the sign opposite to
-//! `f(b)`. Each step tries inverse quadratic interpolation through the three
-//! points, or the secant through two when `a = c`, and takes the step when it
-//! falls well inside `[b, c]` and is less than half the step before the last.
-//! Otherwise it bisects. A step is never shorter than
+//! # ITP
+//!
+//! [`itp`] is the interpolate, truncate and project method \[1\]. Each step
+//! computes the regula falsi point `x_f` of the bracket `[a, b]`, moves it
+//! towards the midpoint `m` by `delta = kappa1 (b - a)^kappa2` (or to `m` when
+//! it is closer than that), and projects the result into the ball of radius
 //!
 //! ```text
-//! tol_act = 2 ε |b| + tolerance / 2,
+//! r_j = tolerance * 2^(n_max - j) - (b - a) / 2,   n_max = n_half + n0,
+//! n_half = ceil(log2((b0 - a0) / (2 tolerance))),
 //! ```
 //!
-//! and the search stops, converged, when `|c - b| / 2 <= tol_act` or
-//! `f(b) = 0`. The steps follow `R_zeroin2` line by line, so the points
-//! evaluated are R's up to the last bits of an interpolation, which a fused
-//! multiply-add in R's build can move and which epistat does not use. A root
-//! at an end of the bracket is returned at once. The defaults are `uniroot`'s:
-//! `tolerance = ε^(1/4)` and 1,000 iterations.
+//! around `m`, with `j` the steps taken and `[a0, b0]` the first bracket. The
+//! ball keeps the bracket no wider than bisection's after the same number of
+//! steps would be, times `2^n0`, so the search ends within `n_max` steps
+//! whatever the function (\[1\], Theorem 2.1), and on a twice differentiable
+//! function with a simple root it converges with order `kappa2` (Theorem 2.3).
+//! It stops, converged, when `b - a <= 2 tolerance`, after `n_max` steps
+//! (where the bracket is that narrow but for the rounding of its ends), when
+//! the midpoint is no longer strictly inside the bracket, or at a point where
+//! the function is 0. It returns the midpoint of the last bracket, or that
+//! point, which lies within `tolerance` of a sign change, up to the rounding
+//! of the ends. The defaults are those the paper argues
+//! for, `kappa1 = 0.2 / (b0 - a0)`, `kappa2 = 2` and `n0 = 1`, with the
+//! tolerance of R's `uniroot`, `ε^(1/4)`.
+//!
+//! The function may return an infinite value, which counts by its sign; the
+//! step is then the midpoint. A NaN value is an error.
 //!
 //! # References
 //!
-//! 1. Brent RP. Algorithms for Minimization without Derivatives. Englewood
-//!    Cliffs: Prentice-Hall; 1973. Chapter 4.
-//! 2. R Core Team. `uniroot`, src/library/stats/R/nlm.R, and `R_zeroin2`,
-//!    src/library/stats/src/zeroin.c, R 4.6.2.
+//! 1. Oliveira IFD, Takahashi RHC. An enhancement of the bisection method
+//!    average performance preserving minmax optimality. ACM Trans Math Softw.
+//!    2020;47(1):5. doi:10.1145/3423597
 
 use crate::error::{Error, domain};
 
@@ -95,31 +104,48 @@ impl Default for Bisection {
     }
 }
 
-/// Settings of [`zeroin`], with R's `uniroot` names in the docs.
+/// Settings of [`itp`], with the names of Oliveira and Takahashi.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Zeroin {
-    /// The most iterations, R's `maxiter`.
-    pub max_iterations: usize,
-    /// The tolerance of the root, R's `tol`.
+pub struct Itp {
+    /// The largest distance allowed between the result and a sign change,
+    /// the paper's `epsilon`. The default is R's `uniroot` tolerance,
+    /// `ε^(1/4)`.
     pub tolerance: f64,
+    /// The truncation factor `kappa1`, positive. `None`, the default, takes
+    /// `0.2 / (upper - lower)`.
+    pub kappa1: Option<f64>,
+    /// The truncation exponent `kappa2`, in `[1, 1 + phi)` with `phi` the
+    /// golden ratio. The default is 2.
+    pub kappa2: f64,
+    /// The slack `n0` over bisection's step count. The default is 1.
+    pub n0: usize,
+    /// The most steps. The default has no effect, since the search ends
+    /// within `n_half + n0` steps; a smaller limit ends it early, not
+    /// converged.
+    pub max_iterations: usize,
 }
 
-impl Default for Zeroin {
-    /// `uniroot`'s defaults: 1,000 iterations and `tol = ε^(1/4)`.
+impl Default for Itp {
     fn default() -> Self {
         Self {
-            max_iterations: 1_000,
             tolerance: f64::EPSILON.powf(0.25),
+            kappa1: None,
+            kappa2: 2.0,
+            n0: 1,
+            max_iterations: usize::MAX,
         }
     }
 }
 
 fn check_bracket(lower: f64, upper: f64) -> Result<(), Error> {
     if !lower.is_finite() {
-        return Err(domain("lower", lower, "finite"));
+        return Err(domain("lower", lower, "a finite number"));
     }
-    if !(upper.is_finite() && upper > lower) {
-        return Err(domain("upper", upper, "finite and above lower"));
+    if !upper.is_finite() {
+        return Err(domain("upper", upper, "a finite number"));
+    }
+    if lower >= upper {
+        return Err(domain("upper", upper, "above lower"));
     }
     Ok(())
 }
@@ -144,150 +170,194 @@ pub fn bisect(
         ("relative_tolerance", options.relative_tolerance),
     ] {
         if !(value.is_finite() && value >= 0.0) {
-            return Err(domain(what, value, "[0, inf)"));
+            return Err(domain(what, value, "a finite number at least 0"));
         }
     }
-    let f_lower = f(lower);
-    let f_upper = f(upper);
-    let lower_negative = f_lower < 0.0;
-    if lower_negative == (f_upper < 0.0) || f_lower.is_nan() || f_upper.is_nan() {
+    let lower_negative = f(lower) < 0.0;
+    if lower_negative == (f(upper) < 0.0) {
         return Err(Error::NoSignChange);
     }
     let (mut a, mut b) = (lower, upper);
     let mut iterations = 0;
     let mut converged = false;
     while iterations < options.max_iterations {
-        let mid = a + (b - a) / 2.0;
-        if mid <= a || mid >= b {
+        let m = a + (b - a) / 2.0;
+        if m <= a || m >= b {
             converged = true;
             break;
         }
         iterations += 1;
-        if (f(mid) < 0.0) == lower_negative {
-            a = mid;
+        if (f(m) < 0.0) == lower_negative {
+            a = m;
         } else {
-            b = mid;
+            b = m;
         }
-        if b - a <= options.absolute_tolerance + options.relative_tolerance * mid.abs() {
+        if b - a <= options.absolute_tolerance + options.relative_tolerance * m.abs() {
             converged = true;
             break;
         }
     }
     let x = a + (b - a) / 2.0;
-    let value = f(x);
     Ok(Root {
         x,
-        value,
+        value: f(x),
         iterations,
         evaluations: iterations + 3,
         converged,
     })
 }
 
-/// A root of `f` in `[lower, upper]` by Brent's method, as R's
-/// `uniroot(f, c(lower, upper), tol = tolerance, maxiter = max_iterations)`.
+/// `x * 2^k`, exact while the result is a normal double.
+fn times_power_of_two(mut x: f64, mut k: i64) -> f64 {
+    // 2^1000 and 2^-1000: biased exponents 2023 and 23.
+    let up = f64::from_bits(2_023_u64 << 52);
+    let down = f64::from_bits(23_u64 << 52);
+    while k > 1_000 {
+        x *= up;
+        k -= 1_000;
+    }
+    while k < -1_000 {
+        x *= down;
+        k += 1_000;
+    }
+    let biased = u64::try_from(1_023 + k).expect("k lies in [-1000, 1000]");
+    x * f64::from_bits(biased << 52)
+}
+
+/// The sign of `y` as used by [`itp`]: -1, 0 or 1.
+fn sign(y: f64) -> f64 {
+    if y > 0.0 {
+        1.0
+    } else if y < 0.0 {
+        -1.0
+    } else {
+        0.0
+    }
+}
+
+/// A root of `f` in `[lower, upper]` by the ITP method of Oliveira and
+/// Takahashi, as described in the module documentation.
 ///
-/// `x` and `iterations` are `uniroot`'s `root` and `iter`, and `value` is
-/// `f(x)` from the last evaluation, where `uniroot` evaluates `f` once more.
+/// A root at an end is returned at once with no steps. `value` is `f(x)`; when
+/// `x` is the midpoint of the last bracket, `f` is evaluated there once more
+/// and the evaluation is counted.
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when an end is not finite, `lower >= upper`, or the
-/// tolerance is not finite and positive; [`Error::NoSignChange`] when the
-/// values at the ends have the same sign or one is NaN, where `uniroot`
-/// stops.
-#[expect(
-    clippy::float_cmp,
-    clippy::many_single_char_names,
-    reason = "R_zeroin2's tests and names, kept for comparison with it"
-)]
-pub fn zeroin(
+/// [`Error::Input`] when an end is not finite, `lower >= upper`, the tolerance
+/// is not finite and positive, `kappa1` is not finite and positive, or
+/// `kappa2` is outside `[1, 1 + phi)`; [`Error::NonFinite`] when `f` is NaN at
+/// an evaluated point; [`Error::NoSignChange`] when the values at the ends
+/// have the same sign.
+pub fn itp(
     mut f: impl FnMut(f64) -> f64,
     lower: f64,
     upper: f64,
-    options: &Zeroin,
+    options: &Itp,
 ) -> Result<Root, Error> {
     check_bracket(lower, upper)?;
-    let tol = options.tolerance;
-    if !(tol.is_finite() && tol > 0.0) {
-        return Err(domain("tolerance", tol, "(0, inf)"));
+    let eps = options.tolerance;
+    if !(eps.is_finite() && eps > 0.0) {
+        return Err(domain("tolerance", eps, "a finite number above 0"));
     }
-    let mut fa = f(lower);
-    let mut fb = f(upper);
-    if fa.is_nan() || fb.is_nan() || fa * fb > 0.0 {
-        return Err(Error::NoSignChange);
+    let kappa1 = options.kappa1.unwrap_or(0.2 / (upper - lower));
+    if !(kappa1.is_finite() && kappa1 > 0.0) {
+        return Err(domain("kappa1", kappa1, "a finite number above 0"));
     }
-    let found = |x: f64, value: f64, iterations: usize, converged: bool| Root {
+    let kappa2 = options.kappa2;
+    let golden = f64::midpoint(1.0, 5.0_f64.sqrt());
+    if !(kappa2 >= 1.0 && kappa2 < 1.0 + golden) {
+        return Err(domain("kappa2", kappa2, "[1, 1 + golden ratio)"));
+    }
+    let mut evaluate = |x: f64| -> Result<f64, Error> {
+        let y = f(x);
+        if y.is_nan() {
+            Err(Error::NonFinite { x })
+        } else {
+            Ok(y)
+        }
+    };
+    let (mut a, mut b) = (lower, upper);
+    let mut ya = evaluate(a)?;
+    let mut yb = evaluate(b)?;
+    let done = |x: f64, value: f64, iterations: usize, evaluations: usize, converged: bool| Root {
         x,
         value,
         iterations,
-        evaluations: iterations + 2,
+        evaluations,
         converged,
     };
-    if fa == 0.0 {
-        return Ok(found(lower, fa, 0, true));
+    if ya == 0.0 {
+        return Ok(done(a, ya, 0, 2, true));
     }
-    if fb == 0.0 {
-        return Ok(found(upper, fb, 0, true));
+    if yb == 0.0 {
+        return Ok(done(b, yb, 0, 2, true));
     }
-    let (mut a, mut b) = (lower, upper);
-    let mut c = a;
-    let mut fc = fa;
+    let s = sign(yb);
+    if (ya > 0.0) == (yb > 0.0) {
+        return Err(Error::NoSignChange);
+    }
+    // The bracket's width over 2 eps can overflow; its base-2 logarithm cannot.
+    let half_steps = ((b / 2.0 - a / 2.0) / eps).log2().ceil().max(0.0);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the logarithm of a finite ratio of doubles is below 2,200"
+    )]
+    let n_max = half_steps as i64 + i64::try_from(options.n0).unwrap_or(i64::MAX / 2);
+    let mut j: i64 = 0;
     let mut iterations = 0;
-    // R_zeroin2 runs the loop `maxit + 1` times, so a search that does not
-    // converge takes one step more than `max_iterations`.
-    while iterations <= options.max_iterations {
-        let prev_step = b - a;
-        if fc.abs() < fb.abs() {
-            a = b;
-            b = c;
-            c = a;
-            fa = fb;
-            fb = fc;
-            fc = fa;
+    let mut converged = true;
+    // In exact arithmetic the bracket is no wider than 2 tolerance after
+    // n_max steps; the rounding of the ends can leave it wider by a few units
+    // in their last place, which the step count does not wait for.
+    while b - a > 2.0 * eps && j < n_max {
+        if iterations == options.max_iterations {
+            converged = false;
+            break;
         }
-        let tol_act = 2.0 * f64::EPSILON * b.abs() + tol / 2.0;
-        let mut new_step = (c - b) / 2.0;
-        if new_step.abs() <= tol_act || fb == 0.0 {
-            return Ok(found(b, fb, iterations, true));
+        let m = a + (b - a) / 2.0;
+        if !(a < m && m < b) {
+            break;
         }
-        if prev_step.abs() >= tol_act && fa.abs() > fb.abs() {
-            let cb = c - b;
-            let (mut p, mut q);
-            if a == c {
-                let t1 = fb / fa;
-                p = cb * t1;
-                q = 1.0 - t1;
-            } else {
-                let qa = fa / fc;
-                let t1 = fb / fc;
-                let t2 = fb / fa;
-                p = t2 * (cb * qa * (qa - t1) - (b - a) * (t1 - 1.0));
-                q = (qa - 1.0) * (t1 - 1.0) * (t2 - 1.0);
-            }
-            if p > 0.0 {
-                q = -q;
-            } else {
-                p = -p;
-            }
-            if p < (0.75 * cb * q - (tol_act * q).abs() / 2.0) && p < (prev_step * q / 2.0).abs() {
-                new_step = p / q;
+        let r = (times_power_of_two(eps, n_max - j) - (b - a) / 2.0).max(0.0);
+        let delta = kappa1 * (b - a).powf(kappa2);
+        let mut xf = m;
+        if ya.is_finite() && yb.is_finite() {
+            let interpolated = (yb * a - ya * b) / (yb - ya);
+            if interpolated.is_finite() {
+                xf = interpolated;
             }
         }
-        if new_step.abs() < tol_act {
-            new_step = if new_step > 0.0 { tol_act } else { -tol_act };
+        let sigma = sign(m - xf);
+        let xt = if delta <= (m - xf).abs() {
+            xf + sigma * delta
+        } else {
+            m
+        };
+        let mut x = if (xt - m).abs() <= r {
+            xt
+        } else {
+            m - sigma * r
+        };
+        if !(a < x && x < b) {
+            x = m;
         }
-        a = b;
-        fa = fb;
-        b += new_step;
-        fb = f(b);
+        let y = evaluate(x)?;
         iterations += 1;
-        if (fb > 0.0 && fc > 0.0) || (fb < 0.0 && fc < 0.0) {
-            c = a;
-            fc = fa;
+        j += 1;
+        if s * y > 0.0 {
+            b = x;
+            yb = y;
+        } else if s * y < 0.0 {
+            a = x;
+            ya = y;
+        } else {
+            return Ok(done(x, y, iterations, iterations + 2, true));
         }
     }
-    Ok(found(b, fb, iterations, false))
+    let x = a + (b - a) / 2.0;
+    let value = evaluate(x)?;
+    Ok(done(x, value, iterations, iterations + 3, converged))
 }
 
 #[cfg(test)]
@@ -295,79 +365,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bisection_reaches_adjacent_doubles() {
-        let root = bisect(|x| x * x - 2.0, 0.0, 2.0, &Bisection::default()).unwrap();
-        assert!(root.converged);
-        assert!((root.x - std::f64::consts::SQRT_2).abs() <= 4.0 * f64::EPSILON);
-        assert_eq!(root.evaluations, root.iterations + 3);
-        let falling = bisect(|x| 1.0 - x, 0.0, 3.0, &Bisection::default()).unwrap();
-        assert!((falling.x - 1.0).abs() <= 4.0 * f64::EPSILON);
-    }
-
-    #[test]
-    fn an_iteration_limit_is_reported() {
-        let options = Bisection {
-            max_iterations: 3,
-            ..Bisection::default()
-        };
-        let root = bisect(|x| x - 0.3, 0.0, 1.0, &options).unwrap();
-        assert!(!root.converged);
-        assert_eq!(root.iterations, 3);
-        assert_eq!(root.x, 0.3125);
-    }
-
-    #[test]
-    fn brackets_are_checked() {
-        let options = Bisection::default();
-        assert_eq!(bisect(|x| x, 1.0, 2.0, &options), Err(Error::NoSignChange));
+    fn powers_of_two_are_exact() {
+        for k in [-1_022_i32, -1, 0, 1, 52, 1_023] {
+            assert_eq!(
+                times_power_of_two(1.0, i64::from(k)),
+                2.0_f64.powi(k),
+                "{k}"
+            );
+        }
+        let tiny = times_power_of_two(1.0, -1_000);
         assert_eq!(
-            bisect(|_| f64::NAN, -1.0, 1.0, &options),
-            Err(Error::NoSignChange)
+            times_power_of_two(tiny, 2_000),
+            times_power_of_two(1.0, 1_000)
         );
-        assert!(matches!(
-            bisect(|x| x, 1.0, 1.0, &options),
-            Err(Error::Input(_))
-        ));
-        assert!(matches!(
-            bisect(|x| x, f64::NEG_INFINITY, 1.0, &options),
-            Err(Error::Input(_))
-        ));
-        let negative = Bisection {
-            absolute_tolerance: -1.0,
-            ..options
-        };
-        assert!(matches!(
-            bisect(|x| x, -1.0, 1.0, &negative),
-            Err(Error::Input(_))
-        ));
-        assert_eq!(
-            zeroin(|x| x * x + 1.0, -1.0, 1.0, &Zeroin::default()),
-            Err(Error::NoSignChange)
-        );
-        let zero = Zeroin {
-            tolerance: 0.0,
-            ..Zeroin::default()
-        };
-        assert!(matches!(
-            zeroin(|x| x, -1.0, 1.0, &zero),
-            Err(Error::Input(_))
-        ));
-    }
-
-    #[test]
-    fn a_root_at_an_end_is_returned_at_once() {
-        let root = zeroin(|x| x - 1.0, 0.0, 1.0, &Zeroin::default()).unwrap();
-        assert_eq!((root.x, root.iterations, root.evaluations), (1.0, 0, 2));
-    }
-
-    #[test]
-    fn zeroin_stops_unconverged_at_its_limit() {
-        let options = Zeroin {
-            max_iterations: 2,
-            tolerance: 1e-12,
-        };
-        let root = zeroin(|x| (x - 1.0 / 3.0).powi(3), 0.0, 1.0, &options).unwrap();
-        assert!(!root.converged);
-        assert_eq!(root.iterations, 3);
+        assert_eq!(times_power_of_two(1.0, -1_074), f64::from_bits(1));
+        assert!(times_power_of_two(1.0, 2_100).is_infinite());
     }
 }

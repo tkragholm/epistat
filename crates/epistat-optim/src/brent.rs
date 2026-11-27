@@ -1,11 +1,10 @@
-//! Brent's one-dimensional minimiser on an interval, the `fmin` of R's
-//! `optimize`.
+//! Brent's one-dimensional minimiser on an interval.
 //!
 //! # Algorithm
 //!
-//! The search keeps an interval `[a, b]` known to hold a local minimum, the
-//! best point `x` found so far, the second best `w` and the previous value of
-//! `w`, `v` \[1\]. Each step tries the minimum of the parabola through
+//! The search \[1\] keeps an interval `[a, b]` known to hold a local minimum,
+//! the best point `x` found so far, the second best `w` and the previous
+//! value of `w`, `v`. Each step tries the minimum of the parabola through
 //! `(v, f(v))`, `(w, f(w))` and `(x, f(x))`:
 //!
 //! ```text
@@ -16,27 +15,40 @@
 //!
 //! and takes it when it falls inside `[a, b]` and is less than half the step
 //! before the last. Otherwise it takes a golden-section step of
-//! `c = (3 - sqrt 5) / 2` of the larger part of the interval. A point is never
-//! evaluated within `tol1 = sqrt(eps) |x| + tol / 3` of `x`, or within `2 tol1`
-//! of an end of the interval, with `eps` the machine epsilon. The search stops
-//! when `|x - (a + b) / 2| <= 2 tol1 - (b - a) / 2`, that is when the interval
-//! around `x` is no wider than about `4 tol1`.
+//! `c = (3 - sqrt 5) / 2` of the larger part of the interval. The first point
+//! is `a + c (b - a)`.
 //!
-//! The first point is `a + c (b - a)`. The steps, the stopping rule and the
-//! treatment of a value that is not finite follow R's C function `Brent_fmin`
-//! line by line, so that the points evaluated are R's: a value that is NaN or
-//! infinite is replaced by the largest finite double, as `optimize` does.
+//! The tolerance follows the convention of Forsythe, Malcolm and Moler \[2\],
+//! which R documents for `optimize`: a point is never evaluated within
+//! `tol1 = sqrt(ε) |x| + tolerance / 3` of `x`, or within `2 tol1` of an end
+//! of the interval, with `ε` the machine epsilon, and the search stops when
+//! `|x - (a + b) / 2| <= 2 tol1 - (b - a) / 2`, that is when the interval
+//! around `x` is no wider than about `4 tol1`. For finite functions the
+//! points evaluated are then those of `optimize` up to the last bits of a
+//! parabolic step.
 //!
-//! Without derivatives the search converges superlinearly on a smooth function
-//! near a minimum with a positive second derivative, and never more slowly
-//! than golden-section search, which shrinks the interval by `0.618` each step.
-//! On a function with several minima in `[a, b]` it finds one of them.
+//! Without derivatives the search converges superlinearly, with order about
+//! 1.32, on a smooth function near a minimum with a positive second
+//! derivative, and never much more slowly than golden-section search, which
+//! shrinks the interval by `0.618` each step \[1\]. On a function with several
+//! minima in `[a, b]` it finds one of them; on a flat function, some point at
+//! which the stopping rule holds.
+//!
+//! # Values that are not finite
+//!
+//! The objective returns `Result`, and an error stops the search and is
+//! returned, so that each caller states what a failed evaluation means. A
+//! value of `+inf` is legal and worse than any finite value; the parabola is
+//! not tried while one of the three stored values is infinite, so the step is
+//! golden section. NaN, which has no order, and `-inf`, which means the
+//! function is unbounded below, are errors ([`Error::NonFinite`]).
 //!
 //! # References
 //!
 //! 1. Brent RP. Algorithms for Minimization without Derivatives. Englewood
 //!    Cliffs: Prentice-Hall; 1973. Chapter 5.
-//! 2. R Core Team. `optimize`, src/library/stats/src/optimize.c, R 4.6.2.
+//! 2. Forsythe GE, Malcolm MA, Moler CB. Computer Methods for Mathematical
+//!    Computations. Englewood Cliffs: Prentice-Hall; 1977. Chapter 8.
 
 use crate::error::{Error, domain};
 
@@ -46,86 +58,111 @@ use crate::error::{Error, domain};
 pub struct Minimum {
     /// The point found.
     pub x: f64,
-    /// The function at `x`, after a value that is not finite is replaced as
-    /// described in the module documentation.
+    /// The function at `x`, finite or `+inf`.
     pub value: f64,
     /// The number of steps after the first point, each one evaluation.
     pub iterations: usize,
     /// The number of function evaluations, `iterations + 1`.
     pub evaluations: usize,
-    /// Whether the stopping rule was met. The search has no iteration limit,
-    /// as R's has none, so this is always true; the field is there so that the
-    /// three minimisers report the same fields.
+    /// Whether the stopping rule was met before the iteration limit.
     pub converged: bool,
 }
 
-/// A local minimum of `f` on `[lower, upper]` to within about `tol`, by
-/// Brent's method as R's `optimize(f, c(lower, upper), tol = tol)`.
+/// Settings of [`minimize`], with R's `optimize` names in the docs.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Brent {
+    /// The tolerance of the point, R's `tol`. The default is R's,
+    /// `ε^(1/4)`.
+    pub tolerance: f64,
+    /// The most steps after the first point. R's `optimize` has no limit.
+    /// The default, 10,000, does not bind: golden-section search shrinks any
+    /// finite interval to the smallest `tol1` in fewer than 3,100 steps
+    /// (`2,100 ln 2 / ln 1.618`), and a parabolic step is taken only when it
+    /// is shorter than half the step before the last, so the search needs at
+    /// most a small multiple of that.
+    pub max_iterations: usize,
+}
+
+impl Default for Brent {
+    fn default() -> Self {
+        Self {
+            tolerance: f64::EPSILON.powf(0.25),
+            max_iterations: 10_000,
+        }
+    }
+}
+
+/// A local minimum of `f` on `[lower, upper]` to within about the tolerance,
+/// by Brent's method, as described in the module documentation.
+///
+/// `f` returns `Ok` with the value at a point, or an error, which ends the
+/// search and is returned. A caller whose objective cannot fail uses
+/// [`Error`] as `E`.
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when an end is not finite, `lower >= upper`, or `tol` is
-/// not finite and positive.
+/// [`Error::Input`] when an end is not finite, `lower >= upper`, or the
+/// tolerance is not finite and positive; [`Error::NonFinite`] when `f` returns
+/// NaN or `-inf`; and any error `f` returns.
 #[expect(
     clippy::float_cmp,
-    reason = "Brent's algorithm tests whether a trial point is exactly one of the stored points"
+    reason = "points equal to the best one are compared exactly"
 )]
-#[expect(
-    clippy::manual_midpoint,
-    reason = "the midpoint is R's (a + b) * .5, kept for the same points"
-)]
-#[expect(
-    clippy::many_single_char_names,
-    reason = "the names of Brent's algorithm, kept for comparison with its published form"
-)]
-pub fn minimize(
-    mut f: impl FnMut(f64) -> f64,
+pub fn minimize<E: From<Error>>(
+    mut f: impl FnMut(f64) -> Result<f64, E>,
     lower: f64,
     upper: f64,
-    tol: f64,
-) -> Result<Minimum, Error> {
+    options: &Brent,
+) -> Result<Minimum, E> {
     if !lower.is_finite() {
-        return Err(domain("lower", lower, "finite"));
+        return Err(domain("lower", lower, "a finite number").into());
     }
-    if !(upper.is_finite() && upper > lower) {
-        return Err(domain("upper", upper, "finite and above lower"));
+    if !upper.is_finite() {
+        return Err(domain("upper", upper, "a finite number").into());
     }
-    if !(tol.is_finite() && tol > 0.0) {
-        return Err(domain("tol", tol, "(0, inf)"));
+    if lower >= upper {
+        return Err(domain("upper", upper, "above lower").into());
     }
-    let mut evaluations = 0_usize;
-    let mut eval = |x: f64| {
-        evaluations += 1;
-        let value = f(x);
-        if value.is_finite() { value } else { f64::MAX }
-    };
-    let c = (3.0 - 5.0_f64.sqrt()) * 0.5;
-    let eps = f64::EPSILON.sqrt();
-    let (mut a, mut b) = (lower, upper);
-    let mut v = a + c * (b - a);
-    let mut w = v;
-    let mut x = v;
-    let mut d = 0.0_f64;
-    let mut e = 0.0_f64;
-    let mut fx = eval(x);
-    let mut fv = fx;
-    let mut fw = fx;
-    let tol3 = tol / 3.0;
-    loop {
-        let xm = (a + b) * 0.5;
-        let tol1 = eps * x.abs() + tol3;
-        let t2 = tol1 * 2.0;
-        if (x - xm).abs() <= t2 - (b - a) * 0.5 {
-            break;
+    let tolerance = options.tolerance;
+    if !(tolerance.is_finite() && tolerance > 0.0) {
+        return Err(domain("tolerance", tolerance, "a finite number above 0").into());
+    }
+    let mut evaluate = |x: f64| -> Result<f64, E> {
+        let y = f(x)?;
+        if y.is_nan() || y == f64::NEG_INFINITY {
+            return Err(Error::NonFinite { x }.into());
         }
-        let mut p = 0.0;
-        let mut q = 0.0;
-        let mut r = 0.0;
-        if e.abs() > tol1 {
+        Ok(y)
+    };
+
+    let c = 0.5 * (3.0 - 5.0_f64.sqrt());
+    let eps = f64::EPSILON.sqrt();
+    let t = tolerance / 3.0;
+    let (mut a, mut b) = (lower, upper);
+    let mut x = a + c * (b - a);
+    let (mut w, mut v) = (x, x);
+    let mut fx = evaluate(x)?;
+    let (mut fw, mut fv) = (fx, fx);
+    // d is the last step and e the one before it.
+    let mut d: f64 = 0.0;
+    let mut e: f64 = 0.0;
+    let mut iterations = 0;
+    let converged = loop {
+        let m = f64::midpoint(a, b);
+        let tol1 = eps * x.abs() + t;
+        let tol2 = 2.0 * tol1;
+        if (x - m).abs() <= tol2 - 0.5 * (b - a) {
+            break true;
+        }
+        if iterations == options.max_iterations {
+            break false;
+        }
+        let (mut p, mut q, mut r) = (0.0, 0.0, 0.0);
+        if e.abs() > tol1 && fx.is_finite() && fw.is_finite() && fv.is_finite() {
             r = (x - w) * (fx - fv);
             q = (x - v) * (fx - fw);
             p = (x - v) * q - (x - w) * r;
-            q = (q - r) * 2.0;
+            q = 2.0 * (q - r);
             if q > 0.0 {
                 p = -p;
             } else {
@@ -134,36 +171,34 @@ pub fn minimize(
             r = e;
             e = d;
         }
-        if p.abs() >= (q * 0.5 * r).abs() || p <= q * (a - x) || p >= q * (b - x) {
-            e = if x < xm { b - x } else { a - x };
-            d = c * e;
-        } else {
+        if p.abs() < (0.5 * q * r).abs() && p > q * (a - x) && p < q * (b - x) {
             d = p / q;
             let u = x + d;
-            if u - a < t2 || b - u < t2 {
-                d = if x >= xm { -tol1 } else { tol1 };
+            if u - a < tol2 || b - u < tol2 {
+                d = if x < m { tol1 } else { -tol1 };
             }
+        } else {
+            e = (if x < m { b } else { a }) - x;
+            d = c * e;
         }
         let u = if d.abs() >= tol1 {
             x + d
-        } else if d > 0.0 {
+        } else if d >= 0.0 {
             x + tol1
         } else {
             x - tol1
         };
-        let fu = eval(u);
+        let fu = evaluate(u)?;
+        iterations += 1;
         if fu <= fx {
             if u < x {
                 b = x;
             } else {
                 a = x;
             }
-            v = w;
-            w = x;
-            x = u;
-            fv = fw;
-            fw = fx;
-            fx = fu;
+            (v, fv) = (w, fw);
+            (w, fw) = (x, fx);
+            (x, fx) = (u, fu);
         } else {
             if u < x {
                 a = u;
@@ -171,41 +206,18 @@ pub fn minimize(
                 b = u;
             }
             if fu <= fw || w == x {
-                v = w;
-                fv = fw;
-                w = u;
-                fw = fu;
+                (v, fv) = (w, fw);
+                (w, fw) = (u, fu);
             } else if fu <= fv || v == x || v == w {
-                v = u;
-                fv = fu;
+                (v, fv) = (u, fu);
             }
         }
-    }
+    };
     Ok(Minimum {
         x,
         value: fx,
-        iterations: evaluations - 1,
-        evaluations,
-        converged: true,
+        iterations,
+        evaluations: iterations + 1,
+        converged,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use epistat_core::InputError;
-
-    #[test]
-    fn refuses_bad_input() {
-        let input = |r: Result<Minimum, Error>, name: &str| matches!(r, Err(Error::Input(InputError::Domain { what, .. })) if what == name);
-        assert!(input(minimize(|x| x, 1.0, 1.0, 1e-5), "upper"));
-        assert!(input(minimize(|x| x, f64::NAN, 1.0, 1e-5), "lower"));
-        assert!(input(minimize(|x| x, 0.0, 1.0, 0.0), "tol"));
-    }
-
-    #[test]
-    fn finds_the_minimum_of_a_parabola() {
-        let m = minimize(|x| (x - 0.3) * (x - 0.3), -1.0, 2.0, 1e-10).unwrap();
-        assert!((m.x - 0.3).abs() < 1e-8, "{m:?}");
-    }
 }

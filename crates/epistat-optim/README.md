@@ -4,7 +4,8 @@ Optimisers for the small problems of statistical estimation. The only
 dependency is `rayon`, and it is optional. The crate holds:
 
 - BFGS with the line search of Moré and Thuente,
-- Brent's one-dimensional minimiser, as R's `optimize`,
+- Brent's one-dimensional minimiser, with the tolerance of R's `optimize`,
+- roots in a bracket by bisection and by the ITP method,
 - the Nelder-Mead simplex method,
 - a dense primal simplex method for linear programs with warm starts,
 - a bounded-variable dual simplex method for programs with few rows and up to a
