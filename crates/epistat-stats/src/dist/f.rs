@@ -14,7 +14,7 @@
 //! The functions agree with R's `pf` and `qf` to about `1e-13` relative, not
 //! bit for bit.
 
-use super::beta::{beta_fraction, ln_gamma_ratio};
+use super::beta::regularised;
 use super::gamma::ln_gamma;
 
 /// The upper tail `P(F > f)` of the F distribution on `df1` and `df2` degrees
@@ -24,10 +24,10 @@ use super::gamma::ln_gamma;
 /// `f <= 0`. NaN when a degree of freedom is not positive or the continued
 /// fraction does not converge.
 ///
-/// The factor `x^a y^b / B(a, b)` of the incomplete beta function is formed
-/// from `y = 1 - x` given exactly, with `a ln x = a ln(1 - y)` by `ln_1p`, and
-/// from a log-gamma difference that does not cancel, so that the tail keeps
-/// its accuracy for the very large `df2` that multiple imputation gives. For
+/// Both `x` and `y = 1 - x` are passed to the incomplete beta function, which
+/// forms its factor `x^a y^b / B(a, b)` from the smaller of them, so that the
+/// tail keeps its accuracy for the very large `df2` that multiple imputation
+/// gives. For
 /// two-sided t tails, `P(|T| > z)` on `nu` degrees of freedom is
 /// `sf(z^2, 1, nu)`.
 ///
@@ -57,13 +57,7 @@ pub fn sf(f: f64, df1: f64, df2: f64) -> f64 {
         return super::chi_square::sf(df1 * f, df1) + density * c * (c - b + 1.0) / df2;
     }
     let denominator = df2 + df1 * f;
-    let (x, y) = (df2 / denominator, df1 * f / denominator);
-    let front = (a * (-y).ln_1p() + b * y.ln() + ln_gamma_ratio(a, b) - ln_gamma(b)).exp();
-    if x < (a + 1.0) / (a + b + 2.0) {
-        beta_fraction(a, b, x).map_or(f64::NAN, |cf| front * cf / a)
-    } else {
-        beta_fraction(b, a, y).map_or(f64::NAN, |cf| 1.0 - front * cf / b)
-    }
+    regularised(a, b, df2 / denominator, df1 * f / denominator)
 }
 
 /// The `p` quantile of the F distribution with `df1` and `df2` degrees of

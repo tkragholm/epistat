@@ -24,8 +24,8 @@
 //!
 //! # References
 //!
-//! 1. Press WH, Teukolsky SA, Vetterling WT, Flannery BP. Numerical Recipes,
-//!    3rd edition. Cambridge University Press 2007, section 6.14.
+//! 1. Johnson NL, Kotz S, Balakrishnan N. Continuous Univariate
+//!    Distributions, volume 2, 2nd edition. Wiley 1995, chapter 28.
 
 #![expect(
     clippy::float_cmp,
