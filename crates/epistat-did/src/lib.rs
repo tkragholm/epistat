@@ -293,9 +293,10 @@ pub use methods::missing::{
 };
 pub use methods::staggered::{StaggeredPanel, StaggeredPanelBuilder};
 pub use methods::standard::estimate_att_two_by_two;
+pub use methods::sunab;
 pub use methods::sunab::{
-    SUNAB_DEFAULT_REFERENCES, SunabBins, SunabCell, SunabConfig, SunabControl, SunabError,
-    SunabEstimate, SunabReference, SunabResult, SunabTerm, estimate_sunab,
+    SunabAggregate, SunabBins, SunabCell, SunabControl, SunabFit, SunabOptions, SunabReference,
+    SunabTerm,
 };
 pub use methods::synthdid;
 pub use methods::synthdid::{
