@@ -15,7 +15,7 @@ pub mod panel;
 pub mod repeated;
 pub mod repeated_efficient;
 
-pub use design::{DesignPruning, independent_design_columns};
+pub(crate) use design::prune_design;
 
 use crate::inference::{multiplier_bootstrap_ci, normal_interval};
 use crate::types::DrDidConfig;

@@ -1,12 +1,37 @@
-//! Difference-in-Differences with compositional changes (`DiD_CC`).
+//! Difference-in-differences with compositional changes in repeated
+//! cross-sections, after Sant'Anna and Xu \[1\].
 //!
-//! This module implements a pragmatic semiparametric working-model version of
-//! Sant'Anna and Xu (2026) for the canonical two-period repeated
-//! cross-section design. The robust estimator uses four cell-specific outcome
-//! regressions and a generalized propensity score over the `(D, T)` cells,
-//! while the stationarity estimator uses the Sant'Anna-Zhao style pooled
-//! treated weighting rule. A Hausman-style comparison test reports whether the
-//! stationarity restriction materially shifts the ATT target.
+//! [`estimate`] takes a repeated cross-section [`TwoPeriodData`] and
+//! [`DidCcOptions`] and returns a [`DidCc`]; [`test()`] compares the two
+//! estimators with a Hausman test.
+//!
+//! # Algorithm
+//!
+//! This is a working-model version of the estimator for the canonical
+//! two-period design. The composition-robust estimator
+//! ([`Assumption::Robust`]) combines four outcome regressions, one per arm and
+//! period, fitted by local linear regression with the ridge of
+//! [`NuisanceOptions::ridge`], with a generalised propensity score over the
+//! four (arm, period) cells, a multinomial logit of the cell on the design.
+//! The estimator under stationarity ([`Assumption::Stationary`]) uses the
+//! Sant'Anna-Zhao weighting with a pooled propensity score of the arm. When
+//! the multinomial or the pooled logit cannot be fitted on the covariates,
+//! it is fitted on the intercept alone, and failing that the cell shares are
+//! used. With [`DidCcOptions::cross_fitting`] each row's nuisance values come
+//! from the models fitted on the other folds, the folds drawn within each
+//! cell.
+//!
+//! The influence function is the centred score, the standard error
+//! `sqrt(mean(psi^2) / n)`, and the interval normal or, with
+//! [`DidCcOptions::bootstrap`], the multiplier bootstrap percentile interval.
+//! The Hausman statistic is `(theta_s - theta_r)^2 / se^2`, with `se` from
+//! the difference of the two influence functions, against a chi-square
+//! distribution with one degree of freedom.
+//!
+//! # References
+//!
+//! 1. Sant'Anna PHC, Xu Q. Difference-in-differences with compositional
+//!    changes. Working paper, 2023.
 
 use epistat_linalg::{Mat, MatRef};
 use epistat_rng::Stream;
@@ -27,6 +52,241 @@ use crate::types::{
     DidCcConfig, DidCcError, DidCcEstimate, DidCcHausmanTest, DidCell, DrDidRepeatedObservation,
     TimePeriod, TreatmentGroup,
 };
+
+use epistat_core::{Bootstrap, Estimate, InputError, Level};
+use epistat_inference::Influence;
+
+use crate::error::Error;
+use crate::methods::two_period::{
+    Design, NuisanceOptions, TwoPeriodData, domain, repeated_rows, row_influence,
+};
+
+/// The identifying assumption of the estimate.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Assumption {
+    /// Robust to changes in the composition of the sample between the
+    /// periods.
+    #[default]
+    Robust,
+    /// The covariates' distribution is stationary between the periods.
+    Stationary,
+}
+
+/// The folds of cross-fitting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CrossFitting {
+    /// The number of folds, at least 2.
+    pub folds: usize,
+    /// The seed of the assignment of rows to folds, drawn within each cell.
+    pub seed: u64,
+}
+
+/// The options of [`estimate`] and [`test()`].
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct DidCcOptions {
+    /// The identifying assumption of [`estimate`]; [`test()`] forms both.
+    pub assumption: Assumption,
+    /// The nuisance models: the clip of the propensity scores, the ridge of
+    /// the outcome regressions and the iterations of the logits. The legacy
+    /// switch is not read.
+    pub nuisance: NuisanceOptions,
+    /// The confidence level of the intervals.
+    pub level: Level,
+    /// A multiplier bootstrap for the intervals: the percentile interval of
+    /// Rademacher draws of the influence function. `None`, the default, gives
+    /// normal intervals.
+    pub bootstrap: Option<Bootstrap>,
+    /// Cross-fitting of the nuisance models; `None`, the default, fits them
+    /// on every row.
+    pub cross_fitting: Option<CrossFitting>,
+}
+
+/// An ATT under compositional changes.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct DidCc {
+    /// The assumption it was formed under.
+    pub assumption: Assumption,
+    /// The ATT with its standard error, interval and normal p-value.
+    pub estimate: Estimate,
+    /// Treated rows in the post period.
+    pub n_treated_post: usize,
+    /// Treated rows in the pre period.
+    pub n_treated_pre: usize,
+    /// Comparison rows in the post period.
+    pub n_control_post: usize,
+    /// Comparison rows in the pre period.
+    pub n_control_pre: usize,
+    /// The sum of the prior weights.
+    pub total_weight: f64,
+    /// The influence function, one value per row, under
+    /// [`epistat_inference::ClusterRule::NoSmallSample`].
+    pub influence: Influence,
+}
+
+/// The Hausman comparison of the robust and the stationary estimates.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct DidCcTest {
+    /// The composition-robust estimate.
+    pub robust: DidCc,
+    /// The estimate under stationarity.
+    pub stationary: DidCc,
+    /// The stationary estimate minus the robust one.
+    pub difference: f64,
+    /// The standard error of the difference, from the difference of the two
+    /// influence functions.
+    pub se: f64,
+    /// `(difference / se)^2`.
+    pub statistic: f64,
+    /// The p-value of the statistic against a chi-square distribution with
+    /// one degree of freedom; a small value rejects stationarity.
+    pub p_value: f64,
+}
+
+/// The ATT of the repeated cross-section `data` under `options.assumption`.
+///
+/// # Errors
+///
+/// [`Error::Input`] for a nuisance option outside its domain, a bootstrap
+/// without replicates or fewer than two folds; [`Error::Unsupported`] for a
+/// panel or clusters; [`Error::NoTreated`] or [`Error::NoComparison`] for an
+/// arm without rows in a period; [`Error::CrossFitCell`] for a cell with
+/// fewer rows than folds; and [`Error::Singular`] for an outcome regression
+/// that cannot be solved.
+pub fn estimate(data: &TwoPeriodData<'_>, options: &DidCcOptions) -> Result<DidCc, Error> {
+    let (rows, config) = prepare(data, options)?;
+    let fit = match options.assumption {
+        Assumption::Robust => robust(&rows, config),
+        Assumption::Stationary => stationary(&rows, config),
+    }
+    .map_err(Error::from)?;
+    result(options.assumption, fit, options.level)
+}
+
+/// The Hausman test of stationarity: both estimates of [`estimate`] and the
+/// test of their difference. `options.assumption` is not read.
+///
+/// # Errors
+///
+/// As [`estimate`], and [`Error::DegenerateVariance`] when the difference
+/// has no positive variance.
+pub fn test(data: &TwoPeriodData<'_>, options: &DidCcOptions) -> Result<DidCcTest, Error> {
+    let (rows, config) = prepare(data, options)?;
+    let fit = hausman(&rows, config).map_err(Error::from)?;
+    Ok(DidCcTest {
+        robust: result(Assumption::Robust, fit.robust, options.level)?,
+        stationary: result(Assumption::Stationary, fit.stationary, options.level)?,
+        difference: fit.difference,
+        se: fit.difference_se,
+        statistic: fit.statistic,
+        p_value: fit.p_value,
+    })
+}
+
+fn prepare(
+    data: &TwoPeriodData<'_>,
+    options: &DidCcOptions,
+) -> Result<(Vec<DrDidRepeatedObservation>, DidCcConfig), Error> {
+    options.nuisance.validate()?;
+    let Design::RepeatedCrossSection { post, outcome } = data.design() else {
+        return Err(Error::Unsupported {
+            what: "the compositional-change estimator on a panel",
+        });
+    };
+    if data.clusters().is_some() {
+        return Err(Error::Unsupported {
+            what: "clusters in the compositional-change estimator",
+        });
+    }
+    if let Some(bootstrap) = options.bootstrap
+        && bootstrap.replicates == 0
+    {
+        return Err(domain("bootstrap replicates", 0.0, "[1, inf)"));
+    }
+    if let Some(cross) = options.cross_fitting
+        && cross.folds < 2
+    {
+        return Err(InputError::Domain {
+            what: "cross-fitting folds",
+            value: crate::util::usize_to_f64(cross.folds),
+            domain: "[2, inf)",
+        }
+        .into());
+    }
+    let config = DidCcConfig {
+        drdid: options.nuisance.config(options.level, options.bootstrap),
+        bootstrap_confidence_intervals: options.bootstrap.is_some(),
+        cross_fit_folds: options.cross_fitting.map_or(1, |cross| cross.folds),
+        cross_fit_seed: options.cross_fitting.map_or(0, |cross| cross.seed),
+    };
+    Ok((repeated_rows(data, post, outcome), config))
+}
+
+fn result(assumption: Assumption, fit: DidCcEstimate, level: Level) -> Result<DidCc, Error> {
+    Ok(DidCc {
+        assumption,
+        estimate: crate::inference::estimate_from(
+            fit.att,
+            fit.se,
+            (fit.ci_low, fit.ci_high),
+            level,
+        ),
+        n_treated_post: fit.treated_post_n,
+        n_treated_pre: fit.treated_pre_n,
+        n_control_post: fit.control_post_n,
+        n_control_pre: fit.control_pre_n,
+        total_weight: fit.total_weight,
+        influence: row_influence(fit.influence_function)?,
+    })
+}
+
+impl From<DidCcError> for Error {
+    fn from(error: DidCcError) -> Self {
+        match error {
+            DidCcError::EmptyInput => InputError::Empty { what: "rows" }.into(),
+            DidCcError::NoTreated => Self::NoTreated,
+            DidCcError::NoControl => Self::NoComparison,
+            DidCcError::MissingCell { cell } => {
+                let (treated, post) = cell.flags();
+                Self::EmptyCell { treated, post }
+            }
+            DidCcError::InvalidWeight { value } => domain("weights", value, "(0, inf)"),
+            DidCcError::InvalidOutcome { .. } => InputError::NotFinite {
+                what: "outcome",
+                row: 0,
+            }
+            .into(),
+            DidCcError::InvalidCovariate { .. } => InputError::NotFinite {
+                what: "covariates",
+                row: 0,
+            }
+            .into(),
+            DidCcError::InconsistentCovariateCount { expected, actual } => InputError::Length {
+                what: "covariates",
+                expected,
+                found: actual,
+            }
+            .into(),
+            DidCcError::InvalidConfidenceLevel | DidCcError::InvalidCrossFitFolds => {
+                Self::Unsupported {
+                    what: "the compositional-change options",
+                }
+            }
+            DidCcError::InvalidConfig(_) => Self::Singular,
+            DidCcError::InsufficientCellForCrossFit { folds, cell } => {
+                let (treated, post) = cell.flags();
+                Self::CrossFitCell {
+                    folds,
+                    treated,
+                    post,
+                }
+            }
+            DidCcError::DegenerateHausmanVariance => Self::DegenerateVariance,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct DidCcPreparedData {
@@ -62,42 +322,6 @@ struct DidCcNuisance {
 
 type CrossFitNuisance = (OutcomePredictions, Vec<[f64; 4]>, Vec<f64>);
 
-/// Read access to the fields of a `DiD_CC` observation.
-pub trait DidCcObservationView {
-    /// Whether the observation is in the treated group.
-    fn treated(&self) -> bool;
-    /// Whether the observation is from the post-treatment period.
-    fn post_period(&self) -> bool;
-    /// Observed outcome value.
-    fn outcome(&self) -> f64;
-    /// Sampling weight.
-    fn weight(&self) -> f64;
-    /// Covariate values.
-    fn covariates(&self) -> &[f64];
-}
-
-impl DidCcObservationView for DrDidRepeatedObservation {
-    fn treated(&self) -> bool {
-        self.treated
-    }
-
-    fn post_period(&self) -> bool {
-        self.post_period
-    }
-
-    fn outcome(&self) -> f64 {
-        self.outcome
-    }
-
-    fn weight(&self) -> f64 {
-        self.weight
-    }
-
-    fn covariates(&self) -> &[f64] {
-        &self.covariates
-    }
-}
-
 struct OutcomeCellScratch {
     subset_design: Mat<f64>,
     subset_outcomes: Vec<f64>,
@@ -122,26 +346,8 @@ struct OutcomeTrainData<'a> {
     design: MatRef<'a, f64>,
 }
 
-/// Estimate the ATT using the composition-robust `DiD_CC` EIF-style score.
-///
-/// # Errors
-/// Returns [`DidCcError`] when inputs/configuration are invalid or nuisance
-/// working models cannot be fit.
-pub fn estimate_did_cc_robust(
+fn robust(
     observations: &[DrDidRepeatedObservation],
-    config: DidCcConfig,
-) -> Result<DidCcEstimate, DidCcError> {
-    estimate_did_cc_robust_from_views(observations, config)
-}
-
-/// Estimate the ATT using the composition-robust `DiD_CC` EIF-style score from
-/// borrowed row views.
-///
-/// # Errors
-/// Returns [`DidCcError`] when inputs/configuration are invalid or nuisance
-/// working models cannot be fit.
-pub fn estimate_did_cc_robust_from_views<T: DidCcObservationView>(
-    observations: &[T],
     config: DidCcConfig,
 ) -> Result<DidCcEstimate, DidCcError> {
     validate_did_cc_config(config)?;
@@ -150,26 +356,8 @@ pub fn estimate_did_cc_robust_from_views<T: DidCcObservationView>(
     Ok(build_robust_estimate(&prepared, &nuisance, config))
 }
 
-/// Estimate the ATT using the stationarity-imposing Sant'Anna-Zhao style score.
-///
-/// # Errors
-/// Returns [`DidCcError`] when inputs/configuration are invalid or nuisance
-/// working models cannot be fit.
-pub fn estimate_did_cc_stationary(
+fn stationary(
     observations: &[DrDidRepeatedObservation],
-    config: DidCcConfig,
-) -> Result<DidCcEstimate, DidCcError> {
-    estimate_did_cc_stationary_from_views(observations, config)
-}
-
-/// Estimate the ATT using the stationarity-imposing Sant'Anna-Zhao style score
-/// from borrowed row views.
-///
-/// # Errors
-/// Returns [`DidCcError`] when inputs/configuration are invalid or nuisance
-/// working models cannot be fit.
-pub fn estimate_did_cc_stationary_from_views<T: DidCcObservationView>(
-    observations: &[T],
     config: DidCcConfig,
 ) -> Result<DidCcEstimate, DidCcError> {
     validate_did_cc_config(config)?;
@@ -178,26 +366,8 @@ pub fn estimate_did_cc_stationary_from_views<T: DidCcObservationView>(
     Ok(build_stationary_estimate(&prepared, &nuisance, config))
 }
 
-/// Compare the robust and stationarity-based ATT estimators with a Hausman-type test.
-///
-/// # Errors
-/// Returns [`DidCcError`] when either estimator cannot be formed or the
-/// difference variance is degenerate.
-pub fn test_did_cc_stationarity(
+fn hausman(
     observations: &[DrDidRepeatedObservation],
-    config: DidCcConfig,
-) -> Result<DidCcHausmanTest, DidCcError> {
-    test_did_cc_stationarity_from_views(observations, config)
-}
-
-/// Compare the robust and stationarity-based ATT estimators with a Hausman-type
-/// test using borrowed row views.
-///
-/// # Errors
-/// Returns [`DidCcError`] when either estimator cannot be formed or the
-/// difference variance is degenerate.
-pub fn test_did_cc_stationarity_from_views<T: DidCcObservationView>(
-    observations: &[T],
     config: DidCcConfig,
 ) -> Result<DidCcHausmanTest, DidCcError> {
     validate_did_cc_config(config)?;
@@ -222,16 +392,12 @@ pub fn test_did_cc_stationarity_from_views<T: DidCcObservationView>(
         difference_se,
         statistic,
         p_value,
-        reject_null: p_value < config.hausman_alpha,
     })
 }
 
 fn validate_did_cc_config(config: DidCcConfig) -> Result<(), DidCcError> {
     if !validate_confidence_level(config.drdid.confidence_level) {
         return Err(DidCcError::InvalidConfidenceLevel);
-    }
-    if !validate_confidence_level(config.hausman_alpha) {
-        return Err(DidCcError::InvalidHausmanAlpha);
     }
     if config.cross_fit_folds == 0 {
         return Err(DidCcError::InvalidCrossFitFolds);
@@ -244,13 +410,13 @@ fn validate_did_cc_config(config: DidCcConfig) -> Result<(), DidCcError> {
     Ok(())
 }
 
-fn prepare_did_cc_data<T: DidCcObservationView>(
-    observations: &[T],
+fn prepare_did_cc_data(
+    observations: &[DrDidRepeatedObservation],
 ) -> Result<DidCcPreparedData, DidCcError> {
     if observations.is_empty() {
         return Err(DidCcError::EmptyInput);
     }
-    let covariate_count = observations.first().map_or(0, |row| row.covariates().len());
+    let covariate_count = observations.first().map_or(0, |row| row.covariates.len());
     let feature_count = covariate_count + 1;
     let observation_count = observations.len();
 
@@ -268,18 +434,18 @@ fn prepare_did_cc_data<T: DidCcObservationView>(
     let mut design_matrix_flat = Vec::with_capacity(observation_count * feature_count);
 
     for row in observations {
-        let covariates = row.covariates();
+        let covariates = &row.covariates;
         if covariates.len() != covariate_count {
             return Err(DidCcError::InconsistentCovariateCount {
                 expected: covariate_count,
                 actual: covariates.len(),
             });
         }
-        let outcome = row.outcome();
+        let outcome = row.outcome;
         if !outcome.is_finite() {
             return Err(DidCcError::InvalidOutcome { value: outcome });
         }
-        let weight = row.weight();
+        let weight = row.weight;
         if !weight.is_finite() || weight <= 0.0 {
             return Err(DidCcError::InvalidWeight { value: weight });
         }
@@ -289,15 +455,15 @@ fn prepare_did_cc_data<T: DidCcObservationView>(
             }
         }
 
-        match (row.treated(), row.post_period()) {
+        match (row.treated, row.post_period) {
             (true, true) => treated_post_n += 1,
             (true, false) => treated_pre_n += 1,
             (false, true) => control_post_n += 1,
             (false, false) => control_pre_n += 1,
         }
 
-        let treated_value = if row.treated() { 1.0 } else { 0.0 };
-        let post_value = if row.post_period() { 1.0 } else { 0.0 };
+        let treated_value = if row.treated { 1.0 } else { 0.0 };
+        let post_value = if row.post_period { 1.0 } else { 0.0 };
         treated.push(treated_value);
         post_period.push(post_value);
         class_labels.push(class_index_raw(treated_value, post_value));
@@ -1057,9 +1223,9 @@ mod tests {
             }
         }
 
-        let robust = estimate_did_cc_robust(&rows, DidCcConfig::default()).unwrap();
-        let stationary = estimate_did_cc_stationary(&rows, DidCcConfig::default()).unwrap();
-        let test = test_did_cc_stationarity(&rows, DidCcConfig::default()).unwrap();
+        let robust = robust(&rows, DidCcConfig::default()).unwrap();
+        let stationary = stationary(&rows, DidCcConfig::default()).unwrap();
+        let test = hausman(&rows, DidCcConfig::default()).unwrap();
 
         assert!((robust.att - 2.0).abs() < 1e-6);
         assert!((stationary.att - 2.0).abs() < 1e-6);
@@ -1091,13 +1257,13 @@ mod tests {
             ));
         }
 
-        let robust = estimate_did_cc_robust(&rows, DidCcConfig::default()).unwrap();
-        let stationary = estimate_did_cc_stationary(&rows, DidCcConfig::default()).unwrap();
-        let test = test_did_cc_stationarity(&rows, DidCcConfig::default()).unwrap();
+        let robust = robust(&rows, DidCcConfig::default()).unwrap();
+        let stationary = stationary(&rows, DidCcConfig::default()).unwrap();
+        let test = hausman(&rows, DidCcConfig::default()).unwrap();
 
         assert!(robust.att > stationary.att + 0.5);
         assert!(test.difference.abs() > 0.5);
-        assert!(test.reject_null);
+        assert!(test.p_value < 0.05);
     }
 
     #[test]
@@ -1146,8 +1312,8 @@ mod tests {
             }
         }
 
-        let no_split = estimate_did_cc_robust(&rows, DidCcConfig::default()).unwrap();
-        let cross_fit = estimate_did_cc_robust(
+        let no_split = robust(&rows, DidCcConfig::default()).unwrap();
+        let cross_fit = robust(
             &rows,
             DidCcConfig {
                 drdid: crate::types::DrDidConfig {
@@ -1176,7 +1342,7 @@ mod tests {
             row(false, false, 0.0, 1.0),
         ];
 
-        let err = estimate_did_cc_robust(
+        let err = robust(
             &rows,
             DidCcConfig {
                 cross_fit_folds: 2,
@@ -1250,7 +1416,7 @@ mod tests {
 
         for draw in 0..draws {
             let rows = simulate_did_cc_sample(&mut rng, 80, false);
-            let estimate = estimate_did_cc_robust(
+            let estimate = robust(
                 &rows,
                 DidCcConfig {
                     drdid: crate::types::DrDidConfig {
@@ -1263,7 +1429,6 @@ mod tests {
                     bootstrap_confidence_intervals: true,
                     cross_fit_folds: 4,
                     cross_fit_seed: 91,
-                    ..DidCcConfig::default()
                 },
             )
             .expect("cross-fit estimate");
@@ -1311,16 +1476,14 @@ mod tests {
                 bootstrap_confidence_intervals: true,
                 cross_fit_folds: 4,
                 cross_fit_seed: 17,
-                ..DidCcConfig::default()
             };
-            let robust = estimate_did_cc_robust(&rows, config).expect("robust estimate");
-            let stationary =
-                estimate_did_cc_stationary(&rows, config).expect("stationary estimate");
-            let hausman = test_did_cc_stationarity(&rows, config).expect("hausman");
+            let robust = robust(&rows, config).expect("robust estimate");
+            let stationary = stationary(&rows, config).expect("stationary estimate");
+            let hausman = hausman(&rows, config).expect("hausman");
 
             robust_abs_error += (robust.att - target_att).abs();
             stationary_abs_error += (stationary.att - target_att).abs();
-            hausman_rejections += usize::from(hausman.reject_null);
+            hausman_rejections += usize::from(hausman.p_value < 0.05);
         }
 
         let mean_robust_abs_error = robust_abs_error / crate::util::usize_to_f64(draws);
@@ -1338,7 +1501,7 @@ mod tests {
     #[test]
     fn did_cc_can_skip_bootstrap_confidence_intervals() {
         let rows = simulate_did_cc_sample(&mut Stream::seeded(24_0312), 40, false);
-        let estimate = estimate_did_cc_robust(
+        let estimate = robust(
             &rows,
             DidCcConfig {
                 drdid: crate::types::DrDidConfig {
@@ -1350,7 +1513,6 @@ mod tests {
                 bootstrap_confidence_intervals: false,
                 cross_fit_folds: 4,
                 cross_fit_seed: 33,
-                ..DidCcConfig::default()
             },
         )
         .expect("estimate without bootstrap ci");

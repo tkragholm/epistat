@@ -17,10 +17,8 @@
 //! number is `kappa^2`, so its influence values differ by a relative
 //! `8 kappa^2 eps` of the largest of them.
 
-use epistat_did::{
-    BSplineBasis, Basis, ContinuousObservation, PolynomialBasis, estimate_acrt_sieve,
-};
-use epistat_linalg::Col;
+use epistat_did::Error;
+use epistat_did::continuous::{self, Acrt, AcrtOptions, BasisSpec, ContinuousData};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -57,19 +55,23 @@ struct Reference {
 }
 
 /// The basis `(d, d^2)`, which does not span the constants.
-struct Quadratic;
+/// `(d, d^2)`, the quadratic without its constant.
+const QUADRATIC: BasisSpec = BasisSpec::Polynomial {
+    degree: 2,
+    constant: false,
+};
 
-impl Basis for Quadratic {
-    fn eval(&self, x: f64) -> Col<f64> {
-        Col::from_fn(2, |j| if j == 0 { x } else { x * x })
-    }
+const CUBIC: BasisSpec = BasisSpec::Polynomial {
+    degree: 3,
+    constant: true,
+};
 
-    fn eval_deriv(&self, x: f64) -> Col<f64> {
-        Col::from_fn(2, |j| if j == 0 { 1.0 } else { 2.0 * x })
-    }
-
-    fn num_basis(&self) -> usize {
-        2
+fn spline(lower: f64, upper: f64) -> BasisSpec {
+    BasisSpec::BSpline {
+        degree: 3,
+        internal_knots: Vec::new(),
+        lower,
+        upper,
     }
 }
 
@@ -83,27 +85,36 @@ fn load() -> Reference {
     r
 }
 
-fn observations(case: &Case) -> Vec<ContinuousObservation> {
-    (0..case.dose.len())
-        .map(|i| ContinuousObservation {
-            dose: case.dose[i],
-            delta_outcome: case.delta_y[i],
-            weight: case.weight[i],
-        })
-        .collect()
+fn fit(dose: &[f64], change: &[f64], weight: &[f64], basis: &BasisSpec) -> Result<Acrt, Error> {
+    let data = ContinuousData::builder(dose, change)
+        .weights(weight)
+        .build()?;
+    continuous::estimate(
+        &data,
+        &AcrtOptions {
+            basis: basis.clone(),
+            ..AcrtOptions::default()
+        },
+    )
 }
 
-fn check<B: Basis>(case: &Case, basis: &B, label: &str) {
-    let result = estimate_acrt_sieve(&observations(case), basis).expect("sieve");
+fn estimate(case: &Case, basis: &BasisSpec) -> Result<Acrt, Error> {
+    fit(&case.dose, &case.delta_y, &case.weight, basis)
+}
+
+fn check(case: &Case, basis: &BasisSpec, label: &str) {
+    let result = estimate(case, basis).expect("sieve");
+    let acrt = result.estimate.estimate;
+    let se = result.estimate.se.expect("se");
+    let influence = result.influence.column(0);
     let n = case.dose.len() as f64;
     let largest = case.influence.iter().fold(0.0_f64, |m, v| m.max(v.abs()));
     let rho = 8.0 * case.kappa * EPS * case.acrt.abs().max(1.0);
     let own = 8.0 * case.kappa * case.kappa * EPS * largest;
     let estimate_tol = rho + own / n;
     assert!(
-        (result.acrt_glob - case.acrt).abs() <= estimate_tol,
-        "{label}: ACRT {} against R {}",
-        result.acrt_glob,
+        (acrt - case.acrt).abs() <= estimate_tol,
+        "{label}: ACRT {acrt} against R {}",
         case.acrt
     );
     let mut worst = 0.0_f64;
@@ -112,11 +123,11 @@ fn check<B: Basis>(case: &Case, basis: &B, label: &str) {
         let tol = 2.0 * (case.influence_plain[i] - case.influence[i]).abs()
             + 3.0 * n * rho / case.h
             + own;
-        let deviation = (result.influence_function[i] - case.influence[i]).abs();
+        let deviation = (influence[i] - case.influence[i]).abs();
         assert!(
             deviation <= tol,
             "{label} unit {i}: influence {} against the jackknife {} (tolerance {tol:e})",
-            result.influence_function[i],
+            influence[i],
             case.influence[i]
         );
         worst = worst.max(deviation / tol);
@@ -126,14 +137,13 @@ fn check<B: Basis>(case: &Case, basis: &B, label: &str) {
     // by at most the 2-norm of their tolerances over n.
     let se_tol = squares.sqrt() / n;
     assert!(
-        (result.se - case.se_ij).abs() <= se_tol,
-        "{label}: standard error {} against the jackknife {} (tolerance {se_tol:e})",
-        result.se,
+        (se - case.se_ij).abs() <= se_tol,
+        "{label}: standard error {se} against the jackknife {} (tolerance {se_tol:e})",
         case.se_ij
     );
     println!(
-        "{label}: worst influence deviation {worst:.3e} of its tolerance; se {:.6} (jackknife {:.6}, delete-one {:.6})",
-        result.se, case.se_ij, case.se_delete_one
+        "{label}: worst influence deviation {worst:.3e} of its tolerance; se {se:.6} (jackknife {:.6}, delete-one {:.6})",
+        case.se_ij, case.se_delete_one
     );
 }
 
@@ -142,17 +152,16 @@ fn the_influence_function_is_the_jackknife_of_the_procedure() {
     let reference = load();
     let contdid = &reference.cases[0];
     assert_eq!(contdid.name, "contdid");
+    check(contdid, &CUBIC, "contdid, cubic polynomial");
+    let boundary = contdid.boundary.as_ref().expect("boundary");
     check(
         contdid,
-        &PolynomialBasis::new(3),
-        "contdid, cubic polynomial",
+        &spline(boundary[0], boundary[1]),
+        "contdid, cubic B-spline",
     );
-    let boundary = contdid.boundary.as_ref().expect("boundary");
-    let spline = BSplineBasis::new(3, Vec::new(), (boundary[0], boundary[1])).expect("knots");
-    check(contdid, &spline, "contdid, cubic B-spline");
     let weighted = &reference.cases[1];
     assert_eq!(weighted.name, "weighted");
-    check(weighted, &Quadratic, "weighted, (d, d^2)");
+    check(weighted, &QUADRATIC, "weighted, (d, d^2)");
 }
 
 /// The cubic B-spline basis without interior knots spans the cubic polynomials,
@@ -163,21 +172,17 @@ fn the_estimate_is_contdid_s() {
     let reference = load();
     let case = &reference.cases[0];
     let boundary = case.boundary.as_ref().expect("boundary");
-    let spline = BSplineBasis::new(3, Vec::new(), (boundary[0], boundary[1])).expect("knots");
+    let spline = spline(boundary[0], boundary[1]);
     let want = case.contdid_acrt.expect("contdid");
     let tol = 8.0 * case.kappa * case.kappa * EPS * want.abs().max(1.0);
     for (label, got) in [
         (
             "polynomial",
-            estimate_acrt_sieve(&observations(case), &PolynomialBasis::new(3))
-                .unwrap()
-                .acrt_glob,
+            estimate(case, &CUBIC).unwrap().estimate.estimate,
         ),
         (
             "B-spline",
-            estimate_acrt_sieve(&observations(case), &spline)
-                .unwrap()
-                .acrt_glob,
+            estimate(case, &spline).unwrap().estimate.estimate,
         ),
     ] {
         assert!(
@@ -202,24 +207,30 @@ fn the_estimate_is_contdid_s() {
 fn negative_doses_have_no_influence_and_invalid_input_is_an_error() {
     let reference = load();
     let case = &reference.cases[1];
-    let result = estimate_acrt_sieve(&observations(case), &Quadratic).unwrap();
+    let result = estimate(case, &QUADRATIC).unwrap();
     for (i, &dose) in case.dose.iter().enumerate() {
         if dose < 0.0 {
-            assert_eq!(result.influence_function[i].to_bits(), 0.0_f64.to_bits());
+            assert_eq!(result.influence.column(0)[i].to_bits(), 0.0_f64.to_bits());
         }
     }
-    let mut bad = observations(case);
-    bad[0].weight = -1.0;
-    assert!(estimate_acrt_sieve(&bad, &Quadratic).is_err());
-    let mut bad = observations(case);
-    bad[1].delta_outcome = f64::NAN;
-    assert!(estimate_acrt_sieve(&bad, &Quadratic).is_err());
-    let treated_only: Vec<_> = observations(case)
-        .into_iter()
-        .filter(|o| o.dose > 0.0)
+    let mut weight = case.weight.clone();
+    weight[0] = -1.0;
+    assert!(fit(&case.dose, &case.delta_y, &weight, &QUADRATIC).is_err());
+    let mut change = case.delta_y.clone();
+    change[1] = f64::NAN;
+    assert!(fit(&case.dose, &change, &case.weight, &QUADRATIC).is_err());
+    let treated: Vec<usize> = (0..case.dose.len())
+        .filter(|&i| case.dose[i] > 0.0)
         .collect();
+    let pick = |v: &[f64]| treated.iter().map(|&i| v[i]).collect::<Vec<_>>();
     assert_eq!(
-        estimate_acrt_sieve(&treated_only, &Quadratic),
-        Err(epistat_did::ContinuousDidError::NoControlUnits)
+        fit(
+            &pick(&case.dose),
+            &pick(&case.delta_y),
+            &pick(&case.weight),
+            &QUADRATIC
+        )
+        .unwrap_err(),
+        Error::NoComparison
     );
 }

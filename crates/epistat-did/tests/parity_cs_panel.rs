@@ -17,7 +17,9 @@ use epistat_did::att_gt::{
     AggteOptions, AggteType, AggteWeights, AttGt, AttGtOptions, BasePeriod, ComparisonGroup,
     Design, Estimator, NuisanceOptions,
 };
-use epistat_did::{DrDidConfig, DrDidObservation, Error, estimate_drdid_panel};
+use epistat_did::two_period::{self, TwoPeriodOptions};
+use epistat_did::{Error, TwoPeriodData};
+use epistat_linalg::MatRef;
 use rows::{Cell, Obs, Summary};
 use serde::Deserialize;
 
@@ -120,33 +122,44 @@ fn clustered(rows: &[Obs], unit_order: &[i64], cluster_of_unit: &[i64]) -> Vec<O
 fn drdid_panel_matches_r_on_one_lifted_cell() {
     let fixture: DrDidCellRef = load_json("tests/data/drdid_panel_cell_ref.json");
 
-    let rows = (0..fixture.d.len())
-        .map(|i| DrDidObservation {
-            treated: fixture.d[i] > 0.5,
-            delta_outcome: fixture.lemp_post[i] - fixture.lemp_base[i],
-            weight: 1.0,
-            // estimate_drdid_panel takes a finished design matrix, so the
-            // intercept is explicit here. R was given cbind(1, lpop) to match.
-            covariates: vec![1.0, fixture.lpop[i]],
-        })
-        .collect::<Vec<_>>();
-
-    let fit = estimate_drdid_panel(&rows, DrDidConfig::builder().build()).expect("panel fit");
+    let treated: Vec<bool> = fixture.d.iter().map(|&v| v > 0.5).collect();
+    let change: Vec<f64> = fixture
+        .lemp_post
+        .iter()
+        .zip(&fixture.lemp_base)
+        .map(|(post, base)| post - base)
+        .collect();
+    // The estimator adds the intercept; R was given cbind(1, lpop) to match.
+    let data = TwoPeriodData::panel(&treated, &change)
+        .covariates(MatRef::from_column_major_slice(
+            &fixture.lpop,
+            change.len(),
+            1,
+        ))
+        .build()
+        .expect("data");
+    let fit = two_period::estimate(
+        &data,
+        &TwoPeriodOptions {
+            estimator: two_period::Estimator::DoublyRobust,
+            ..TwoPeriodOptions::default()
+        },
+    )
+    .expect("panel fit");
+    let (att, se) = (fit.estimate.estimate, fit.estimate.se.expect("se"));
 
     assert!(
-        (fit.att - fixture.att).abs() < 1e-10,
-        "att {} vs R {}",
-        fit.att,
+        (att - fixture.att).abs() < 1e-10,
+        "att {att} vs R {}",
         fixture.att
     );
     assert!(
-        (fit.se - fixture.se).abs() < 1e-10,
-        "se {} vs R {}",
-        fit.se,
+        (se - fixture.se).abs() < 1e-10,
+        "se {se} vs R {}",
         fixture.se
     );
-    assert_eq!(fit.influence_function.len(), fixture.inffunc.len());
-    for (ours, theirs) in fit.influence_function.iter().zip(&fixture.inffunc) {
+    assert_eq!(fit.influence.n_units(), fixture.inffunc.len());
+    for (ours, theirs) in fit.influence.column(0).iter().zip(&fixture.inffunc) {
         assert!((ours - theirs).abs() < 1e-9, "influence {ours} vs {theirs}");
     }
 }
@@ -1008,7 +1021,8 @@ fn rc_route_matches_the_traditional_estimator_and_aggregates() {
         // identical to it. The crate's 1e-8 ridge is NOT the cause: disabling it
         // leaves the worst deviation at 8.5e-4 unchanged. Nor is it a general
         // weakness of this crate's repeated-cross-section code, since
-        // `estimate_drdid_repeated_efficient` matches DRDID::drdid_rc to 1.5e-11
+        // `two_period::estimate` with `Estimator::DoublyRobust` on a repeated
+        // cross-section matches DRDID::drdid_rc to 1.5e-11
         // on the point estimate and 3.4e-12 on the standard error. Something in
         // the TRADITIONAL variant specifically is slightly off, and since `did`
         // calls the locally efficient one, it is bounded here rather than chased.

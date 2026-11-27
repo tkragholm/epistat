@@ -5,10 +5,9 @@
 
 use epistat_testkit::load_json;
 
-use epistat_did::{
-    DrDidConfig, DrDidObservation, DrDidRepeatedObservation, estimate_drdid_improved_panel,
-    estimate_drdid_improved_repeated_cross_section,
-};
+use epistat_did::TwoPeriodData;
+use epistat_did::two_period::{self, Estimator, NuisanceOptions, TwoPeriodOptions};
+use epistat_linalg::MatRef;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -65,28 +64,46 @@ fn worst(ours: &[f64], theirs: &[f64]) -> f64 {
         .fold(0.0, f64::max)
 }
 
-fn config() -> DrDidConfig {
-    DrDidConfig::builder().ridge(0.0).build()
+fn options() -> TwoPeriodOptions {
+    TwoPeriodOptions {
+        estimator: Estimator::Improved,
+        nuisance: NuisanceOptions {
+            ridge: 0.0,
+            ..NuisanceOptions::default()
+        },
+        ..TwoPeriodOptions::default()
+    }
+}
+
+/// Rows of covariates as one column-major buffer.
+fn column_major(x: &[Vec<f64>]) -> (Vec<f64>, usize) {
+    let k = x.first().map_or(0, Vec::len);
+    (
+        (0..k)
+            .flat_map(|j| x.iter().map(move |row| row[j]))
+            .collect(),
+        k,
+    )
 }
 
 #[test]
 fn improved_rc_matches_drdid_imp_rc() {
     for case in fixture().rc {
         let d = &case.data;
-        // The repeated estimators prepend the intercept themselves.
-        let rows: Vec<DrDidRepeatedObservation> = (0..d.y.len())
-            .map(|i| DrDidRepeatedObservation {
-                treated: d.d[i] > 0.5,
-                post_period: d.post[i] > 0.5,
-                outcome: d.y[i],
-                weight: d.weights[i],
-                covariates: d.x[i].clone(),
-            })
-            .collect();
-        let fit = estimate_drdid_improved_repeated_cross_section(&rows, config())
+        let treated: Vec<bool> = d.d.iter().map(|&v| v > 0.5).collect();
+        let post: Vec<bool> = d.post.iter().map(|&v| v > 0.5).collect();
+        let (x, k) = column_major(&d.x);
+        let data = TwoPeriodData::repeated_cross_section(&treated, &post, &d.y)
+            .weights(&d.weights)
+            .covariates(MatRef::from_column_major_slice(&x, d.y.len(), k))
+            .build()
+            .expect("data");
+        let fit = two_period::estimate(&data, &options())
             .unwrap_or_else(|e| panic!("{}: {e}", case.name));
-        let (att, se) = ((fit.att - case.att).abs(), (fit.se - case.se).abs());
-        let influence = worst(&fit.influence_function, &case.inffunc);
+        let fit_att = fit.estimate.estimate;
+        let fit_se = fit.estimate.se.expect("se");
+        let (att, se) = ((fit_att - case.att).abs(), (fit_se - case.se).abs());
+        let influence = worst(fit.influence.column(0), &case.inffunc);
         println!(
             "{}: att {att:e}, se {se:e}, influence {influence:e}",
             case.name
@@ -99,19 +116,20 @@ fn improved_rc_matches_drdid_imp_rc() {
 fn improved_panel_matches_drdid_imp_panel() {
     for case in fixture().panel {
         let d = &case.data;
-        // The panel estimator takes a finished design matrix, intercept first.
-        let rows: Vec<DrDidObservation> = (0..d.y1.len())
-            .map(|i| DrDidObservation {
-                treated: d.d[i] > 0.5,
-                delta_outcome: d.y1[i] - d.y0[i],
-                weight: d.weights[i],
-                covariates: std::iter::once(1.0).chain(d.x[i].iter().copied()).collect(),
-            })
-            .collect();
-        let fit = estimate_drdid_improved_panel(&rows, config())
+        let treated: Vec<bool> = d.d.iter().map(|&v| v > 0.5).collect();
+        let change: Vec<f64> = d.y1.iter().zip(&d.y0).map(|(a, b)| a - b).collect();
+        let (x, k) = column_major(&d.x);
+        let data = TwoPeriodData::panel(&treated, &change)
+            .weights(&d.weights)
+            .covariates(MatRef::from_column_major_slice(&x, change.len(), k))
+            .build()
+            .expect("data");
+        let fit = two_period::estimate(&data, &options())
             .unwrap_or_else(|e| panic!("{}: {e}", case.name));
-        let (att, se) = ((fit.att - case.att).abs(), (fit.se - case.se).abs());
-        let influence = worst(&fit.influence_function, &case.inffunc);
+        let fit_att = fit.estimate.estimate;
+        let fit_se = fit.estimate.se.expect("se");
+        let (att, se) = ((fit_att - case.att).abs(), (fit_se - case.se).abs());
+        let influence = worst(fit.influence.column(0), &case.inffunc);
         println!(
             "{}: att {att:e}, se {se:e}, influence {influence:e}",
             case.name

@@ -40,7 +40,7 @@ use crate::types::{DidCell, DrDidConfig, DrDidError, DrDidEstimate, DrDidRepeate
 /// `epistat-did` 0.1 instead: an unweighted propensity score clipped to
 /// `[propensity_clip, 1 - propensity_clip]`, no trimming, and only the
 /// cell-mean terms in the influence function. The improved estimator is
-/// [`estimate_drdid_improved_repeated_cross_section`](crate::estimate_drdid_improved_repeated_cross_section).
+/// in `improved::repeated`.
 ///
 /// References:
 /// - Callaway, B. and Sant'Anna, P. H. C. (2021). "Difference-in-Differences

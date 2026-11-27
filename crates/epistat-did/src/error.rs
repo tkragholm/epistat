@@ -186,6 +186,37 @@ pub enum Error {
     /// A solver refused its problem, as the Frank-Wolfe steps of synthdid.
     #[error(transparent)]
     Optim(#[from] epistat_optim::Error),
+    /// A two-period sample has no treated row, or none the trim leaves with
+    /// weight.
+    #[error("no treated row of positive weight")]
+    NoTreated,
+    /// A two-period sample has no comparison row, or none the trim leaves
+    /// with weight.
+    #[error("no comparison row of positive weight")]
+    NoComparison,
+    /// A repeated cross-section has no row in one arm and period.
+    #[error("no row with treated = {treated} and post = {post}")]
+    EmptyCell {
+        /// The arm of the empty cell.
+        treated: bool,
+        /// The period of the empty cell.
+        post: bool,
+    },
+    /// An arm and period of a repeated cross-section has fewer rows than the
+    /// cross-fitting folds.
+    #[error("{folds} folds need {folds} rows with treated = {treated} and post = {post}")]
+    CrossFitCell {
+        /// The number of folds.
+        folds: usize,
+        /// The arm of the cell.
+        treated: bool,
+        /// The period of the cell.
+        post: bool,
+    },
+    /// The variance of a difference of two estimates is not positive, so it
+    /// cannot be tested.
+    #[error("the variance of the difference is not positive")]
+    DegenerateVariance,
 }
 
 impl Classify for Error {
@@ -217,11 +248,17 @@ impl Classify for Error {
             | Self::NoPrePeriods { .. }
             | Self::NoPostPeriods { .. }
             | Self::NoPostTreatmentCells
-            | Self::NoPreTreatmentCells => ErrorKind::Input,
+            | Self::NoPreTreatmentCells
+            | Self::NoTreated
+            | Self::NoComparison
+            | Self::EmptyCell { .. }
+            | Self::CrossFitCell { .. } => ErrorKind::Input,
             Self::Unsupported { .. } | Self::NoInfluence => ErrorKind::Unsupported,
-            Self::CellFailed { .. } | Self::Singular | Self::NotFinite | Self::Collinear { .. } => {
-                ErrorKind::Numerical
-            }
+            Self::CellFailed { .. }
+            | Self::Singular
+            | Self::NotFinite
+            | Self::Collinear { .. }
+            | Self::DegenerateVariance => ErrorKind::Numerical,
         }
     }
 
@@ -260,6 +297,11 @@ impl Classify for Error {
             Self::NoPreTreatmentCells => "did.no_pre_treatment_cells",
             Self::Singular => "did.singular",
             Self::NotFinite => "did.not_finite",
+            Self::NoTreated => "did.no_treated",
+            Self::NoComparison => "did.no_comparison",
+            Self::EmptyCell { .. } => "did.empty_cell",
+            Self::CrossFitCell { .. } => "did.cross_fit_cell",
+            Self::DegenerateVariance => "did.degenerate_variance",
         }
     }
 }
@@ -330,6 +372,18 @@ mod tests {
             Error::PlaceboControls,
             Error::Draw { replicate: 1 },
             Error::Adoption { unit: 2 },
+            Error::NoTreated,
+            Error::NoComparison,
+            Error::EmptyCell {
+                treated: true,
+                post: false,
+            },
+            Error::CrossFitCell {
+                folds: 2,
+                treated: false,
+                post: true,
+            },
+            Error::DegenerateVariance,
         ];
         epistat_testkit::assert_codes_unique("did", &errors);
         assert_eq!(Error::Bins.kind(), ErrorKind::Input);

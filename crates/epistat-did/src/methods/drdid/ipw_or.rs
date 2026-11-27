@@ -94,9 +94,7 @@ use super::panel::{
 };
 use crate::estimators::common::linalg::solve_spd_system;
 use crate::inference::standard_error_from_influence;
-use crate::types::{
-    DidCell, DrDidConfig, DrDidError, DrDidEstimate, DrDidObservation, DrDidRepeatedObservation,
-};
+use crate::types::{DidCell, DrDidConfig, DrDidError, DrDidEstimate, DrDidRepeatedObservation};
 use crate::util::usize_to_f64;
 
 /// Comparators at or above this propensity score are trimmed, as at
@@ -242,44 +240,6 @@ fn sample(
     })
 }
 
-/// A panel sample: `observations` carry a finished design, as for
-/// [`crate::estimate_drdid_panel`], with a constant column used when there are
-/// no covariates.
-fn panel_sample(
-    observations: &[DrDidObservation],
-    nuisance: Nuisance,
-) -> Result<Sample, DrDidError> {
-    let covariate_count = observations.first().map_or(0, |row| row.covariates.len());
-    let feature_count = covariate_count.max(1);
-    let mut design = Vec::with_capacity(observations.len() * feature_count);
-    for row in observations {
-        if row.covariates.len() != covariate_count {
-            return Err(DrDidError::InconsistentCovariateCount {
-                expected: covariate_count,
-                actual: row.covariates.len(),
-            });
-        }
-        if covariate_count == 0 {
-            design.push(1.0);
-        } else {
-            design.extend_from_slice(&row.covariates);
-        }
-    }
-    let weights: Vec<f64> = observations.iter().map(|row| row.weight).collect();
-    sample(
-        observations
-            .iter()
-            .map(|row| f64::from(u8::from(row.treated)))
-            .collect(),
-        Vec::new(),
-        observations.iter().map(|row| row.delta_outcome).collect(),
-        &weights,
-        design,
-        feature_count,
-        nuisance,
-    )
-}
-
 fn panel_flat_sample(input: PanelFlatInput<'_>, nuisance: Nuisance) -> Result<Sample, DrDidError> {
     let n = input.treated.len();
     let feature_count = input.feature_count.max(1);
@@ -308,7 +268,7 @@ fn panel_flat_sample(input: PanelFlatInput<'_>, nuisance: Nuisance) -> Result<Sa
 }
 
 /// A repeated cross-section sample, with the intercept prepended to the
-/// covariates as [`crate::estimate_drdid_repeated_cross_section`] does.
+/// covariates as the traditional repeated cross-section estimator does.
 fn repeated_sample(
     observations: &[DrDidRepeatedObservation],
     nuisance: Nuisance,
@@ -787,30 +747,15 @@ pub(crate) fn estimate_dr_did_repeated_traditional(
 }
 
 /// The panel inverse probability weighted ATT with normalised weights,
-/// `DRDID::std_ipw_did_panel`.
-///
-/// `observations` carry outcome changes and a finished design, intercept
-/// included, as for [`crate::estimate_drdid_panel`]. See the module
-/// documentation for the estimator and its influence function, which includes
-/// the estimation of the propensity score.
+/// `DRDID::std_ipw_did_panel`, on a flat design intercept included. See the
+/// module documentation for the estimator and its influence function, which
+/// includes the estimation of the propensity score.
 ///
 /// # Errors
 /// [`DrDidError`] for an invalid configuration or input, an arm without
-/// rows, or a propensity score that cannot be fitted.
-pub fn estimate_ipw_did_panel(
-    observations: &[DrDidObservation],
-    config: DrDidConfig,
-) -> Result<DrDidEstimate, DrDidError> {
-    validate_drdid_config(config)?;
-    ipw_panel(&panel_sample(observations, Nuisance::Propensity)?, config)
-}
-
-/// [`estimate_ipw_did_panel`] on a flat design.
-///
-/// # Errors
-/// As [`estimate_ipw_did_panel`], plus
+/// rows, or a nuisance model that cannot be fitted, plus
 /// [`DrDidError::InconsistentCovariateCount`] for a design of the wrong length.
-pub fn estimate_ipw_did_panel_flat(
+pub(crate) fn estimate_ipw_did_panel_flat(
     input: PanelFlatInput<'_>,
     config: DrDidConfig,
 ) -> Result<DrDidEstimate, DrDidError> {
@@ -818,28 +763,15 @@ pub fn estimate_ipw_did_panel_flat(
     ipw_panel(&panel_flat_sample(input, Nuisance::Propensity)?, config)
 }
 
-/// The panel outcome regression ATT, `DRDID::reg_did_panel`.
-///
-/// `observations` are as for [`estimate_ipw_did_panel`]. The influence
-/// function includes the estimation of the comparators' regression.
+/// The panel outcome regression ATT, `DRDID::reg_did_panel`, on a flat design
+/// intercept included. The influence function includes the estimation of the
+/// comparators' regression.
 ///
 /// # Errors
 /// [`DrDidError`] for an invalid configuration or input, an arm without
-/// rows, or a regression that cannot be solved.
-pub fn estimate_or_did_panel(
-    observations: &[DrDidObservation],
-    config: DrDidConfig,
-) -> Result<DrDidEstimate, DrDidError> {
-    validate_drdid_config(config)?;
-    or_panel(&panel_sample(observations, Nuisance::Outcome)?, config)
-}
-
-/// [`estimate_or_did_panel`] on a flat design.
-///
-/// # Errors
-/// As [`estimate_or_did_panel`], plus
+/// rows, or a nuisance model that cannot be fitted, plus
 /// [`DrDidError::InconsistentCovariateCount`] for a design of the wrong length.
-pub fn estimate_or_did_panel_flat(
+pub(crate) fn estimate_or_did_panel_flat(
     input: PanelFlatInput<'_>,
     config: DrDidConfig,
 ) -> Result<DrDidEstimate, DrDidError> {

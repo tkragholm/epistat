@@ -15,19 +15,19 @@
 //!   bootstrap and uniform bands ([`att_gt::AttGt::aggregate`]), and gives
 //!   simultaneous bands over the cells, the Wald pre-test of `att_gt` and the
 //!   event study HonestDiD takes.
-//! - The two-period estimators of `DRDID` \[2\]: [`estimate_drdid_panel`],
-//!   [`estimate_drdid_repeated_cross_section`], [`estimate_ipw_did_panel`],
-//!   [`estimate_or_did_panel`], [`estimate_ipw_did_repeated_cross_section`],
-//!   [`estimate_or_did_repeated_cross_section`], the improved estimators
-//!   [`estimate_drdid_improved_panel`] and
-//!   [`estimate_drdid_improved_repeated_cross_section`], and the locally
-//!   efficient [`estimate_drdid_repeated_efficient`].
+//! - The two-period estimators of `DRDID` \[2\] on a [`TwoPeriodData`], a
+//!   panel of outcome changes or a repeated cross-section:
+//!   [`two_period::estimate`] by the improved, doubly robust, traditional
+//!   doubly robust, inverse probability weighting or outcome regression
+//!   estimator, with the nuisance models of the panel doubly robust
+//!   estimator in [`two_period::nuisance`].
 //! - Compositional changes in repeated cross-sections \[4\]:
-//!   [`estimate_did_cc_robust`], [`estimate_did_cc_stationary`] and
-//!   [`test_did_cc_stationarity`].
-//! - Doubly robust triple differences \[5\]: [`estimate_dr_ddd`].
+//!   [`did_cc::estimate`] under either assumption and the Hausman test of
+//!   stationarity [`did_cc::test`].
+//! - Doubly robust triple differences \[5\]: [`triple_did::estimate`].
 //! - The average causal response to a continuous treatment \[6\]:
-//!   [`estimate_acrt_sieve`].
+//!   [`continuous::estimate`], with the sieve's basis as a
+//!   [`continuous::BasisSpec`].
 //! - Two-way fixed-effects regressions, static and event study with binned
 //!   end points, as `fixest::feols` fits them: [`twfe::fit`], and the
 //!   Goodman-Bacon decomposition \[11\] of the static estimate into its 2x2
@@ -79,7 +79,7 @@
 //! Each estimator returns the influence function `psi_i` of every unit, and
 //! the standard error is `sqrt(mean((psi_i - mean(psi))^2) / n)`. The intervals
 //! are `att +- z se`, or percentile intervals of a Rademacher multiplier
-//! bootstrap when [`DrDidConfig::bootstrap_reps`] is positive; those of the
+//! bootstrap when the options ask for a `Bootstrap`; those of the
 //! improved two-period estimators are `att +- 1.96 se`. With clusters, the
 //! units are replaced by the sums of the centred `psi_i` within each cluster,
 //! divided by `n`, without the factor `G / (G - 1)`, as in `did`;
@@ -145,7 +145,6 @@ pub(crate) mod types;
 pub(crate) mod util;
 
 pub use error::Error;
-pub use estimators::common::basis::{BSplineBasis, Basis, PolynomialBasis};
 pub use inference::did_clusters::{
     DidClusterError, did_cluster_sums, did_covariance, did_standard_error,
 };
@@ -195,30 +194,14 @@ pub use inference::sensitivity::{
 pub use methods::att_gt;
 pub use methods::bacon;
 pub use methods::bacon::{BaconComparison, BaconDecomposition, BaconKind, BaconWithin};
-pub use methods::continuous::sieve::estimate_acrt_sieve;
+pub use methods::continuous;
 pub use methods::dcdh;
 pub use methods::dcdh::{
     Dcdh, DcdhAvgTimePeriods, DcdhBootstrap, DcdhBootstrapTerm, DcdhDesign, DcdhEffectsEqual,
     DcdhHeterogeneity, DcdhOptions, DcdhPath, DcdhPathResult, DcdhSubgroup, DcdhSwitchDate,
     DcdhSwitchDates, DcdhSwitchers, DcdhTerm, SwitchingPanel, SwitchingPanelBuilder,
 };
-pub use methods::did_cc::{
-    estimate_did_cc_robust, estimate_did_cc_stationary, test_did_cc_stationarity,
-};
-pub use methods::drdid::improved::{
-    estimate_drdid_improved_panel, estimate_drdid_improved_repeated_cross_section,
-};
-pub use methods::drdid::ipw_or::{
-    estimate_ipw_did_panel, estimate_ipw_did_repeated_cross_section, estimate_or_did_panel,
-    estimate_or_did_repeated_cross_section,
-};
-pub use methods::drdid::panel::{
-    PanelFlatInput, PanelNuisanceFit, PanelPropensityCoefficients, estimate_drdid_panel,
-    fit_drdid_panel_nuisance, fit_drdid_panel_propensity_coefficients,
-};
-pub use methods::drdid::repeated::estimate_drdid_repeated_cross_section;
-pub use methods::drdid::repeated_efficient::estimate_drdid_repeated_efficient;
-pub use methods::drdid::{DesignPruning, independent_design_columns};
+pub use methods::did_cc;
 pub use methods::etwfe;
 pub use methods::etwfe::{
     EtwfeCoefficient, EtwfeControl, EtwfeEffect, EtwfeEffects, EtwfeFamily, EtwfeFit, EtwfeOptions,
@@ -236,7 +219,6 @@ pub use methods::missing::{
     att_missing_pre, att_missing_pre_from_predictions, missing_cross_fit_folds,
 };
 pub use methods::staggered::{StaggeredPanel, StaggeredPanelBuilder};
-pub use methods::standard::estimate_att_two_by_two;
 pub use methods::sunab;
 pub use methods::sunab::{
     SunabAggregate, SunabBins, SunabCell, SunabControl, SunabFit, SunabOptions, SunabReference,
@@ -247,9 +229,11 @@ pub use methods::synthdid::{
     StaggeredSynthDid, SynthCohort, SynthDid, SynthDidOptions, SynthDraws, SynthFit,
     SynthReplicates, SynthTrace, SynthUndefined, SynthVariance, SynthWeights,
 };
-pub use methods::triple_did::aggregator::estimate_dr_ddd;
+pub use methods::triple_did;
 pub use methods::twfe;
 pub use methods::twfe::{TwfeFit, TwfeOptions, TwfeSpec, TwfeTerm};
+pub use methods::two_period;
+pub use methods::two_period::{TwoPeriodData, TwoPeriodDataBuilder};
 pub use methods::two_stage;
 pub use methods::two_stage::{TwoStage, TwoStageOptions, TwoStageSpec, TwoStageTerm};
 pub use types::*;

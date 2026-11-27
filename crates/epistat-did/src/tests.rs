@@ -1,5 +1,6 @@
 use super::*;
-use epistat_linalg::Mat;
+use epistat_core::{Bootstrap, InputError, Level};
+use epistat_linalg::{Mat, MatRef};
 
 use crate::error::InternalDidError as PortedDidError;
 use crate::estimators::common::linalg::ridge_solve_lu;
@@ -11,93 +12,84 @@ use crate::estimators::outcome::model::OutcomeModel;
 use crate::estimators::propensity::common::logistic_scores;
 use crate::estimators::propensity::irls::irls as irls_fit;
 use crate::methods::standard::summarize_two_by_two;
-use crate::types::{DidCell, TimePeriod, TreatmentGroup};
+use crate::types::DidCell;
+use two_period::{Estimator, TwoPeriodOptions};
 
-use rstest::rstest;
-
-fn panel_row(treated: bool, post_period: bool, outcome: f64) -> PanelObservation {
-    PanelObservation::new(did_cell(treated, post_period), outcome)
-}
-
-fn did_cell(treated: bool, post_period: bool) -> DidCell {
-    DidCell::from_parts(
-        TreatmentGroup::from_bool(treated),
-        TimePeriod::from_bool(post_period),
-    )
-}
-
-fn treatment_group(treated: bool) -> TreatmentGroup {
-    TreatmentGroup::from_bool(treated)
+fn two_by_two(
+    treated: &[bool],
+    post: &[bool],
+    y: &[f64],
+    w: Option<&[f64]>,
+) -> Result<epistat_core::Estimate, Error> {
+    let builder = TwoPeriodData::repeated_cross_section(treated, post, y);
+    let builder = match w {
+        Some(w) => builder.weights(w),
+        None => builder,
+    };
+    two_period::two_by_two(&builder.build()?, Level::default())
 }
 
 #[test]
 fn estimates_att_for_simple_2x2_panel() {
-    let panel = [
-        panel_row(true, false, 10.0),
-        panel_row(true, false, 10.0),
-        panel_row(true, true, 18.0),
-        panel_row(true, true, 18.0),
-        panel_row(false, false, 7.0),
-        panel_row(false, false, 7.0),
-        panel_row(false, true, 12.0),
-        panel_row(false, true, 12.0),
-    ];
-
-    let result = estimate_att_two_by_two(&panel, DidConfig::default()).expect("estimate");
-    assert!((result.att - 3.0).abs() < 1e-12);
+    let treated = [true, true, true, true, false, false, false, false];
+    let post = [false, false, true, true, false, false, true, true];
+    let y = [10.0, 10.0, 18.0, 18.0, 7.0, 7.0, 12.0, 12.0];
+    let result = two_by_two(&treated, &post, &y, None).expect("estimate");
+    assert!((result.estimate - 3.0).abs() < 1e-12);
 }
 
-#[rstest]
-#[case::missing_cells(
-    &[
-        panel_row(true, false, 10.0),
-        panel_row(true, true, 11.0),
-        panel_row(false, false, 9.0),
-    ],
-    DidError::EmptyCell {
-        cell: DidCell::ControlPost,
-    }
-)]
-#[case::invalid_weights(
-    &[
-        PanelObservation { weight: 0.0, ..panel_row(true, false, 10.0) },
-        panel_row(true, true, 11.0),
-        panel_row(false, false, 9.0),
-        panel_row(false, true, 9.0),
-    ],
-    DidError::InvalidWeight { value: 0.0 }
-)]
-#[case::nan_outcome(
-    &[
-        panel_row(true, false, 10.0),
-        panel_row(true, true, f64::NAN),
-        panel_row(false, false, 9.0),
-        panel_row(false, true, 9.0),
-    ],
-    DidError::InvalidOutcome { value: f64::NAN }
-)]
-fn validate_two_by_two_inputs(
-    #[case] panel: &[PanelObservation],
-    #[case] expected_error: DidError,
-) {
-    let error = estimate_att_two_by_two(panel, DidConfig::default()).expect_err("must fail");
-    match (error, expected_error) {
-        (DidError::InvalidOutcome { value: a }, DidError::InvalidOutcome { value: b }) => {
-            assert!(a.is_nan() && b.is_nan());
+#[test]
+fn validate_two_by_two_inputs() {
+    let error = two_by_two(
+        &[true, true, false],
+        &[false, true, false],
+        &[10.0, 11.0, 9.0],
+        None,
+    )
+    .expect_err("must fail");
+    assert_eq!(
+        error,
+        Error::EmptyCell {
+            treated: false,
+            post: true
         }
-        (a, b) => assert_eq!(a, b),
-    }
+    );
+    let treated = [true, true, false, false];
+    let post = [false, true, false, true];
+    let error = two_by_two(
+        &treated,
+        &post,
+        &[10.0, 11.0, 9.0, 9.0],
+        Some(&[0.0, 1.0, 1.0, 1.0]),
+    )
+    .expect_err("must fail");
+    assert!(matches!(
+        error,
+        Error::Input(InputError::Domain {
+            what: "weights",
+            ..
+        })
+    ));
+    let error =
+        two_by_two(&treated, &post, &[10.0, f64::NAN, 9.0, 9.0], None).expect_err("must fail");
+    assert_eq!(
+        error,
+        Error::Input(InputError::NotFinite {
+            what: "outcome",
+            row: 1
+        })
+    );
 }
 
 #[test]
 fn summarizes_two_by_two_cells() {
-    let panel = [
-        panel_row(true, false, 10.0),
-        panel_row(true, true, 14.0),
-        panel_row(false, false, 8.0),
-        panel_row(false, true, 10.0),
+    let rows = [
+        (true, false, 10.0, 1.0),
+        (true, true, 14.0, 1.0),
+        (false, false, 8.0, 1.0),
+        (false, true, 10.0, 1.0),
     ];
-    let summary = summarize_two_by_two(&panel).expect("summary");
+    let summary = summarize_two_by_two(rows.into_iter()).expect("summary");
     assert_eq!(summary.total_observations(), 4);
     assert_eq!(summary.cell(DidCell::TreatedPre).observations, 1);
     assert!((summary.cell(DidCell::TreatedPost).mean_outcome - 14.0).abs() < 1e-12);
@@ -105,136 +97,108 @@ fn summarizes_two_by_two_cells() {
     assert!((summary.cell(DidCell::ControlPost).mean_outcome - 10.0).abs() < 1e-12);
 }
 
-#[test]
-fn drdid_estimates_att_with_covariates() {
-    let rows = vec![
-        DrDidObservation {
-            covariates: vec![1.0],
-            ..DrDidObservation::new(treatment_group(true), 9.0)
-        },
-        DrDidObservation {
-            covariates: vec![0.0],
-            ..DrDidObservation::new(treatment_group(true), 8.0)
-        },
-        DrDidObservation {
-            covariates: vec![1.0],
-            ..DrDidObservation::new(treatment_group(true), 7.0)
-        },
-        DrDidObservation {
-            covariates: vec![1.0],
-            ..DrDidObservation::new(treatment_group(false), 6.0)
-        },
-        DrDidObservation {
-            covariates: vec![0.0],
-            ..DrDidObservation::new(treatment_group(false), 5.0)
-        },
-        DrDidObservation {
-            covariates: vec![1.0],
-            ..DrDidObservation::new(treatment_group(false), 4.0)
-        },
-    ];
-    let config = DrDidConfig::builder()
-        .bootstrap_reps(199)
-        .bootstrap_seed(42)
-        .build();
-    let estimate = estimate_drdid_panel(&rows, config).expect("estimate drdid");
-    assert_eq!(estimate.treated_n, 3);
-    assert_eq!(estimate.control_n, 3);
-    assert!((estimate.att - 3.0).abs() < 0.35);
-    assert!(estimate.se.is_finite());
-    assert!(estimate.ci_low <= estimate.ci_high);
+fn dr_panel(
+    treated: &[bool],
+    change: &[f64],
+    x: Option<&[f64]>,
+    options: &TwoPeriodOptions,
+) -> Result<two_period::TwoPeriod, Error> {
+    let builder = TwoPeriodData::panel(treated, change);
+    let builder = match x {
+        Some(x) => builder.covariates(MatRef::from_column_major_slice(x, treated.len(), 1)),
+        None => builder,
+    };
+    two_period::estimate(&builder.build()?, options)
+}
+
+fn doubly_robust() -> TwoPeriodOptions {
+    TwoPeriodOptions {
+        estimator: Estimator::DoublyRobust,
+        ..TwoPeriodOptions::default()
+    }
 }
 
 #[test]
-fn drdid_rejects_inconsistent_covariates() {
-    let rows = vec![
-        DrDidObservation {
-            covariates: vec![1.0],
-            ..DrDidObservation::new(treatment_group(true), 8.0)
-        },
-        DrDidObservation {
-            covariates: vec![1.0, 0.0],
-            ..DrDidObservation::new(treatment_group(false), 5.0)
-        },
-    ];
-    let error = estimate_drdid_panel(&rows, DrDidConfig::default()).expect_err("must fail");
-    assert_eq!(
-        error,
-        DrDidError::InconsistentCovariateCount {
-            expected: 1,
-            actual: 2
-        }
-    );
+fn drdid_estimates_att_with_covariates() {
+    let treated = [true, true, true, false, false, false];
+    let change = [9.0, 8.0, 7.0, 6.0, 5.0, 4.0];
+    let x = [1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
+    let options = TwoPeriodOptions {
+        bootstrap: Some(Bootstrap::new(199, 42)),
+        ..doubly_robust()
+    };
+    let fit = dr_panel(&treated, &change, Some(&x), &options).expect("estimate drdid");
+    assert_eq!(fit.n_treated, 3);
+    assert_eq!(fit.n_control, 3);
+    assert!((fit.estimate.estimate - 3.0).abs() < 0.35);
+    assert!(fit.estimate.se.is_some());
+    assert!(fit.estimate.lower().unwrap() <= fit.estimate.upper().unwrap());
 }
 
 #[test]
 fn drdid_rejects_missing_treated_or_control_groups() {
-    let no_treated = vec![
-        DrDidObservation::new(treatment_group(false), 4.0),
-        DrDidObservation::new(treatment_group(false), 5.0),
-    ];
-    let err = estimate_drdid_panel(&no_treated, DrDidConfig::default()).expect_err("must fail");
-    assert_eq!(err, DrDidError::NoTreated);
-
-    let no_control = vec![
-        DrDidObservation::new(treatment_group(true), 7.0),
-        DrDidObservation::new(treatment_group(true), 8.0),
-    ];
-    let err = estimate_drdid_panel(&no_control, DrDidConfig::default()).expect_err("must fail");
-    assert_eq!(err, DrDidError::NoControl);
+    let err = dr_panel(&[false, false], &[4.0, 5.0], None, &doubly_robust()).expect_err("fail");
+    assert_eq!(err, Error::NoTreated);
+    let err = dr_panel(&[true, true], &[7.0, 8.0], None, &doubly_robust()).expect_err("fail");
+    assert_eq!(err, Error::NoComparison);
 }
 
 #[test]
-fn drdid_rejects_invalid_config_and_values() {
-    let rows = vec![
-        DrDidObservation::new(treatment_group(true), 9.0),
-        DrDidObservation::new(treatment_group(false), 6.0),
-    ];
-
-    let err = estimate_drdid_panel(&rows, DrDidConfig::builder().confidence_level(1.0).build())
-        .expect_err("must fail");
+fn drdid_rejects_invalid_options_and_values() {
+    let options = TwoPeriodOptions {
+        nuisance: two_period::NuisanceOptions {
+            propensity_clip: 0.5,
+            ..two_period::NuisanceOptions::default()
+        },
+        ..doubly_robust()
+    };
+    let err = dr_panel(&[true, false], &[9.0, 6.0], None, &options).expect_err("fail");
+    assert!(matches!(
+        err,
+        Error::Input(InputError::Domain {
+            what: "propensity_clip",
+            ..
+        })
+    ));
+    let err = TwoPeriodData::panel(&[true, false], &[9.0, 6.0])
+        .weights(&[1.0, 0.0])
+        .build()
+        .expect_err("fail");
+    assert!(matches!(
+        err,
+        Error::Input(InputError::Domain {
+            what: "weights",
+            ..
+        })
+    ));
+    let err = dr_panel(
+        &[true, false],
+        &[f64::INFINITY, 6.0],
+        None,
+        &doubly_robust(),
+    )
+    .expect_err("fail");
     assert_eq!(
         err,
-        DrDidError::InvalidConfig("confidence_level must be finite and in (0, 1)".to_string())
+        Error::Input(InputError::NotFinite {
+            what: "change",
+            row: 0
+        })
     );
-
-    let bad_weight = vec![
-        DrDidObservation {
-            weight: 1.0,
-            ..DrDidObservation::new(treatment_group(true), 9.0)
-        },
-        DrDidObservation {
-            weight: 0.0,
-            ..DrDidObservation::new(treatment_group(false), 6.0)
-        },
-    ];
-    let err = estimate_drdid_panel(&bad_weight, DrDidConfig::default()).expect_err("must fail");
-    assert_eq!(err, DrDidError::InvalidWeight { value: 0.0 });
-
-    let bad_outcome = vec![
-        DrDidObservation::new(treatment_group(true), f64::INFINITY),
-        DrDidObservation::new(treatment_group(false), 6.0),
-    ];
-    let err = estimate_drdid_panel(&bad_outcome, DrDidConfig::default()).expect_err("must fail");
+    let err = dr_panel(
+        &[true, false],
+        &[9.0, 6.0],
+        Some(&[f64::NAN, 0.0]),
+        &doubly_robust(),
+    )
+    .expect_err("fail");
     assert_eq!(
         err,
-        DrDidError::InvalidOutcome {
-            value: f64::INFINITY
-        }
+        Error::Input(InputError::NotFinite {
+            what: "covariates",
+            row: 0
+        })
     );
-
-    let bad_covariate = vec![
-        DrDidObservation {
-            covariates: vec![f64::NAN],
-            ..DrDidObservation::new(treatment_group(true), 9.0)
-        },
-        DrDidObservation {
-            covariates: vec![0.0],
-            ..DrDidObservation::new(treatment_group(false), 6.0)
-        },
-    ];
-    let err = estimate_drdid_panel(&bad_covariate, DrDidConfig::default()).expect_err("must fail");
-    assert!(matches!(err, DrDidError::InvalidCovariate { value } if value.is_nan()));
 }
 
 fn make_logit_design() -> Mat<f64> {

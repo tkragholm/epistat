@@ -9,7 +9,29 @@ pub mod did_clusters;
 #[cfg(feature = "honest")]
 pub mod sensitivity;
 
+use epistat_core::{Estimate, Interval, Level, Scale};
+
 use crate::types::{BootstrapConfig, InferenceConfig};
+
+/// An estimate with its standard error, interval at `level` and normal
+/// p-value; a part that is not finite is `None`.
+pub(crate) fn estimate_from(
+    att: f64,
+    se: f64,
+    (lower, upper): (f64, f64),
+    level: Level,
+) -> Estimate {
+    let finite = |value: f64| value.is_finite().then_some(value);
+    let se = finite(se);
+    let p_value = epistat_stats::wald(att, se, level, Scale::Identity).p_value;
+    Estimate::new(
+        att,
+        se,
+        Some(Interval::new(finite(lower), finite(upper), level)),
+        p_value,
+        Scale::Identity,
+    )
+}
 
 /// Whether the confidence level is finite and strictly between 0 and 1.
 #[must_use]

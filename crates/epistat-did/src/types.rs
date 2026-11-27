@@ -1,6 +1,6 @@
 /// Whether a unit is in the treated or the control group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TreatmentGroup {
+pub(crate) enum TreatmentGroup {
     /// Not treated.
     Control,
     /// Treated.
@@ -17,17 +17,11 @@ impl TreatmentGroup {
             Self::Control
         }
     }
-
-    /// Whether this is the treated group.
-    #[must_use]
-    pub const fn is_treated(self) -> bool {
-        matches!(self, Self::Treated)
-    }
 }
 
 /// Whether an observation is before or after treatment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum TimePeriod {
+pub(crate) enum TimePeriod {
     /// Before treatment.
     Pre,
     /// After treatment.
@@ -39,40 +33,6 @@ impl TimePeriod {
     #[must_use]
     pub const fn from_bool(post_period: bool) -> Self {
         if post_period { Self::Post } else { Self::Pre }
-    }
-
-    /// Whether this is the post-treatment period.
-    #[must_use]
-    pub const fn is_post(self) -> bool {
-        matches!(self, Self::Post)
-    }
-}
-
-/// One 2x2 `DiD` panel observation.
-#[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
-pub struct PanelObservation {
-    /// Whether the unit is in the treated group.
-    pub treated: bool,
-    /// Whether the observation is from the post-treatment period.
-    pub post_period: bool,
-    /// Observed outcome value.
-    pub outcome: f64,
-    /// Sampling weight, 1.0 by default.
-    #[builder(default = 1.0)]
-    pub weight: f64,
-}
-
-impl PanelObservation {
-    /// Builds an observation in the given cell with weight 1.0.
-    #[must_use]
-    pub const fn new(cell: DidCell, outcome: f64) -> Self {
-        let (treated, post_period) = cell.flags();
-        Self {
-            treated,
-            post_period,
-            outcome,
-            weight: 1.0,
-        }
     }
 }
 
@@ -102,64 +62,16 @@ impl InferenceConfig {
 
 /// Settings of the multiplier bootstrap behind bootstrap confidence intervals.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct BootstrapConfig {
-    /// Number of bootstrap replications. The default is 999.
+pub(crate) struct BootstrapConfig {
+    /// Number of bootstrap replications.
     pub reps: usize,
-    /// Seed of the bootstrap random number generator. The default is 17,431.
+    /// Seed of the bootstrap random number generator.
     pub seed: u64,
-}
-
-impl Default for BootstrapConfig {
-    fn default() -> Self {
-        Self {
-            reps: 999,
-            seed: 17_431,
-        }
-    }
-}
-
-/// Configuration of the 2x2 `DiD` estimator.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DidConfig {
-    /// Confidence level as a probability strictly between 0 and 1, such as 0.95.
-    /// The default is 0.95.
-    pub confidence_level: f64,
-}
-
-impl Default for DidConfig {
-    fn default() -> Self {
-        Self {
-            confidence_level: InferenceConfig::default().confidence_level,
-        }
-    }
-}
-
-impl DidConfig {
-    /// The confidence level as an [`InferenceConfig`].
-    #[must_use]
-    pub const fn inference(self) -> InferenceConfig {
-        InferenceConfig {
-            confidence_level: self.confidence_level,
-        }
-    }
-}
-
-/// 2x2 ATT estimate with a normal-approximation confidence interval.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DidEstimate {
-    /// Estimated average treatment effect on the treated.
-    pub att: f64,
-    /// Standard error of the estimate.
-    pub se: f64,
-    /// Lower bound of the confidence interval.
-    pub ci_low: f64,
-    /// Upper bound of the confidence interval.
-    pub ci_high: f64,
 }
 
 /// Canonical 2x2 cell identifiers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum DidCell {
+pub(crate) enum DidCell {
     /// Treated units before treatment.
     TreatedPre,
     /// Treated units after treatment.
@@ -182,17 +94,6 @@ impl DidCell {
         }
     }
 
-    /// Snake-case label of the cell, such as `treated_pre`.
-    #[must_use]
-    pub const fn as_label(self) -> &'static str {
-        match self {
-            Self::TreatedPre => "treated_pre",
-            Self::TreatedPost => "treated_post",
-            Self::ControlPre => "control_pre",
-            Self::ControlPost => "control_post",
-        }
-    }
-
     /// The cell as `(treated, post_period)`.
     #[must_use]
     pub const fn flags(self) -> (bool, bool) {
@@ -201,24 +102,6 @@ impl DidCell {
             Self::TreatedPost => (true, true),
             Self::ControlPre => (false, false),
             Self::ControlPost => (false, true),
-        }
-    }
-
-    /// Treatment group of the cell.
-    #[must_use]
-    pub const fn treatment_group(self) -> TreatmentGroup {
-        match self {
-            Self::TreatedPre | Self::TreatedPost => TreatmentGroup::Treated,
-            Self::ControlPre | Self::ControlPost => TreatmentGroup::Control,
-        }
-    }
-
-    /// Time period of the cell.
-    #[must_use]
-    pub const fn time_period(self) -> TimePeriod {
-        match self {
-            Self::TreatedPre | Self::ControlPre => TimePeriod::Pre,
-            Self::TreatedPost | Self::ControlPost => TimePeriod::Post,
         }
     }
 }
@@ -277,38 +160,9 @@ impl DidInputSummary {
     }
 }
 
-/// Errors returned by `DiD` estimation.
-#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
-pub enum DidError {
-    /// A 2x2 cell has no observations.
-    #[error("missing observations for cell={cell:?}")]
-    EmptyCell {
-        /// The empty 2x2 cell.
-        cell: DidCell,
-    },
-    /// A weight is not finite and positive.
-    #[error("weights must be finite and positive, got {value}")]
-    InvalidWeight {
-        /// The offending value.
-        value: f64,
-    },
-    /// An outcome is not finite.
-    #[error("outcomes must be finite, got {value}")]
-    InvalidOutcome {
-        /// The offending value.
-        value: f64,
-    },
-    /// The confidence level is not strictly between 0 and 1.
-    #[error("confidence_level must be finite and in (0, 1), got {value}")]
-    InvalidConfidenceLevel {
-        /// The offending value.
-        value: f64,
-    },
-}
-
 /// One panel-level row for doubly robust `DiD` with outcome deltas.
 #[derive(bon::Builder, Debug, Clone, PartialEq)]
-pub struct DrDidObservation {
+pub(crate) struct DrDidObservation {
     /// Whether the unit is in the treated group.
     pub treated: bool,
     /// Change in outcome between the post and pre period.
@@ -321,22 +175,9 @@ pub struct DrDidObservation {
     pub covariates: Vec<f64>,
 }
 
-impl DrDidObservation {
-    /// Builds an observation with weight 1.0 and no covariates.
-    #[must_use]
-    pub const fn new(group: TreatmentGroup, delta_outcome: f64) -> Self {
-        Self {
-            treated: group.is_treated(),
-            delta_outcome,
-            weight: 1.0,
-            covariates: Vec::new(),
-        }
-    }
-}
-
 /// One repeated cross-section row for doubly robust `DiD`.
 #[derive(bon::Builder, Debug, Clone, PartialEq)]
-pub struct DrDidRepeatedObservation {
+pub(crate) struct DrDidRepeatedObservation {
     /// Whether the unit is in the treated group.
     pub treated: bool,
     /// Whether the observation is from the post-treatment period.
@@ -368,7 +209,7 @@ impl DrDidRepeatedObservation {
 
 /// Configuration for panel `DR-DiD` estimation.
 #[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
-pub struct DrDidConfig {
+pub(crate) struct DrDidConfig {
     /// Confidence level as a probability strictly between 0 and 1, such as 0.95.
     /// The default is 0.95.
     #[builder(default = 0.95)]
@@ -397,10 +238,10 @@ pub struct DrDidConfig {
     /// replicates of the influence function.
     #[builder(default = 0_usize)]
     pub bootstrap_reps: usize,
-    /// Seed of the multiplier bootstrap. The default is 17,431.
-    #[builder(default = 17_431_u64)]
+    /// Seed of the multiplier bootstrap, read only with replicates.
+    #[builder(default = 0_u64)]
     pub bootstrap_seed: u64,
-    /// Whether [`crate::estimate_drdid_repeated_cross_section`] computes as
+    /// Whether the traditional repeated cross-section estimator computes as
     /// `epistat-did` 0.1 and `did_methods` 0.2 did, for reproducing results
     /// made with them: propensity score fitted without the sampling weights
     /// and clipped to `[propensity_clip, 1 - propensity_clip]`, no trimming,
@@ -420,7 +261,7 @@ impl Default for DrDidConfig {
             max_iter: 200,
             tol: 1e-8,
             bootstrap_reps: 0,
-            bootstrap_seed: BootstrapConfig::default().seed,
+            bootstrap_seed: 0,
             legacy_repeated_cross_section: false,
         }
     }
@@ -447,7 +288,7 @@ impl DrDidConfig {
 
 /// `DR-DiD` ATT estimate and uncertainty summary.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DrDidEstimate {
+pub(crate) struct DrDidEstimate {
     /// Estimated average treatment effect on the treated.
     pub att: f64,
     /// Standard error from the influence function, not accounting for
@@ -477,13 +318,10 @@ pub struct DrDidEstimate {
 
 /// Configuration for `DiD_CC` estimators and the stationarity Hausman test.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DidCcConfig {
+pub(crate) struct DidCcConfig {
     /// Settings of the doubly robust estimator, including the confidence level
     /// and the bootstrap settings.
     pub drdid: DrDidConfig,
-    /// Significance level of the Hausman test, strictly between 0 and 1. The
-    /// default is 0.05.
-    pub hausman_alpha: f64,
     /// Whether the confidence intervals are multiplier-bootstrap percentile
     /// intervals, using `drdid.bootstrap_reps` and `drdid.bootstrap_seed`, or
     /// otherwise normal intervals from the standard error. The default is
@@ -492,8 +330,8 @@ pub struct DidCcConfig {
     /// Number of cross-fitting folds, at least 1. One means no cross-fitting.
     /// The default is 1.
     pub cross_fit_folds: usize,
-    /// Seed of the cross-fitting fold assignment. The default is the default
-    /// bootstrap seed.
+    /// Seed of the cross-fitting fold assignment, read only with more than one
+    /// fold.
     pub cross_fit_seed: u64,
 }
 
@@ -501,17 +339,16 @@ impl Default for DidCcConfig {
     fn default() -> Self {
         Self {
             drdid: DrDidConfig::default(),
-            hausman_alpha: 0.05,
             bootstrap_confidence_intervals: false,
             cross_fit_folds: 1,
-            cross_fit_seed: BootstrapConfig::default().seed,
+            cross_fit_seed: 0,
         }
     }
 }
 
 /// ATT estimate from the compositional-change `DiD_CC` family.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DidCcEstimate {
+pub(crate) struct DidCcEstimate {
     /// Estimated average treatment effect on the treated.
     pub att: f64,
     /// Standard error from the influence function, not accounting for
@@ -540,7 +377,7 @@ pub struct DidCcEstimate {
 /// Hausman-style comparison between robust and stationarity-based `DiD_CC` ATT
 /// estimators.
 #[derive(Debug, Clone, PartialEq)]
-pub struct DidCcHausmanTest {
+pub(crate) struct DidCcHausmanTest {
     /// Composition-robust estimate.
     pub robust: DidCcEstimate,
     /// Estimate under the stationarity restriction.
@@ -555,14 +392,11 @@ pub struct DidCcHausmanTest {
     /// p-value of the statistic against a chi-square distribution with one
     /// degree of freedom.
     pub p_value: f64,
-    /// Whether `p_value` is below `DidCcConfig::hausman_alpha`, so that the
-    /// stationarity restriction is rejected.
-    pub reject_null: bool,
 }
 
 /// Errors returned by `DiD_CC` estimation and testing.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum DidCcError {
+pub(crate) enum DidCcError {
     /// No observations were given.
     #[error("DiD_CC requires at least one observation")]
     EmptyInput,
@@ -609,9 +443,6 @@ pub enum DidCcError {
     /// The confidence level is not strictly between 0 and 1.
     #[error("confidence_level must be finite and in (0, 1)")]
     InvalidConfidenceLevel,
-    /// The Hausman significance level is not strictly between 0 and 1.
-    #[error("hausman_alpha must be finite and in (0, 1)")]
-    InvalidHausmanAlpha,
     /// The configuration is invalid, with a description.
     #[error("invalid DiD_CC config: {0}")]
     InvalidConfig(String),
@@ -628,9 +459,6 @@ pub enum DidCcError {
         /// The cell with too few observations.
         cell: DidCell,
     },
-    /// A linear system could not be solved.
-    #[error("could not solve linear system")]
-    SingularSystem,
     /// The variance of the Hausman difference is not positive.
     #[error("Hausman difference variance must be strictly positive")]
     DegenerateHausmanVariance,
@@ -638,7 +466,7 @@ pub enum DidCcError {
 
 /// Errors returned by panel `DR-DiD` estimation.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum DrDidError {
+pub(crate) enum DrDidError {
     /// No observations were given.
     #[error("DR-DiD requires at least one observation")]
     EmptyInput,
@@ -688,104 +516,4 @@ pub enum DrDidError {
     /// A linear system could not be solved.
     #[error("could not solve linear system")]
     SingularSystem,
-}
-
-/// One row for continuous treatment `DiD` (CGBS 2024).
-#[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
-pub struct ContinuousObservation {
-    /// Treatment dose (D). A dose of exactly 0 marks a control unit and a
-    /// positive dose a treated unit.
-    pub dose: f64,
-    /// Change in outcome (ΔY) between the post and pre period.
-    pub delta_outcome: f64,
-    /// Sampling weight, 1.0 by default.
-    #[builder(default = 1.0)]
-    pub weight: f64,
-}
-
-impl ContinuousObservation {
-    /// Builds an observation with weight 1.0.
-    #[must_use]
-    pub const fn new(dose: f64, delta_outcome: f64) -> Self {
-        Self {
-            dose,
-            delta_outcome,
-            weight: 1.0,
-        }
-    }
-}
-
-/// Result of an ACRT (Average Causal Response) Sieve estimation.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ACRTResult {
-    /// Unweighted mean over the treated units of the derivative of the fitted
-    /// dose-response function at their dose.
-    pub acrt_glob: f64,
-    /// Sieve coefficients, one per basis function in the order of the basis.
-    pub coefficients: Vec<f64>,
-    /// Standard error of `acrt_glob` from its influence function.
-    pub se: f64,
-    /// Influence function for `acrt_glob`, one value per input observation,
-    /// scaled so that the estimate moves by its mean. Units with a negative dose
-    /// have zero influence.
-    pub influence_function: Vec<f64>,
-}
-
-/// Errors returned by continuous `DiD` estimation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum ContinuousDidError {
-    /// No observations were given.
-    #[error("continuous DiD requires at least one observation")]
-    EmptyInput,
-    /// No unit has a positive dose.
-    #[error("no treated units found (dose > 0)")]
-    NoTreatedUnits,
-    /// No unit with dose 0 has a positive weight.
-    #[error("no control units of positive weight found (dose = 0)")]
-    NoControlUnits,
-    /// A dose, outcome or weight is not finite, or a weight is negative.
-    #[error("a dose, outcome or weight is not finite, or a weight is negative")]
-    InvalidObservation,
-    /// The basis matrix is singular.
-    #[error("basis matrix is singular")]
-    SingularBasis,
-}
-
-/// One row for Triple-Difference `DiD` (OVS 2025).
-#[derive(bon::Builder, Debug, Clone, PartialEq)]
-pub struct TripleDidObservation {
-    /// Treatment indicator. The estimator does not read it: the subgroup is
-    /// fixed by `group_s` and `partition_q`.
-    pub treated: bool,
-    /// Group indicator (S): whether the unit is in the group that is treated,
-    /// such as an enabled region or cohort.
-    pub group_s: bool,
-    /// Partition indicator (Q): whether the unit is in the eligible partition,
-    /// such as an eligible age group.
-    pub partition_q: bool,
-    /// Change in outcome (ΔY) between the post and pre period.
-    pub delta_outcome: f64,
-    /// Sampling weight, 1.0 by default.
-    #[builder(default = 1.0)]
-    pub weight: f64,
-    /// Covariate values of the doubly robust estimation, empty by default.
-    #[builder(default)]
-    pub covariates: Vec<f64>,
-}
-
-/// Result of a Triple-Difference estimation.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TripleDidResult {
-    /// Estimated triple-difference effect, the ATT of the focal group `S = 1,
-    /// Q = 1` against the three comparison groups.
-    pub att_ddd: f64,
-    /// Standard error from the influence function.
-    pub se: f64,
-    /// Lower end of the confidence interval, normal or bootstrap as
-    /// [`DrDidEstimate::ci_low`].
-    pub ci_low: f64,
-    /// Upper end of the confidence interval, as `ci_low`.
-    pub ci_high: f64,
-    /// Influence function of the estimate, one value per input observation.
-    pub influence_function: Vec<f64>,
 }

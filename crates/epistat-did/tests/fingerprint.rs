@@ -16,24 +16,22 @@ use epistat_did::att_gt::{
     self, Aggte, AggteOptions, AggteType, AggteWeights, AttGt, AttGtOptions, BasePeriod,
     ComparisonGroup, Design, Estimator, NuisanceOptions, UnbalancedPanel,
 };
+use epistat_did::continuous::{self, AcrtOptions, BasisSpec, ContinuousData};
+use epistat_did::did_cc::{self, Assumption, DidCc, DidCcOptions};
+use epistat_did::triple_did::{self, TripleDidData, TripleDidOptions};
+use epistat_did::two_period::nuisance::{self, Pruning};
+use epistat_did::two_period::{self, Estimator as E, TwoPeriod, TwoPeriodOptions};
 use epistat_did::{
-    ContinuousObservation, DesignPruning, DidCcConfig, DidConfig, DrDidConfig, DrDidObservation,
-    DrDidRepeatedObservation, HonestEventStudyInput, HonestJointPathConfig, HonestJointPathMethod,
+    Error, HonestEventStudyInput, HonestJointPathConfig, HonestJointPathMethod,
     HonestMonotonicityDirection, HonestPostFunctional, HonestRelativeMagnitudeBound,
-    HonestSensitivity, InferenceConfig, LeastFavorableSimulation, PanelFlatInput, PanelObservation,
-    PolynomialBasis, RelativeMagnitudeConfidenceSetConfig, SensitivitySummaryMethod,
-    StaggeredPanel, TripleDidObservation, assess_honest_event_study_directional_region_with_config,
+    HonestSensitivity, InferenceConfig, LeastFavorableSimulation,
+    RelativeMagnitudeConfidenceSetConfig, SensitivitySummaryMethod, StaggeredPanel, TwoPeriodData,
+    assess_honest_event_study_directional_region_with_config,
     assess_honest_event_study_joint_path_region_with_config, assess_honest_event_study_workflow,
     compute_original_confidence_set, compute_relative_magnitude_confidence_set,
-    compute_relative_magnitude_identified_set, estimate_acrt_sieve, estimate_att_two_by_two,
-    estimate_did_cc_robust, estimate_did_cc_stationary, estimate_dr_ddd,
-    estimate_drdid_improved_panel, estimate_drdid_improved_repeated_cross_section,
-    estimate_drdid_panel, estimate_drdid_repeated_cross_section, estimate_drdid_repeated_efficient,
-    estimate_ipw_did_panel, estimate_ipw_did_repeated_cross_section, estimate_or_did_panel,
-    estimate_or_did_repeated_cross_section, estimate_smoothness_upper_bound_from_pretrends,
-    fit_drdid_panel_nuisance, fit_drdid_panel_propensity_coefficients, independent_design_columns,
+    compute_relative_magnitude_identified_set, estimate_smoothness_upper_bound_from_pretrends,
     summarize_relative_magnitude_sensitivity_many_with_simulation,
-    summarize_smoothness_sensitivity_with_simulation, test_did_cc_stationarity,
+    summarize_smoothness_sensitivity_with_simulation,
 };
 use epistat_linalg::MatRef;
 use epistat_testkit::{Fingerprint, load_json, on_threads};
@@ -347,12 +345,47 @@ struct CcRef {
     composition_shift: CcDesign,
 }
 
+/// The triple-difference units: group, partition, outcome change and the
+/// two covariates column-major.
+struct Triple {
+    group: Vec<bool>,
+    partition: Vec<bool>,
+    change: Vec<f64>,
+    covariates: Vec<f64>,
+}
+
+/// A repeated cross-section: arm, period, outcome, and the covariates
+/// column-major with `k` columns.
+struct Repeated {
+    treated: Vec<bool>,
+    post: Vec<bool>,
+    outcome: Vec<f64>,
+    weight: Vec<f64>,
+    covariates: Vec<f64>,
+    k: usize,
+}
+
+impl Repeated {
+    fn data(&self) -> TwoPeriodData<'_> {
+        TwoPeriodData::repeated_cross_section(&self.treated, &self.post, &self.outcome)
+            .weights(&self.weight)
+            .covariates(MatRef::from_column_major_slice(
+                &self.covariates,
+                self.treated.len(),
+                self.k,
+            ))
+            .build()
+            .expect("repeated cross-section")
+    }
+}
+
 struct Data {
     mpdta: Vec<MpdtaRow>,
     honest: HonestEventStudyInput,
-    triple: Vec<TripleDidObservation>,
-    continuous: Vec<ContinuousObservation>,
-    cc: Vec<DrDidRepeatedObservation>,
+    triple: Triple,
+    dose: Vec<f64>,
+    dose_change: Vec<f64>,
+    cc: Repeated,
 }
 
 fn data() -> Data {
@@ -367,45 +400,37 @@ fn data() -> Data {
         .map(|i| i32::try_from(i).expect("fits"))
         .collect();
     let triple: TripleRef = load_json("tests/data/triple_did_ref.json");
-    let triple = triple
-        .data
-        .chunks(2)
-        .map(|pair| {
-            assert_eq!(pair[0].id, pair[1].id);
-            TripleDidObservation {
-                treated: pair[1].treat == 1,
-                group_s: pair[1].treat == 1,
-                partition_q: pair[1].partition == 1,
-                delta_outcome: pair[1].outcome - pair[0].outcome,
-                weight: 1.0,
-                covariates: vec![1.0, pair[1].x1, pair[1].x2],
-            }
-        })
-        .collect();
+    let pairs: Vec<&[TripleRow]> = triple.data.chunks(2).collect();
+    for pair in &pairs {
+        assert_eq!(pair[0].id, pair[1].id);
+    }
+    let triple = Triple {
+        group: pairs.iter().map(|pair| pair[1].treat == 1).collect(),
+        partition: pairs.iter().map(|pair| pair[1].partition == 1).collect(),
+        change: pairs
+            .iter()
+            .map(|pair| pair[1].outcome - pair[0].outcome)
+            .collect(),
+        covariates: pairs
+            .iter()
+            .map(|pair| pair[1].x1)
+            .chain(pairs.iter().map(|pair| pair[1].x2))
+            .collect(),
+    };
     let continuous: ContRef = load_json("tests/data/contdid_ref.json");
-    let continuous = continuous
-        .dose
-        .iter()
-        .zip(&continuous.delta_y)
-        .map(|(&dose, &delta_outcome)| ContinuousObservation {
-            dose,
-            delta_outcome,
-            weight: 1.0,
-        })
-        .collect();
     let cc: CcRef = load_json("tests/data/did_cc_ref_scaffold.json");
-    let cc = cc
-        .composition_shift
-        .rows
-        .into_iter()
-        .map(|row| DrDidRepeatedObservation {
-            treated: row.treated,
-            post_period: row.post_period,
-            outcome: row.outcome,
-            weight: 1.0,
-            covariates: row.covariates,
-        })
-        .collect();
+    let rows = cc.composition_shift.rows;
+    let k = rows[0].covariates.len();
+    let cc = Repeated {
+        treated: rows.iter().map(|row| row.treated).collect(),
+        post: rows.iter().map(|row| row.post_period).collect(),
+        outcome: rows.iter().map(|row| row.outcome).collect(),
+        weight: vec![1.0; rows.len()],
+        covariates: (0..k)
+            .flat_map(|j| rows.iter().map(move |row| row.covariates[j]))
+            .collect(),
+        k,
+    };
     Data {
         mpdta: mpdta.data_subset,
         honest: HonestEventStudyInput {
@@ -415,7 +440,8 @@ fn data() -> Data {
             post_periods,
         },
         triple,
-        continuous,
+        dose: continuous.dose,
+        dose_change: continuous.delta_y,
         cc,
     }
 }
@@ -509,58 +535,128 @@ fn clustered_options(comparison_group: ComparisonGroup, base_period: BasePeriod)
     }
 }
 
-/// The estimators' settings with a 999-replicate bootstrap interval, so the
-/// hashes pin the bootstrap path, and the legacy repeated cross-section
-/// doubly robust computation, which `drdid_rc` and `att_gt_dr_rc` pin.
-/// `drdid_panel_analytic` pins the default analytic interval, and
-/// `drdid_rc1` and `att_gt_dr_rc1` the default `drdid_rc1` estimator.
-fn drdid_config() -> DrDidConfig {
-    DrDidConfig::builder()
-        .bootstrap_reps(999)
-        .legacy_repeated_cross_section(true)
-        .build()
-}
-
-/// The compositional-change settings with bootstrap intervals, for the same
-/// reason as [`drdid_config`].
-fn did_cc_config() -> DidCcConfig {
-    DidCcConfig {
-        drdid: drdid_config(),
-        bootstrap_confidence_intervals: true,
-        ..DidCcConfig::default()
+/// The estimators' settings with a 999-replicate bootstrap interval, seeded
+/// as the estimators' former default, so the hashes pin the bootstrap path,
+/// and the legacy repeated cross-section doubly robust computation, which
+/// `drdid_rc` and `att_gt_dr_rc` pin. `drdid_panel_analytic` pins the default
+/// analytic interval, and `drdid_rc1` and `att_gt_dr_rc1` the default
+/// `drdid_rc1` estimator.
+fn two_period_options(estimator: two_period::Estimator) -> TwoPeriodOptions {
+    TwoPeriodOptions {
+        estimator,
+        nuisance: NuisanceOptions {
+            legacy_repeated_cross_section: true,
+            ..NuisanceOptions::default()
+        },
+        level: Level::default(),
+        bootstrap: Some(Bootstrap::new(999, 17_431)),
     }
 }
 
-/// The 2004 cohort against the never treated, 2003 to 2004.
-fn cell(rows: &[MpdtaRow]) -> (Vec<DrDidObservation>, Vec<DrDidRepeatedObservation>) {
+/// The compositional-change settings with bootstrap intervals, for the same
+/// reason as [`two_period_options`].
+fn did_cc_options(assumption: Assumption) -> DidCcOptions {
+    DidCcOptions {
+        assumption,
+        nuisance: two_period_options(two_period::Estimator::DoublyRobust).nuisance,
+        bootstrap: Some(Bootstrap::new(999, 17_431)),
+        ..DidCcOptions::default()
+    }
+}
+
+/// The numbers of a two-period estimate as `DrDidEstimate` printed them.
+fn two_period_digest(fit: &Result<TwoPeriod, Error>) -> u64 {
+    let fit = fit.as_ref().expect("a two-period estimate");
+    let e = fit.estimate;
+    let mut numbers = vec![
+        e.estimate,
+        nan(e.se),
+        nan(e.lower()),
+        nan(e.upper()),
+        int(fit.n_treated as u64),
+        int(fit.n_control as u64),
+        fit.total_weight,
+    ];
+    numbers.extend_from_slice(fit.influence.column(0));
+    numbers.push(int(fit.columns_dropped as u64));
+    hash_numbers(&numbers)
+}
+
+/// The numbers of an estimate under compositional changes as
+/// `DidCcEstimate` printed them.
+fn did_cc_numbers(fit: &DidCc, numbers: &mut Vec<f64>) {
+    let e = fit.estimate;
+    numbers.extend([
+        e.estimate,
+        nan(e.se),
+        nan(e.lower()),
+        nan(e.upper()),
+        int(fit.n_treated_post as u64),
+        int(fit.n_treated_pre as u64),
+        int(fit.n_control_post as u64),
+        int(fit.n_control_pre as u64),
+        fit.total_weight,
+    ]);
+    numbers.extend_from_slice(fit.influence.column(0));
+}
+
+/// The 2004 cohort against the never treated, 2003 to 2004: the panel of
+/// outcome changes with log population at 2004 as the covariate, and the
+/// repeated cross-section of both years.
+fn cell(rows: &[MpdtaRow]) -> (Panel, Repeated) {
     let kept = |row: &&MpdtaRow| row.first_treat == 2004 || row.first_treat == 0;
-    let mut panel = Vec::new();
+    let mut panel = Panel {
+        treated: Vec::new(),
+        change: Vec::new(),
+        weight: Vec::new(),
+        lpop: Vec::new(),
+    };
     for post in rows.iter().filter(kept).filter(|row| row.year == 2004) {
         let base = rows
             .iter()
             .find(|row| row.countyreal == post.countyreal && row.year == 2003)
             .expect("base year");
-        panel.push(DrDidObservation {
-            treated: post.first_treat == 2004,
-            delta_outcome: post.lemp - base.lemp,
-            weight: weight(post.countyreal),
-            covariates: vec![1.0, post.lpop],
-        });
+        panel.treated.push(post.first_treat == 2004);
+        panel.change.push(post.lemp - base.lemp);
+        panel.weight.push(weight(post.countyreal));
+        panel.lpop.push(post.lpop);
     }
-    let repeated = rows
+    let repeated: Vec<&MpdtaRow> = rows
         .iter()
         .filter(kept)
         .filter(|row| row.year == 2003 || row.year == 2004)
-        .map(|row| DrDidRepeatedObservation {
-            treated: row.first_treat == 2004,
-            post_period: row.year == 2004,
-            outcome: row.lemp,
-            weight: weight(row.countyreal),
-            // The repeated estimators prepend the intercept themselves.
-            covariates: vec![row.lpop],
-        })
         .collect();
+    let repeated = Repeated {
+        treated: repeated.iter().map(|row| row.first_treat == 2004).collect(),
+        post: repeated.iter().map(|row| row.year == 2004).collect(),
+        outcome: repeated.iter().map(|row| row.lemp).collect(),
+        weight: repeated.iter().map(|row| weight(row.countyreal)).collect(),
+        covariates: repeated.iter().map(|row| row.lpop).collect(),
+        k: 1,
+    };
     (panel, repeated)
+}
+
+/// A two-period panel: arm, outcome change, weight and one covariate.
+struct Panel {
+    treated: Vec<bool>,
+    change: Vec<f64>,
+    weight: Vec<f64>,
+    lpop: Vec<f64>,
+}
+
+impl Panel {
+    fn data(&self) -> TwoPeriodData<'_> {
+        TwoPeriodData::panel(&self.treated, &self.change)
+            .weights(&self.weight)
+            .covariates(MatRef::from_column_major_slice(
+                &self.lpop,
+                self.treated.len(),
+                1,
+            ))
+            .build()
+            .expect("panel")
+    }
 }
 
 #[expect(
@@ -812,108 +908,158 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
 
     // Two-period estimators on one cell.
     let (panel_cell, rc_cell) = cell(&data.mpdta);
-    let drdid = drdid_config();
+    let (panel, repeated) = (panel_cell.data(), rc_cell.data());
+    let two = |data: &TwoPeriodData<'_>, options: TwoPeriodOptions| {
+        two_period_digest(&two_period::estimate(data, &options))
+    };
     out.push((
         "drdid_panel",
-        digest(&estimate_drdid_panel(&panel_cell, drdid)),
+        two(&panel, two_period_options(E::DoublyRobust)),
     ));
     out.push((
         "drdid_panel_analytic",
-        digest(&estimate_drdid_panel(&panel_cell, DrDidConfig::default())),
+        two(
+            &panel,
+            TwoPeriodOptions {
+                estimator: E::DoublyRobust,
+                ..TwoPeriodOptions::default()
+            },
+        ),
     ));
     out.push((
         "drdid_improved_panel",
-        digest(&estimate_drdid_improved_panel(&panel_cell, drdid)),
+        two(&panel, two_period_options(E::Improved)),
     ));
     out.push((
         "drdid_rc",
-        digest(&estimate_drdid_repeated_cross_section(&rc_cell, drdid)),
+        two(&repeated, two_period_options(E::TraditionalDoublyRobust)),
     ));
     out.push((
         "drdid_improved_rc",
-        digest(&estimate_drdid_improved_repeated_cross_section(
-            &rc_cell, drdid,
-        )),
+        two(&repeated, two_period_options(E::Improved)),
     ));
     out.push((
         "drdid_rc_efficient",
-        digest(&estimate_drdid_repeated_efficient(&rc_cell, drdid)),
+        two(&repeated, two_period_options(E::DoublyRobust)),
     ));
-    let two_by_two = rc_cell
-        .iter()
-        .map(|row| PanelObservation {
-            treated: row.treated,
-            post_period: row.post_period,
-            outcome: row.outcome,
-            weight: row.weight,
-        })
-        .collect::<Vec<_>>();
+    let plain =
+        TwoPeriodData::repeated_cross_section(&rc_cell.treated, &rc_cell.post, &rc_cell.outcome)
+            .weights(&rc_cell.weight)
+            .build()
+            .expect("2x2");
+    let two_by_two =
+        two_period::two_by_two(&plain, Level::confidence(0.95).expect("level")).expect("2x2");
     out.push((
         "two_by_two",
-        digest(&estimate_att_two_by_two(
-            &two_by_two,
-            DidConfig {
-                confidence_level: 0.95,
-            },
-        )),
+        hash_numbers(&[
+            two_by_two.estimate,
+            nan(two_by_two.se),
+            nan(two_by_two.lower()),
+            nan(two_by_two.upper()),
+        ]),
     ));
-    let treated = panel_cell.iter().map(|r| r.treated).collect::<Vec<_>>();
-    let delta = panel_cell
+    let doubled: Vec<f64> = panel_cell
+        .lpop
         .iter()
-        .map(|r| r.delta_outcome)
-        .collect::<Vec<_>>();
-    let weights = panel_cell.iter().map(|r| r.weight).collect::<Vec<_>>();
-    let design = panel_cell
-        .iter()
-        .flat_map(|r| [r.covariates[0], r.covariates[1], r.covariates[1] * 2.0])
-        .collect::<Vec<_>>();
-    let input = PanelFlatInput {
-        treated: &treated,
-        delta_outcome: &delta,
-        weight: &weights,
-        design_matrix_flat: &design,
-        feature_count: 3,
-    };
+        .copied()
+        .chain(panel_cell.lpop.iter().map(|x| x * 2.0))
+        .collect();
+    let doubled = TwoPeriodData::panel(&panel_cell.treated, &panel_cell.change)
+        .weights(&panel_cell.weight)
+        .covariates(MatRef::from_column_major_slice(
+            &doubled,
+            panel_cell.treated.len(),
+            2,
+        ))
+        .build()
+        .expect("panel");
+    let nuisance_options = two_period_options(E::DoublyRobust).nuisance;
     out.push((
         "panel_nuisance",
-        digest(&fit_drdid_panel_nuisance(input, drdid)),
+        digest(&nuisance::fit(&doubled, &nuisance_options)),
     ));
     out.push((
         "panel_propensity",
-        digest(&fit_drdid_panel_propensity_coefficients(input, drdid)),
+        digest(&nuisance::propensity(&doubled, &nuisance_options)),
     ));
     out.push((
         "independent_columns",
-        digest(&independent_design_columns(
-            &design,
-            3,
-            &weights,
-            DesignPruning::PerArm { treated: &treated },
+        digest(&nuisance::independent_columns(
+            &doubled,
+            Pruning::PerArm,
             1e-7,
         )),
     ));
 
     // Triple differences, continuous treatment, compositional changes.
-    out.push(("dr_ddd", digest(&estimate_dr_ddd(&data.triple, drdid))));
-    out.push((
-        "acrt_sieve",
-        digest(&estimate_acrt_sieve(
-            &data.continuous,
-            &PolynomialBasis::new(3),
-        )),
-    ));
-    out.push((
-        "did_cc_robust",
-        digest(&estimate_did_cc_robust(&data.cc, did_cc_config())),
-    ));
-    out.push((
-        "did_cc_stationary",
-        digest(&estimate_did_cc_stationary(&data.cc, did_cc_config())),
-    ));
-    out.push((
-        "did_cc_test",
-        digest(&test_did_cc_stationarity(&data.cc, did_cc_config())),
-    ));
+    let triple = &data.triple;
+    let n_triple = triple.change.len();
+    let triple_data = TripleDidData::builder(&triple.group, &triple.partition, &triple.change)
+        .covariates(MatRef::from_column_major_slice(
+            &triple.covariates,
+            n_triple,
+            2,
+        ))
+        .build()
+        .expect("triple");
+    let ddd = triple_did::estimate(
+        &triple_data,
+        &TripleDidOptions {
+            nuisance: nuisance_options,
+            level: Level::default(),
+            bootstrap: Some(Bootstrap::new(999, 17_431)),
+        },
+    )
+    .expect("triple differences");
+    let mut numbers = vec![
+        ddd.estimate.estimate,
+        nan(ddd.estimate.se),
+        nan(ddd.estimate.lower()),
+        nan(ddd.estimate.upper()),
+    ];
+    numbers.extend_from_slice(ddd.influence.column(0));
+    out.push(("dr_ddd", hash_numbers(&numbers)));
+    let doses = ContinuousData::builder(&data.dose, &data.dose_change)
+        .build()
+        .expect("doses");
+    let acrt = continuous::estimate(
+        &doses,
+        &AcrtOptions {
+            basis: BasisSpec::Polynomial {
+                degree: 3,
+                constant: true,
+            },
+            ..AcrtOptions::default()
+        },
+    )
+    .expect("ACRT");
+    let mut numbers = vec![acrt.estimate.estimate];
+    numbers.extend_from_slice(&acrt.coefficients);
+    numbers.push(nan(acrt.estimate.se));
+    numbers.extend_from_slice(acrt.influence.column(0));
+    out.push(("acrt_sieve", hash_numbers(&numbers)));
+    let cc = data.cc.data();
+    for (name, assumption) in [
+        ("did_cc_robust", Assumption::Robust),
+        ("did_cc_stationary", Assumption::Stationary),
+    ] {
+        let fit = did_cc::estimate(&cc, &did_cc_options(assumption)).expect("did_cc");
+        let mut numbers = Vec::new();
+        did_cc_numbers(&fit, &mut numbers);
+        out.push((name, hash_numbers(&numbers)));
+    }
+    let test = did_cc::test(&cc, &did_cc_options(Assumption::Robust)).expect("did_cc test");
+    let mut numbers = Vec::new();
+    did_cc_numbers(&test.robust, &mut numbers);
+    did_cc_numbers(&test.stationary, &mut numbers);
+    numbers.extend([
+        test.difference,
+        test.se,
+        test.statistic,
+        test.p_value,
+        f64::from(u8::from(test.p_value < 0.05)),
+    ]);
+    out.push(("did_cc_test", hash_numbers(&numbers)));
 
     // HonestDiD, on the paths Study I calls.
     let honest = &data.honest;
@@ -1134,29 +1280,35 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
         ));
     }
     let (panel_cell, rc_cell) = cell(&data.mpdta);
+    let (panel, repeated) = (panel_cell.data(), rc_cell.data());
     out.push((
         "ipw_did_panel",
-        digest(&estimate_ipw_did_panel(&panel_cell, drdid)),
+        two(&panel, two_period_options(E::InverseProbabilityWeighting)),
     ));
     out.push((
         "or_did_panel",
-        digest(&estimate_or_did_panel(&panel_cell, drdid)),
+        two(&panel, two_period_options(E::OutcomeRegression)),
     ));
     out.push((
         "ipw_did_rc",
-        digest(&estimate_ipw_did_repeated_cross_section(&rc_cell, drdid)),
+        two(
+            &repeated,
+            two_period_options(E::InverseProbabilityWeighting),
+        ),
     ));
     out.push((
         "or_did_rc",
-        digest(&estimate_or_did_repeated_cross_section(&rc_cell, drdid)),
+        two(&repeated, two_period_options(E::OutcomeRegression)),
     ));
-    let rc1 = DrDidConfig {
-        legacy_repeated_cross_section: false,
-        ..drdid
-    };
     out.push((
         "drdid_rc1",
-        digest(&estimate_drdid_repeated_cross_section(&rc_cell, rc1)),
+        two(
+            &repeated,
+            TwoPeriodOptions {
+                nuisance: NuisanceOptions::default(),
+                ..two_period_options(E::TraditionalDoublyRobust)
+            },
+        ),
     ));
     out.push((
         "att_gt_dr_rc1",

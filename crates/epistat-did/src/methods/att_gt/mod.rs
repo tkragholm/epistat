@@ -77,9 +77,7 @@
 
 use std::fmt;
 
-use epistat_core::{
-    Bootstrap, Covariance, Estimate, EventStudy, InputError, Interval, Level, Scale,
-};
+use epistat_core::{Bootstrap, Covariance, Estimate, EventStudy, InputError, Level};
 use epistat_inference::{ClusterRule, Clusters, Influence};
 
 use crate::error::Error;
@@ -101,6 +99,7 @@ mod rows;
 #[cfg(test)]
 mod tests;
 
+pub use crate::methods::two_period::NuisanceOptions;
 pub use aggte::{Aggte, AggteOptions, AggteOverall, AggtePoint, AggteType, AggteWeights, Band};
 pub use bands::{AttGtBand, AttGtBands};
 pub use pretest::PretrendWald;
@@ -214,43 +213,6 @@ pub enum Design {
     /// function is indexed by row, so [`AttGtSample::units`] holds row
     /// numbers.
     RepeatedCrossSection,
-}
-
-/// The nuisance models of the two-period estimators.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NuisanceOptions {
-    /// Propensity scores are clipped to `[propensity_clip, 1 - propensity_clip]`;
-    /// in `(0, 0.5)`. The default is 1e-6.
-    pub propensity_clip: f64,
-    /// Ridge penalty on the diagonal of the outcome regressions' normal
-    /// equations, finite and not negative. The default is 1e-8.
-    pub ridge: f64,
-    /// Iterations of the propensity fit, at least 1. `glm`'s `maxit` is 25;
-    /// the default of 200 lets a fit near separation finish.
-    pub max_iterations: usize,
-    /// Convergence tolerance of the propensity fit, positive, `glm`'s
-    /// `epsilon`. The default is 1e-8, `glm`'s.
-    pub tolerance: f64,
-    /// Whether the traditional repeated cross-section doubly robust estimator,
-    /// and the efficient estimator on a repeated cross-section, which uses it,
-    /// compute as `epistat-did` 0.1 and `did_methods` 0.2 did, for reproducing
-    /// results made with them: the propensity score fitted without the
-    /// sampling weights and clipped, no trimming, and an influence function
-    /// without the estimation of the nuisance models. Off, the default, the
-    /// estimator is `DRDID::drdid_rc1`.
-    pub legacy_repeated_cross_section: bool,
-}
-
-impl Default for NuisanceOptions {
-    fn default() -> Self {
-        Self {
-            propensity_clip: 1e-6,
-            ridge: 1e-8,
-            max_iterations: 200,
-            tolerance: 1e-8,
-            legacy_repeated_cross_section: false,
-        }
-    }
 }
 
 /// The options of [`estimate`], with `did::att_gt`'s defaults.
@@ -787,23 +749,7 @@ fn validate(panel: &StaggeredPanel<'_>, options: &AttGtOptions) -> Result<(), Er
         }
         .into());
     }
-    let nuisance = options.nuisance;
-    if !(nuisance.propensity_clip > 0.0 && nuisance.propensity_clip < 0.5) {
-        return Err(domain(
-            "propensity_clip",
-            nuisance.propensity_clip,
-            "(0, 0.5)",
-        ));
-    }
-    if !(nuisance.ridge.is_finite() && nuisance.ridge >= 0.0) {
-        return Err(domain("ridge", nuisance.ridge, "[0, inf)"));
-    }
-    if nuisance.max_iterations == 0 {
-        return Err(domain("max_iterations", 0.0, "[1, inf)"));
-    }
-    if !(nuisance.tolerance.is_finite() && nuisance.tolerance > 0.0) {
-        return Err(domain("tolerance", nuisance.tolerance, "(0, inf)"));
-    }
+    options.nuisance.validate()?;
     if let Some(bootstrap) = options.bootstrap {
         if bootstrap.replicates == 0 {
             return Err(domain("bootstrap replicates", 0.0, "[1, inf)"));
@@ -955,20 +901,7 @@ fn assemble(
     })
 }
 
-/// An estimate with its standard error, interval and normal p-value; a part
-/// that is not finite is `None`.
-fn cell_estimate(att: f64, se: f64, (lower, upper): (f64, f64), level: Level) -> Estimate {
-    let finite = |value: f64| value.is_finite().then_some(value);
-    let se = finite(se);
-    let p_value = epistat_stats::wald(att, se, level, Scale::Identity).p_value;
-    Estimate::new(
-        att,
-        se,
-        Some(Interval::new(finite(lower), finite(upper), level)),
-        p_value,
-        Scale::Identity,
-    )
-}
+pub(super) use crate::inference::estimate_from as cell_estimate;
 
 /// The settings every route reads, from [`AttGtOptions`].
 #[derive(Debug, Clone, Copy)]
@@ -985,10 +918,6 @@ pub(super) struct Config {
 
 impl Config {
     fn new(options: &AttGtOptions) -> Self {
-        let nuisance = options.nuisance;
-        let (replicates, seed) = options
-            .bootstrap
-            .map_or((0, 0), |bootstrap| (bootstrap.replicates, bootstrap.seed));
         Self {
             comparison_group: options.comparison_group,
             base_period: options.base_period,
@@ -997,16 +926,7 @@ impl Config {
             skip_failed_cells: options.skip_failed_cells,
             refuse_small_never_treated: options.refuse_small_never_treated,
             refuse_poor_overlap: options.refuse_poor_overlap,
-            drdid: DrDidConfig {
-                confidence_level: options.level.confidence_value(),
-                propensity_clip: nuisance.propensity_clip,
-                ridge: nuisance.ridge,
-                max_iter: nuisance.max_iterations,
-                tol: nuisance.tolerance,
-                bootstrap_reps: replicates,
-                bootstrap_seed: seed,
-                legacy_repeated_cross_section: nuisance.legacy_repeated_cross_section,
-            },
+            drdid: options.nuisance.config(options.level, options.bootstrap),
         }
     }
 }

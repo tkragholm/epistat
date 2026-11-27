@@ -4,25 +4,74 @@ use criterion::{
     BenchmarkGroup, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
     measurement::WallTime,
 };
+use epistat_core::Bootstrap;
 use epistat_did::att_gt::{self, AttGtOptions, Design, Estimator};
+use epistat_did::did_cc::{self, Assumption, CrossFitting, DidCcOptions};
+use epistat_did::two_period::{self, NuisanceOptions, TwoPeriodOptions};
 use epistat_did::{
-    DidCcConfig, DrDidConfig, DrDidObservation, DrDidRepeatedObservation, HonestEventStudyInput,
-    HonestJointPathConfig, HonestPostFunctional, HonestSensitivity, HonestWorkflowConfig,
-    HonestWorkflowDirectionMode, InferenceConfig, RelativeMagnitudeConfidenceSetConfig,
-    StaggeredPanel, assess_honest_event_study_directional_region_with_config,
+    HonestEventStudyInput, HonestJointPathConfig, HonestPostFunctional, HonestSensitivity,
+    HonestWorkflowConfig, HonestWorkflowDirectionMode, InferenceConfig,
+    RelativeMagnitudeConfidenceSetConfig, StaggeredPanel, TwoPeriodData,
+    assess_honest_event_study_directional_region_with_config,
     assess_honest_event_study_joint_path_region_with_config,
     assess_honest_event_study_post_functional_multi_flci_with_config,
     assess_honest_event_study_post_functional_with_config, assess_honest_event_study_workflow,
-    estimate_did_cc_robust, estimate_did_cc_stationary,
-    estimate_drdid_improved_repeated_cross_section, estimate_drdid_panel, test_did_cc_stationarity,
 };
+use epistat_linalg::MatRef;
 
 fn usize_to_f64(value: usize) -> f64 {
     f64::from(u32::try_from(value).expect("benchmark size fits u32"))
 }
 
-fn build_drdid_panel_rows(num_units: usize, num_covariates: usize) -> Vec<DrDidObservation> {
-    (0..num_units)
+/// Two-period columns: arm, outcome (or change), period, and the covariates
+/// column-major with `k` columns.
+struct TwoPeriodColumns {
+    treated: Vec<bool>,
+    post: Vec<bool>,
+    outcome: Vec<f64>,
+    covariates: Vec<f64>,
+    k: usize,
+}
+
+impl TwoPeriodColumns {
+    fn from_rows(rows: &[(bool, bool, f64, Vec<f64>)]) -> Self {
+        let k = rows.first().map_or(0, |row| row.3.len());
+        Self {
+            treated: rows.iter().map(|row| row.0).collect(),
+            post: rows.iter().map(|row| row.1).collect(),
+            outcome: rows.iter().map(|row| row.2).collect(),
+            covariates: (0..k)
+                .flat_map(|j| rows.iter().map(move |row| row.3[j]))
+                .collect(),
+            k,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.treated.len()
+    }
+
+    fn x(&self) -> MatRef<'_, f64> {
+        MatRef::from_column_major_slice(&self.covariates, self.len(), self.k)
+    }
+
+    fn panel(&self) -> TwoPeriodData<'_> {
+        TwoPeriodData::panel(&self.treated, &self.outcome)
+            .covariates(self.x())
+            .build()
+            .expect("panel")
+    }
+
+    fn repeated(&self) -> TwoPeriodData<'_> {
+        TwoPeriodData::repeated_cross_section(&self.treated, &self.post, &self.outcome)
+            .covariates(self.x())
+            .build()
+            .expect("repeated cross-section")
+    }
+}
+
+fn build_drdid_panel_rows(num_units: usize, num_covariates: usize) -> TwoPeriodColumns {
+    let rows: Vec<_> = (0..num_units)
         .map(|unit_index| {
             let treated = unit_index % 4 == 0;
             let unit_index_f64 = usize_to_f64(unit_index);
@@ -40,14 +89,15 @@ fn build_drdid_panel_rows(num_units: usize, num_covariates: usize) -> Vec<DrDidO
                 .sum::<f64>()
                 * 0.05;
             let treatment_effect = if treated { 1.75 } else { 0.0 };
-            DrDidObservation {
+            (
                 treated,
-                delta_outcome: baseline + covariate_signal + treatment_effect,
-                weight: 1.0,
+                true,
+                baseline + covariate_signal + treatment_effect,
                 covariates,
-            }
+            )
         })
-        .collect()
+        .collect();
+    TwoPeriodColumns::from_rows(&rows)
 }
 
 /// A repeated cross-section of `num_units * periods` rows, each its own
@@ -140,7 +190,7 @@ fn build_honest_input(num_pre_periods: usize, num_post_periods: usize) -> Honest
     }
 }
 
-fn build_did_cc_rows(num_units_per_cell: usize) -> Vec<DrDidRepeatedObservation> {
+fn build_did_cc_rows(num_units_per_cell: usize) -> TwoPeriodColumns {
     let mut observations = Vec::with_capacity(num_units_per_cell * 4);
     for unit_index in 0..num_units_per_cell {
         let unit_index_f64 = usize_to_f64(unit_index);
@@ -148,39 +198,35 @@ fn build_did_cc_rows(num_units_per_cell: usize) -> Vec<DrDidRepeatedObservation>
         let treated_pre_x = usize_to_f64((unit_index + 2) % 9) * 0.25;
         let treated_post_x = usize_to_f64((unit_index + 5) % 9) * 0.25;
 
-        observations.push(DrDidRepeatedObservation {
-            treated: false,
-            post_period: false,
-            outcome: unit_index_f64.mul_add(0.001, control_x),
-            weight: 1.0,
-            covariates: vec![control_x, control_x * control_x],
-        });
-        observations.push(DrDidRepeatedObservation {
-            treated: false,
-            post_period: true,
-            outcome: unit_index_f64.mul_add(0.001, control_x + 0.9),
-            weight: 1.0,
-            covariates: vec![control_x, control_x * control_x],
-        });
-        observations.push(DrDidRepeatedObservation {
-            treated: true,
-            post_period: false,
-            outcome: unit_index_f64.mul_add(0.001, treated_pre_x + 0.2),
-            weight: 1.0,
-            covariates: vec![treated_pre_x, treated_pre_x * treated_pre_x],
-        });
-        observations.push(DrDidRepeatedObservation {
-            treated: true,
-            post_period: true,
-            outcome: unit_index_f64.mul_add(0.001, treated_post_x + 2.1 + treated_post_x * 0.6),
-            weight: 1.0,
-            covariates: vec![treated_post_x, treated_post_x * treated_post_x],
-        });
+        observations.push((
+            false,
+            false,
+            unit_index_f64.mul_add(0.001, control_x),
+            vec![control_x, control_x * control_x],
+        ));
+        observations.push((
+            false,
+            true,
+            unit_index_f64.mul_add(0.001, control_x + 0.9),
+            vec![control_x, control_x * control_x],
+        ));
+        observations.push((
+            true,
+            false,
+            unit_index_f64.mul_add(0.001, treated_pre_x + 0.2),
+            vec![treated_pre_x, treated_pre_x * treated_pre_x],
+        ));
+        observations.push((
+            true,
+            true,
+            unit_index_f64.mul_add(0.001, treated_post_x + 2.1 + treated_post_x * 0.6),
+            vec![treated_post_x, treated_post_x * treated_post_x],
+        ));
     }
-    observations
+    TwoPeriodColumns::from_rows(&observations)
 }
 
-fn build_improved_repeated_rows(num_units_per_period: usize) -> Vec<DrDidRepeatedObservation> {
+fn build_improved_repeated_rows(num_units_per_period: usize) -> TwoPeriodColumns {
     let mut rows = Vec::with_capacity(2 * num_units_per_period);
     for post_period in [false, true] {
         for unit_index in 0..num_units_per_period {
@@ -193,16 +239,15 @@ fn build_improved_repeated_rows(num_units_per_period: usize) -> Vec<DrDidRepeate
                 0.7f64.mul_add(-x2, 1.2f64.mul_add(x1, 1.8)) + if post_period { 0.9 } else { 0.0 };
             let treatment_effect = if treated && post_period { 1.5 } else { 0.0 };
             let noise = (0.033 * unit_f).sin() * 0.1;
-            rows.push(DrDidRepeatedObservation {
+            rows.push((
                 treated,
                 post_period,
-                outcome: base + treatment_effect + noise,
-                weight: 1.0,
-                covariates: vec![1.0, x1, x2],
-            });
+                base + treatment_effect + noise,
+                vec![x1, x2],
+            ));
         }
     }
-    rows
+    TwoPeriodColumns::from_rows(&rows)
 }
 
 fn bench_drdid_panel(criterion: &mut Criterion) {
@@ -211,7 +256,12 @@ fn bench_drdid_panel(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("drdid_panel");
     group.throughput(Throughput::Elements(throughput));
     group.bench_function("20k_rows_6_covariates", |bencher| {
-        bencher.iter(|| estimate_drdid_panel(&rows, DrDidConfig::default()).expect("panel drdid"));
+        let data = rows.panel();
+        let options = TwoPeriodOptions {
+            estimator: two_period::Estimator::DoublyRobust,
+            ..TwoPeriodOptions::default()
+        };
+        bencher.iter(|| two_period::estimate(&data, &options).expect("panel drdid"));
     });
     group.finish();
 }
@@ -222,8 +272,9 @@ fn bench_drdid_improved_repeated(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("drdid_improved_repeated");
     group.throughput(Throughput::Elements(throughput));
     group.bench_function("8k_per_period_3_covariates", |bencher| {
+        let data = rows.repeated();
         bencher.iter(|| {
-            estimate_drdid_improved_repeated_cross_section(&rows, DrDidConfig::default())
+            two_period::estimate(&data, &TwoPeriodOptions::default())
                 .expect("improved repeated drdid")
         });
     });
@@ -524,47 +575,53 @@ fn bench_relative_magnitude_directional_basis_region(criterion: &mut Criterion) 
 fn bench_did_cc(criterion: &mut Criterion) {
     let rows = build_did_cc_rows(4_000);
     let throughput = u64::try_from(rows.len()).expect("row count fits u64");
-    let config = DidCcConfig::default();
-    let cross_fit_config = DidCcConfig {
-        drdid: DrDidConfig {
-            bootstrap_reps: 19,
-            max_iter: 1_000,
-            tol: 1e-6,
-            ..DrDidConfig::default()
+    let options = |assumption| DidCcOptions {
+        assumption,
+        ..DidCcOptions::default()
+    };
+    let cross_fit = |assumption| DidCcOptions {
+        assumption,
+        nuisance: NuisanceOptions {
+            max_iterations: 1_000,
+            tolerance: 1e-6,
+            ..NuisanceOptions::default()
         },
-        cross_fit_folds: 4,
-        cross_fit_seed: 17,
-        ..DidCcConfig::default()
+        bootstrap: Some(Bootstrap::new(19, 17_431)),
+        cross_fitting: Some(CrossFitting { folds: 4, seed: 17 }),
+        ..DidCcOptions::default()
     };
     let cross_fit_rows = build_did_cc_rows(1_000);
+    let (data, cross_fit_data) = (rows.repeated(), cross_fit_rows.repeated());
     let mut group = criterion.benchmark_group("did_cc");
     group.throughput(Throughput::Elements(throughput));
 
     group.bench_function("robust_4k_per_cell", |bencher| {
-        bencher.iter(|| estimate_did_cc_robust(&rows, config).expect("did_cc robust"));
+        bencher.iter(|| did_cc::estimate(&data, &options(Assumption::Robust)).expect("robust"));
     });
     group.bench_function("stationary_4k_per_cell", |bencher| {
-        bencher.iter(|| estimate_did_cc_stationary(&rows, config).expect("did_cc stationary"));
+        bencher.iter(|| {
+            did_cc::estimate(&data, &options(Assumption::Stationary)).expect("stationary")
+        });
     });
     group.bench_function("hausman_4k_per_cell", |bencher| {
-        bencher.iter(|| test_did_cc_stationarity(&rows, config).expect("did_cc hausman"));
+        bencher.iter(|| did_cc::test(&data, &options(Assumption::Robust)).expect("hausman"));
     });
     group.bench_function("robust_cross_fit_1k_per_cell", |bencher| {
         bencher.iter(|| {
-            estimate_did_cc_robust(&cross_fit_rows, cross_fit_config)
-                .expect("did_cc robust cross-fit")
+            did_cc::estimate(&cross_fit_data, &cross_fit(Assumption::Robust))
+                .expect("robust cross-fit")
         });
     });
     group.bench_function("stationary_cross_fit_1k_per_cell", |bencher| {
         bencher.iter(|| {
-            estimate_did_cc_stationary(&cross_fit_rows, cross_fit_config)
-                .expect("did_cc stationary cross-fit")
+            did_cc::estimate(&cross_fit_data, &cross_fit(Assumption::Stationary))
+                .expect("stationary cross-fit")
         });
     });
     group.bench_function("hausman_cross_fit_1k_per_cell", |bencher| {
         bencher.iter(|| {
-            test_did_cc_stationarity(&cross_fit_rows, cross_fit_config)
-                .expect("did_cc hausman cross-fit")
+            did_cc::test(&cross_fit_data, &cross_fit(Assumption::Robust))
+                .expect("hausman cross-fit")
         });
     });
 
