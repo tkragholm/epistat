@@ -1,5 +1,5 @@
-//! Truncated weights in the outcome model of sequential trials, `limit_weights`
-//! of `epistat_survival::weighting::trials`, against TrialEmulation 0.0.5
+//! Truncated weights in the outcome model of sequential trials,
+//! `WeightLimits::apply` as `epistat_survival::weighting::trials` takes it, against TrialEmulation 0.0.5
 //! `initiators(analysis_weights = "p99")` and `"weight_limits"` on the panel of
 //! `data/trial_chain.R`, per protocol with switch weights. See
 //! `data/trial_limits.R`.
@@ -19,8 +19,8 @@ use epistat_matching::{
 };
 use epistat_survival::weighting::trials::{
     Fit, Msm, MsmInput, Panel, PersonPeriod, TrialRows, WeightLimits, WeightModel, WeightRows,
-    censoring_weights, cumulative_incidence_rows, fit_msm, limit_weights, protocol_rows,
-    switch_weights, trial_weights,
+    censoring_weights, cumulative_incidence_rows, fit_msm, protocol_rows, switch_weights,
+    trial_weights,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -265,7 +265,7 @@ fn truncated_weights_agree_with_trial_emulation() {
                 upper: 3.0,
             },
         };
-        let limited = limit_weights(&weight, rule).expect("limits");
+        let limited = rule.apply(&weight).expect("limits");
         let design = Mat::from_fn(t.len(), 7, |r, j| {
             let mut out = [0.0; 7];
             design_row(&t, p, t.assigned[r], t.follow_up_time[r], r, &mut out);
