@@ -42,6 +42,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 /// Holding a `NormalizedDiagnosis` is a small type-level guarantee that the
 /// contained code has already been normalized.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct NormalizedDiagnosis {
     /// The canonicalized, uppercase, alphanumeric code (e.g. `"C500"`), with any
     /// Danish register `D` prefix removed and the ICD chapter letter first.

@@ -11,16 +11,29 @@
 //!
 //! # What is built in
 //!
-//! The code lists and weights are those of the R package `comorbidity` 1.1.0
-//! \[6\], which takes them from Quan et al. \[2\] (the coding algorithms for the
-//! Charlson and the Elixhauser conditions) and from the three weight tables
-//! above. They are written to `lists.rs` by `tests/data/comorbidity_lists.R`,
-//! and the tests check every code of the alphabet against the package.
+//! The Quan code lists are transcribed from Quan et al. \[2\], ICD-10
+//! column of Table 1 (Charlson) and Table 2 (Elixhauser), with the tables'
+//! names of the conditions as labels and the codes written as the tables
+//! print them, read by [`CodeSet::parse`]:
+//!
+//! - `I43.x` is the category `I43` with every subdivision, the prefix `I43`.
+//! - `I42.5–I42.9`, with the en dash of the tables, is the range of
+//!   four-character codes `I425` to `I429`: `I42.6` is in it and `I42` is not.
+//! - `C37.x–C41.x` is the range of categories `C37` to `C41` with every
+//!   subdivision, and `D65–D68.x`, printed with the wildcard on one end only,
+//!   is the same kind of range.
+//! - A three-character code printed without a decimal, such as `R64`, `F10`
+//!   or `E52`, is the category as a prefix, as `R64.x` would be.
+//!
+//! The weights are those of the three weight tables above. The tests check
+//! every code of an ICD-10 alphabet and the scores of sampled persons against
+//! the R package `comorbidity` 1.1.0 \[6\], run as a black box, and list each
+//! code where the package and the tables disagree; the tables are followed.
 //!
 //! - [`ComorbidityMap::charlson_quan_icd10`] with [`charlson_original`]
 //!   (Charlson 1987) or [`charlson_quan2011`] (Quan 2011, Table 4).
 //! - [`ComorbidityMap::elixhauser_quan_icd10`] with
-//!   [`elixhauser_van_walraven`] (van Walraven 2009, Table 3).
+//!   [`elixhauser_van_walraven`] (van Walraven 2009).
 //!
 //! - [`ComorbidityMap::charlson_denmark`] with [`charlson_denmark_weights`]:
 //!   the 19 conditions of the Danish coding, with the ICD-10 codes of
@@ -116,10 +129,13 @@
 //!    2011;3:203-11.
 
 mod denmark;
-mod lists;
+mod quan;
+
+use epistat_core::InputError;
 
 use crate::Error;
 use crate::codes::{CodeSet, EraCodeSet, Revision, revision_of};
+use crate::error::{csr, length};
 use crate::events::{EventRows, Lookback};
 
 /// One condition of a comorbidity map.
@@ -160,14 +176,14 @@ impl Weights {
 /// ([`ComorbidityMap::charlson_quan_icd10`]).
 #[must_use]
 pub fn charlson_original() -> Weights {
-    Weights::new("Charlson 1987", lists::CHARLSON_1987.to_vec())
+    Weights::new("Charlson 1987", quan::CHARLSON_1987.to_vec())
 }
 
 /// The updated weights of Quan et al. 2011 for the 17 conditions of the Quan
 /// coding ([`ComorbidityMap::charlson_quan_icd10`]).
 #[must_use]
 pub fn charlson_quan2011() -> Weights {
-    Weights::new("Quan 2011", lists::CHARLSON_QUAN_2011.to_vec())
+    Weights::new("Quan 2011", quan::CHARLSON_QUAN_2011.to_vec())
 }
 
 /// The Charlson 1987 weights of the 19 conditions of
@@ -187,7 +203,7 @@ pub fn charlson_denmark_weights() -> Weights {
 pub fn elixhauser_van_walraven() -> Weights {
     Weights::new(
         "van Walraven 2009",
-        lists::ELIXHAUSER_VAN_WALRAVEN_2009.to_vec(),
+        quan::ELIXHAUSER_VAN_WALRAVEN_2009.to_vec(),
     )
 }
 
@@ -199,52 +215,41 @@ pub struct ComorbidityMap {
     cancels: Vec<u64>,
 }
 
-fn condition_from(spec: &lists::Spec, supersedes: &[&str]) -> Condition {
-    Condition {
-        key: spec.key.to_owned(),
-        label: spec.label.to_owned(),
-        codes: EraCodeSet {
-            icd8: CodeSet::default(),
-            icd10: CodeSet::from_prefixes(spec.prefixes.iter().copied())
-                .unwrap_or_else(|_| unreachable!("the generated prefixes are valid")),
-        },
-        supersedes: supersedes.iter().map(|&s| s.to_owned()).collect(),
-    }
-}
-
 impl ComorbidityMap {
     /// A map from conditions in the order of their bits.
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for more than 64 conditions, a key used twice, a
-    /// `supersedes` key that names no condition or the condition itself.
+    /// [`Error::Input`] for more than 64 conditions,
+    /// [`Error::DuplicateName`] for a key used twice, and
+    /// [`Error::Supersedes`] for a `supersedes` key that names no condition or
+    /// the condition itself.
     pub fn new(conditions: Vec<Condition>) -> Result<Self, Error> {
         if conditions.len() > 64 {
-            return Err(Error::invalid(format!(
-                "a comorbidity map holds at most 64 conditions, got {}",
-                conditions.len()
-            )));
+            return Err(InputError::TooLarge {
+                what: "conditions",
+                limit: 64,
+                found: conditions.len() as u64,
+            }
+            .into());
         }
         let mut cancels = Vec::with_capacity(conditions.len());
         for (k, c) in conditions.iter().enumerate() {
             if conditions[..k].iter().any(|o| o.key == c.key) {
-                return Err(Error::invalid(format!(
-                    "the condition {:?} is listed twice",
-                    c.key
-                )));
+                return Err(Error::DuplicateName {
+                    what: "condition",
+                    name: c.key.clone(),
+                });
             }
             let mut mask = 0_u64;
             for key in &c.supersedes {
-                let Some(j) = conditions.iter().position(|o| &o.key == key) else {
-                    return Err(Error::invalid(format!(
-                        "{:?} supersedes {key:?}, which is not a condition of the map",
-                        c.key
-                    )));
+                let target = conditions.iter().position(|o| &o.key == key);
+                let Some(j) = target.filter(|&j| j != k) else {
+                    return Err(Error::Supersedes {
+                        key: c.key.clone(),
+                        target: key.clone(),
+                    });
                 };
-                if j == k {
-                    return Err(Error::invalid(format!("{:?} supersedes itself", c.key)));
-                }
                 mask |= 1 << j;
             }
             cancels.push(mask);
@@ -259,19 +264,7 @@ impl ComorbidityMap {
     /// al. 2005 (Table 1), with no ICD-8 codes.
     #[must_use]
     pub fn charlson_quan_icd10() -> Self {
-        let supersedes = |key: &str| -> &[&str] {
-            match key {
-                "msld" => &["mld"],
-                "diabwc" => &["diab"],
-                "metacanc" => &["canc"],
-                _ => &[],
-            }
-        };
-        let conditions = lists::CHARLSON_QUAN_ICD10
-            .iter()
-            .map(|s| condition_from(s, supersedes(s.key)))
-            .collect();
-        Self::new(conditions).unwrap_or_else(|_| unreachable!("the built-in map is valid"))
+        Self::new(quan::charlson()).unwrap_or_else(|_| unreachable!("the built-in map is valid"))
     }
 
     /// The 19 conditions of the Charlson index in the Danish coding: ICD-10
@@ -290,19 +283,7 @@ impl ComorbidityMap {
     /// et al. 2005 (Table 2), with no ICD-8 codes.
     #[must_use]
     pub fn elixhauser_quan_icd10() -> Self {
-        let supersedes = |key: &str| -> &[&str] {
-            match key {
-                "hypc" => &["hypunc"],
-                "diabc" => &["diabunc"],
-                "metacanc" => &["solidtum"],
-                _ => &[],
-            }
-        };
-        let conditions = lists::ELIXHAUSER_QUAN_ICD10
-            .iter()
-            .map(|s| condition_from(s, supersedes(s.key)))
-            .collect();
-        Self::new(conditions).unwrap_or_else(|_| unreachable!("the built-in map is valid"))
+        Self::new(quan::elixhauser()).unwrap_or_else(|_| unreachable!("the built-in map is valid"))
     }
 
     /// The conditions in the order of their bits.
@@ -315,14 +296,17 @@ impl ComorbidityMap {
         self.conditions
             .iter()
             .position(|c| c.key == key)
-            .ok_or_else(|| Error::invalid(format!("the map has no condition {key:?}")))
+            .ok_or_else(|| Error::UnknownName {
+                what: "condition",
+                name: key.to_owned(),
+            })
     }
 
     /// Replace the ICD-10 codes of a condition, for a Danish or study list.
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when no condition has the key.
+    /// [`Error::UnknownName`] when no condition has the key.
     pub fn set_icd10(&mut self, key: &str, codes: CodeSet) -> Result<(), Error> {
         let k = self.position(key)?;
         self.conditions[k].codes.icd10 = codes;
@@ -333,7 +317,7 @@ impl ComorbidityMap {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when no condition has the key.
+    /// [`Error::UnknownName`] when no condition has the key.
     pub fn set_icd8(&mut self, key: &str, codes: CodeSet) -> Result<(), Error> {
         let k = self.position(key)?;
         self.conditions[k].codes.icd8 = codes;
@@ -404,18 +388,17 @@ impl ComorbidityMap {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when the weights are not one per condition, or
-    /// a flag is set beyond the conditions.
+    /// [`Error::Input`] when the weights are not one per condition, and
+    /// [`Error::OutOfRange`] when a flag is set beyond the conditions.
     pub fn score(&self, flags: u64, weights: &Weights) -> Result<f64, Error> {
-        if weights.value.len() != self.conditions.len() {
-            return Err(Error::invalid(format!(
-                "{} weights for {} conditions",
-                weights.value.len(),
-                self.conditions.len()
-            )));
-        }
+        length("weights", self.conditions.len(), weights.value.len())?;
         if self.conditions.len() < 64 && flags >> self.conditions.len() != 0 {
-            return Err(Error::invalid("a flag is set beyond the conditions"));
+            return Err(Error::OutOfRange {
+                what: "flag bit",
+                row: None,
+                value: u64::from(flags.ilog2()),
+                limit: self.conditions.len() as u64,
+            });
         }
         let mut sum = 0.0;
         for (k, w) in weights.value.iter().enumerate() {
@@ -429,6 +412,7 @@ impl ComorbidityMap {
 
 /// The classification of a dictionary of codes by a [`ComorbidityMap`].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ClassifiedCodes {
     /// For each code, the mask of its conditions.
     pub masks: Vec<u64>,
@@ -441,11 +425,6 @@ pub struct ClassifiedCodes {
     /// Codes that are of neither revision, and match nothing.
     pub unroutable_codes: usize,
 }
-
-/// The name of [`ClassifiedCodes`] before it was distinguished from
-/// [`crate::codes::Classification`].
-#[deprecated(since = "0.2.0", note = "use `comorbidity::ClassifiedCodes`")]
-pub type Classification = ClassifiedCodes;
 
 /// The index dates of persons, in rows sorted by person.
 #[derive(Clone, Copy, Debug)]
@@ -461,6 +440,7 @@ pub struct IndexTable<'a> {
 
 /// The flags found for one index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct IndexFlags {
     /// The OR of the masks of the diagnoses in the window, before the hierarchy.
     pub flags: u64,
@@ -496,9 +476,10 @@ impl IndexFlags {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the columns differ in length, a person is out
-/// of range, the rows of a person are not sorted by day, the look-back is
-/// [`Lookback::None`] or negative, or the rows are not a CSR layout.
+/// [`Error::Input`] when the columns differ in length, the rows of a person
+/// are not sorted by day, the look-back is negative, or the rows are not a CSR
+/// layout, [`Error::OutOfRange`] when a person is out of range, and
+/// [`Error::Required`] for [`Lookback::None`].
 pub fn flags_at_index(
     rows: &EventRows<'_>,
     indices: &IndexTable<'_>,
@@ -506,42 +487,37 @@ pub fn flags_at_index(
     include_index_day: bool,
 ) -> Result<Vec<IndexFlags>, Error> {
     let n = indices.person.len();
-    if indices.day.len() != n || indices.history_start.len() != n {
-        return Err(Error::invalid(
-            "person, day and history_start must have one value per index",
-        ));
-    }
+    length("day", n, indices.day.len())?;
+    length("history_start", n, indices.history_start.len())?;
     if lookback == Lookback::None {
-        return Err(Error::invalid(
-            "flags need a look-back window, not Lookback::None",
-        ));
+        return Err(Error::Required {
+            what: "a look-back window",
+            by: "flags_at_index",
+        });
     }
     let offsets = rows.person_offsets;
-    if offsets.is_empty()
-        || offsets[0] != 0
-        || offsets[offsets.len() - 1] != rows.day.len()
-        || rows.mask.len() != rows.day.len()
-        || offsets.windows(2).any(|w| w[0] > w[1])
-    {
-        return Err(Error::invalid(
-            "person_offsets must be a CSR layout over day and mask",
-        ));
-    }
+    csr("person_offsets", offsets, rows.day.len())?;
+    length("mask", rows.day.len(), rows.mask.len())?;
     let persons = offsets.len() - 1;
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let p = indices.person[i] as usize;
         if p >= persons {
-            return Err(Error::invalid(format!(
-                "index {i} names person {p} of {persons}"
-            )));
+            return Err(Error::OutOfRange {
+                what: "person",
+                row: Some(i),
+                value: u64::from(indices.person[i]),
+                limit: persons as u64,
+            });
         }
         let (a, b) = (offsets[p], offsets[p + 1]);
         let days = &rows.day[a..b];
-        if days.windows(2).any(|w| w[0] > w[1]) {
-            return Err(Error::invalid(format!(
-                "the rows of person {p} are not sorted by day"
-            )));
+        if let Some(at) = days.windows(2).position(|w| w[0] > w[1]) {
+            return Err(InputError::Unsorted {
+                what: "day",
+                row: a + at + 1,
+            }
+            .into());
         }
         let (index, history) = (indices.day[i], indices.history_start[i]);
         let start = lookback.window_start(index, history)?.unwrap_or(history);

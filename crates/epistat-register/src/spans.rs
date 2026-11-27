@@ -46,6 +46,7 @@ use crate::error::{length, row_count};
 
 /// The merged spans of a sorted set of intervals.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MergedSpans {
     /// For each span, its first row, which holds its start.
     pub first_row: Vec<u32>,
@@ -62,21 +63,24 @@ impl MergedSpans {
     /// # Errors
     ///
     /// [`Error::Input`] when the columns differ in length, and
-    /// [`Error::Invalid`] when a span names a row beyond them.
+    /// [`Error::OutOfRange`] when a span names a row beyond them.
     pub fn bounds(&self, start: &[i64], end: &[i64]) -> Result<(Vec<i64>, Vec<i64>), Error> {
         length("end", start.len(), end.len())?;
         length("last_row", self.first_row.len(), self.last_row.len())?;
-        let row = |row: u32| {
-            let row = row as usize;
-            (row < start.len())
-                .then_some(row)
-                .ok_or_else(|| Error::invalid(format!("a span names row {row} of {}", start.len())))
+        let row = |what: &'static str, span: usize, row: u32| {
+            let at = row as usize;
+            (at < start.len()).then_some(at).ok_or(Error::OutOfRange {
+                what,
+                row: Some(span),
+                value: u64::from(row),
+                limit: start.len() as u64,
+            })
         };
         let mut starts = Vec::with_capacity(self.first_row.len());
         let mut ends = Vec::with_capacity(self.first_row.len());
-        for (&first, &last) in self.first_row.iter().zip(&self.last_row) {
-            starts.push(start[row(first)?]);
-            ends.push(end[row(last)?]);
+        for (span, (&first, &last)) in self.first_row.iter().zip(&self.last_row).enumerate() {
+            starts.push(start[row("first_row", span, first)?]);
+            ends.push(end[row("last_row", span, last)?]);
         }
         Ok((starts, ends))
     }
@@ -91,9 +95,10 @@ impl MergedSpans {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the columns differ in length, the first row
-/// does not begin a key, a row has an end before its start, or there are more
-/// rows than a `u32` row number holds.
+/// [`Error::Input`] when the columns differ in length or there are more rows
+/// than a `u32` row number holds, [`Error::FirstRowBeginsNoKey`] when the
+/// first row does not begin a key, and [`Error::EndBeforeStart`] for a row
+/// with an end before its start.
 pub fn merge_sorted_spans(
     new_key: &[bool],
     start: &[i64],
@@ -108,12 +113,10 @@ pub fn merge_sorted_spans(
         return Ok(MergedSpans::default());
     }
     if !new_key[0] {
-        return Err(Error::invalid("the first row must begin a key"));
+        return Err(Error::FirstRowBeginsNoKey { what: "new_key" });
     }
     if let Some(row) = (0..n).find(|&row| end[row] < start[row]) {
-        return Err(Error::invalid(format!(
-            "row {row} has an end before its start"
-        )));
+        return Err(Error::EndBeforeStart { what: "end", row });
     }
 
     let mut merged = MergedSpans::default();
@@ -141,6 +144,41 @@ pub fn merge_sorted_spans(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::Classify;
+
+    #[test]
+    fn bounds_refuse_a_span_beyond_the_rows() {
+        let merged = MergedSpans {
+            first_row: vec![0],
+            last_row: vec![1],
+        };
+        let error = merged.bounds(&[0], &[1]).unwrap_err();
+        assert_eq!(error.code(), "register.out_of_range");
+        assert_eq!(
+            error,
+            Error::OutOfRange {
+                what: "last_row",
+                row: Some(0),
+                value: 1,
+                limit: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn a_merge_refuses_an_inverted_row_and_a_first_row_of_no_key() {
+        assert_eq!(
+            merge_sorted_spans(&[true, false], &[0, 5], &[3, 4], 0).unwrap_err(),
+            Error::EndBeforeStart {
+                what: "end",
+                row: 1
+            }
+        );
+        assert_eq!(
+            merge_sorted_spans(&[false], &[0], &[3], 0).unwrap_err(),
+            Error::FirstRowBeginsNoKey { what: "new_key" }
+        );
+    }
 
     fn merge(keys: &[bool], start: &[i64], end: &[i64], grace: i64) -> Vec<(u32, u32)> {
         let m = merge_sorted_spans(keys, start, end, grace).unwrap();

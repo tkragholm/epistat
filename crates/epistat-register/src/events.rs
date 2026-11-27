@@ -111,9 +111,14 @@ impl Lookback {
         if let Self::Days(days) = self
             && days < 0
         {
-            return Err(Error::invalid(format!(
-                "a look-back of {days} days is negative"
-            )));
+            return Err(InputError::Domain {
+                what: "lookback",
+                #[expect(clippy::cast_precision_loss, reason = "a number of days")]
+                value: days as f64,
+                domain: "[0, inf)",
+                row: None,
+            }
+            .into());
         }
         Ok(self.start(entry, history_start))
     }
@@ -210,6 +215,7 @@ pub struct PersonWindows<'a> {
 
 /// What the prior window shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PriorStatus {
     /// The rule has no look-back.
     NotAssessed,
@@ -223,6 +229,7 @@ pub enum PriorStatus {
 
 /// The result for one person and one definition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Outcome {
     /// The day of the first event in the follow-up window.
     pub first_in_window: Option<i64>,
@@ -239,6 +246,7 @@ pub struct Outcome {
 /// The outcomes of every definition for every person, in one column ordered
 /// by definition and then person.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Outcomes {
     persons: usize,
     definitions: usize,
@@ -317,26 +325,40 @@ fn validate(
     length("entry", persons, windows.entry.len())?;
     length("exit", persons, windows.exit.len())?;
     length("history_start", persons, windows.history_start.len())?;
-    if rules.is_empty() || rules.len() > 64 {
-        return Err(Error::invalid(format!(
-            "between 1 and 64 rules are needed, got {}",
-            rules.len()
-        )));
-    }
-    for rule in rules {
-        if rule.require != 1 && rule.require != 2 {
-            return Err(Error::invalid(format!(
-                "require must be 1 or 2, got {}",
-                rule.require
-            )));
+    check::non_empty("rules", rules.len())?;
+    if rules.len() > 64 {
+        return Err(InputError::TooLarge {
+            what: "rules",
+            limit: 64,
+            found: rules.len() as u64,
         }
-        if rule.confirm_within.is_some_and(|w| w < 0) {
-            return Err(Error::invalid("confirm_within must not be negative"));
+        .into());
+    }
+    for (k, rule) in rules.iter().enumerate() {
+        if rule.require != 1 && rule.require != 2 {
+            return Err(InputError::Domain {
+                what: "require",
+                value: f64::from(rule.require),
+                domain: "{1, 2}",
+                row: Some(k),
+            }
+            .into());
+        }
+        if let Some(within) = rule.confirm_within.filter(|&w| w < 0) {
+            return Err(InputError::Domain {
+                what: "confirm_within",
+                #[expect(clippy::cast_precision_loss, reason = "a number of days")]
+                value: within as f64,
+                domain: "[0, inf)",
+                row: Some(k),
+            }
+            .into());
         }
         if rule.require == 2 && rule.confirm_by == ConfirmBy::Contacts && rows.contact.is_none() {
-            return Err(Error::invalid(
-                "a rule that confirms by contacts needs the contact column",
-            ));
+            return Err(Error::Required {
+                what: "the contact column",
+                by: "a rule that confirms by contacts",
+            });
         }
         rule.lookback.window_start(0, 0)?;
     }
@@ -347,9 +369,10 @@ fn validate(
             other => other,
         })?;
         if windows.entry[p] > windows.exit[p] {
-            return Err(Error::invalid(format!(
-                "person {p} has an entry after its exit"
-            )));
+            return Err(Error::EndBeforeStart {
+                what: "exit",
+                row: p,
+            });
         }
     }
     Ok(persons)
@@ -363,9 +386,10 @@ fn validate(
 /// # Errors
 ///
 /// [`Error::Input`] when the columns differ in length, the offsets are
-/// not a CSR layout, the rows of a person are not sorted by day, a person's
-/// entry is after its exit, there are no rules or more than 64, `require` is not
-/// 1 or 2, a look-back or `confirm_within` is negative, or a rule that confirms
+/// not a CSR layout, the rows of a person are not sorted by day, there are no
+/// rules or more than 64, `require` is not 1 or 2, or a look-back or
+/// `confirm_within` is negative, [`Error::EndBeforeStart`] when a person's
+/// exit is before its entry, and [`Error::Required`] when a rule that confirms
 /// by contacts has no contact column.
 pub fn evaluate(
     rows: &EventRows<'_>,

@@ -90,6 +90,7 @@ pub enum SameDay {
 /// Closed periods of residence per person, sorted by start with an unknown
 /// start first.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Spells {
     /// Spell range of each person, of length persons plus one.
     pub person_offsets: Vec<usize>,
@@ -112,9 +113,9 @@ impl Spells {
     /// # Errors
     ///
     /// [`Error::Input`] when the window columns do not have one entry
-    /// per person, a window ends before it starts, or the spells are not a
-    /// layout of sorted, disjoint spells, which [`residence_spells`] always
-    /// gives.
+    /// per person or the spells are not a layout of sorted, disjoint spells,
+    /// which [`residence_spells`] always gives, and [`Error::EndBeforeStart`]
+    /// when a window ends before it starts.
     pub fn span_set(&self, window_start: &[i64], window_end: &[i64]) -> Result<SpanSet, Error> {
         let persons = self.person_offsets.len().saturating_sub(1);
         length("window start", persons, window_start.len())?;
@@ -233,21 +234,18 @@ pub fn residence_spells(e: &Events<'_>, same_day: SameDay) -> Result<Spells, Err
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the query columns differ in length or a person
-/// is not below the number of persons of `spells`.
+/// [`Error::Input`] when the query columns differ in length, and
+/// [`Error::OutOfRange`] when a person is not below the number of persons of
+/// `spells`.
 pub fn resident_on(spells: &Spells, person: &[u32], day: &[i64]) -> Result<Vec<bool>, Error> {
     length("day", person.len(), day.len())?;
     let persons = spells.person_offsets.len().saturating_sub(1);
     person
         .iter()
         .zip(day)
-        .map(|(&p, &d)| {
-            let p = p as usize;
-            if p >= persons {
-                return Err(Error::invalid(format!(
-                    "person {p} is not below the number of persons, {persons}"
-                )));
-            }
+        .enumerate()
+        .map(|(row, (&p, &d))| {
+            let p = person_in_range(row, p, persons)?;
             let range = spells.person_offsets[p]..spells.person_offsets[p + 1];
             if range.is_empty() {
                 return Ok(true);
@@ -261,14 +259,30 @@ pub fn resident_on(spells: &Spells, person: &[u32], day: &[i64]) -> Result<Vec<b
         .collect()
 }
 
+/// The person of query `row` as a position, or [`Error::OutOfRange`].
+fn person_in_range(row: usize, person: u32, persons: usize) -> Result<usize, Error> {
+    let p = person as usize;
+    if p < persons {
+        Ok(p)
+    } else {
+        Err(Error::OutOfRange {
+            what: "person",
+            row: Some(row),
+            value: u64::from(person),
+            limit: persons as u64,
+        })
+    }
+}
+
 /// The day of each person's first emigration on or after a day, among the
 /// usable events of [`residence_spells`], or `None` when there is none. A
 /// second departure with no return between is not counted.
 ///
 /// # Errors
 ///
-/// As [`residence_spells`], and when a person is not below the number of
-/// persons or the query columns differ in length.
+/// As [`residence_spells`], [`Error::OutOfRange`] when a person is not
+/// below the number of persons, and [`Error::Input`] when the query columns
+/// differ in length.
 pub fn first_departure_on_or_after(
     e: &Events<'_>,
     same_day: SameDay,
@@ -281,14 +295,9 @@ pub fn first_departure_on_or_after(
     person
         .iter()
         .zip(day)
-        .map(|(&p, &d)| {
-            let p = p as usize;
-            if p >= e.persons() {
-                return Err(Error::invalid(format!(
-                    "person {p} is not below the number of persons, {}",
-                    e.persons()
-                )));
-            }
+        .enumerate()
+        .map(|(row, (&p, &d))| {
+            let p = person_in_range(row, p, e.persons())?;
             alternating(e, p, same_day, &mut events);
             Ok(events
                 .iter()
@@ -300,6 +309,7 @@ pub fn first_departure_on_or_after(
 
 /// Why observation ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum EndReason {
     /// Death.
     Death,
