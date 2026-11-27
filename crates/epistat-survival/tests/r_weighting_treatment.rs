@@ -34,7 +34,7 @@ use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::pooled::PooledOptions;
 use epistat_survival::weighting::pooled::{PooledEvent, TreatmentHistory};
-use epistat_survival::weighting::{Censoring, WeightAt, Weights};
+use epistat_survival::weighting::{OutcomeCensoring, WeightAt, Weights};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -285,7 +285,7 @@ fn variances_match_the_jackknife_of_refits() {
         let estimated = Weights {
             iptw: None,
             subject: None,
-            censoring: Some(Censoring::Pooled {
+            censoring: Some(OutcomeCensoring::Pooled {
                 fit: &w,
                 at: WeightAt::Stop,
             }),

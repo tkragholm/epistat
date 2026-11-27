@@ -9,7 +9,7 @@
 //! ([`standardise_cox`]) or cause-specific Cox models
 //! ([`standardise_cause_specific`]). For each level `a` of the exposure the
 //! caller gives the covariates of every person with the exposure set to `a`
-//! ([`Level`]). The model gives each person a risk of the event by time `t`,
+//! ([`ExposureLevel`]). The model gives each person a risk of the event by time `t`,
 //! `F(t | x_i(a))`, and the standardised risk is the mean over the persons,
 //!
 //! ```text
@@ -148,12 +148,12 @@ pub enum Counterfactual<'a> {
 
 /// One level of the exposure: the covariates of every model under it.
 #[derive(Debug, Clone)]
-pub struct Level<'a> {
+pub struct ExposureLevel<'a> {
     /// One entry per model, in the order of the models.
     pub designs: Vec<Counterfactual<'a>>,
 }
 
-impl<'a> Level<'a> {
+impl<'a> ExposureLevel<'a> {
     /// A level for a single model.
     #[must_use]
     pub fn single(design: Counterfactual<'a>) -> Self {
@@ -162,6 +162,10 @@ impl<'a> Level<'a> {
         }
     }
 }
+
+/// `ExposureLevel`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `ExposureLevel`")]
+pub type Level<'a> = ExposureLevel<'a>;
 
 /// The options of [`standardise_cox`] and [`standardise_cause_specific`].
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -223,7 +227,7 @@ pub struct Standardised {
 
 /// The risk difference and the risk ratio of two levels at every time.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Contrast {
+pub struct StandardiseContrast {
     /// The risk of the first level minus that of the second.
     pub difference: Vec<Option<f64>>,
     /// The risk of the first level over that of the second, `None` where the
@@ -234,6 +238,10 @@ pub struct Contrast {
     /// As `difference_inference` for the ratio, tested against 1.
     pub ratio_inference: Option<Inference>,
 }
+
+/// `StandardiseContrast`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `StandardiseContrast`")]
+pub type Contrast = StandardiseContrast;
 
 /// The standard error, limits and p-value of a contrast at every time.
 #[derive(Debug, Clone, PartialEq)]
@@ -258,7 +266,7 @@ impl Standardised {
     ///
     /// An input error without `se`, for a time that does not exist or
     /// where a risk is not defined, and for fewer than two levels.
-    pub fn tests(&self, k: usize, kind: yates::Test) -> Result<Vec<yates::WaldTest>> {
+    pub fn tests(&self, k: usize, kind: yates::YatesTest) -> Result<Vec<yates::WaldTest>> {
         let Some(cov) = &self.covariance else {
             return Err(Error::invalid("tests: the result has no standard errors"));
         };
@@ -280,7 +288,7 @@ impl Standardised {
     /// # Errors
     ///
     /// An input error for a level that does not exist.
-    pub fn contrast(&self, first: usize, second: usize) -> Result<Contrast> {
+    pub fn contrast(&self, first: usize, second: usize) -> Result<StandardiseContrast> {
         let l = self.n_levels;
         if first >= l || second >= l {
             return Err(Error::invalid(format!(
@@ -331,7 +339,7 @@ impl Standardised {
             }
             None => (None, None),
         };
-        Ok(Contrast {
+        Ok(StandardiseContrast {
             difference,
             ratio,
             difference_inference,
@@ -382,7 +390,7 @@ pub fn standardise_cox<'a>(
     design: MatRef<'a, f64>,
     fit: &'a CoxModelFit,
     options: &CoxOptions,
-    levels: &[Level<'_>],
+    levels: &[ExposureLevel<'_>],
     times: &[f64],
     opts: &StandardiseOptions,
 ) -> Result<Standardised> {
@@ -420,7 +428,7 @@ pub fn standardise_cause_specific<'a>(
     fits: &'a [CoxModelFit],
     cause: u32,
     csc: &CscOptions,
-    levels: &[Level<'_>],
+    levels: &[ExposureLevel<'_>],
     times: &[f64],
     opts: &StandardiseOptions,
 ) -> Result<Standardised> {
@@ -537,7 +545,7 @@ impl LevelRows<'_> {
 }
 
 fn prepare<'a>(
-    levels: &'a [Level<'_>],
+    levels: &'a [ExposureLevel<'_>],
     models: &[ModelInput<'_>],
     rows: &[usize],
 ) -> Result<Vec<LevelRows<'a>>> {
@@ -601,7 +609,7 @@ fn prepare<'a>(
 fn run(
     models: &[ModelInput<'_>],
     cause_model: Option<(usize, &[usize])>,
-    levels: &[Level<'_>],
+    levels: &[ExposureLevel<'_>],
     times: &[f64],
     opts: &StandardiseOptions,
 ) -> Result<Standardised> {

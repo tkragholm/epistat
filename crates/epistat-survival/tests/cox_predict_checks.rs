@@ -9,8 +9,9 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::cox::predict::{
-    BaselineOptions, Centring, ConfType, FittedModel, HazardType, NewData, PredictOptions,
-    PredictType, Reference, SurvfitOptions, Variance, basehaz, predict, predict_terms, survfit,
+    BaselineOptions, Centring, ConfType, CoxHazardType, CoxPredictOptions, CoxPredictType,
+    CoxSurvfitOptions, CoxVariance, FittedModel, NewData, Reference, basehaz, predict,
+    predict_terms, survfit,
 };
 use epistat_survival::cox::{CoxModelFit, CoxOptions, Ties, fit};
 use epistat_survival::{Covariance, SurvData};
@@ -54,9 +55,9 @@ fn worked_case() {
     // Expected number of events of the three rows: H(stop) times risk 1.
     let e = predict(
         &fitted,
-        PredictType::Expected,
+        CoxPredictType::Expected,
         None,
-        &PredictOptions::default(),
+        &CoxPredictOptions::default(),
     )
     .unwrap();
     assert!((e.fit[0] - 1.0 / 3.0).abs() < 4.0 * f64::EPSILON);
@@ -67,7 +68,7 @@ fn worked_case() {
     // xbar(s) = h(s) times the mean of z over the risk set.
     let mut new = NewData::new(x.as_ref());
     new.stratum = None;
-    let curves = survfit(&fitted, &new, &SurvfitOptions::default()).unwrap();
+    let curves = survfit(&fitted, &new, &CoxSurvfitOptions::default()).unwrap();
     let c = &curves.curves[1];
     assert!((c.survival[1] - (-5.0f64 / 6.0).exp()).abs() < 4.0 * f64::EPSILON);
     // z = 0 for the middle row. xbar(1) = (1/3) (mean of z over rows 0,1,2 =
@@ -172,7 +173,13 @@ fn rows_of_weight_zero_change_no_baseline_bit() {
     }
     assert_eq!(b2.n_used, n);
     // A row of weight zero still has a prediction.
-    let p = predict(&f2, PredictType::Risk, None, &PredictOptions::default()).unwrap();
+    let p = predict(
+        &f2,
+        CoxPredictType::Risk,
+        None,
+        &CoxPredictOptions::default(),
+    )
+    .unwrap();
     assert_eq!(p.fit.len(), n + extra);
 }
 
@@ -201,7 +208,7 @@ fn curves_do_not_depend_on_the_means() {
     let strata = [0u32, 1];
     let mut new = NewData::new(new_x.as_ref());
     new.stratum = Some(&strata);
-    let reference = survfit(&fitted, &new, &SurvfitOptions::default()).unwrap();
+    let reference = survfit(&fitted, &new, &CoxSurvfitOptions::default()).unwrap();
     // An error of the baseline is at most the sums of its sizes times eps, and
     // the means move the risk scores by exp of a shift of at most 2 |beta|.
     let eps = f64::EPSILON;
@@ -214,9 +221,9 @@ fn curves_do_not_depend_on_the_means() {
         let other = survfit(
             &fitted,
             &new,
-            &SurvfitOptions {
+            &CoxSurvfitOptions {
                 centring,
-                ..SurvfitOptions::default()
+                ..CoxSurvfitOptions::default()
             },
         )
         .unwrap();
@@ -234,9 +241,9 @@ fn curves_do_not_depend_on_the_means() {
     let breslow = survfit(
         &fitted,
         &new,
-        &SurvfitOptions {
-            hazard: Some(HazardType::Breslow),
-            ..SurvfitOptions::default()
+        &CoxSurvfitOptions {
+            hazard: Some(CoxHazardType::Breslow),
+            ..CoxSurvfitOptions::default()
         },
     )
     .unwrap();
@@ -286,13 +293,13 @@ fn refusals() {
     };
     let plain = NewData::new(new_x.as_ref());
     expect_err(
-        survfit(&fitted, &plain, &SurvfitOptions::default()).map(|_| ()),
+        survfit(&fitted, &plain, &CoxSurvfitOptions::default()).map(|_| ()),
         "no stratum",
     );
     let mut new = plain;
     new.stratum = Some(&strata_unknown);
     expect_err(
-        survfit(&fitted, &new, &SurvfitOptions::default()).map(|_| ()),
+        survfit(&fitted, &new, &CoxSurvfitOptions::default()).map(|_| ()),
         "unknown stratum",
     );
     new.stratum = Some(&strata);
@@ -300,30 +307,30 @@ fn refusals() {
         survfit(
             &fitted,
             &new,
-            &SurvfitOptions {
-                variance: Variance::Robust,
-                ..SurvfitOptions::default()
+            &CoxSurvfitOptions {
+                variance: CoxVariance::Robust,
+                ..CoxSurvfitOptions::default()
             },
         )
         .map(|_| ()),
         "robust without clusters",
     );
     // Expected needs a stop, and a start with entry times.
-    let opts_e = PredictOptions::default();
+    let opts_e = CoxPredictOptions::default();
     expect_err(
-        predict(&fitted, PredictType::Expected, Some(&new), &opts_e).map(|_| ()),
+        predict(&fitted, CoxPredictType::Expected, Some(&new), &opts_e).map(|_| ()),
         "no stop",
     );
     new.stop = Some(&t1);
     expect_err(
-        predict(&fitted, PredictType::Expected, Some(&new), &opts_e).map(|_| ()),
+        predict(&fitted, CoxPredictType::Expected, Some(&new), &opts_e).map(|_| ()),
         "no start with entry times",
     );
     new.start = Some(&t0);
-    assert!(predict(&fitted, PredictType::Expected, Some(&new), &opts_e).is_ok());
+    assert!(predict(&fitted, CoxPredictType::Expected, Some(&new), &opts_e).is_ok());
     new.start = Some(&t1);
     expect_err(
-        predict(&fitted, PredictType::Expected, Some(&new), &opts_e).map(|_| ()),
+        predict(&fitted, CoxPredictType::Expected, Some(&new), &opts_e).map(|_| ()),
         "start not before stop",
     );
     // A strata reference needs the stratum of a new row.
@@ -332,11 +339,11 @@ fn refusals() {
     expect_err(
         predict(
             &fitted,
-            PredictType::LinearPredictor,
+            CoxPredictType::LinearPredictor,
             Some(&bare),
-            &PredictOptions {
+            &CoxPredictOptions {
                 reference: Some(Reference::Strata),
-                ..PredictOptions::default()
+                ..CoxPredictOptions::default()
             },
         )
         .map(|_| ()),
@@ -350,7 +357,7 @@ fn refusals() {
     let mut too_wide = NewData::new(wide.as_ref());
     too_wide.stratum = Some(&strata);
     expect_err(
-        survfit(&fitted, &too_wide, &SurvfitOptions::default()).map(|_| ()),
+        survfit(&fitted, &too_wide, &CoxSurvfitOptions::default()).map(|_| ()),
         "columns",
     );
     // A fit without an estimate has nothing to predict from.
@@ -373,9 +380,9 @@ fn refusals() {
     let none = survfit(
         &fitted,
         &new,
-        &SurvfitOptions {
+        &CoxSurvfitOptions {
             se_fit: false,
-            ..SurvfitOptions::default()
+            ..CoxSurvfitOptions::default()
         },
     )
     .unwrap();
@@ -383,9 +390,9 @@ fn refusals() {
     let nolimits = survfit(
         &fitted,
         &new,
-        &SurvfitOptions {
+        &CoxSurvfitOptions {
             conf_type: ConfType::None,
-            ..SurvfitOptions::default()
+            ..CoxSurvfitOptions::default()
         },
     )
     .unwrap();

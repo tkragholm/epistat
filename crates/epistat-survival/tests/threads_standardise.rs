@@ -14,7 +14,7 @@ use epistat_survival::SurvData;
 use epistat_survival::absrisk::{CauseSpecificCox, CscOptions};
 use epistat_survival::cox::{self, CoxOptions};
 use epistat_survival::standardise::{
-    Counterfactual, InfluenceForm, Level, StandardiseOptions, Standardised,
+    Counterfactual, ExposureLevel, InfluenceForm, StandardiseOptions, Standardised,
     standardise_cause_specific, standardise_cox,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
@@ -72,8 +72,8 @@ fn standardised_risks_are_the_same_on_every_pool() {
         };
         let fit = cox::fit(&data, x.as_ref(), &options).unwrap();
         let levels = [
-            Level::single(Counterfactual::Columns(&one)),
-            Level::single(Counterfactual::Columns(&two)),
+            ExposureLevel::single(Counterfactual::Columns(&one)),
+            ExposureLevel::single(Counterfactual::Columns(&two)),
         ];
         let out = standardise_cox(
             &data,
@@ -100,10 +100,10 @@ fn standardised_risks_are_the_same_on_every_pool() {
             let csc = CscOptions::default();
             let model = CauseSpecificCox::fit(&data, &designs, &csc).unwrap();
             let levels = [
-                Level {
+                ExposureLevel {
                     designs: vec![Counterfactual::Columns(&one), Counterfactual::Columns(&one)],
                 },
-                Level {
+                ExposureLevel {
                     designs: vec![Counterfactual::Columns(&two), Counterfactual::Columns(&two)],
                 },
             ];

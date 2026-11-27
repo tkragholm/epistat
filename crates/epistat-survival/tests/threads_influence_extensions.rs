@@ -14,7 +14,7 @@ use epistat_survival::SurvData;
 use epistat_survival::absrisk::{CauseSpecificCox, CscOptions, NewRows, RiskOptions, SurvType};
 use epistat_survival::cox::{self, CoxOptions};
 use epistat_survival::standardise::{
-    Counterfactual, Level, StandardiseOptions, Standardised, standardise_cause_specific,
+    Counterfactual, ExposureLevel, StandardiseOptions, Standardised, standardise_cause_specific,
     standardise_cox,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
@@ -75,8 +75,8 @@ fn weights_entry_offset_and_survival_type_are_the_same_on_every_pool() {
         .build()
         .unwrap();
     let levels = [
-        Level::single(Counterfactual::Columns(&one)),
-        Level::single(Counterfactual::Columns(&two)),
+        ExposureLevel::single(Counterfactual::Columns(&one)),
+        ExposureLevel::single(Counterfactual::Columns(&two)),
     ];
     let std_err = StandardiseOptions {
         se: true,
@@ -92,7 +92,7 @@ fn weights_entry_offset_and_survival_type_are_the_same_on_every_pool() {
             standardise_cox(&data, x.as_ref(), &fit, &options, &levels, &times, &std_err).unwrap();
         flat(&out)
     });
-    let pair = |set: &'static [(usize, f64); 1]| Level {
+    let pair = |set: &'static [(usize, f64); 1]| ExposureLevel {
         designs: vec![Counterfactual::Columns(set), Counterfactual::Columns(set)],
     };
     let pairs = [pair(&[(0, 0.0)]), pair(&[(0, 1.0)])];

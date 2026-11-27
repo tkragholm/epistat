@@ -22,9 +22,10 @@
 use epistat_core::InputError;
 use epistat_linalg::{Attempt, Mat, Method, weighted_gram};
 
-use super::iptw::{Estimand, Iptw};
+use super::iptw::Iptw;
 use crate::error::{Error, Result};
 use crate::surv::{SurvBuf, SurvData};
+use epistat_core::Estimand;
 
 /// The attempts for the stacked matrices, which are not symmetric.
 pub(super) const GENERAL: [Attempt; 2] = [
@@ -43,16 +44,14 @@ impl Iptw {
     fn log_slope(&self, i: usize) -> f64 {
         let (a, p) = (self.treatment[i], self.propensity[i]);
         match (self.estimand, a) {
-            (Estimand::Ate, true) => -(1.0 - p),
-            (Estimand::Ate, false) => p,
+            (Estimand::Ate, true) if self.weights[i] != 0.0 => -(1.0 - p),
+            (Estimand::Ate, false) if self.weights[i] != 0.0 => p,
             (Estimand::Att, false) => 1.0,
             (Estimand::Atc, true) => -1.0,
             (Estimand::Ato, true) => -p,
             (Estimand::Ato, false) => 1.0 - p,
             (Estimand::Atm, true) if p > 0.5 => -1.0,
             (Estimand::Atm, false) if p < 0.5 => 1.0,
-            (Estimand::Atos, true) if self.weights[i] != 0.0 => -(1.0 - p),
-            (Estimand::Atos, false) if self.weights[i] != 0.0 => p,
             _ => 0.0,
         }
     }

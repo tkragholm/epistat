@@ -5,7 +5,7 @@
 
 use epistat_survival::SurvData;
 use epistat_survival::lowlevel::integrate;
-use epistat_survival::multistate::{Options, estimate};
+use epistat_survival::multistate::{MultistateOptions, estimate};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -168,9 +168,9 @@ fn occupation_and_restricted_time_match_r() {
         }
         .build()
         .unwrap();
-        let options = Options {
+        let options = MultistateOptions {
             initial: Some(case.p0.clone()),
-            ..Options::default()
+            ..MultistateOptions::default()
         };
         let got = estimate(&data, &case.time, &options).unwrap();
         assert_eq!(got.n_rows, case.start.len(), "{}", case.name);

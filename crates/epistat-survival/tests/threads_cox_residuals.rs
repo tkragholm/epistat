@@ -10,7 +10,7 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{
-    Collapse, CoxOptions, ResidualKind, ResidualOptions, Ties, ZphOptions, ZphTransform, fit,
+    Collapse, CoxOptions, CoxResidualKind, ResidualOptions, Ties, ZphOptions, ZphTransform, fit,
     residuals, zph,
 };
 use epistat_testkit::{POOLS, absent, assert_same_on_pools};
@@ -59,14 +59,14 @@ fn residuals_and_zph() {
             let model = fit(&data, x.as_ref(), &cox).unwrap();
             let mut out = Vec::new();
             for (kind, collapse) in [
-                (ResidualKind::Martingale, Collapse::None),
-                (ResidualKind::Martingale, Collapse::Cluster),
-                (ResidualKind::Deviance, Collapse::Codes(&codes)),
-                (ResidualKind::Score, Collapse::None),
-                (ResidualKind::Schoenfeld, Collapse::None),
-                (ResidualKind::ScaledSchoenfeld, Collapse::None),
-                (ResidualKind::Dfbeta, Collapse::Cluster),
-                (ResidualKind::Dfbetas, Collapse::None),
+                (CoxResidualKind::Martingale, Collapse::None),
+                (CoxResidualKind::Martingale, Collapse::Cluster),
+                (CoxResidualKind::Deviance, Collapse::Codes(&codes)),
+                (CoxResidualKind::Score, Collapse::None),
+                (CoxResidualKind::Schoenfeld, Collapse::None),
+                (CoxResidualKind::ScaledSchoenfeld, Collapse::None),
+                (CoxResidualKind::Dfbeta, Collapse::Cluster),
+                (CoxResidualKind::Dfbetas, Collapse::None),
             ] {
                 let opts = ResidualOptions {
                     collapse,

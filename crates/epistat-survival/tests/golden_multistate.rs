@@ -26,7 +26,7 @@
 use epistat_core::Bootstrap;
 use epistat_rng::Stream;
 use epistat_survival::lowlevel::integrate;
-use epistat_survival::multistate::{Options, bootstrap, estimate};
+use epistat_survival::multistate::{MultistateOptions, bootstrap, estimate};
 use epistat_survival::timefix::TimeFix;
 use epistat_survival::{SurvBuf, SurvData};
 use epistat_testkit::Fingerprint;
@@ -299,8 +299,8 @@ const HORIZONS: [(f64, f64); 6] = [
 ];
 
 /// Times are compared as they are, and the leaving rate may exceed 1 by 1e-9.
-fn options(initial: Option<&[f64]>) -> Options {
-    Options {
+fn options(initial: Option<&[f64]>) -> MultistateOptions {
+    MultistateOptions {
         timefix: TimeFix::Exact,
         rate_tolerance: Some(1e-9),
         initial: initial.map(<[f64]>::to_vec),
@@ -438,7 +438,7 @@ fn occupation_refusals() {
     );
     let short = p.buf(&ones[1..], None, 3);
     check_text("refuse/weights length", &message(short));
-    let tolerance = Options {
+    let tolerance = MultistateOptions {
         rate_tolerance: Some(-1.5),
         ..options(Some(&[1.0, 0.0, 0.0]))
     };

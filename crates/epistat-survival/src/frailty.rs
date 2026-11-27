@@ -149,7 +149,7 @@
 //!
 //! # EM
 //!
-//! [`Method::Em`] alternates a Cox fit of [`crate::cox::fit`] with the offset
+//! [`FrailtyMethod::Em`] alternates a Cox fit of [`crate::cox::fit`] with the offset
 //! `o_j + ln z_i` (the M-step for `beta` and the Breslow `h_0`) and the E-step
 //! `z_i = (nu + D_i) / (nu + Lambda_i)` \[2\] \[3\], and computes the marginal
 //! likelihood above from the gamma integral, on the scale of `c`. It stops when
@@ -293,7 +293,7 @@ impl Theta {
 
 /// How the model is fitted at a given theta.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Method {
+pub enum FrailtyMethod {
     /// Newton's method on the penalised partial likelihood with the whole
     /// information, `coxph`'s model.
     Penalised,
@@ -321,7 +321,7 @@ pub struct FrailtyOptions {
     /// How theta is chosen. [`Theta::Profile`] by default.
     pub theta: Theta,
     /// How the model is fitted at each theta.
-    pub method: Method,
+    pub method: FrailtyMethod,
     /// The Newton iteration has converged when the decrement
     /// `U' H^-1 U` is at most this. It must be positive; `1e-10` by default.
     pub tolerance: f64,
@@ -339,7 +339,7 @@ impl Default for FrailtyOptions {
             timefix: TimeFix::default(),
             cause: None,
             theta: Theta::Profile,
-            method: Method::Penalised,
+            method: FrailtyMethod::Penalised,
             tolerance: 1e-10,
             max_iterations: 50,
             theta_tolerance: 1e-6,
@@ -547,7 +547,7 @@ struct Problem<'a> {
     layout: Layout,
     tolerance: f64,
     max_iterations: usize,
-    method: Method,
+    method: FrailtyMethod,
     em: Option<EmInput<'a>>,
 }
 
@@ -573,7 +573,7 @@ impl Problem<'_> {
         let layout = &self.layout;
         let penalty = Self::penalty(theta);
         let (state, eval, iterations, converged, em_marginal) = match (self.method, &self.em) {
-            (Method::Em { .. }, Some(input)) if theta > 0.0 => {
+            (FrailtyMethod::Em { .. }, Some(input)) if theta > 0.0 => {
                 let em = fit_em(layout, input, theta, start)?;
                 let eval = layout
                     .evaluate(&em.state, penalty)
@@ -867,7 +867,7 @@ fn check_options(opts: &FrailtyOptions, data: &SurvData<'_>) -> Result<()> {
         }
         _ => {}
     }
-    if let Method::Em {
+    if let FrailtyMethod::Em {
         max_iterations,
         tolerance,
     } = opts.method
@@ -994,7 +994,7 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Re
         efron: opts.ties == Ties::Efron,
     });
     let estimated = !matches!(opts.theta, Theta::Fixed(_));
-    let em = matches!(opts.method, Method::Em { .. });
+    let em = matches!(opts.method, FrailtyMethod::Em { .. });
     if (estimated || em) && !layout.unit_weights {
         return Err(Error::invalid(
             "weight: estimating theta and EM need case weights of 1, for which the marginal \
@@ -1014,7 +1014,7 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Re
     let zero_offset = vec![0.0; rows];
     let x_kept = Mat::from_fn(rows, p, |i, c| xk[i * p + c]);
     let em_input = match opts.method {
-        Method::Em {
+        FrailtyMethod::Em {
             max_iterations,
             tolerance,
         } => Some(EmInput {
@@ -1026,7 +1026,7 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Re
             max_iterations,
             tolerance,
         }),
-        Method::Penalised => None,
+        FrailtyMethod::Penalised => None,
     };
     let problem = Problem {
         layout,

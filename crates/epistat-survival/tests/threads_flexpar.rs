@@ -5,8 +5,8 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::flexpar::{
-    Contrast, FlexParFit, FlexParOptions, Predict, PredictOptions, Scale, TimeVarying, contrast,
-    fit, predict,
+    FlexParFit, FlexParOptions, FlexparContrast, FlexparPredictOptions, FlexparScale, Predict,
+    TimeVarying, contrast, fit, predict,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -72,7 +72,11 @@ fn flexpar_fit_predict_contrast() {
     let xs = Mat::from_fn(2, 3, |i, j| [[0.3, 1.0, 9.0], [-0.5, 0.0, 9.0]][i][j]);
     let x0 = Mat::from_fn(1, 3, |_, j| [-0.5, 0.0, 9.0][j]);
     let times = [0.1, 0.5, 1.0, 2.5];
-    for scale in [Scale::Hazard, Scale::Odds, Scale::Probit] {
+    for scale in [
+        FlexparScale::Hazard,
+        FlexparScale::Odds,
+        FlexparScale::Probit,
+    ] {
         let options = FlexParOptions {
             tvc: &tvc,
             ..FlexParOptions::new(scale, 3)
@@ -81,9 +85,9 @@ fn flexpar_fit_predict_contrast() {
             let f = fit(&data, x.as_ref(), &options).unwrap();
             assert!(f.converged && f.beta[2].is_none());
             let mut out = flat(&f);
-            let o = PredictOptions {
+            let o = FlexparPredictOptions {
                 robust: true,
-                ..PredictOptions::default()
+                ..FlexparPredictOptions::default()
             };
             for what in [
                 Predict::Survival,
@@ -97,9 +101,9 @@ fn flexpar_fit_predict_contrast() {
                 }
             }
             for what in [
-                Contrast::HazardRatio,
-                Contrast::HazardDifference,
-                Contrast::SurvivalDifference,
+                FlexparContrast::HazardRatio,
+                FlexparContrast::HazardDifference,
+                FlexparContrast::SurvivalDifference,
             ] {
                 for curve in contrast(&f, xs.as_ref(), x0.as_ref(), &times, what, &o).unwrap() {
                     for p in curve {

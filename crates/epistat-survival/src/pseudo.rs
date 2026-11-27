@@ -133,7 +133,7 @@
 //!
 //! Every row is a subject. `eventglm`'s default `"independent"` is the exact
 //! jackknife of the whole sample, and `"stratified"` the exact jackknife within the
-//! strata of the censoring covariates: both are [`Method::Jackknife`], the second
+//! strata of the censoring covariates: both are [`PseudoMethod::Jackknife`], the second
 //! with a stratum column. They are checked against `eventglm`. `"aareg"` is not
 //! provided. For a time before every exit time `eventglm` takes `G` at the first
 //! exit time, below 1 where someone is censored there, and the survival
@@ -179,7 +179,9 @@ use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
-pub use ipcw::{IpcwMethod, IpcwOptions, pseudo_ipcw};
+#[expect(deprecated, reason = "the 0.3 name stays for one release")]
+pub use ipcw::IpcwOptions;
+pub use ipcw::{IpcwMethod, PseudoIpcwOptions, pseudo_ipcw};
 #[expect(deprecated, reason = "the 0.3 names stay for one release")]
 pub use regression::{Covariance, GeeFit, GeeOptions};
 pub use regression::{PseudoRegression, PseudoRegressionOptions};
@@ -233,7 +235,7 @@ impl Target {
 
 /// How the pseudo-values are made.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Method {
+pub enum PseudoMethod {
     /// The infinitesimal jackknife, as `survival::pseudo`.
     #[default]
     InfinitesimalJackknife,
@@ -241,13 +243,17 @@ pub enum Method {
     Jackknife,
 }
 
+/// `PseudoMethod`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `PseudoMethod`")]
+pub type Method = PseudoMethod;
+
 /// What [`pseudo`] does besides the data and the times.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PseudoOptions {
     /// What is estimated. It has no default.
     pub target: Target,
     /// How the pseudo-values are made. The default is `survival::pseudo`'s.
-    pub method: Method,
+    pub method: PseudoMethod,
     /// How near-equal times are treated. The default is `survival`'s rule,
     /// see [`TimeFix`].
     pub timefix: TimeFix,
@@ -267,7 +273,7 @@ impl PseudoOptions {
     pub fn new(target: Target) -> Self {
         Self {
             target,
-            method: Method::default(),
+            method: PseudoMethod::default(),
             timefix: TimeFix::default(),
             max_influence_values: None,
         }
@@ -373,8 +379,8 @@ pub fn pseudo(data: &SurvData<'_>, times: &[f64], opts: &PseudoOptions) -> Resul
 
     // The influence of every subject, for each group, when that is the method.
     let influences: Vec<Vec<f64>> = match opts.method {
-        Method::Jackknife => Vec::new(),
-        Method::InfinitesimalJackknife => match opts.target {
+        PseudoMethod::Jackknife => Vec::new(),
+        PseudoMethod::InfinitesimalJackknife => match opts.target {
             Target::Survival | Target::RestrictedMean => groups
                 .iter()
                 .zip(&reads)
@@ -433,7 +439,7 @@ pub fn pseudo(data: &SurvData<'_>, times: &[f64], opts: &PseudoOptions) -> Resul
             reads: &reads[gi],
         };
         match opts.method {
-            Method::Jackknife => {
+            PseudoMethod::Jackknife => {
                 if n < 2 {
                     return Err(Error::invalid(format!(
                         "the jackknife needs two subjects in a group, and group {} has {n}",
@@ -443,7 +449,7 @@ pub fn pseudo(data: &SurvData<'_>, times: &[f64], opts: &PseudoOptions) -> Resul
                 out.values
                     .extend(jackknife::run(group, &reading, &estimates[gi]));
             }
-            Method::InfinitesimalJackknife => {
+            PseudoMethod::InfinitesimalJackknife => {
                 #[expect(
                     clippy::cast_precision_loss,
                     reason = "a subject count is far below 2^53"

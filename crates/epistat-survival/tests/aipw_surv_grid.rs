@@ -6,7 +6,7 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::aipw::{
-    AipwSurv, AipwSurvOptions, AipwSurvSpec, Censoring, Estimator, aipw_cox,
+    AipwCensoring, AipwSurv, AipwSurvOptions, AipwSurvSpec, Estimator, aipw_cox,
 };
 use epistat_survival::cox::Ties;
 use epistat_survival::standardise::Counterfactual;
@@ -43,11 +43,11 @@ fn run(s: &Scenario, km: bool, grid: Option<usize>) -> AipwSurv {
         levels: [Counterfactual::Columns(&c0), Counterfactual::Columns(&c1)],
         propensity_x: z.as_ref(),
         censoring: if km {
-            Censoring::KaplanMeier {
+            AipwCensoring::KaplanMeier {
                 groups: Some(&group),
             }
         } else {
-            Censoring::Cox { x: x.as_ref() }
+            AipwCensoring::Cox { x: x.as_ref() }
         },
     };
     aipw_cox(

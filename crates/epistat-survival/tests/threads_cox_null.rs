@@ -11,8 +11,8 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
-    BaselineOptions, ConfType, FittedModel, NewData, PredictOptions, PredictType, SurvfitOptions,
-    basehaz, predict, survfit,
+    BaselineOptions, ConfType, CoxPredictOptions, CoxPredictType, CoxSurvfitOptions, FittedModel,
+    NewData, basehaz, predict, survfit,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::{POOLS, assert_same_on_pools};
@@ -77,15 +77,15 @@ fn model_without_covariates() {
             let mut new = NewData::new(new_x.as_ref());
             new.stratum = Some(&new_stratum);
             new.offset = Some(&new_offset);
-            let popts = PredictOptions {
+            let popts = CoxPredictOptions {
                 se_fit: true,
-                ..PredictOptions::default()
+                ..CoxPredictOptions::default()
             };
             for kind in [
-                PredictType::LinearPredictor,
-                PredictType::Risk,
-                PredictType::Expected,
-                PredictType::Survival,
+                CoxPredictType::LinearPredictor,
+                CoxPredictType::Risk,
+                CoxPredictType::Expected,
+                CoxPredictType::Survival,
             ] {
                 let p = predict(&fitted, kind, None, &popts).unwrap();
                 out.extend(&p.fit);
@@ -95,9 +95,9 @@ fn model_without_covariates() {
                 let c = survfit(
                     &fitted,
                     &new,
-                    &SurvfitOptions {
+                    &CoxSurvfitOptions {
                         conf_type,
-                        ..SurvfitOptions::default()
+                        ..CoxSurvfitOptions::default()
                     },
                 )
                 .unwrap();

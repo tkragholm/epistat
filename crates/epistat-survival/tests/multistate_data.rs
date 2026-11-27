@@ -14,7 +14,7 @@
 use epistat_core::Bootstrap;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::multistate::{Options, bootstrap, estimate};
+use epistat_survival::multistate::{MultistateOptions, bootstrap, estimate};
 use epistat_survival::timefix::TimeFix;
 use epistat_testkit::bits;
 
@@ -165,9 +165,9 @@ fn estimate_reports_its_rows_and_takes_the_distribution_it_formed() {
             let derived = estimate(
                 &data,
                 times,
-                &Options {
+                &MultistateOptions {
                     timefix,
-                    ..Options::default()
+                    ..MultistateOptions::default()
                 },
             )
             .unwrap();
@@ -179,10 +179,10 @@ fn estimate_reports_its_rows_and_takes_the_distribution_it_formed() {
             assert!((derived.initial.iter().sum::<f64>() - 1.0).abs() < 1e-14);
 
             // The distribution formed from the data, given, changes nothing.
-            let given = Options {
+            let given = MultistateOptions {
                 timefix,
                 initial: Some(derived.initial.clone()),
-                ..Options::default()
+                ..MultistateOptions::default()
             };
             let again = estimate(&data, times, &given).unwrap();
             assert_eq!(bits(&derived.probabilities), bits(&again.probabilities));
@@ -196,7 +196,7 @@ fn the_initial_distribution_is_the_weighted_opening_states() {
     let p = process(70, 6, true, true);
     let c = columns(&p);
     let data = data(&p, &c, true);
-    let got = estimate(&data, &event_times(&p), &Options::default()).unwrap();
+    let got = estimate(&data, &event_times(&p), &MultistateOptions::default()).unwrap();
     let mut expected = [0.0f64; 3];
     for &row in &p.first {
         expected[p.from[row as usize] as usize] += p.weight[row as usize];
@@ -221,13 +221,13 @@ fn bootstrap_reports_its_shape() {
         let mut descending = ascending.clone();
         descending.reverse();
         let seeds = Bootstrap::new(6, 500);
-        let options = Options {
+        let options = MultistateOptions {
             timefix: if integer {
                 TimeFix::default()
             } else {
                 TimeFix::Exact
             },
-            ..Options::default()
+            ..MultistateOptions::default()
         };
         for (horizons, width) in [(vec![], 3), (vec![2.0, 7.5, 30.0], 3)] {
             for times in [&ascending, &descending] {
@@ -252,7 +252,7 @@ fn rows_of_weight_zero_are_not_used_and_change_nothing() {
     let c = columns(&p);
     let times = event_times(&p);
     let all = data(&p, &c, false);
-    let base = estimate(&all, &times, &Options::default()).unwrap();
+    let base = estimate(&all, &times, &MultistateOptions::default()).unwrap();
 
     // A copy of the process in which every person appears twice, the second
     // copy with weight 0.
@@ -276,7 +276,7 @@ fn rows_of_weight_zero_are_not_used_and_change_nothing() {
         .weight(&weight)
         .build()
         .unwrap();
-    let got = estimate(&padded, &times, &Options::default()).unwrap();
+    let got = estimate(&padded, &times, &MultistateOptions::default()).unwrap();
     assert_eq!(got.n_rows, 2 * n);
     assert_eq!(got.n_used, n);
     assert_eq!(bits(&got.probabilities), bits(&base.probabilities));
@@ -325,7 +325,7 @@ fn the_data_are_checked_before_estimating() {
         cluster: &cluster,
     };
     let ones = [1.0; 3];
-    let options = Options::default();
+    let options = MultistateOptions::default();
     // Clean data: a gap is allowed, so is nothing else to report.
     let good = build(&cols, &start, Some(&istate), Some(&id), &ones);
     assert!(estimate(&good, &times, &options).is_ok());
@@ -335,7 +335,7 @@ fn the_data_are_checked_before_estimating() {
         Ok(()) => "ok".to_owned(),
         Err(error) => error.to_string(),
     };
-    let estimate_of = |data: &SurvData<'_>, options: &Options| {
+    let estimate_of = |data: &SurvData<'_>, options: &MultistateOptions| {
         message(estimate(data, &times, options).map(|_| ()))
     };
 
@@ -363,29 +363,29 @@ fn the_data_are_checked_before_estimating() {
         vec![1.5, -0.5],
         vec![f64::NAN, 1.0],
     ] {
-        let given = Options {
+        let given = MultistateOptions {
             initial: Some(initial),
-            ..Options::default()
+            ..MultistateOptions::default()
         };
         assert_ne!(estimate_of(&good, &given), "ok");
     }
     // A rate tolerance that is negative or not finite has no meaning.
     for tolerance in [-1e-12, f64::NAN, f64::INFINITY] {
-        let given = Options {
+        let given = MultistateOptions {
             rate_tolerance: Some(tolerance),
-            ..Options::default()
+            ..MultistateOptions::default()
         };
         assert!(estimate_of(&good, &given).contains("rate_tolerance"));
     }
-    let zero = Options {
+    let zero = MultistateOptions {
         rate_tolerance: Some(0.0),
-        ..Options::default()
+        ..MultistateOptions::default()
     };
     assert_eq!(estimate_of(&good, &zero), "ok");
     // The bootstrap needs clusters and forms the distribution itself.
-    let given = Options {
+    let given = MultistateOptions {
         initial: Some(vec![0.5, 0.5]),
-        ..Options::default()
+        ..MultistateOptions::default()
     };
     assert!(
         message(bootstrap(&good, &times, &[], 0.0, Bootstrap::new(1, 1), &given).map(|_| ()))

@@ -5,7 +5,7 @@
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::cox::{self, CoxOptions, Ties};
-use epistat_survival::frailty::{FrailtyOptions, Method, Theta, ThetaStatus, fit};
+use epistat_survival::frailty::{FrailtyMethod, FrailtyOptions, Theta, ThetaStatus, fit};
 use epistat_survival::{SurvBuf, SurvData};
 
 struct Sim {
@@ -72,7 +72,7 @@ fn refuses_what_is_not_defined() {
     assert!(fit(&d, s.x.as_ref(), &fixed(-0.1, Ties::Efron)).is_err());
     assert!(fit(&d, s.x.as_ref(), &fixed(f64::NAN, Ties::Efron)).is_err());
     let em_efron = FrailtyOptions {
-        method: Method::Em {
+        method: FrailtyMethod::Em {
             max_iterations: 10,
             tolerance: 1e-10,
         },

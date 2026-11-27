@@ -285,7 +285,7 @@ fn censoring_curve(time: &[f64], event: &[i32], weight: &[f64]) -> Steps {
 /// for [`rows`], and for [`risk_rows`] the individual or any individual with
 /// the covariate value the collapsed row carries.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Rows {
+pub struct FineGrayRows {
     /// The input row each row comes from.
     pub row: Vec<u32>,
     /// Interval start.
@@ -299,7 +299,7 @@ pub struct Rows {
     pub weight: Vec<f64>,
 }
 
-impl Rows {
+impl FineGrayRows {
     /// The value of `column`, one value per row of the input, at the input row
     /// of each row here.
     ///
@@ -326,7 +326,7 @@ impl Rows {
     }
 }
 
-impl Rows {
+impl FineGrayRows {
     fn push(&mut self, row: usize, start: f64, stop: f64, event: bool, weight: f64) {
         self.row.push(row as u32);
         self.start.push(start);
@@ -335,6 +335,10 @@ impl Rows {
         self.weight.push(weight);
     }
 }
+
+/// `FineGrayRows`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `FineGrayRows`")]
+pub type Rows = FineGrayRows;
 
 /// A competing event: its time, its weight and the weight over `G` just
 /// before the time.
@@ -446,7 +450,7 @@ impl<'a> Expansion<'a> {
 
     /// One row `(0, x_i]` for each individual with the cause of interest or
     /// censored. There is nothing to expand for them.
-    fn direct_rows(&self, rows: &mut Rows) {
+    fn direct_rows(&self, rows: &mut FineGrayRows) {
         for i in 0..self.time.len() {
             if !self.competing(i) {
                 rows.push(
@@ -470,8 +474,8 @@ impl<'a> Expansion<'a> {
     /// censoring, as in `survival::finegray`. `G` is read at `max(start, x)`
     /// because `G(start)` alone gives weights above 1 when the event falls
     /// after censoring has begun. Rows of weight zero are left out.
-    fn expand(&self) -> Rows {
-        let mut rows = Rows::default();
+    fn expand(&self) -> FineGrayRows {
+        let mut rows = FineGrayRows::default();
         for i in 0..self.time.len() {
             let (t, w) = (self.time[i], self.weight[i]);
             if !self.competing(i) {
@@ -520,9 +524,9 @@ impl<'a> Expansion<'a> {
     /// # Errors
     ///
     /// An input error when `level` does not hold one code per individual.
-    fn risk_rows(&self, level: &[u32]) -> Result<Rows> {
+    fn risk_rows(&self, level: &[u32]) -> Result<FineGrayRows> {
         check_lengths(&[("time", self.time.len()), ("level", level.len())])?;
-        let mut rows = Rows::default();
+        let mut rows = FineGrayRows::default();
         self.direct_rows(&mut rows);
 
         // Per level and stratum: (event time, w, w / G(event time-)) and a
@@ -714,7 +718,7 @@ fn with_expansion<T>(
 }
 
 /// Point the rows at the rows of the data they came from.
-fn original_rows(mut rows: Rows, index: Option<&[u32]>) -> Rows {
+fn original_rows(mut rows: FineGrayRows, index: Option<&[u32]>) -> FineGrayRows {
     if let Some(index) = index {
         for row in &mut rows.row {
             *row = index[*row as usize];
@@ -732,13 +736,13 @@ fn original_rows(mut rows: Rows, index: Option<&[u32]>) -> Rows {
 /// times of its stratum and weighted by its censoring distribution. The tie
 /// rule of `opts` is applied to the times first, and rows of weight 0 are left
 /// out of the data, of the censoring distribution and of the rows.
-/// [`Rows::row`] is the row of `data` each row comes from.
+/// [`FineGrayRows::row`] is the row of `data` each row comes from.
 ///
 /// # Errors
 ///
 /// An input error when `data` has a start column, when `cause` is not a
 /// status code of `data`, or as for [`SurvData::with_timefix`].
-pub fn rows(data: &SurvData<'_>, cause: u32, opts: &RowsOptions) -> Result<Rows> {
+pub fn rows(data: &SurvData<'_>, cause: u32, opts: &RowsOptions) -> Result<FineGrayRows> {
     with_expansion(data, cause, opts.timefix, |expansion, index| {
         Ok(original_rows(expansion.expand(), index))
     })
@@ -749,7 +753,7 @@ pub fn rows(data: &SurvData<'_>, cause: u32, opts: &RowsOptions) -> Result<Rows>
 ///
 /// `level` holds one code per row of `data`, the covariate level of the row.
 /// The rows have the risk sets of [`rows`] for a covariate with those levels.
-/// [`Rows::row`] is the first row of `data` of the level and stratum that has
+/// [`FineGrayRows::row`] is the first row of `data` of the level and stratum that has
 /// a competing event, and levels are emitted in order of that first row.
 ///
 /// # Errors
@@ -761,7 +765,7 @@ pub fn risk_rows(
     cause: u32,
     level: &[u32],
     opts: &RowsOptions,
-) -> Result<Rows> {
+) -> Result<FineGrayRows> {
     check_lengths(&[("stop", data.n_rows()), ("level", level.len())])?;
     with_expansion(data, cause, opts.timefix, |expansion, index| {
         let level = pick_used(level, index);
@@ -1086,8 +1090,8 @@ mod tests {
     use epistat_rng::Stream;
 
     use super::{
-        Expansion, FineGrayOptions, Rows, RowsOptions, censoring_curve, fit, risk_rows, row_codes,
-        rows, with_expansion,
+        Expansion, FineGrayOptions, FineGrayRows, RowsOptions, censoring_curve, fit, risk_rows,
+        row_codes, rows, with_expansion,
     };
     use crate::check::check_lengths;
     use crate::cox::{CoxModelFit, CoxOptions, Ties};
@@ -1209,7 +1213,7 @@ mod tests {
         }
     }
 
-    fn fit_rows(rows: &Rows, x: &[f64]) -> CoxModelFit {
+    fn fit_rows(rows: &FineGrayRows, x: &[f64]) -> CoxModelFit {
         let design = Mat::from_fn(rows.row.len(), 1, |k, _| x[rows.row[k] as usize]);
         let data = SurvData::builder(&rows.stop, &rows.status)
             .n_codes(1)

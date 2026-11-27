@@ -19,7 +19,7 @@
 
 use epistat_stats::dist::normal;
 
-use super::Scale;
+use super::FlexparScale;
 
 const HALF_LN_2PI: f64 = 0.918_938_533_204_672_7;
 
@@ -63,17 +63,17 @@ pub(super) fn log_upper_tail(y: f64) -> (f64, f64) {
 }
 
 /// The cumulative hazard `H(eta)` and its first two derivatives.
-pub(super) fn cumulative(scale: Scale, eta: f64) -> (f64, f64, f64) {
+pub(super) fn cumulative(scale: FlexparScale, eta: f64) -> (f64, f64, f64) {
     match scale {
-        Scale::Hazard => {
+        FlexparScale::Hazard => {
             let h = eta.exp();
             (h, h, h)
         }
-        Scale::Odds => {
+        FlexparScale::Odds => {
             let p = expit(eta);
             (softplus(eta), p, p * (1.0 - p))
         }
-        Scale::Probit => {
+        FlexparScale::Probit => {
             let (log_tail, l) = log_upper_tail(eta);
             (-log_tail, l, l * (l - eta))
         }
@@ -82,14 +82,14 @@ pub(super) fn cumulative(scale: Scale, eta: f64) -> (f64, f64, f64) {
 
 /// `ln m(eta)` and its first two derivatives, where the hazard is
 /// `m(eta) eta'(u) / t`.
-pub(super) fn log_hazard_factor(scale: Scale, eta: f64) -> (f64, f64, f64) {
+pub(super) fn log_hazard_factor(scale: FlexparScale, eta: f64) -> (f64, f64, f64) {
     match scale {
-        Scale::Hazard => (eta, 1.0, 0.0),
-        Scale::Odds => {
+        FlexparScale::Hazard => (eta, 1.0, 0.0),
+        FlexparScale::Odds => {
             let p = expit(eta);
             (eta - softplus(eta), 1.0 - p, -p * (1.0 - p))
         }
-        Scale::Probit => {
+        FlexparScale::Probit => {
             let (log_tail, l) = log_upper_tail(eta);
             (
                 -0.5 * eta * eta - HALF_LN_2PI - log_tail,
@@ -101,11 +101,11 @@ pub(super) fn log_hazard_factor(scale: Scale, eta: f64) -> (f64, f64, f64) {
 }
 
 /// The survivor function at `eta`.
-pub(super) fn survival(scale: Scale, eta: f64) -> f64 {
+pub(super) fn survival(scale: FlexparScale, eta: f64) -> f64 {
     match scale {
-        Scale::Hazard => (-eta.exp()).exp(),
-        Scale::Odds => expit(-eta),
-        Scale::Probit => normal::cdf(-eta),
+        FlexparScale::Hazard => (-eta.exp()).exp(),
+        FlexparScale::Odds => expit(-eta),
+        FlexparScale::Probit => normal::cdf(-eta),
     }
 }
 
@@ -135,7 +135,11 @@ mod tests {
 
     #[test]
     fn derivatives_agree_with_differences() {
-        for scale in [Scale::Hazard, Scale::Odds, Scale::Probit] {
+        for scale in [
+            FlexparScale::Hazard,
+            FlexparScale::Odds,
+            FlexparScale::Probit,
+        ] {
             for &eta in &[-6.0, -1.3, 0.0, 0.7, 4.0, 5.5, 9.0] {
                 let h = 1e-5;
                 let (_, h1, h2) = cumulative(scale, eta);
@@ -158,7 +162,11 @@ mod tests {
 
     #[test]
     fn survival_is_the_exponential_of_minus_the_cumulative_hazard() {
-        for scale in [Scale::Hazard, Scale::Odds, Scale::Probit] {
+        for scale in [
+            FlexparScale::Hazard,
+            FlexparScale::Odds,
+            FlexparScale::Probit,
+        ] {
             for &eta in &[-3.0, 0.0, 2.0] {
                 let s = survival(scale, eta);
                 assert!(close(s, (-cumulative(scale, eta).0).exp(), 1e-14));

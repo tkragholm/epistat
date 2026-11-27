@@ -10,7 +10,9 @@
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::standardise::Counterfactual;
-use epistat_survival::standardise::yates::{InverseLink, Test, YatesLevel, YatesOptions, yates};
+use epistat_survival::standardise::yates::{
+    InverseLink, YatesLevel, YatesOptions, YatesTest, yates,
+};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
 #[test]
@@ -31,7 +33,11 @@ fn population_means_are_the_same_on_every_pool() {
         InverseLink::Exp,
         InverseLink::Logistic,
     ] {
-        for test in [Test::Global, Test::Pairwise, Test::VersusMean] {
+        for test in [
+            YatesTest::Global,
+            YatesTest::Pairwise,
+            YatesTest::VersusMean,
+        ] {
             assert_same_on_pools(&POOLS, || {
                 let levels: Vec<YatesLevel<'_>> = [&set_a[..], &set_b[..], &set_c[..]]
                     .into_iter()

@@ -49,7 +49,7 @@ use std::collections::HashMap;
 
 use epistat_survival::Level;
 use epistat_survival::SurvData;
-use epistat_survival::rmst::{Contrast, GroupRmst, RmstOptions, Tau, rmst2};
+use epistat_survival::rmst::{GroupRmst, RmstContrast, RmstOptions, Tau, rmst2};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -292,7 +292,7 @@ fn rmst2_agrees_with_survrm2() {
 fn check_contrast(
     w: &mut Worst,
     label: &str,
-    got: &Contrast,
+    got: &RmstContrast,
     want: &Row,
     want_se: f64,
     tolerances: [f64; 4],

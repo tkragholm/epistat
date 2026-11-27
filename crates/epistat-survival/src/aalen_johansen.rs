@@ -483,7 +483,7 @@ pub fn estimate(data: &SurvData<'_>, opts: &AalenJohansenOptions) -> Result<Curv
 
 /// What [`variance`] reports besides the standard errors at each time.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct VarianceOptions {
+pub struct AalenJohansenVarianceOptions {
     /// Horizons at which the standard error of the restricted time in each
     /// state, from the start of the curves, is wanted. Ascending. Empty, the
     /// default, asks for none.
@@ -495,7 +495,11 @@ pub struct VarianceOptions {
     pub influence_times: Vec<f64>,
 }
 
-/// The influence part of [`Variance`] that is not one row per time: one entry
+/// `AalenJohansenVarianceOptions`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `AalenJohansenVarianceOptions`")]
+pub type VarianceOptions = AalenJohansenVarianceOptions;
+
+/// The influence part of [`AalenJohansenVariance`] that is not one row per time: one entry
 /// for each group.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupInfluence {
@@ -524,7 +528,7 @@ pub struct GroupInfluence {
 /// A state is the event-free state, `0` in the vectors that say `state`, and then
 /// each cause in the order of `causes`.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Variance {
+pub struct AalenJohansenVariance {
     /// The causes, as in [`Curves::causes`].
     pub causes: Vec<i32>,
     /// The group of each row, as in [`Curves::group`].
@@ -556,9 +560,9 @@ pub struct Variance {
     /// start times the smaller of 0 and the earliest exit time, over every row
     /// used, as `survfit` takes its `t0`.
     pub origin: f64,
-    /// The horizons of [`VarianceOptions::horizons`].
+    /// The horizons of [`AalenJohansenVarianceOptions::horizons`].
     pub horizons: Vec<f64>,
-    /// The times of [`VarianceOptions::influence_times`].
+    /// The times of [`AalenJohansenVarianceOptions::influence_times`].
     pub influence_times: Vec<f64>,
     /// What is not one value per row, for each group in ascending order.
     pub groups: Vec<GroupInfluence>,
@@ -567,6 +571,10 @@ pub struct Variance {
     /// The number of rows of positive weight, which are the rows used.
     pub n_used: usize,
 }
+
+/// `AalenJohansenVariance`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `AalenJohansenVariance`")]
+pub type Variance = AalenJohansenVariance;
 
 /// The standard errors of the incidence, the event-free probability, the
 /// cumulative hazards and the restricted times of the Aalen-Johansen
@@ -582,7 +590,7 @@ pub struct Variance {
 /// lines up with [`Curves`] row by row. See the module `multistate::influence`
 /// for the recursion, and for how memory is bounded: the influence of every
 /// cluster at every time is never held, only that at
-/// [`VarianceOptions::influence_times`], and the time is
+/// [`AalenJohansenVarianceOptions::influence_times`], and the time is
 /// `O(clusters * times * causes)`.
 ///
 /// `survfit` starts the restricted times at the earliest start time over
@@ -597,8 +605,8 @@ pub struct Variance {
 pub fn variance(
     data: &SurvData<'_>,
     opts: &AalenJohansenOptions,
-    v: &VarianceOptions,
-) -> Result<Variance> {
+    v: &AalenJohansenVarianceOptions,
+) -> Result<AalenJohansenVariance> {
     let (mut out, dfbeta) = variance_dfbeta(data, opts, v)?;
     let columns = v.influence_times.len() * (out.causes.len() + 1);
     for (group, values) in out.groups.iter_mut().zip(dfbeta) {
@@ -613,8 +621,8 @@ pub fn variance(
 pub(crate) fn variance_dfbeta(
     data: &SurvData<'_>,
     opts: &AalenJohansenOptions,
-    v: &VarianceOptions,
-) -> Result<(Variance, Vec<Vec<f64>>)> {
+    v: &AalenJohansenVarianceOptions,
+) -> Result<(AalenJohansenVariance, Vec<Vec<f64>>)> {
     check_ascending(&v.horizons, "horizons", false)?;
     check_ascending(&v.influence_times, "influence_times", false)?;
     let data = data.clone().with_timefix(opts.timefix)?;
@@ -658,7 +666,7 @@ pub(crate) fn variance_dfbeta(
         members[g as usize].push(position as u32);
     }
 
-    let mut out = Variance {
+    let mut out = AalenJohansenVariance {
         cif: vec![Vec::new(); k],
         std_cif: vec![Vec::new(); k],
         cumhaz: vec![Vec::new(); k],
@@ -670,7 +678,7 @@ pub(crate) fn variance_dfbeta(
         influence_times: v.influence_times.clone(),
         n_rows: data.n_rows(),
         n_used,
-        ..Variance::default()
+        ..AalenJohansenVariance::default()
     };
     let mut p0 = vec![0.0f64; states];
     p0[0] = 1.0;
@@ -2036,7 +2044,7 @@ mod estimate_tests {
     reason = "the sizes in these tests are small"
 )]
 mod variance_tests {
-    use super::{AalenJohansenOptions, Error, VarianceOptions, variance};
+    use super::{AalenJohansenOptions, AalenJohansenVarianceOptions, Error, variance};
     use crate::surv::SurvData;
 
     /// With no censoring and one cause the estimate is the empirical
@@ -2054,7 +2062,7 @@ mod variance_tests {
         let got = variance(
             &data,
             &AalenJohansenOptions::default(),
-            &VarianceOptions::default(),
+            &AalenJohansenVarianceOptions::default(),
         )
         .unwrap();
         let cumulative = [1.0, 3.0, 4.0, 5.0, 7.0, 8.0];
@@ -2092,8 +2100,8 @@ mod variance_tests {
             .build()
             .unwrap();
         let opts = AalenJohansenOptions::default();
-        let by_id = variance(&whole, &opts, &VarianceOptions::default()).unwrap();
-        let by_row = variance(&rows, &opts, &VarianceOptions::default()).unwrap();
+        let by_id = variance(&whole, &opts, &AalenJohansenVarianceOptions::default()).unwrap();
+        let by_row = variance(&rows, &opts, &AalenJohansenVarianceOptions::default()).unwrap();
         assert_eq!(by_id.groups[0].clusters, vec![0, 1, 2]);
         assert_eq!(by_row.groups[0].clusters, vec![0, 1, 2, 3]);
         // the estimates are the same, the errors are not
@@ -2121,7 +2129,7 @@ mod variance_tests {
             .build()
             .unwrap();
         let times: Vec<f64> = (1..=24).map(f64::from).collect();
-        let v = VarianceOptions {
+        let v = AalenJohansenVarianceOptions {
             horizons: vec![],
             influence_times: times.clone(),
         };
@@ -2170,11 +2178,11 @@ mod variance_tests {
             .unwrap();
         let opts = AalenJohansenOptions::default();
         for v in [
-            VarianceOptions {
+            AalenJohansenVarianceOptions {
                 horizons: vec![2.0, 1.0],
                 influence_times: vec![],
             },
-            VarianceOptions {
+            AalenJohansenVarianceOptions {
                 horizons: vec![],
                 influence_times: vec![f64::NAN],
             },

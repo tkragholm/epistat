@@ -37,7 +37,9 @@ use std::collections::BTreeMap;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxModelFit, Ties};
-use epistat_survival::fine_gray::{FineGrayOptions, Rows, RowsOptions, fit, risk_rows, rows};
+use epistat_survival::fine_gray::{
+    FineGrayOptions, FineGrayRows, RowsOptions, fit, risk_rows, rows,
+};
 use epistat_survival::lowlevel::float_codes;
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -257,7 +259,7 @@ struct RowReport {
 /// contain no event time of the cause. `scale` multiplies the weight of our rows of
 /// each individual.
 fn compare_rows(
-    ours: &Rows,
+    ours: &FineGrayRows,
     theirs: &RRows,
     scale: &[f64],
     events: &[f64],

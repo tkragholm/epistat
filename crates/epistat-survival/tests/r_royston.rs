@@ -51,10 +51,10 @@
 use std::collections::BTreeMap;
 
 use epistat_linalg::Mat;
-use epistat_survival::cox::predict::{FittedModel, PredictOptions, PredictType, predict};
+use epistat_survival::cox::predict::{CoxPredictOptions, CoxPredictType, FittedModel, predict};
 use epistat_survival::cox::{CoxOptions, fit};
 use epistat_survival::metrics::royston::{
-    Adjustment, FitOptions, RoystonOptions, estimate, from_fit,
+    FitOptions, RoystonAdjustment, RoystonOptions, estimate, from_fit,
 };
 use epistat_survival::{SurvData, timefix::TimeFix};
 use epistat_testkit::load_json;
@@ -170,7 +170,7 @@ fn estimate_matches_r() {
                 &c.eta,
                 &RoystonOptions {
                     ties: res.ties,
-                    adjust: res.adjust.then_some(Adjustment {
+                    adjust: res.adjust.then_some(RoystonAdjustment {
                         n_events: c.nevent,
                         n_coef: c.coefficients.len(),
                     }),
@@ -253,9 +253,9 @@ fn from_fit_matches_r() {
                 fit: &model,
                 options: &cox,
             },
-            PredictType::LinearPredictor,
+            CoxPredictType::LinearPredictor,
             None,
-            &PredictOptions::default(),
+            &CoxPredictOptions::default(),
         )
         .unwrap()
         .fit;

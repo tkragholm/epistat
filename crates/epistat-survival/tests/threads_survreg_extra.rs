@@ -6,7 +6,8 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::survreg::{
-    DfbetaOptions, Distribution, PredictOptions, PredictType, SurvregOptions, TermsReference, fit,
+    DfbetaOptions, Distribution, SurvregOptions, SurvregPredictOptions, SurvregPredictType,
+    TermsReference, fit,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -88,8 +89,8 @@ fn survreg_extra_options() {
         out.extend(&f.linear_predictors);
         out.extend(&f.column_means);
         for kind in [
-            PredictType::Quantile { p: vec![0.1, 0.9] },
-            PredictType::Terms {
+            SurvregPredictType::Quantile { p: vec![0.1, 0.9] },
+            SurvregPredictType::Terms {
                 groups: vec![vec![0], vec![1]],
                 reference: TermsReference::Sample,
             },
@@ -97,7 +98,7 @@ fn survreg_extra_options() {
             let p = f
                 .predict(
                     design.as_ref(),
-                    &PredictOptions {
+                    &SurvregPredictOptions {
                         kind,
                         se_fit: true,
                         strata: Some(stratum.clone()),

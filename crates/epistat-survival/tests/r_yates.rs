@@ -43,7 +43,9 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::standardise::Counterfactual;
-use epistat_survival::standardise::yates::{InverseLink, Test, YatesLevel, YatesOptions, yates};
+use epistat_survival::standardise::yates::{
+    InverseLink, YatesLevel, YatesOptions, YatesTest, yates,
+};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -154,9 +156,9 @@ fn population_means_match_r() {
             .collect();
         let var: Vec<f64> = case.var.iter().flatten().copied().collect();
         let test = if case.test == "pairwise" {
-            Test::Pairwise
+            YatesTest::Pairwise
         } else {
-            Test::Global
+            YatesTest::Global
         };
         let out = yates(
             &case.coefficients,

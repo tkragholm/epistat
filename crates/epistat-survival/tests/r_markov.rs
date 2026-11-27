@@ -31,7 +31,7 @@
 
 use epistat_core::Bootstrap;
 use epistat_survival::SurvData;
-use epistat_survival::markov::{Options, test};
+use epistat_survival::markov::{MarkovOptions, test};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -168,7 +168,7 @@ fn markov_test_matches_mstate() {
             f.target,
             &case.grid,
             seeds,
-            &Options::default(),
+            &MarkovOptions::default(),
         )
         .unwrap();
         assert_eq!(out.n_rows, s.person.len(), "{name}");

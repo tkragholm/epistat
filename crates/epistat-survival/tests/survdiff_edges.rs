@@ -2,7 +2,7 @@
 //! weight 0, group codes that are not dense, and refused input.
 
 use epistat_survival::SurvData;
-use epistat_survival::survdiff::{Options, one_sample, test};
+use epistat_survival::survdiff::{SurvdiffOptions, one_sample, test};
 
 const U: f64 = f64::EPSILON;
 
@@ -17,7 +17,7 @@ fn a_worked_example_is_exact_to_rounding() {
     let status = [1, 1, 1];
     let group = [10, 20, 10];
     let data = SurvData::builder(&time, &status).build().unwrap();
-    let got = test(&data, &group, &Options::default()).unwrap();
+    let got = test(&data, &group, &SurvdiffOptions::default()).unwrap();
     assert_eq!(got.groups, vec![10, 20]);
     assert_eq!(got.n, vec![2, 1]);
     let close = |a: f64, b: f64| assert!((a - b).abs() <= 8.0 * U * b.abs(), "{a} vs {b}");
@@ -38,12 +38,12 @@ fn a_worked_example_is_exact_to_rounding() {
 fn one_group_or_no_event_leaves_the_statistic_missing() {
     let time = [1.0, 2.0, 3.0];
     let data = SurvData::builder(&time, &[1, 0, 1]).build().unwrap();
-    let one = test(&data, &[4, 4, 4], &Options::default()).unwrap();
+    let one = test(&data, &[4, 4, 4], &SurvdiffOptions::default()).unwrap();
     assert_eq!(one.groups, vec![4]);
     assert!(one.statistic.is_none() && one.df.is_none() && one.p_value.is_none());
     assert_eq!(one.observed, vec![2.0]);
     let data = SurvData::builder(&time, &[0, 0, 0]).build().unwrap();
-    let none = test(&data, &[1, 2, 1], &Options::default()).unwrap();
+    let none = test(&data, &[1, 2, 1], &SurvdiffOptions::default()).unwrap();
     assert!(none.statistic.is_none() && none.p_value.is_none());
     assert_eq!(none.observed, vec![0.0, 0.0]);
     assert_eq!(none.expected, vec![0.0, 0.0]);
@@ -61,7 +61,7 @@ fn rows_of_weight_zero_are_left_out_and_labels_follow_the_codes() {
         .stratum(&stratum)
         .build()
         .unwrap();
-    let got = test(&full, &group, &Options::default()).unwrap();
+    let got = test(&full, &group, &SurvdiffOptions::default()).unwrap();
     // Row 2 (group 5, stratum 2) and nothing else is left out.
     let keep = [0, 1, 3, 4, 5];
     let pick = |v: &[f64]| keep.iter().map(|&i| v[i]).collect::<Vec<_>>();
@@ -70,7 +70,7 @@ fn rows_of_weight_zero_are_left_out_and_labels_follow_the_codes() {
     let g: Vec<u32> = keep.iter().map(|&i| group[i]).collect();
     let st: Vec<u32> = keep.iter().map(|&i| stratum[i]).collect();
     let reduced = SurvData::builder(&t, &s).stratum(&st).build().unwrap();
-    let want = test(&reduced, &g, &Options::default()).unwrap();
+    let want = test(&reduced, &g, &SurvdiffOptions::default()).unwrap();
     assert_eq!(got.groups, vec![5, 30, 99]);
     assert_eq!(got.strata, Some(vec![2, 7]));
     assert_eq!(got.n_rows, 6);
@@ -86,10 +86,10 @@ fn refused_input() {
     let time = [1.0, 2.0, 3.0];
     let status = [1, 1, 0];
     let group = [1, 2, 1];
-    let opts = Options::default();
+    let opts = SurvdiffOptions::default();
     let ok = SurvData::builder(&time, &status).build().unwrap();
     assert!(test(&ok, &group[..2], &opts).is_err());
-    let nan = Options {
+    let nan = SurvdiffOptions {
         rho: f64::NAN,
         ..opts
     };
@@ -126,7 +126,7 @@ fn refused_input() {
 fn one_sample_with_survival_one_has_no_statistic() {
     let time = [1.0, 2.0];
     let data = SurvData::builder(&time, &[0, 0]).build().unwrap();
-    let got = one_sample(&data, &[1.0, 1.0], &Options::default()).unwrap();
+    let got = one_sample(&data, &[1.0, 1.0], &SurvdiffOptions::default()).unwrap();
     assert!(got.expected.abs() < f64::MIN_POSITIVE);
     assert!(got.statistic.is_none() && got.p_value.is_none());
 }

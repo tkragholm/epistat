@@ -24,7 +24,7 @@ const EXACT_LIMIT: f64 = 3e8;
 
 /// The estimator of the cumulative excess hazard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Method {
+pub enum NetMethod {
     /// Ederer II: the observed hazard minus the mean reference hazard of the
     /// persons at risk. It is not a consistent estimator of net survival when
     /// the censoring depends on age or other determinants of the reference
@@ -49,7 +49,7 @@ pub enum Method {
 
 /// How the limits of the net survival are formed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Transform {
+pub enum NetTransform {
     /// Normal limits for `ln Lambda`, where `Lambda` is the cumulative excess
     /// hazard.
     LogLog,
@@ -77,15 +77,15 @@ pub enum Grid {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NetOptions<'a> {
     /// The estimator.
-    pub method: Method,
+    pub method: NetMethod,
     /// The time points.
     pub grid: Grid,
     /// The confidence level of the limits.
     pub level: Level,
     /// The scale of the limits.
-    pub transform: Transform,
+    pub transform: NetTransform,
     /// The potential follow-up of every row of the data, which
-    /// [`Method::Hakulinen`] needs and the other methods do not take: the time
+    /// [`NetMethod::Hakulinen`] needs and the other methods do not take: the time
     /// a row would have been followed to had it not died, its exit time if it
     /// was censored. `relsurv::rs.surv` sets it to `fin.date` less the date
     /// of diagnosis for those who died.
@@ -95,10 +95,10 @@ pub struct NetOptions<'a> {
 impl Default for NetOptions<'_> {
     fn default() -> Self {
         Self {
-            method: Method::PoharPerme,
+            method: NetMethod::PoharPerme,
             grid: Grid::EventTimes,
             level: Level::default(),
-            transform: Transform::LogLog,
+            transform: NetTransform::LogLog,
             potential: None,
         }
     }
@@ -205,7 +205,7 @@ fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions<'_>) 
             "net survival takes weights of 0 and 1 only, which select rows",
         ));
     }
-    let hakulinen = opts.method == Method::Hakulinen;
+    let hakulinen = opts.method == NetMethod::Hakulinen;
     if hakulinen && opts.potential.is_none() {
         return Err(Error::invalid(
             "the Hakulinen estimator needs the potential follow-up of every row",
@@ -271,7 +271,7 @@ pub fn net_survival(
         .enumerate()
         .map(|(stratum, rows)| {
             let raw = match (opts.method, opts.grid) {
-                (Method::EdererI | Method::Hakulinen, grid) => {
+                (NetMethod::EdererI | NetMethod::Hakulinen, grid) => {
                     relative(&rows, start, stop, status, expected, opts, grid)?
                 }
                 (method, Grid::EventTimes) => exact(&rows, start, stop, status, expected, method)?,
@@ -290,7 +290,7 @@ fn exact(
     stop: &[f64],
     status: &[i32],
     expected: &ExpectedHazard,
-    method: Method,
+    method: NetMethod,
 ) -> Result<Raw> {
     let begin = |i: usize| start.map_or(0.0, |s| s[i]);
     let mut points: Vec<f64> = rows.iter().map(|&i| stop[i]).collect();
@@ -352,7 +352,7 @@ fn exact(
             let h_b = pieces.slice(at.0..at.1).cumulative_within(b);
             let dead = stop[*i] == b && status[*i] != 0;
             match method {
-                Method::PoharPerme => {
+                NetMethod::PoharPerme => {
                     let e_a = h_a.exp();
                     w_a += e_a;
                     w_gain += e_a * (h_b - *h_a).exp_m1();
@@ -363,7 +363,7 @@ fn exact(
                         dw2 += wb * wb;
                     }
                 }
-                Method::EdererII | Method::EdererI | Method::Hakulinen => {
+                NetMethod::EdererII | NetMethod::EdererI | NetMethod::Hakulinen => {
                     dh += h_b - *h_a;
                     if dead {
                         deaths += 1.0;
@@ -373,12 +373,12 @@ fn exact(
             *h_a = h_b;
         }
         match method {
-            Method::PoharPerme => {
+            NetMethod::PoharPerme => {
                 let w_b = w_a + w_gain;
                 lambda += dw / w_b - (w_gain / w_a).ln_1p();
                 variance += dw2 / (w_b * w_b);
             }
-            Method::EdererII | Method::EdererI | Method::Hakulinen => {
+            NetMethod::EdererII | NetMethod::EdererI | NetMethod::Hakulinen => {
                 lambda += deaths / n - dh / n;
                 variance += deaths / (n * n);
             }
@@ -421,7 +421,7 @@ fn relative(
         Grid::Width(w) => interval_observed(rows, stop, status, w),
     };
     let method = match (opts.method, opts.potential) {
-        (Method::Hakulinen, Some(potential)) => {
+        (NetMethod::Hakulinen, Some(potential)) => {
             if potential.len() != stop.len() {
                 return Err(Error::invalid(format!(
                     "{} potential follow-up times for {} rows",
@@ -593,7 +593,7 @@ fn interval(
     stop: &[f64],
     status: &[i32],
     expected: &ExpectedHazard,
-    method: Method,
+    method: NetMethod,
     width: f64,
 ) -> Raw {
     let t_max = rows.iter().map(|&i| stop[i]).fold(0.0_f64, f64::max);
@@ -622,10 +622,10 @@ fn interval(
                         let h_lo = pieces.cumulative_within(lo);
                         let h_hi = pieces.cumulative_within(hi);
                         let w = match method {
-                            Method::PoharPerme => {
+                            NetMethod::PoharPerme => {
                                 pieces.cumulative_within(f64::midpoint(lo, hi)).exp()
                             }
-                            Method::EdererII | Method::EdererI | Method::Hakulinen => 1.0,
+                            NetMethod::EdererII | NetMethod::EdererI | NetMethod::Hakulinen => 1.0,
                         };
                         let d = f64::from(u8::from(status[i] != 0 && hi == stop[i]));
                         c.wy[k] += w * y;
@@ -668,23 +668,23 @@ fn interval(
     raw
 }
 
-fn finish(stratum: usize, raw: Raw, z: f64, transform: Transform) -> NetSurvival {
+fn finish(stratum: usize, raw: Raw, z: f64, transform: NetTransform) -> NetSurvival {
     let survival: Vec<f64> = raw.lambda.iter().map(|l| (-l).exp()).collect();
     let mut lower = Vec::with_capacity(survival.len());
     let mut upper = Vec::with_capacity(survival.len());
     for ((&l, &v), &s) in raw.lambda.iter().zip(&raw.variance).zip(&survival) {
         let se = v.sqrt();
         let limits = match transform {
-            Transform::Plain => Some((s - z * se * s, s + z * se * s)),
-            Transform::Log => Some((s * (-z * se).exp(), s * (z * se).exp())),
-            Transform::LogLog if l > 0.0 => {
+            NetTransform::Plain => Some((s - z * se * s, s + z * se * s)),
+            NetTransform::Log => Some((s * (-z * se).exp(), s * (z * se).exp())),
+            NetTransform::LogLog if l > 0.0 => {
                 let shift = z * se / l;
                 Some((
                     (-(l.ln() + shift).exp()).exp(),
                     (-(l.ln() - shift).exp()).exp(),
                 ))
             }
-            Transform::LogLog => None,
+            NetTransform::LogLog => None,
         };
         lower.push(limits.map(|x| x.0));
         upper.push(limits.map(|x| x.1));

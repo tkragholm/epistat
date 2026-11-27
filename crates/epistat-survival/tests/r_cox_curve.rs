@@ -56,7 +56,7 @@ use std::collections::{BTreeMap, HashMap};
 use epistat_linalg::{Mat, Side};
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
-    ConfType, CurveType, FittedModel, NewData, PathData, SurvfitOptions, survfit, survfit_paths,
+    ConfType, CoxSurvfitOptions, CurveType, FittedModel, NewData, PathData, survfit, survfit_paths,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::{NanRule, load_json, worst_deviation, worst_deviation_defined_each};
@@ -638,7 +638,7 @@ fn curves_match_r() {
         new.stratum = r.strata.then_some(levels.as_slice());
         new.offset = r.offset.then_some(r.new_offset.as_slice());
         for sc in &r.scenarios {
-            let mk = |conf_type| SurvfitOptions {
+            let mk = |conf_type| CoxSurvfitOptions {
                 conf_type,
                 curve_type: if sc.stype == 1 {
                     CurveType::KalbfleischPrentice
@@ -647,7 +647,7 @@ fn curves_match_r() {
                 },
                 start_time: sc.start_time,
                 censor_times: sc.censor,
-                ..SurvfitOptions::default()
+                ..CoxSurvfitOptions::default()
             };
             let log = survfit(&fitted, &new, &mk(ConfType::Log)).unwrap();
             let ll = survfit(&fitted, &new, &mk(ConfType::LogLog)).unwrap();
@@ -713,7 +713,7 @@ fn curves_match_r() {
             .map(|i| theta_of(&path.x[i], if r.offset { path.offset[i] } else { 0.0 }))
             .collect();
         for sc in scenarios {
-            let mk = |conf_type| SurvfitOptions {
+            let mk = |conf_type| CoxSurvfitOptions {
                 conf_type,
                 curve_type: if sc.stype == 1 {
                     CurveType::KalbfleischPrentice
@@ -722,7 +722,7 @@ fn curves_match_r() {
                 },
                 start_time: sc.start_time,
                 censor_times: sc.censor,
-                ..SurvfitOptions::default()
+                ..CoxSurvfitOptions::default()
             };
             let data = PathData {
                 x: px.as_ref(),

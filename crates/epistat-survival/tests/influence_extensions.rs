@@ -40,7 +40,7 @@ use epistat_survival::SurvData;
 use epistat_survival::absrisk::{CauseSpecificCox, CscOptions, NewRows, RiskOptions, SurvType};
 use epistat_survival::cox::{self, CoxModelFit, CoxOptions, Ties};
 use epistat_survival::standardise::{
-    Counterfactual, InfluenceForm, Level, StandardiseOptions, Standardised,
+    Counterfactual, ExposureLevel, InfluenceForm, StandardiseOptions, Standardised,
     standardise_cause_specific, standardise_cox,
 };
 
@@ -250,10 +250,10 @@ fn check_covariance(name: &str, unit: &Standardised, num: &Numeric, scale: &[f64
 const SET0: [(usize, f64); 1] = [(0, 0.0)];
 const SET1: [(usize, f64); 1] = [(0, 1.0)];
 
-fn levels() -> [Level<'static>; 2] {
+fn levels() -> [ExposureLevel<'static>; 2] {
     [
-        Level::single(Counterfactual::Columns(&SET0)),
-        Level::single(Counterfactual::Columns(&SET1)),
+        ExposureLevel::single(Counterfactual::Columns(&SET0)),
+        ExposureLevel::single(Counterfactual::Columns(&SET1)),
     ]
 }
 
@@ -317,7 +317,7 @@ fn csc_run(
     let fits: Vec<CoxModelFit> = (0..2)
         .map(|m| cox::fit(&data, designs[m], &precise(Some(m as u32 + 1))).unwrap())
         .collect();
-    let level = |set: &'static [(usize, f64)]| Level {
+    let level = |set: &'static [(usize, f64)]| ExposureLevel {
         designs: vec![Counterfactual::Columns(set), Counterfactual::Columns(set)],
     };
     standardise_cause_specific(
@@ -626,7 +626,7 @@ fn survival_type_run(
         cox::fit(&data, designs[0], &precise(Some(1))).unwrap(),
         cox::fit(&any, designs[1], &precise(None)).unwrap(),
     ];
-    let level = |set: &'static [(usize, f64)]| Level {
+    let level = |set: &'static [(usize, f64)]| ExposureLevel {
         designs: vec![Counterfactual::Columns(set), Counterfactual::Columns(set)],
     };
     standardise_cause_specific(

@@ -43,7 +43,7 @@
 use std::collections::HashMap;
 
 use epistat_survival::SurvData;
-use epistat_survival::pseudo::{Method, PseudoOptions, Target, pseudo};
+use epistat_survival::pseudo::{PseudoMethod, PseudoOptions, Target, pseudo};
 use epistat_survival::survfit::{ConfType, SurvfitOptions, estimate};
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -261,9 +261,9 @@ fn pseudo_agrees_with_r() {
         let data = builder.build().unwrap();
         let mut opts = PseudoOptions::new(target_of(&case.target));
         opts.method = if case.method == "ij" {
-            Method::InfinitesimalJackknife
+            PseudoMethod::InfinitesimalJackknife
         } else {
-            Method::Jackknife
+            PseudoMethod::Jackknife
         };
         let label = format!(
             "{} {} {} {}",
@@ -296,7 +296,7 @@ fn pseudo_agrees_with_r() {
         let engine = matches!(
             opts.target,
             Target::CumulativeIncidence { .. } | Target::RestrictedTimeLost { .. }
-        ) && opts.method == Method::InfinitesimalJackknife;
+        ) && opts.method == PseudoMethod::InfinitesimalJackknife;
         for (g, estimate_g) in got.groups.iter().enumerate() {
             assert_eq!(estimate_g.n_subjects, case.n_subjects[g], "{label}: n");
             let n = estimate_g.n_subjects;
@@ -450,7 +450,7 @@ fn jackknife_agrees_with_the_pseudo_package() {
         ),
     ] {
         let mut opts = PseudoOptions::new(target);
-        opts.method = Method::Jackknife;
+        opts.method = PseudoMethod::Jackknife;
         let got = pseudo(data, &pkg.times, &opts).unwrap();
         assert_eq!(got.values.len(), n * k);
         for (i, (&mine, &theirs)) in got.values.iter().zip(want).enumerate() {

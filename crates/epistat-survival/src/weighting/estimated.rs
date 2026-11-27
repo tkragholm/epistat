@@ -30,7 +30,7 @@ use crate::surv::SurvData;
 
 /// The model of censoring whose weights an outcome uses.
 #[derive(Debug, Clone, Copy)]
-pub enum Censoring<'a> {
+pub enum OutcomeCensoring<'a> {
     /// The Kaplan-Meier or Cox model of the censoring hazard of
     /// [`ipcw::fit`](super::ipcw::fit), fitted again to the data of the outcome
     /// model with the options given.
@@ -54,6 +54,10 @@ pub enum Censoring<'a> {
     },
 }
 
+/// `OutcomeCensoring`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `OutcomeCensoring`")]
+pub type Censoring<'a> = OutcomeCensoring<'a>;
+
 /// The weights of an outcome model: the models they are estimated from, or
 /// none for case weights taken as known.
 ///
@@ -69,7 +73,7 @@ pub struct Weights<'a> {
     /// may have none. It needs `iptw`.
     pub subject: Option<&'a [u32]>,
     /// The censoring weights, `None` for none.
-    pub censoring: Option<Censoring<'a>>,
+    pub censoring: Option<OutcomeCensoring<'a>>,
 }
 
 impl<'a> Weights<'a> {
@@ -98,7 +102,7 @@ impl<'a> Weights<'a> {
 
     /// These weights times the censoring weights of `censoring`.
     #[must_use]
-    pub const fn with_censoring(self, censoring: Censoring<'a>) -> Self {
+    pub const fn with_censoring(self, censoring: OutcomeCensoring<'a>) -> Self {
         Self {
             censoring: Some(censoring),
             ..self
@@ -169,7 +173,7 @@ pub(super) fn prepare<'a>(data: &SurvData<'_>, est: &Weights<'a>) -> Result<Prep
     }
     match est.censoring {
         None => {}
-        Some(Censoring::Pooled { fit, at }) => {
+        Some(OutcomeCensoring::Pooled { fit, at }) => {
             if fit.len() != n {
                 return Err(Error::invalid(format!(
                     "censoring: the pooled fit has {} rows for {n} rows of data",
@@ -185,7 +189,7 @@ pub(super) fn prepare<'a>(data: &SurvData<'_>, est: &Weights<'a>) -> Result<Prep
             }
             nuisances.push(Box::new(PooledNuisance::new(fit, at, unit_of_row.clone())?));
         }
-        Some(Censoring::Hazard { model, options, at }) => {
+        Some(OutcomeCensoring::Hazard { model, options, at }) => {
             let (w, nuisance) =
                 ProcessNuisance::new(data, model, options, at, unit_of_row.clone(), n_units)?;
             for (a, b) in weight.iter_mut().zip(&w) {

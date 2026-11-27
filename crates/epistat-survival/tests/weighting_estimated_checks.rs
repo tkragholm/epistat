@@ -16,7 +16,7 @@ use epistat_survival::weighting::km::{self, KmOptions};
 use epistat_survival::weighting::pooled;
 use epistat_survival::weighting::pooled::PooledEvent;
 use epistat_survival::weighting::pooled::PooledOptions;
-use epistat_survival::weighting::{Censoring, WeightAt, Weights};
+use epistat_survival::weighting::{OutcomeCensoring, WeightAt, Weights};
 
 /// Four subjects with two or three rows each.
 struct Tiny {
@@ -147,7 +147,7 @@ fn estimated_variances_refuse_invalid_input() {
     let est = Weights {
         iptw: None,
         subject: Some(&ids),
-        censoring: Some(Censoring::Hazard {
+        censoring: Some(OutcomeCensoring::Hazard {
             model: CensoringModel::KaplanMeier,
             options: &km_model,
             at: WeightAt::Stop,
@@ -166,7 +166,7 @@ fn estimated_variances_refuse_invalid_input() {
     let est = Weights {
         iptw: None,
         subject: None,
-        censoring: Some(Censoring::Hazard {
+        censoring: Some(OutcomeCensoring::Hazard {
             model: CensoringModel::KaplanMeier,
             options: &km_model,
             at: WeightAt::Stop,
@@ -182,7 +182,7 @@ fn estimated_variances_refuse_invalid_input() {
     let est = Weights {
         iptw: None,
         subject: None,
-        censoring: Some(Censoring::Hazard {
+        censoring: Some(OutcomeCensoring::Hazard {
             model: CensoringModel::Cox { x: x.as_ref() },
             options: &exact,
             at: WeightAt::Stop,
@@ -207,7 +207,7 @@ fn estimated_variances_refuse_invalid_input() {
         let est = Weights {
             iptw: None,
             subject: None,
-            censoring: Some(Censoring::Pooled {
+            censoring: Some(OutcomeCensoring::Pooled {
                 fit: &fit,
                 at: WeightAt::Stop,
             }),

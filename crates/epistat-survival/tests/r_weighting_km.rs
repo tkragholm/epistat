@@ -20,10 +20,11 @@
 //! difference between the finite differences with and without Richardson
 //! extrapolation, which bounds the error of the reference.
 
+use epistat_core::Estimand;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::weighting::Weights;
-use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
+use epistat_survival::weighting::iptw::{self, IptwOptions};
 use epistat_survival::weighting::km::{KmOptions, estimate};
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -127,7 +128,7 @@ fn weighted_curves_match_survfit_and_finite_differences() {
                 _ => Estimand::Atc,
             },
             stabilise: r.stabilise,
-            alpha: None,
+            optimal_subset: None,
         };
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         let data = builder.build().unwrap();

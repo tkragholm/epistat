@@ -4,7 +4,7 @@ use epistat_linalg::MatRef;
 use epistat_stats::dist::normal;
 use epistat_stats::quantile::type7;
 
-use super::Scale;
+use super::FlexparScale;
 use super::design::Design;
 use crate::error::{Error, Result};
 use crate::ldl;
@@ -161,7 +161,7 @@ fn nelson_aalen(
 /// at every event. The covariate effects start at zero.
 pub(super) fn starting_values(
     design: &Design,
-    scale: Scale,
+    scale: FlexparScale,
     stop: &[f64],
     start: Option<&[f64]>,
     event: &[i32],
@@ -171,9 +171,9 @@ pub(super) fn starting_values(
     let df = design.baseline.len();
     let points = nelson_aalen(stop, start, event, weight);
     let g = |h: f64| match scale {
-        Scale::Hazard => h.ln(),
-        Scale::Odds => h.exp_m1().ln(),
-        Scale::Probit => -normal::quantile((-h).exp()),
+        FlexparScale::Hazard => h.ln(),
+        FlexparScale::Odds => h.exp_m1().ln(),
+        FlexparScale::Probit => -normal::quantile((-h).exp()),
     };
     let usable: Vec<(f64, f64, f64)> = points
         .iter()

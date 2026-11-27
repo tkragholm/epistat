@@ -98,7 +98,7 @@ use epistat_linalg::Mat;
 use super::prepare::{check_times, sort_rows};
 use crate::error::{Error, Result};
 use crate::pseudo::regression::{self, PseudoRegressionOptions};
-use crate::pseudo::{Method, PseudoOptions, Target, pseudo};
+use crate::pseudo::{PseudoMethod, PseudoOptions, Target, pseudo};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
@@ -187,7 +187,7 @@ fn pseudo_risk(
     let sorted = sort_rows(data, timefix, cause)?;
     check_times(&[time], sorted.max_time)?;
     let options = PseudoOptions {
-        method: Method::Jackknife,
+        method: PseudoMethod::Jackknife,
         timefix,
         ..PseudoOptions::new(Target::CumulativeIncidence { cause })
     };

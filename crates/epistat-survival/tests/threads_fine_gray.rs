@@ -16,7 +16,9 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxModelFit, Ties};
-use epistat_survival::fine_gray::{FineGrayOptions, Rows, RowsOptions, fit, risk_rows, rows};
+use epistat_survival::fine_gray::{
+    FineGrayOptions, FineGrayRows, RowsOptions, fit, risk_rows, rows,
+};
 use epistat_survival::lowlevel::float_codes;
 use epistat_survival::timefix::TimeFix;
 use epistat_testkit::{POOLS, absent, assert_same_on_pools};
@@ -62,7 +64,7 @@ fn sample(n: usize, seed: u64) -> Sample {
     s
 }
 
-fn rows_bits(rows: &Rows) -> Vec<f64> {
+fn rows_bits(rows: &FineGrayRows) -> Vec<f64> {
     let mut out: Vec<f64> = rows.row.iter().map(|&r| f64::from(r)).collect();
     out.extend(&rows.start);
     out.extend(&rows.stop);

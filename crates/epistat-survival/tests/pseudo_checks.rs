@@ -19,7 +19,9 @@ use epistat_glm::Link;
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::pseudo::{Method, PseudoOptions, PseudoRegressionOptions, Target, pseudo};
+use epistat_survival::pseudo::{
+    PseudoMethod, PseudoOptions, PseudoRegressionOptions, Target, pseudo,
+};
 
 const EPS: f64 = f64::EPSILON;
 
@@ -140,7 +142,10 @@ fn without_censoring_both_jackknives_give_the_indicator() {
     let data = SurvData::builder(&stop, &status).build().unwrap();
     let times = [1.0, 2.0, 3.5];
     let tolerance = 64.0 * (2.0 * n as f64) * EPS;
-    for method in [Method::InfinitesimalJackknife, Method::Jackknife] {
+    for method in [
+        PseudoMethod::InfinitesimalJackknife,
+        PseudoMethod::Jackknife,
+    ] {
         let mut opts = PseudoOptions::new(Target::Survival);
         opts.method = method;
         let p = pseudo(&data, &times, &opts).unwrap();
@@ -186,7 +191,7 @@ fn refusals() {
     // One subject cannot be left out.
     let one = SurvData::builder(&stop[..1], &status[..1]).build().unwrap();
     let mut jack = PseudoOptions::new(Target::Survival);
-    jack.method = Method::Jackknife;
+    jack.method = PseudoMethod::Jackknife;
     assert!(pseudo(&one, &[1.0], &jack).is_err());
     assert!(pseudo(&one, &[1.0], &ok).is_ok());
     // A subject with rows in two strata.

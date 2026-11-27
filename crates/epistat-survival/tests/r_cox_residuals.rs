@@ -65,7 +65,7 @@ use epistat_linalg::Mat;
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{
-    Collapse, CoxModelFit, CoxOptions, CoxResiduals, ResidualKind, ResidualOptions, Ties,
+    Collapse, CoxModelFit, CoxOptions, CoxResidualKind, CoxResiduals, ResidualOptions, Ties,
     ZphOptions, ZphTransform, fit, residuals, zph,
 };
 use epistat_testkit::{load_json, na_f64_vec};
@@ -329,7 +329,7 @@ impl Setup<'_> {
 
     fn residuals(
         &self,
-        kind: ResidualKind,
+        kind: CoxResidualKind,
         weighted: Option<bool>,
         collapse: Collapse<'_>,
     ) -> CoxResiduals {
@@ -437,7 +437,7 @@ fn deviance(m: f64, s: f64) -> (f64, f64) {
 
 type ClusterCase<'a> = (
     &'a str,
-    ResidualKind,
+    CoxResidualKind,
     &'a Option<Matrix>,
     &'a dyn Fn(usize, usize) -> f64,
 );
@@ -463,7 +463,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
 
     // Martingale, unweighted and weighted.
     for (weighted, expected) in [(false, &r.martingale), (true, &r.martingale_weighted)] {
-        let got = s.residuals(ResidualKind::Martingale, Some(weighted), Collapse::None);
+        let got = s.residuals(CoxResidualKind::Martingale, Some(weighted), Collapse::None);
         assert_eq!(got.rows, rows.iter().map(|&i| i as u32).collect::<Vec<_>>());
         let w = |i: usize| if weighted { s.weight(i) } else { 1.0 };
         let value = worst_column(
@@ -475,12 +475,12 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
         );
         worst.add(&format!("{name} martingale weighted={weighted}"), value);
     }
-    let by_default = s.residuals(ResidualKind::Martingale, None, Collapse::None);
+    let by_default = s.residuals(CoxResidualKind::Martingale, None, Collapse::None);
     assert_eq!(by_default.columns[0].as_ref().unwrap().len(), n);
 
     // Deviance. The derivative is evaluated at R's martingale residual.
     let status: Vec<f64> = s.status.iter().map(|&e| f64::from(e)).collect();
-    let got = s.residuals(ResidualKind::Deviance, None, Collapse::None);
+    let got = s.residuals(CoxResidualKind::Deviance, None, Collapse::None);
     let value = worst_column(
         got.columns[0].as_ref(),
         &|i| Some(r.deviance[i]),
@@ -495,7 +495,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
         s.xmax[j] * (s.bx * (2.0 + mart[i].abs()) + s.ne * (2.0 + s.cs[i])) * s.weight(i)
     };
     for (weighted, expected) in [(false, &r.score), (true, &r.score_weighted)] {
-        let got = s.residuals(ResidualKind::Score, Some(weighted), Collapse::None);
+        let got = s.residuals(CoxResidualKind::Score, Some(weighted), Collapse::None);
         let mut value = 0.0f64;
         for (j, column) in got.columns.iter().enumerate().take(p) {
             value = value.max(worst_column(
@@ -526,15 +526,15 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
         scale
     };
     for (kind, weighted, expected) in [
-        (ResidualKind::Dfbeta, None, &r.dfbeta),
-        (ResidualKind::Dfbeta, Some(false), &r.dfbeta_unweighted),
-        (ResidualKind::Dfbetas, None, &r.dfbetas),
+        (CoxResidualKind::Dfbeta, None, &r.dfbeta),
+        (CoxResidualKind::Dfbeta, Some(false), &r.dfbeta_unweighted),
+        (CoxResidualKind::Dfbetas, None, &r.dfbetas),
     ] {
         let got = s.residuals(kind, weighted, Collapse::None);
         let w = weighted.unwrap_or(true);
         let mut value = 0.0f64;
         for (j, column) in got.columns.iter().enumerate().take(p) {
-            let se = if kind == ResidualKind::Dfbetas {
+            let se = if kind == CoxResidualKind::Dfbetas {
                 s.v(j, j).sqrt()
             } else {
                 1.0
@@ -553,7 +553,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
     // Schoenfeld, weighted or not, and scaled.
     let events = r.schoenfeld_time.len();
     for (weighted, expected) in [(false, &r.schoenfeld), (true, &r.schoenfeld_weighted)] {
-        let got = s.residuals(ResidualKind::Schoenfeld, Some(weighted), Collapse::None);
+        let got = s.residuals(CoxResidualKind::Schoenfeld, Some(weighted), Collapse::None);
         assert_eq!(got.time, r.schoenfeld_time, "{name}: event times");
         assert_eq!(got.rows, r.schoenfeld_row, "{name}: rows of the events");
         assert_eq!(
@@ -581,7 +581,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
         worst.add(&format!("{name} schoenfeld weighted={weighted}"), value);
     }
     if let Some(expected) = &r.scaledsch {
-        let got = s.residuals(ResidualKind::ScaledSchoenfeld, None, Collapse::None);
+        let got = s.residuals(CoxResidualKind::ScaledSchoenfeld, None, Collapse::None);
         let d = events as f64;
         let mut value = 0.0f64;
         for (j, column) in got.columns.iter().enumerate().take(p) {
@@ -617,7 +617,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
     let tol_sum = |f: &dyn Fn(usize) -> f64| -> Vec<f64> {
         group_sum(codes, &(0..n).map(f).collect::<Vec<_>>())
     };
-    let collapse_check = |kind: ResidualKind,
+    let collapse_check = |kind: CoxResidualKind,
                           weighted: Option<bool>,
                           collapse: Collapse<'_>,
                           expected: &Matrix,
@@ -628,7 +628,10 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
         let got = s.residuals(kind, weighted, collapse);
         assert!(got.rows.is_empty(), "{label}");
         assert_eq!(got.groups, expect_groups, "{label}: groups");
-        let columns = if matches!(kind, ResidualKind::Martingale | ResidualKind::Deviance) {
+        let columns = if matches!(
+            kind,
+            CoxResidualKind::Martingale | CoxResidualKind::Deviance
+        ) {
             1
         } else {
             p
@@ -674,7 +677,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
     cases.push((
         "martingale",
         c(
-            ResidualKind::Martingale,
+            CoxResidualKind::Martingale,
             None,
             &r.martingale_collapse_codes,
             &mart_tol,
@@ -684,7 +687,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
     cases.push((
         "martingale weighted",
         c(
-            ResidualKind::Martingale,
+            CoxResidualKind::Martingale,
             Some(true),
             &r.martingale_weighted_collapse_codes,
             &mart_tol_weighted,
@@ -694,7 +697,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
     cases.push((
         "score",
         c(
-            ResidualKind::Score,
+            CoxResidualKind::Score,
             None,
             &r.score_collapse_codes,
             &score_tol,
@@ -704,7 +707,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
     cases.push((
         "score weighted",
         c(
-            ResidualKind::Score,
+            CoxResidualKind::Score,
             Some(true),
             &r.score_weighted_collapse_codes,
             &score_tol_weighted,
@@ -714,7 +717,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
     cases.push((
         "dfbeta",
         c(
-            ResidualKind::Dfbeta,
+            CoxResidualKind::Dfbeta,
             None,
             &r.dfbeta_collapse_codes,
             &plain_tol,
@@ -724,7 +727,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
     cases.push((
         "dfbetas",
         c(
-            ResidualKind::Dfbetas,
+            CoxResidualKind::Dfbetas,
             None,
             &r.dfbetas_collapse_codes,
             &scaled_tol,
@@ -742,7 +745,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
         .iter()
         .map(|row| row[0].unwrap())
         .collect();
-    let got = s.residuals(ResidualKind::Deviance, None, Collapse::Codes(codes));
+    let got = s.residuals(CoxResidualKind::Deviance, None, Collapse::Codes(codes));
     let tols = tol_sum(&|i| s.bx * (1.0 + mart[i].abs()) + s.ne * s.cs[i]);
     let ours = got.columns[0].as_ref().unwrap();
     let mut value = 0.0f64;
@@ -782,25 +785,25 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
         let cluster_cases: [ClusterCase; 4] = [
             (
                 "martingale",
-                ResidualKind::Martingale,
+                CoxResidualKind::Martingale,
                 &r.martingale_collapse_cluster,
                 &mart_tol,
             ),
             (
                 "score",
-                ResidualKind::Score,
+                CoxResidualKind::Score,
                 &r.score_collapse_cluster,
                 &score_tol,
             ),
             (
                 "dfbeta",
-                ResidualKind::Dfbeta,
+                CoxResidualKind::Dfbeta,
                 &r.dfbeta_collapse_cluster,
                 &plain_tol,
             ),
             (
                 "dfbetas",
-                ResidualKind::Dfbetas,
+                CoxResidualKind::Dfbetas,
                 &r.dfbetas_collapse_cluster,
                 &scaled_tol,
             ),
@@ -812,7 +815,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
             // The data have clusters but no ids; id is refused.
             worst.add(&format!("{name} collapse cluster {what}"), by_cluster);
         }
-        let got = s.residuals(ResidualKind::Deviance, None, Collapse::Cluster);
+        let got = s.residuals(CoxResidualKind::Deviance, None, Collapse::Cluster);
         let m_clusters = r.martingale_collapse_cluster.as_ref().unwrap();
         let status = r.status_collapse_cluster.as_ref().unwrap();
         let tols = group_sum(

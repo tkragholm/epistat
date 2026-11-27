@@ -12,9 +12,9 @@
 //! eta(t | x) = s(u) + x'beta + sum_j x_j s_j(u),
 //! s(u)       = gamma_0 + gamma_1 u + sum_{m=1}^{k-2} gamma_{m+1} v_m(u),
 //!
-//! Scale::Hazard   S = exp(-exp(eta))      g(S) = ln(-ln S)        proportional hazards
-//! Scale::Odds     S = 1 / (1 + exp(eta))  g(S) = ln((1 - S) / S)  proportional odds
-//! Scale::Probit   S = Phi(-eta)           g(S) = -Phi^-1(S)
+//! FlexparScale::Hazard   S = exp(-exp(eta))      g(S) = ln(-ln S)        proportional hazards
+//! FlexparScale::Odds     S = 1 / (1 + exp(eta))  g(S) = ln((1 - S) / S)  proportional odds
+//! FlexparScale::Probit   S = Phi(-eta)           g(S) = -Phi^-1(S)
 //! ```
 //!
 //! `v_m` are the nonlinear functions of Harrell's restricted cubic spline on `k`
@@ -25,7 +25,7 @@
 //! `j / df`. Time-varying effects are the terms `x_j s_j(u)`, where `s_j` is a
 //! spline without an intercept of its own degrees of freedom, with knots placed
 //! in the same way, so that `beta_j + s_j(u)` is the effect of `x_j` at time `t`.
-//! Under `Scale::Hazard` the ratio of hazards for a unit change of `x_j` is
+//! Under `FlexparScale::Hazard` the ratio of hazards for a unit change of `x_j` is
 //! `exp(beta_j + s_j(u))`. The functions of the baseline and of the
 //! time-varying splines differ between packages, and so do their coefficients.
 //! The spaces they span are the same for the same knots, so the coefficients
@@ -61,7 +61,7 @@
 //! `eta'(u) > 0` at every event time and on a grid in time of 101 points
 //! between the boundary knots for up to 200 rows spread through the data, and
 //! [`predict`] refuses to give survival curves of a fit where it is false
-//! unless [`PredictOptions::allow_non_monotone`] is set.
+//! unless [`FlexparPredictOptions::allow_non_monotone`] is set.
 //!
 //! # Excess hazard
 //!
@@ -168,11 +168,13 @@ use crate::error::{Error, Result};
 use crate::ldl;
 use crate::surv::SurvData;
 
-pub use self::predict::{Contrast, Predict, PredictOptions, Prediction, contrast, predict};
+pub use self::predict::{
+    FlexparContrast, FlexparPredictOptions, FlexparPrediction, Predict, contrast, predict,
+};
 
 /// The scale on which the survivor function is linear in the covariates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Scale {
+pub enum FlexparScale {
     /// The log cumulative hazard `ln(-ln S)`: proportional hazards.
     Hazard,
     /// The log cumulative odds `ln((1 - S) / S)`: proportional odds.
@@ -196,7 +198,7 @@ pub struct TimeVarying {
 #[derive(Clone, Copy, Debug)]
 pub struct FlexParOptions<'a> {
     /// The scale of the model.
-    pub scale: Scale,
+    pub scale: FlexparScale,
     /// The degrees of freedom of the baseline spline besides its intercept, at least 1.
     pub df: usize,
     /// The knots of the baseline on the `ln t` scale, boundary knots included
@@ -207,7 +209,7 @@ pub struct FlexParOptions<'a> {
     pub tvc: &'a [TimeVarying],
     /// The expected hazard of the reference population at the exit time of
     /// each row, for an excess hazard model (Nelson et al. 2007), or `None`
-    /// for an ordinary model. Needs [`Scale::Hazard`]; the model is then for
+    /// for an ordinary model. Needs [`FlexparScale::Hazard`]; the model is then for
     /// the excess hazard, and its survivor function is the net survival.
     pub bhazard: Option<&'a [f64]>,
     /// Convergence is declared when the Newton decrement is at most
@@ -220,7 +222,7 @@ pub struct FlexParOptions<'a> {
 impl Default for FlexParOptions<'_> {
     fn default() -> Self {
         Self {
-            scale: Scale::Hazard,
+            scale: FlexparScale::Hazard,
             df: 3,
             knots: None,
             tvc: &[],
@@ -234,7 +236,7 @@ impl Default for FlexParOptions<'_> {
 impl FlexParOptions<'_> {
     /// The defaults with the scale and degrees of freedom given.
     #[must_use]
-    pub fn new(scale: Scale, df: usize) -> Self {
+    pub fn new(scale: FlexparScale, df: usize) -> Self {
         Self {
             scale,
             df,
@@ -284,7 +286,7 @@ pub struct FlexParFit {
     /// The knots of the baseline spline on the `ln t` scale.
     pub knots: Vec<f64>,
     /// The scale of the model.
-    pub scale: Scale,
+    pub scale: FlexparScale,
     /// The Newton iterations used, with those after a BFGS run.
     pub iterations: usize,
     /// Whether the Newton decrement fell below the tolerance.
@@ -361,7 +363,7 @@ fn check_inputs(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FlexParOptions<'
         ));
     }
     if let Some(h) = opts.bhazard {
-        if opts.scale != Scale::Hazard {
+        if opts.scale != FlexparScale::Hazard {
             return Err(Error::invalid(
                 "an expected hazard needs the hazard scale: the excess hazard is additive on the hazard",
             ));
@@ -385,7 +387,7 @@ fn check_inputs(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FlexParOptions<'
 ///
 /// `x` has one column for each covariate and no intercept, since the baseline
 /// has its own. Entry times (the start of a counting-process row) give left
-/// truncation. For a scale other than [`Scale::Hazard`] a subject must have one
+/// truncation. For a scale other than [`FlexparScale::Hazard`] a subject must have one
 /// row, because the survivor function of the other scales is not
 /// additive over the pieces of follow-up.
 ///
@@ -428,7 +430,7 @@ pub fn fit(
             return Err(Error::invalid(format!("row {i} has a negative entry time")));
         }
     }
-    if opts.scale != Scale::Hazard
+    if opts.scale != FlexparScale::Hazard
         && let Some(id) = data.id()
     {
         let mut seen = HashSet::new();

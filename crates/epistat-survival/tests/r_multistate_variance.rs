@@ -13,7 +13,9 @@
 mod influence_bound;
 
 use epistat_survival::SurvData;
-use epistat_survival::multistate::{Options, VarianceOptions, estimate, variance};
+use epistat_survival::multistate::{
+    MultistateOptions, OccupationVarianceOptions, estimate, variance,
+};
 use epistat_testkit::load_json;
 use influence_bound::{Row, influence_bound, kappa};
 use serde::Deserialize;
@@ -125,13 +127,13 @@ fn matches_r_survfit() {
             builder = builder.weight(&case.weight);
         }
         let data = builder.build().unwrap();
-        let opts = Options {
+        let opts = MultistateOptions {
             initial: (!case.estimated_p0).then(|| case.p0.clone()),
-            ..Options::default()
+            ..MultistateOptions::default()
         };
         let all_taus = case.tau.clone();
         let influence_times = case.time.clone();
-        let mut v = VarianceOptions::new(case.t0);
+        let mut v = OccupationVarianceOptions::new(case.t0);
         v.horizons = all_taus.clone();
         v.influence_times = influence_times.clone();
         let got = variance(&data, &case.time, &opts, &v).unwrap();

@@ -31,7 +31,7 @@
 //! The Breslow estimate \[1\] is the Nelson-Aalen estimate with the risk scores
 //! as weights. The Efron form is the Fleming-Harrington estimate \[2\] for tied
 //! events, which `survfit.coxph` uses when the model was fitted with Efron
-//! ties. [`HazardType`] chooses, and the default follows the ties of the fit as
+//! ties. [`CoxHazardType`] chooses, and the default follows the ties of the fit as
 //! `survfit.coxph` does. The survival curve is `exp(-H)` (`stype = 2`), the
 //! Kalbfleisch-Prentice product limit (`stype = 1`) is not provided.
 //!
@@ -252,16 +252,20 @@ pub enum Centring<'a> {
 
 /// How the cumulative hazard handles tied events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HazardType {
+pub enum CoxHazardType {
     /// `W / S_0` at each time, `ctype = 1`.
     Breslow,
     /// The Fleming-Harrington form for tied events, `ctype = 2`.
     Efron,
 }
 
+/// `CoxHazardType`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `CoxHazardType`")]
+pub type HazardType = CoxHazardType;
+
 /// Which covariance matrix of the coefficients the standard errors use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Variance {
+pub enum CoxVariance {
     /// The cluster-robust matrix when the fit has one, otherwise the
     /// model-based one, as `var` of a `coxph` fit.
     #[default]
@@ -271,6 +275,10 @@ pub enum Variance {
     /// The cluster-robust matrix, an error without clusters.
     Robust,
 }
+
+/// `CoxVariance`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `CoxVariance`")]
+pub type Variance = CoxVariance;
 
 /// What a prediction is measured from, as `reference` of `predict.coxph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -286,7 +294,7 @@ pub enum Reference {
 
 /// What [`predict`] returns for a row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PredictType {
+pub enum CoxPredictType {
     /// `(x - reference)' beta + offset - mean offset`.
     LinearPredictor,
     /// The exponential of the linear predictor.
@@ -296,6 +304,10 @@ pub enum PredictType {
     /// `exp(-expected)`.
     Survival,
 }
+
+/// `CoxPredictType`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `CoxPredictType`")]
+pub type PredictType = CoxPredictType;
 
 /// New rows to predict for. The columns follow the design of the fit.
 #[derive(Debug, Clone, Copy)]
@@ -335,14 +347,14 @@ pub struct BaselineOptions<'a> {
     pub centring: Centring<'a>,
     /// The form of the hazard. `None` follows the ties of the fit: Efron for
     /// Efron ties and Breslow otherwise.
-    pub hazard: Option<HazardType>,
+    pub hazard: Option<CoxHazardType>,
     /// The covariance used for the variance parts.
-    pub variance: Variance,
+    pub variance: CoxVariance,
 }
 
 /// The options of [`predict`] and [`predict_terms`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PredictOptions<'a> {
+pub struct CoxPredictOptions<'a> {
     /// The reference. `None` is the default of `predict.coxph`: `Strata` for
     /// the linear predictor and the risk and for terms `Sample`; the expected
     /// number and the survival are always from `Sample`.
@@ -350,24 +362,28 @@ pub struct PredictOptions<'a> {
     /// The means.
     pub centring: Centring<'a>,
     /// The covariance of the standard errors.
-    pub variance: Variance,
+    pub variance: CoxVariance,
     /// Whether to give standard errors, `se.fit`.
     pub se_fit: bool,
     /// The hazard form of the expected number, `None` as in [`BaselineOptions`].
-    pub hazard: Option<HazardType>,
+    pub hazard: Option<CoxHazardType>,
 }
 
-impl Default for PredictOptions<'_> {
+impl Default for CoxPredictOptions<'_> {
     fn default() -> Self {
         Self {
             reference: None,
             centring: Centring::Coxph,
-            variance: Variance::Auto,
+            variance: CoxVariance::Auto,
             se_fit: false,
             hazard: None,
         }
     }
 }
+
+/// `CoxPredictOptions`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `CoxPredictOptions`")]
+pub type PredictOptions<'a> = CoxPredictOptions<'a>;
 
 pub use crate::survfit::ConfType;
 
@@ -385,13 +401,13 @@ pub enum CurveType {
 
 /// The options of [`survfit`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct SurvfitOptions<'a> {
+pub struct CoxSurvfitOptions<'a> {
     /// The means the baseline is formed with. The curves do not depend on it.
     pub centring: Centring<'a>,
     /// The form of the hazard, as in [`BaselineOptions`], `ctype` of `survfit`.
-    pub hazard: Option<HazardType>,
+    pub hazard: Option<CoxHazardType>,
     /// The covariance of the standard error.
-    pub variance: Variance,
+    pub variance: CoxVariance,
     /// Whether to give the standard error, `se.fit`. Without it there are no
     /// confidence limits.
     pub se_fit: bool,
@@ -412,12 +428,12 @@ pub struct SurvfitOptions<'a> {
     pub censor_times: bool,
 }
 
-impl Default for SurvfitOptions<'_> {
+impl Default for CoxSurvfitOptions<'_> {
     fn default() -> Self {
         Self {
             centring: Centring::Coxph,
             hazard: None,
-            variance: Variance::Auto,
+            variance: CoxVariance::Auto,
             se_fit: true,
             conf_type: ConfType::Log,
             level: Level::default(),
@@ -427,6 +443,10 @@ impl Default for SurvfitOptions<'_> {
         }
     }
 }
+
+/// `CoxSurvfitOptions`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `CoxSurvfitOptions`")]
+pub type SurvfitOptions<'a> = CoxSurvfitOptions<'a>;
 
 /// The baseline of one stratum at its event times, in ascending order.
 #[derive(Debug, Clone, PartialEq)]
@@ -477,7 +497,7 @@ pub struct Baseline {
     /// The weighted mean of the offsets `o_c`, 0 without an offset.
     pub offset_centre: f64,
     /// The form of the hazard.
-    pub hazard_type: HazardType,
+    pub hazard_type: CoxHazardType,
     /// `exp(-c' beta)`, the factor from the centred baseline to the baseline
     /// of a subject with every covariate 0 (`centered = FALSE`).
     pub uncentring_factor: f64,
@@ -490,12 +510,16 @@ pub struct Baseline {
 /// The result of [`predict`]: a value per row, and its standard error when
 /// requested.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Prediction {
+pub struct CoxPrediction {
     /// The predicted value of each row.
     pub fit: Vec<f64>,
     /// The standard error of each row when `se_fit` was set.
     pub se: Option<Vec<f64>>,
 }
+
+/// `CoxPrediction`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `CoxPrediction`")]
+pub type Prediction = CoxPrediction;
 
 /// The result of [`predict_terms`].
 #[derive(Debug, Clone, PartialEq)]
@@ -622,7 +646,7 @@ struct Model<'a> {
 }
 
 impl<'a> Model<'a> {
-    fn new(m: &FittedModel<'a>, variance: Variance) -> Result<Self> {
+    fn new(m: &FittedModel<'a>, variance: CoxVariance) -> Result<Self> {
         let rows = m.data.n_rows();
         check_row_count(rows)?;
         check_lengths(&[("data", rows), ("x", m.x.nrows())])?;
@@ -647,13 +671,13 @@ impl<'a> Model<'a> {
             .map(|c| c.unwrap_or(0.0))
             .collect();
         let chosen = match variance {
-            Variance::Auto => m
+            CoxVariance::Auto => m
                 .fit
                 .robust_covariance
                 .as_ref()
                 .unwrap_or(&m.fit.covariance),
-            Variance::Model => &m.fit.covariance,
-            Variance::Robust => m.fit.robust_covariance.as_ref().ok_or_else(|| {
+            CoxVariance::Model => &m.fit.covariance,
+            CoxVariance::Robust => m.fit.robust_covariance.as_ref().ok_or_else(|| {
                 Error::invalid("variance: the fit has no cluster-robust covariance")
             })?,
         };
@@ -714,11 +738,11 @@ impl<'a> Model<'a> {
 
     /// The default hazard form follows the ties of the fit. Any rule other
     /// than Efron is Breslow, as `survfit.coxph` has it.
-    fn hazard_type(&self, chosen: Option<HazardType>) -> HazardType {
+    fn hazard_type(&self, chosen: Option<CoxHazardType>) -> CoxHazardType {
         chosen.unwrap_or(if self.ties == Ties::Efron {
-            HazardType::Efron
+            CoxHazardType::Efron
         } else {
-            HazardType::Breslow
+            CoxHazardType::Breslow
         })
     }
 
@@ -863,7 +887,7 @@ struct Increment {
 }
 
 fn increment(
-    kind: HazardType,
+    kind: CoxHazardType,
     weight: f64,
     count: usize,
     s0: f64,
@@ -874,7 +898,7 @@ fn increment(
     let p = s1.len();
     let bad = || Error::undefined("the sum of the risk scores of a risk set is not positive");
     match kind {
-        HazardType::Breslow => {
+        CoxHazardType::Breslow => {
             if !(s0 > 0.0 && s0.is_finite()) {
                 return Err(bad());
             }
@@ -885,7 +909,7 @@ fn increment(
                 xbar: s1.iter().map(|&s| (s / s0) * hazard).collect(),
             })
         }
-        HazardType::Efron => {
+        CoxHazardType::Efron => {
             let d = count as f64;
             let (mut sum1, mut sum2) = (0.0, 0.0);
             let mut xbar = vec![0.0; p];
@@ -914,7 +938,7 @@ fn increment(
 /// What a baseline is built for.
 #[derive(Clone, Copy)]
 struct BuildSpec {
-    kind: HazardType,
+    kind: CoxHazardType,
     /// The Kalbfleisch-Prentice increments are formed besides the hazard, and
     /// the variance increments are those of that curve.
     product_limit: bool,
@@ -926,7 +950,7 @@ struct BuildSpec {
 }
 
 impl BuildSpec {
-    fn events_only(kind: HazardType) -> Self {
+    fn events_only(kind: CoxHazardType) -> Self {
         Self {
             kind,
             product_limit: false,
@@ -1228,7 +1252,7 @@ fn build_baseline(
 fn baseline_of(
     model: &Model<'_>,
     centring: Centring<'_>,
-    hazard: Option<HazardType>,
+    hazard: Option<CoxHazardType>,
 ) -> Result<Baseline> {
     let centre = model.means(centring)?;
     build_baseline(
@@ -1248,7 +1272,7 @@ fn baseline_of(
 ///
 /// An input error as for [`basehaz`].
 pub fn reference_means(model: &FittedModel<'_>, centring: Centring<'_>) -> Result<Vec<f64>> {
-    Model::new(model, Variance::Auto)?.means(centring)
+    Model::new(model, CoxVariance::Auto)?.means(centring)
 }
 
 /// The weighted mean of the offsets of the fit, 0 without an offset.
@@ -1260,7 +1284,7 @@ pub fn reference_means(model: &FittedModel<'_>, centring: Centring<'_>) -> Resul
 ///
 /// An input error as for [`basehaz`].
 pub fn reference_offset(model: &FittedModel<'_>) -> Result<f64> {
-    Ok(Model::new(model, Variance::Auto)?.weighted_offset_mean())
+    Ok(Model::new(model, CoxVariance::Auto)?.weighted_offset_mean())
 }
 
 /// The baseline cumulative hazard of every stratum, as `basehaz` of
@@ -1325,13 +1349,13 @@ fn expected_parts(
 /// weight.
 pub fn predict(
     model: &FittedModel<'_>,
-    kind: PredictType,
+    kind: CoxPredictType,
     newdata: Option<&NewData<'_>>,
-    opts: &PredictOptions<'_>,
-) -> Result<Prediction> {
+    opts: &CoxPredictOptions<'_>,
+) -> Result<CoxPrediction> {
     let m = Model::new(model, opts.variance)?;
     let p = m.p;
-    let expected = matches!(kind, PredictType::Expected | PredictType::Survival);
+    let expected = matches!(kind, CoxPredictType::Expected | CoxPredictType::Survival);
     let reference = if expected {
         Reference::Sample
     } else {
@@ -1369,13 +1393,13 @@ pub fn predict(
     let mut centre = vec![0.0; p];
     let mut z = vec![0.0; p];
     match kind {
-        PredictType::LinearPredictor | PredictType::Risk => {
+        CoxPredictType::LinearPredictor | CoxPredictType::Risk => {
             let mean_offset = m.plain_offset_mean();
             for i in 0..rows {
                 reference_of(i, &mut centre);
                 centred_row(xm, i, &centre, &mut z);
                 let lp = m.dot_beta(&z) + (offset.map_or(0.0, |o| o[i]) - mean_offset);
-                let value = if kind == PredictType::Risk {
+                let value = if kind == CoxPredictType::Risk {
                     lp.exp()
                 } else {
                     lp
@@ -1383,7 +1407,7 @@ pub fn predict(
                 fit.push(value);
                 if let Some(se) = se.as_mut() {
                     let s = quad(&m.variance, p, &z).sqrt();
-                    se.push(if kind == PredictType::Risk {
+                    se.push(if kind == CoxPredictType::Risk {
                         s * value
                     } else {
                         s
@@ -1391,7 +1415,7 @@ pub fn predict(
                 }
             }
         }
-        PredictType::Expected | PredictType::Survival => {
+        CoxPredictType::Expected | CoxPredictType::Survival => {
             let (starts, stops) = match newdata {
                 None => (m.start().map(<[f64]>::to_vec), m.stop().to_vec()),
                 Some(new) => {
@@ -1436,7 +1460,7 @@ pub fn predict(
                     expected_parts(&baseline, strata[i], begin, stops[i]);
                 let value = increment * theta;
                 let survival = (-value).exp();
-                fit.push(if kind == PredictType::Survival {
+                fit.push(if kind == CoxPredictType::Survival {
                     survival
                 } else {
                     value
@@ -1456,7 +1480,7 @@ pub fn predict(
                     }
                     let var = variance + quad(&m.variance, p, &g);
                     let s = theta * var.sqrt();
-                    se.push(if kind == PredictType::Survival {
+                    se.push(if kind == CoxPredictType::Survival {
                         s * survival
                     } else {
                         s
@@ -1465,7 +1489,7 @@ pub fn predict(
             }
         }
     }
-    Ok(Prediction { fit, se })
+    Ok(CoxPrediction { fit, se })
 }
 
 /// The part of the linear predictor from each group of columns, as
@@ -1482,7 +1506,7 @@ pub fn predict_terms(
     model: &FittedModel<'_>,
     groups: &[&[usize]],
     newdata: Option<&NewData<'_>>,
-    opts: &PredictOptions<'_>,
+    opts: &CoxPredictOptions<'_>,
 ) -> Result<TermsPrediction> {
     let m = Model::new(model, opts.variance)?;
     let p = m.p;
@@ -1607,7 +1631,7 @@ fn bands(kind: ConfType, survival: &[f64], se: Option<&[f64]>, z: f64) -> (Band,
 }
 
 /// The baseline a curve is read from, for the options of [`survfit`].
-fn curve_baseline(m: &Model<'_>, opts: &SurvfitOptions<'_>) -> Result<Baseline> {
+fn curve_baseline(m: &Model<'_>, opts: &CoxSurvfitOptions<'_>) -> Result<Baseline> {
     let product_limit = opts.curve_type == CurveType::KalbfleischPrentice;
     if product_limit && opts.hazard.is_some() {
         return Err(Error::invalid(
@@ -1626,7 +1650,7 @@ fn curve_baseline(m: &Model<'_>, opts: &SurvfitOptions<'_>) -> Result<Baseline> 
         m.weighted_offset_mean(),
         BuildSpec {
             kind: if product_limit {
-                HazardType::Breslow
+                CoxHazardType::Breslow
             } else {
                 m.hazard_type(opts.hazard)
             },
@@ -1644,7 +1668,7 @@ fn curve_baseline(m: &Model<'_>, opts: &SurvfitOptions<'_>) -> Result<Baseline> 
 /// that of the row's stratum. For the curve of the average subject, pass the
 /// row [`reference_means`] returns and the offset [`reference_offset`] returns.
 /// `newdata.start` and `stop` are not read. The curve type, the start time and
-/// the times of the curves are chosen in [`SurvfitOptions`].
+/// the times of the curves are chosen in [`CoxSurvfitOptions`].
 ///
 /// # Errors
 ///
@@ -1653,7 +1677,7 @@ fn curve_baseline(m: &Model<'_>, opts: &SurvfitOptions<'_>) -> Result<Baseline> 
 pub fn survfit(
     model: &FittedModel<'_>,
     newdata: &NewData<'_>,
-    opts: &SurvfitOptions<'_>,
+    opts: &CoxSurvfitOptions<'_>,
 ) -> Result<SurvCurves> {
     let m = Model::new(model, opts.variance)?;
     m.check_new(newdata)?;
@@ -1742,18 +1766,18 @@ pub fn survfit(
 ///
 /// An input error as for [`predict`] and [`residuals`](super::residuals::residuals).
 pub fn predict_expected_martingale(model: &FittedModel<'_>) -> Result<Vec<f64>> {
-    use super::residuals::{ResidualKind, ResidualOptions, residuals};
+    use super::residuals::{CoxResidualKind, ResidualOptions, residuals};
     let defined = predict(
         model,
-        PredictType::Expected,
+        CoxPredictType::Expected,
         None,
-        &PredictOptions::default(),
+        &CoxPredictOptions::default(),
     )?;
     let m = residuals(
         model.data,
         model.x,
         model.fit,
-        &ResidualOptions::new(ResidualKind::Martingale, model.options.clone()),
+        &ResidualOptions::new(CoxResidualKind::Martingale, model.options.clone()),
     )?;
     let data = model.data.clone().with_timefix(model.options.timefix)?;
     let code = match (model.options.cause, data.followup()?.n_codes()) {

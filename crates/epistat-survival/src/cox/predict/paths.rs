@@ -38,7 +38,7 @@ use epistat_linalg::MatRef;
 use epistat_stats::dist::normal;
 
 use super::{
-    CurveType, FittedModel, Model, NewData, SurvfitOptions, bands, centred_row, curve_baseline,
+    CoxSurvfitOptions, CurveType, FittedModel, Model, NewData, bands, centred_row, curve_baseline,
     quad,
 };
 use crate::check::check_lengths;
@@ -112,7 +112,7 @@ pub struct PathCurves {
 pub fn survfit_paths(
     model: &FittedModel<'_>,
     paths: &PathData<'_>,
-    opts: &SurvfitOptions<'_>,
+    opts: &CoxSurvfitOptions<'_>,
 ) -> Result<PathCurves> {
     let m = Model::new(model, opts.variance)?;
     let rows = paths.x.nrows();

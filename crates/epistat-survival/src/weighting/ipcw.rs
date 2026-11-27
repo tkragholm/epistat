@@ -52,7 +52,7 @@ use epistat_core::{Covariance, InputError};
 use epistat_linalg::MatRef;
 
 use crate::cox::{
-    BaselineOptions, Centring, CoxOptions, FittedModel, Ties, Variance, basehaz, fit as cox_fit,
+    BaselineOptions, Centring, CoxOptions, CoxVariance, FittedModel, Ties, basehaz, fit as cox_fit,
 };
 use crate::error::{Error, Result};
 use crate::step::Steps;
@@ -274,7 +274,7 @@ pub(super) fn fit_parts<'a>(
             &BaselineOptions {
                 centring: Centring::Given(&zero),
                 hazard: None,
-                variance: Variance::Model,
+                variance: CoxVariance::Model,
             },
         )?;
         for r in 0..n {

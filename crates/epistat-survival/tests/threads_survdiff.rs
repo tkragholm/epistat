@@ -7,7 +7,7 @@
 
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::survdiff::{Options, one_sample, test};
+use epistat_survival::survdiff::{SurvdiffOptions, one_sample, test};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
 #[test]
@@ -29,9 +29,9 @@ fn survdiff_does_not_depend_on_the_number_of_threads() {
     let offset: Vec<f64> = time.iter().map(|t| (-0.05 * t).exp()).collect();
     let plain = SurvData::builder(&time, &status).build().unwrap();
     for rho in [0.0, 1.0, 0.37] {
-        let opts = Options {
+        let opts = SurvdiffOptions {
             rho,
-            ..Options::default()
+            ..SurvdiffOptions::default()
         };
         assert_same_on_pools(&POOLS, || {
             let r = test(&data, &group, &opts).unwrap();

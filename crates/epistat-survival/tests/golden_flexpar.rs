@@ -11,8 +11,8 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvBuf;
 use epistat_survival::flexpar::{
-    Contrast, FlexParFit, FlexParOptions, Predict, PredictOptions, Scale, TimeVarying, contrast,
-    fit, predict,
+    FlexParFit, FlexParOptions, FlexparContrast, FlexparPredictOptions, FlexparScale, Predict,
+    TimeVarying, contrast, fit, predict,
 };
 use epistat_testkit::Fingerprint;
 
@@ -54,7 +54,7 @@ struct Case {
     columns: usize,
 }
 
-fn run(scale: Scale, case: &Case) -> (u64, u64) {
+fn run(scale: FlexparScale, case: &Case) -> (u64, u64) {
     let n = 500;
     let mut rng = Stream::seeded(77);
     let (mut time, mut start, mut status, mut weight, mut cluster) =
@@ -103,9 +103,9 @@ fn run(scale: Scale, case: &Case) -> (u64, u64) {
         [[0.4, 1.0, 0.0], [-0.3, 0.0, 0.0]][i][j]
     });
     let reference = Mat::from_fn(1, case.columns, |_, j| [-0.3, 0.0, 0.0][j]);
-    let o = PredictOptions {
+    let o = FlexparPredictOptions {
         robust: case.clusters,
-        ..PredictOptions::default()
+        ..FlexparPredictOptions::default()
     };
     let times = [0.2, 0.7, 1.5, 3.0];
     let mut h = Fingerprint::new();
@@ -125,9 +125,9 @@ fn run(scale: Scale, case: &Case) -> (u64, u64) {
         }
     }
     for what in [
-        Contrast::HazardRatio,
-        Contrast::HazardDifference,
-        Contrast::SurvivalDifference,
+        FlexparContrast::HazardRatio,
+        FlexparContrast::HazardDifference,
+        FlexparContrast::SurvivalDifference,
     ] {
         for curve in contrast(&f, new.as_ref(), reference.as_ref(), &times, what, &o).unwrap() {
             for p in curve {
@@ -194,9 +194,9 @@ fn bits_are_pinned() {
     ];
     let mut lines: Vec<Line> = Vec::new();
     for (label, scale) in [
-        ("hazard", Scale::Hazard),
-        ("odds", Scale::Odds),
-        ("probit", Scale::Probit),
+        ("hazard", FlexparScale::Hazard),
+        ("odds", FlexparScale::Odds),
+        ("probit", FlexparScale::Probit),
     ] {
         for case in &cases {
             let (fit, predictions) = run(scale, case);

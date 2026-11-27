@@ -43,7 +43,7 @@
 use std::collections::BTreeMap;
 
 use epistat_linalg::Mat;
-use epistat_survival::cox::predict::{FittedModel, NewData, SurvfitOptions, survfit};
+use epistat_survival::cox::predict::{CoxSurvfitOptions, FittedModel, NewData, survfit};
 use epistat_survival::cox::{CoxOptions, fit};
 use epistat_survival::metrics::brier::{self, BrierOptions};
 use epistat_survival::metrics::rttright::{self, RttrightOptions};
@@ -239,9 +239,9 @@ fn probabilities(
         fit: &model,
         options: &opts,
     };
-    let sopts = SurvfitOptions {
+    let sopts = CoxSurvfitOptions {
         se_fit: false,
-        ..SurvfitOptions::default()
+        ..CoxSurvfitOptions::default()
     };
     let curves = survfit(&fitted, &NewData::new(x.as_ref()), &sopts).unwrap();
     Mat::from_fn(x.nrows(), times.len(), |i, j| {

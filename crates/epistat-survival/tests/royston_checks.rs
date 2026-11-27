@@ -1,7 +1,7 @@
 //! Edge cases of `metrics::royston` that do not need R.
 
 use epistat_survival::SurvData;
-use epistat_survival::metrics::royston::{Adjustment, RoystonOptions, estimate};
+use epistat_survival::metrics::royston::{RoystonAdjustment, RoystonOptions, estimate};
 
 fn sample() -> (Vec<f64>, Vec<i32>, Vec<f64>) {
     let stop: Vec<f64> = (0..40).map(|i| f64::from((i * 7) % 19) + 1.0).collect();
@@ -111,7 +111,7 @@ fn adjusted_standard_error_is_none_when_the_correction_cancels() {
         &data,
         &eta,
         &RoystonOptions {
-            adjust: Some(Adjustment {
+            adjust: Some(RoystonAdjustment {
                 n_events: e,
                 n_coef: 1,
             }),
@@ -136,7 +136,7 @@ fn invalid_input_is_an_error() {
     assert!(estimate(&data, &bad, &opts).is_err());
     for (n_events, n_coef) in [(3.0, 3), (2.0, 3), (f64::INFINITY, 1), (f64::NAN, 1)] {
         let o = RoystonOptions {
-            adjust: Some(Adjustment { n_events, n_coef }),
+            adjust: Some(RoystonAdjustment { n_events, n_coef }),
             ..opts
         };
         assert!(estimate(&data, &eta, &o).is_err(), "{n_events} {n_coef}");

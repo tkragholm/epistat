@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use super::MsModel;
 use crate::covariance;
 use crate::cox::predict::{
-    Baseline, BaselineOptions, Centring, FittedModel, HazardType, StratumBaseline, Variance,
+    Baseline, BaselineOptions, Centring, CoxHazardType, CoxVariance, FittedModel, StratumBaseline,
     basehaz,
 };
 use crate::cox::{CoxModelFit, CoxOptions};
@@ -18,11 +18,11 @@ use crate::timefix::TimeFix;
 pub struct MsFitOptions {
     /// The form of the baseline hazard at tied events. `None` follows the ties
     /// of the fit, as `survfit.coxph` does and `msfit` with it.
-    pub hazard: Option<HazardType>,
+    pub hazard: Option<CoxHazardType>,
     /// The covariance of the coefficients the variances use. The model-based
     /// matrix by default, which is the one `mstate` takes since it refuses a
     /// cluster term.
-    pub variance: Variance,
+    pub variance: CoxVariance,
     /// Whether to give the variances and covariances, `variance` of `msfit`.
     pub se: bool,
     /// The form of the variance of the cumulative hazards, `vartype` of
@@ -37,7 +37,7 @@ impl Default for MsFitOptions {
     fn default() -> Self {
         Self {
             hazard: None,
-            variance: Variance::Model,
+            variance: CoxVariance::Model,
             se: true,
             vartype: MsVarType::Aalen,
             offset: 0.0,
@@ -141,13 +141,13 @@ fn by_time(pairs: &[Vec<f64>], k: usize, n_t: usize) -> Result<Vec<Covariance>> 
 
 /// The covariance matrix of the coefficients, row-major with zeros for aliased
 /// coefficients.
-fn covariance_matrix(fit: &CoxModelFit, variance: Variance) -> Result<Vec<f64>> {
+fn covariance_matrix(fit: &CoxModelFit, variance: CoxVariance) -> Result<Vec<f64>> {
     let matrix = match variance {
-        Variance::Model => &fit.covariance,
-        Variance::Robust => fit.robust_covariance.as_ref().ok_or_else(|| {
+        CoxVariance::Model => &fit.covariance,
+        CoxVariance::Robust => fit.robust_covariance.as_ref().ok_or_else(|| {
             Error::invalid("variance: the robust covariance needs `robust` in the fit")
         })?,
-        Variance::Auto => fit.robust_covariance.as_ref().unwrap_or(&fit.covariance),
+        CoxVariance::Auto => fit.robust_covariance.as_ref().unwrap_or(&fit.covariance),
     };
     Ok(matrix.as_slice().iter().map(|v| v.unwrap_or(0.0)).collect())
 }

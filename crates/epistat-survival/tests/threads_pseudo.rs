@@ -17,7 +17,7 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::pseudo::{
-    Method, Pseudo, PseudoOptions, PseudoRegressionOptions, Target, pseudo,
+    Pseudo, PseudoMethod, PseudoOptions, PseudoRegressionOptions, Target, pseudo,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -100,7 +100,10 @@ fn pseudo_does_not_depend_on_the_number_of_threads() {
             Target::CumulativeHazard,
             Target::CauseHazard { cause: 2 },
         ] {
-            for method in [Method::InfinitesimalJackknife, Method::Jackknife] {
+            for method in [
+                PseudoMethod::InfinitesimalJackknife,
+                PseudoMethod::Jackknife,
+            ] {
                 let mut opts = PseudoOptions::new(target);
                 opts.method = method;
                 assert_same_on_pools(&POOLS, || {

@@ -13,8 +13,8 @@
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::flexpar::{
-    Contrast, FlexParFit, FlexParOptions, Predict, PredictOptions, Scale, TimeVarying, contrast,
-    fit, predict,
+    FlexParFit, FlexParOptions, FlexparContrast, FlexparPredictOptions, FlexparScale, Predict,
+    TimeVarying, contrast, fit, predict,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -124,11 +124,11 @@ struct Reference {
     fits: Vec<RFit>,
 }
 
-fn scale_of(name: &str) -> Scale {
+fn scale_of(name: &str) -> FlexparScale {
     match name {
-        "hazard" => Scale::Hazard,
-        "odds" => Scale::Odds,
-        "probit" => Scale::Probit,
+        "hazard" => FlexparScale::Hazard,
+        "odds" => FlexparScale::Odds,
+        "probit" => FlexparScale::Probit,
         other => panic!("{other}"),
     }
 }
@@ -226,7 +226,7 @@ fn flexpar_against_r() {
         v.jsonlite
     );
     let mut worst = Worst::default();
-    let options = PredictOptions::default();
+    let options = FlexparPredictOptions::default();
     for r in &reference.fits {
         worst.1.clone_from(&r.name);
         worst.2 = format!(
@@ -359,7 +359,7 @@ fn flexpar_against_r() {
                 x1.as_ref(),
                 x0.as_ref(),
                 times,
-                Contrast::HazardRatio,
+                FlexparContrast::HazardRatio,
                 &options,
             )
             .unwrap();
@@ -439,7 +439,7 @@ fn delta_checks(
     f: &FlexParFit,
     r: &RFit,
     times: &[f64],
-    options: &PredictOptions,
+    options: &FlexparPredictOptions,
 ) {
     let profiles = r.profiles.as_ref().unwrap();
     let preds = r.predictions.as_ref().unwrap();
@@ -473,9 +473,9 @@ fn delta_checks(
     let x1 = profile_matrix(profiles, 0);
     let x0 = profile_matrix(profiles, 1);
     for (key, what) in [
-        ("hazard_ratio", Contrast::HazardRatio),
-        ("survival_difference", Contrast::SurvivalDifference),
-        ("hazard_difference", Contrast::HazardDifference),
+        ("hazard_ratio", FlexparContrast::HazardRatio),
+        ("survival_difference", FlexparContrast::SurvivalDifference),
+        ("hazard_difference", FlexparContrast::HazardDifference),
     ] {
         let reference = &preds[key];
         let got = contrast(f, x1.as_ref(), x0.as_ref(), times, what, options).unwrap();

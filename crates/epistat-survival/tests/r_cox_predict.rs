@@ -39,9 +39,9 @@ use epistat_linalg::{Mat, Side};
 use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
-    BaselineOptions, Centring, ConfType, FittedModel, HazardType, NewData, PredictOptions,
-    PredictType, Reference, SurvfitOptions, basehaz, predict, predict_terms, reference_means,
-    reference_offset, survfit,
+    BaselineOptions, Centring, ConfType, CoxHazardType, CoxPredictOptions, CoxPredictType,
+    CoxSurvfitOptions, FittedModel, NewData, Reference, basehaz, predict, predict_terms,
+    reference_means, reference_offset, survfit,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::{NanRule, load_json, worst_deviation, worst_deviation_defined};
@@ -192,10 +192,10 @@ fn flatten(m: &[Vec<f64>]) -> epistat_survival::Covariance {
 }
 
 /// The reference curves are R's with `censor = FALSE`, at the event times.
-fn at_events() -> SurvfitOptions<'static> {
-    SurvfitOptions {
+fn at_events() -> CoxSurvfitOptions<'static> {
+    CoxSurvfitOptions {
         censor_times: false,
-        ..SurvfitOptions::default()
+        ..CoxSurvfitOptions::default()
     }
 }
 
@@ -377,14 +377,14 @@ fn predictions_match_r() {
         new.stratum = r.strata.then_some(r.new_stratum.as_slice());
         new.offset = r.offset.then_some(r.new_offset.as_slice());
         for (label, reference_kind) in refs {
-            let opts_p = PredictOptions {
+            let opts_p = CoxPredictOptions {
                 reference: Some(reference_kind),
                 se_fit: true,
-                ..PredictOptions::default()
+                ..CoxPredictOptions::default()
             };
             for (kind, key) in [
-                (PredictType::LinearPredictor, "lp"),
-                (PredictType::Risk, "risk"),
+                (CoxPredictType::LinearPredictor, "lp"),
+                (CoxPredictType::Risk, "risk"),
             ] {
                 let rp = &r.predict[&format!("{key}_{label}")];
                 let on = predict(&fitted, kind, None, &opts_p).unwrap();
@@ -466,11 +466,11 @@ fn predictions_match_r() {
         }
 
         // expected and survival.
-        let opts_e = PredictOptions {
+        let opts_e = CoxPredictOptions {
             se_fit: true,
-            ..PredictOptions::default()
+            ..CoxPredictOptions::default()
         };
-        let ex = predict(&fitted, PredictType::Expected, None, &opts_e).unwrap();
+        let ex = predict(&fitted, CoxPredictType::Expected, None, &opts_e).unwrap();
         assert_eq!(
             r.expected.fit_plain, r.expected.fit,
             "{name}: survival's expected number without se.fit"
@@ -562,7 +562,7 @@ fn predictions_match_r() {
                 ),
             );
         }
-        let sv = predict(&fitted, PredictType::Survival, None, &opts_e).unwrap();
+        let sv = predict(&fitted, CoxPredictType::Survival, None, &opts_e).unwrap();
         // survival's survival of the fitted data is exp(-expected) of its
         // martingale form, and its se that of the cumulative-hazard form times
         // that survival; the definition form is compared on every row and
@@ -620,7 +620,7 @@ fn predictions_match_r() {
         if !r.offset {
             new_e.stop = Some(&r.new_stop);
             new_e.start = r.entry.then_some(r.new_start.as_slice());
-            let en = predict(&fitted, PredictType::Expected, Some(&new_e), &opts_e).unwrap();
+            let en = predict(&fitted, CoxPredictType::Expected, Some(&new_e), &opts_e).unwrap();
             note(
                 "expected new",
                 worst_deviation(
@@ -753,7 +753,7 @@ fn predictions_match_r() {
                 ),
             );
             for (key, kind) in kinds {
-                let o = SurvfitOptions {
+                let o = CoxSurvfitOptions {
                     conf_type: kind,
                     ..at_events()
                 };
@@ -769,7 +769,7 @@ fn predictions_match_r() {
                         )),
                 );
             }
-            let o90 = SurvfitOptions {
+            let o90 = CoxSurvfitOptions {
                 level: Level::confidence(0.9).unwrap(),
                 ..at_events()
             };
@@ -790,14 +790,14 @@ fn predictions_match_r() {
         }
         // The other hazard type.
         let alt_kind = if r.survfit_alt.ctype == 1 {
-            HazardType::Breslow
+            CoxHazardType::Breslow
         } else {
-            HazardType::Efron
+            CoxHazardType::Efron
         };
         let alt = survfit(
             &fitted,
             &new,
-            &SurvfitOptions {
+            &CoxSurvfitOptions {
                 hazard: Some(alt_kind),
                 ..at_events()
             },

@@ -1,7 +1,7 @@
 //! Net survival standardised by age: a weighted mean of the curves of age
 //! groups.
 
-use super::{NetSurvival, Transform};
+use super::{NetSurvival, NetTransform};
 use crate::error::{Error, Result};
 use epistat_core::Level;
 use epistat_stats::dist::normal;
@@ -52,8 +52,8 @@ pub struct StandardisedNet {
 /// by the delta method for `R_k = exp(-Lambda_k)` and independent groups, as
 /// in the traditional approach of Corazziari et al. and Lambert et al. The
 /// limits are normal on the scale of `transform`: `R -/+ z se` for
-/// [`Transform::Plain`], `R exp(-/+ z se / R)` for [`Transform::Log`], and for
-/// [`Transform::LogLog`] normal limits of `ln Lambda` with `Lambda = -ln R`
+/// [`NetTransform::Plain`], `R exp(-/+ z se / R)` for [`NetTransform::Log`], and for
+/// [`NetTransform::LogLog`] normal limits of `ln Lambda` with `Lambda = -ln R`
 /// and the standard error `se / (R Lambda)`, undefined when `Lambda` is not
 /// positive, as for one curve. A group of weight 0 is left out.
 ///
@@ -67,7 +67,7 @@ pub fn standardise_net(
     weights: &[f64],
     times: &[f64],
     level: Level,
-    transform: Transform,
+    transform: NetTransform,
 ) -> Result<StandardisedNet> {
     if curves.is_empty() {
         return Err(Error::invalid("no curve to standardise"));
@@ -124,9 +124,9 @@ pub fn standardise_net(
         };
         let se = v.sqrt();
         let limits = match transform {
-            Transform::Plain => Some((r - z * se, r + z * se)),
-            Transform::Log => Some((r * (-z * se / r).exp(), r * (z * se / r).exp())),
-            Transform::LogLog => {
+            NetTransform::Plain => Some((r - z * se, r + z * se)),
+            NetTransform::Log => Some((r * (-z * se / r).exp(), r * (z * se / r).exp())),
+            NetTransform::LogLog => {
                 let lambda = -r.ln();
                 (lambda > 0.0).then(|| {
                     let shift = z * se / (r * lambda);

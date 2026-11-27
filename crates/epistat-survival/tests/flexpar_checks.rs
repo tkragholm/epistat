@@ -6,7 +6,8 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::flexpar::{
-    Contrast, FlexParOptions, Predict, PredictOptions, Scale, TimeVarying, contrast, fit, predict,
+    FlexParOptions, FlexparContrast, FlexparPredictOptions, FlexparScale, Predict, TimeVarying,
+    contrast, fit, predict,
 };
 
 struct Sim {
@@ -61,7 +62,7 @@ fn data(s: &Sim, entry: bool) -> SurvData<'_> {
 #[test]
 fn refusals() {
     let s = simulate(200, 1);
-    let opts = FlexParOptions::new(Scale::Hazard, 3);
+    let opts = FlexParOptions::new(FlexparScale::Hazard, 3);
     let d = data(&s, false);
     // a time of 0
     let mut zero = s.time.clone();
@@ -92,7 +93,14 @@ fn refusals() {
         let o = FlexParOptions { tvc: &tvc, ..opts };
         assert!(fit(&d, s.x.as_ref(), &o).is_err());
     }
-    assert!(fit(&d, s.x.as_ref(), &FlexParOptions::new(Scale::Hazard, 0)).is_err());
+    assert!(
+        fit(
+            &d,
+            s.x.as_ref(),
+            &FlexParOptions::new(FlexparScale::Hazard, 0)
+        )
+        .is_err()
+    );
     // knots of the wrong number
     let o = FlexParOptions {
         knots: Some(&[0.0, 1.0]),
@@ -121,8 +129,22 @@ fn refusals() {
         .id(&ids)
         .build()
         .unwrap();
-    assert!(fit(&di, s.x.as_ref(), &FlexParOptions::new(Scale::Odds, 2)).is_err());
-    assert!(fit(&di, s.x.as_ref(), &FlexParOptions::new(Scale::Hazard, 2)).is_ok());
+    assert!(
+        fit(
+            &di,
+            s.x.as_ref(),
+            &FlexParOptions::new(FlexparScale::Odds, 2)
+        )
+        .is_err()
+    );
+    assert!(
+        fit(
+            &di,
+            s.x.as_ref(),
+            &FlexParOptions::new(FlexparScale::Hazard, 2)
+        )
+        .is_ok()
+    );
     // a stratified follow-up
     let strata: Vec<u32> = (0..200).map(|i| i % 2).collect();
     let ds = SurvData::builder(&s.time, &s.status)
@@ -138,18 +160,18 @@ fn prediction_refusals() {
     let f = fit(
         &data(&s, false),
         s.x.as_ref(),
-        &FlexParOptions::new(Scale::Hazard, 3),
+        &FlexParOptions::new(FlexparScale::Hazard, 3),
     )
     .unwrap();
     let x = Mat::from_fn(1, 2, |_, j| if j == 0 { 0.3 } else { 1.0 });
-    let ok = PredictOptions::default();
+    let ok = FlexparPredictOptions::default();
     assert!(predict(&f, x.as_ref(), &[1.0], Predict::Survival, &ok).is_ok());
     assert!(predict(&f, x.as_ref(), &[0.0], Predict::Survival, &ok).is_err());
     assert!(predict(&f, x.as_ref(), &[f64::INFINITY], Predict::Survival, &ok).is_err());
     let wide = Mat::<f64>::zeros(1, 3);
     assert!(predict(&f, wide.as_ref(), &[1.0], Predict::Survival, &ok).is_err());
     // no clusters, so no robust covariance
-    let robust = PredictOptions { robust: true, ..ok };
+    let robust = FlexparPredictOptions { robust: true, ..ok };
     assert!(f.robust_covariance.is_none());
     assert!(predict(&f, x.as_ref(), &[1.0], Predict::Survival, &robust).is_err());
     let two = Mat::<f64>::zeros(2, 2);
@@ -159,7 +181,7 @@ fn prediction_refusals() {
             x.as_ref(),
             two.as_ref(),
             &[1.0],
-            Contrast::HazardRatio,
+            FlexparContrast::HazardRatio,
             &ok
         )
         .is_err()
@@ -177,7 +199,7 @@ fn an_aliased_column_has_no_coefficient_and_changes_nothing_else() {
         2 => 2.0 * s.x[(i, 0)] - 1.0,
         _ => 3.0,
     });
-    let opts = FlexParOptions::new(Scale::Probit, 3);
+    let opts = FlexParOptions::new(FlexparScale::Probit, 3);
     let d = data(&s, true);
     let full = fit(&d, wide.as_ref(), &opts).unwrap();
     let base = fit(&d, s.x.as_ref(), &opts).unwrap();
@@ -193,7 +215,7 @@ fn an_aliased_column_has_no_coefficient_and_changes_nothing_else() {
     // predictions ignore the aliased columns
     let x = Mat::from_fn(1, 4, |_, j| [0.2, 1.0, 5.0, -7.0][j]);
     let xb = Mat::from_fn(1, 2, |_, j| [0.2, 1.0][j]);
-    let o = PredictOptions::default();
+    let o = FlexparPredictOptions::default();
     let a = predict(&full, x.as_ref(), &[1.0, 2.0], Predict::Survival, &o).unwrap();
     let b = predict(&base, xb.as_ref(), &[1.0, 2.0], Predict::Survival, &o).unwrap();
     assert!((a[0][1].estimate - b[0][1].estimate).abs() < 1e-7);
@@ -206,7 +228,7 @@ fn an_aliased_column_has_no_coefficient_and_changes_nothing_else() {
 fn integer_weights_are_repeated_rows_and_zero_weights_are_absent_rows() {
     let s = simulate(120, 4);
     let weights: Vec<f64> = (0..120).map(|i| [0.0, 1.0, 2.0, 3.0][i % 4]).collect();
-    let opts = FlexParOptions::new(Scale::Odds, 2);
+    let opts = FlexParOptions::new(FlexparScale::Odds, 2);
     let weighted = SurvData::builder(&s.time, &s.status)
         .weight(&weights)
         .build()
@@ -254,7 +276,7 @@ fn integer_weights_are_repeated_rows_and_zero_weights_are_absent_rows() {
 fn an_offset_moves_the_intercept_and_leaves_no_null_likelihood() {
     let s = simulate(250, 5);
     let d = data(&s, false);
-    let opts = FlexParOptions::new(Scale::Hazard, 3);
+    let opts = FlexParOptions::new(FlexparScale::Hazard, 3);
     let base = fit(&d, s.x.as_ref(), &opts).unwrap();
     assert!(base.null_log_likelihood.unwrap() < base.log_likelihood);
     // an offset of 0.7 on every row shifts the intercept by -0.7
@@ -283,14 +305,19 @@ fn the_hazard_ratio_is_constant_without_time_varying_effects_and_is_not_with_the
     let x1 = Mat::from_fn(1, 2, |_, j| [0.4, 1.0][j]);
     let x0 = Mat::from_fn(1, 2, |_, j| [0.4, 0.0][j]);
     let times = [0.2, 0.5, 1.0, 2.0, 4.0];
-    let o = PredictOptions::default();
-    let f = fit(&d, s.x.as_ref(), &FlexParOptions::new(Scale::Hazard, 3)).unwrap();
+    let o = FlexparPredictOptions::default();
+    let f = fit(
+        &d,
+        s.x.as_ref(),
+        &FlexParOptions::new(FlexparScale::Hazard, 3),
+    )
+    .unwrap();
     let hr = contrast(
         &f,
         x1.as_ref(),
         x0.as_ref(),
         &times,
-        Contrast::HazardRatio,
+        FlexparContrast::HazardRatio,
         &o,
     )
     .unwrap();
@@ -305,7 +332,7 @@ fn the_hazard_ratio_is_constant_without_time_varying_effects_and_is_not_with_the
         s.x.as_ref(),
         &FlexParOptions {
             tvc: &tvc,
-            ..FlexParOptions::new(Scale::Hazard, 3)
+            ..FlexParOptions::new(FlexparScale::Hazard, 3)
         },
     )
     .unwrap();
@@ -314,7 +341,7 @@ fn the_hazard_ratio_is_constant_without_time_varying_effects_and_is_not_with_the
         x1.as_ref(),
         x0.as_ref(),
         &times,
-        Contrast::HazardRatio,
+        FlexparContrast::HazardRatio,
         &o,
     )
     .unwrap();
@@ -327,7 +354,7 @@ fn the_hazard_ratio_is_constant_without_time_varying_effects_and_is_not_with_the
         x1.as_ref(),
         x0.as_ref(),
         &times,
-        Contrast::SurvivalDifference,
+        FlexparContrast::SurvivalDifference,
         &o,
     )
     .unwrap();
@@ -341,7 +368,7 @@ fn the_hazard_ratio_is_constant_without_time_varying_effects_and_is_not_with_the
         x1.as_ref(),
         x0.as_ref(),
         &times,
-        Contrast::HazardDifference,
+        FlexparContrast::HazardDifference,
         &o,
     )
     .unwrap();
@@ -352,7 +379,11 @@ fn the_hazard_ratio_is_constant_without_time_varying_effects_and_is_not_with_the
 fn survival_is_a_decreasing_function_within_its_limits() {
     let s = simulate(400, 7);
     let d = data(&s, true);
-    for scale in [Scale::Hazard, Scale::Odds, Scale::Probit] {
+    for scale in [
+        FlexparScale::Hazard,
+        FlexparScale::Odds,
+        FlexparScale::Probit,
+    ] {
         let f = fit(&d, s.x.as_ref(), &FlexParOptions::new(scale, 4)).unwrap();
         assert!(f.converged && f.monotone_on_data && !f.diverging);
         let x = Mat::from_fn(1, 2, |_, j| [0.0, 1.0][j]);
@@ -362,7 +393,7 @@ fn survival_is_a_decreasing_function_within_its_limits() {
             x.as_ref(),
             &times,
             Predict::Survival,
-            &PredictOptions::default(),
+            &FlexparPredictOptions::default(),
         )
         .unwrap()[0];
         for w in curve.windows(2) {
@@ -378,7 +409,7 @@ fn survival_is_a_decreasing_function_within_its_limits() {
             x.as_ref(),
             &times,
             Predict::CumulativeHazard,
-            &PredictOptions::default(),
+            &FlexparPredictOptions::default(),
         )
         .unwrap()[0];
         for (a, b) in h.iter().zip(curve) {
@@ -394,7 +425,11 @@ fn a_fit_that_is_not_monotone_is_flagged_and_refused() {
     for seed in 0..200 {
         let s = simulate(45, 100 + seed);
         let d = data(&s, false);
-        let Ok(f) = fit(&d, s.x.as_ref(), &FlexParOptions::new(Scale::Hazard, 6)) else {
+        let Ok(f) = fit(
+            &d,
+            s.x.as_ref(),
+            &FlexParOptions::new(FlexparScale::Hazard, 6),
+        ) else {
             continue;
         };
         if f.monotone_on_data {
@@ -407,13 +442,13 @@ fn a_fit_that_is_not_monotone_is_flagged_and_refused() {
                 x.as_ref(),
                 &[1.0],
                 Predict::Survival,
-                &PredictOptions::default()
+                &FlexparPredictOptions::default()
             )
             .is_err()
         );
-        let allowed = PredictOptions {
+        let allowed = FlexparPredictOptions {
             allow_non_monotone: true,
-            ..PredictOptions::default()
+            ..FlexparPredictOptions::default()
         };
         assert!(predict(&f, x.as_ref(), &[1.0], Predict::Survival, &allowed).is_ok());
         return;
@@ -427,7 +462,11 @@ fn a_fit_that_is_not_monotone_is_flagged_and_refused() {
 fn the_bfgs_fallback_reaches_the_same_maximum() {
     let s = simulate(300, 8);
     let d = data(&s, true);
-    for scale in [Scale::Hazard, Scale::Odds, Scale::Probit] {
+    for scale in [
+        FlexparScale::Hazard,
+        FlexparScale::Odds,
+        FlexparScale::Probit,
+    ] {
         let opts = FlexParOptions {
             max_iterations: 1,
             ..FlexParOptions::new(scale, 4)

@@ -29,7 +29,9 @@ use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_survival::standardise::attributable::af_from_standardised;
-use epistat_survival::standardise::{Counterfactual, Level, StandardiseOptions, standardise_cox};
+use epistat_survival::standardise::{
+    Counterfactual, ExposureLevel, StandardiseOptions, standardise_cox,
+};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -95,8 +97,8 @@ fn the_attributable_fraction_function_matches_afcoxph() {
                 c.label
             );
         }
-        let observed = Level::single(Counterfactual::Columns(&[]));
-        let unexposed = Level::single(Counterfactual::Design(x0.as_ref()));
+        let observed = ExposureLevel::single(Counterfactual::Columns(&[]));
+        let unexposed = ExposureLevel::single(Counterfactual::Design(x0.as_ref()));
         let opts = StandardiseOptions {
             se: true,
             ..StandardiseOptions::default()

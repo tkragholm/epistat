@@ -4,7 +4,7 @@
 use epistat_linalg::MatRef;
 use epistat_optim::bfgs::Bfgs;
 
-use super::Scale;
+use super::FlexparScale;
 use super::design::Design;
 use super::link;
 use crate::ldl;
@@ -16,7 +16,7 @@ const WAVE: usize = 64;
 /// The rows of a fit: the columns of the follow-up table and the design.
 pub(super) struct Model<'a> {
     pub design: &'a Design,
-    pub scale: Scale,
+    pub scale: FlexparScale,
     pub x: MatRef<'a, f64>,
     pub stop: &'a [f64],
     pub start: Option<&'a [f64]>,

@@ -40,10 +40,10 @@ mod common;
 use common::{Lines, Rng, Table, Writer};
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
-use epistat_survival::flexpar::{FlexParOptions, Scale};
+use epistat_survival::flexpar::{FlexParOptions, FlexparScale};
 use epistat_survival::ratetable::{RateDim, RateTable};
 use epistat_survival::relsurv::{
-    ExcessOptions, ExpectedHazard, Grid, Method, NetOptions, excess_hazard, net_survival,
+    ExcessOptions, ExpectedHazard, Grid, NetMethod, NetOptions, excess_hazard, net_survival,
 };
 
 const SEED: u64 = 20_261_123;
@@ -134,9 +134,9 @@ fn main() {
         "net_pp" | "net_e2" | "net_pp_monthly" => {
             let opts = NetOptions {
                 method: if method == "net_e2" {
-                    Method::EdererII
+                    NetMethod::EdererII
                 } else {
-                    Method::PoharPerme
+                    NetMethod::PoharPerme
                 },
                 grid: if method == "net_pp_monthly" {
                     Grid::Width(30.4375)
@@ -190,7 +190,7 @@ fn main() {
                     .collect();
                 let opts = FlexParOptions {
                     bhazard: Some(&bh),
-                    ..FlexParOptions::new(Scale::Hazard, 4)
+                    ..FlexParOptions::new(FlexparScale::Hazard, 4)
                 };
                 epistat_survival::flexpar::fit(&fit_data, x.as_ref(), &opts).expect("flexpar")
             });

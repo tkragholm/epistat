@@ -336,7 +336,7 @@ fn check_contrast(
     worst: &mut Worst,
     tag: &str,
     what: &str,
-    c: &epistat_survival::metrics::contrast::Contrast,
+    c: &epistat_survival::metrics::contrast::ScoreContrast,
     j: usize,
     row: &Row,
     delta: f64,

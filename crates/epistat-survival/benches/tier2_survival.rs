@@ -39,7 +39,7 @@ mod common;
 use common::{Lines, Rng, Table, Writer};
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
-use epistat_survival::aipw::{AipwSurvOptions, AipwSurvSpec, Censoring, Estimator, aipw_cox};
+use epistat_survival::aipw::{AipwCensoring, AipwSurvOptions, AipwSurvSpec, Estimator, aipw_cox};
 use epistat_survival::cox::Ties;
 use epistat_survival::standardise::Counterfactual;
 use epistat_survival::weighting::clone::{
@@ -134,11 +134,11 @@ fn main() {
                 .expect("data");
             let (set0, set1) = ([(0_usize, 0.0)], [(0_usize, 1.0)]);
             let censoring = if method == "aipw_km" {
-                Censoring::KaplanMeier {
+                AipwCensoring::KaplanMeier {
                     groups: Some(&group),
                 }
             } else {
-                Censoring::Cox {
+                AipwCensoring::Cox {
                     x: outcome_x.as_ref(),
                 }
             };

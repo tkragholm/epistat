@@ -9,7 +9,7 @@
 
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::rmst::{Contrast, Rmst2, RmstOptions, Tau, rmst2};
+use epistat_survival::rmst::{Rmst2, RmstContrast, RmstOptions, Tau, rmst2};
 use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 
 fn flatten(r: &Rmst2, out: &mut Vec<f64>) {
@@ -30,7 +30,7 @@ fn flatten(r: &Rmst2, out: &mut Vec<f64>) {
         ]);
     }
     for c in [&r.difference, &r.ratio, &r.loss_ratio] {
-        let Contrast {
+        let RmstContrast {
             estimate,
             se,
             lower,

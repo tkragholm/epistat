@@ -129,7 +129,7 @@ use crate::surv::SurvData;
 
 /// The kinds of residual of [`residuals`], named as in `residuals.coxph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResidualKind {
+pub enum CoxResidualKind {
     /// `type = "martingale"`, one value per row.
     Martingale,
     /// `type = "deviance"`, one value per row.
@@ -146,6 +146,10 @@ pub enum ResidualKind {
     /// `type = "dfbetas"`, `dfbeta` over the standard errors.
     Dfbetas,
 }
+
+/// `CoxResidualKind`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `CoxResidualKind`")]
+pub type ResidualKind = CoxResidualKind;
 
 /// The groups whose residuals are summed, as `collapse` of `residuals.coxph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -167,7 +171,7 @@ pub enum Collapse<'a> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResidualOptions<'a> {
     /// Which residuals to compute.
-    pub kind: ResidualKind,
+    pub kind: CoxResidualKind,
     /// Multiply each residual by the case weight of its row. `None` takes the
     /// default of `residuals.coxph`: `true` for `dfbeta` and `dfbetas`, `false`
     /// for the other kinds.
@@ -184,7 +188,7 @@ impl ResidualOptions<'_> {
     /// The residuals of `kind` for a fit made with `cox`, with the defaults of
     /// `residuals.coxph` for `weighted` and `collapse`.
     #[must_use]
-    pub fn new(kind: ResidualKind, cox: CoxOptions) -> Self {
+    pub fn new(kind: CoxResidualKind, cox: CoxOptions) -> Self {
         Self {
             kind,
             weighted: None,
@@ -198,7 +202,7 @@ impl ResidualOptions<'_> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoxResiduals {
     /// The kind that was computed.
-    pub kind: ResidualKind,
+    pub kind: CoxResidualKind,
     /// One entry per coefficient for the score, Schoenfeld, scaled Schoenfeld,
     /// `dfbeta` and `dfbetas` kinds and one entry for the martingale and
     /// deviance kinds. A column is `None` where the coefficient is `None`.
@@ -576,21 +580,22 @@ pub fn residuals(
     let kind = opts.kind;
     let schoenfeld = matches!(
         kind,
-        ResidualKind::Schoenfeld | ResidualKind::ScaledSchoenfeld
+        CoxResidualKind::Schoenfeld | CoxResidualKind::ScaledSchoenfeld
     );
     if schoenfeld && opts.collapse != Collapse::None {
         return Err(Error::invalid(
             "collapse: the Schoenfeld residuals have one row per event and cannot be collapsed",
         ));
     }
-    if kind == ResidualKind::Deviance && opts.weighted == Some(true) {
+    if kind == CoxResidualKind::Deviance && opts.weighted == Some(true) {
         return Err(Error::invalid(
             "weighted: deviance residuals are defined for the unweighted martingale residuals",
         ));
     }
-    let weighted = opts
-        .weighted
-        .unwrap_or(matches!(kind, ResidualKind::Dfbeta | ResidualKind::Dfbetas));
+    let weighted = opts.weighted.unwrap_or(matches!(
+        kind,
+        CoxResidualKind::Dfbeta | CoxResidualKind::Dfbetas
+    ));
     let prep = prepare(data, x, &opts.cox, &fit.coefficients)?;
     let rows = data.n_rows();
     let weight = data
@@ -604,9 +609,9 @@ pub fn residuals(
     // One value per row of the data for each column, zero for rows not used.
     let mut status_sum: Option<Vec<f64>> = None;
     let columns: Vec<Option<Vec<f64>>> = match kind {
-        ResidualKind::Martingale | ResidualKind::Deviance => {
+        CoxResidualKind::Martingale | CoxResidualKind::Deviance => {
             let mut m = martingale(&prep)?;
-            if kind == ResidualKind::Deviance {
+            if kind == CoxResidualKind::Deviance {
                 // The status of every row, which `collapse` sums with the
                 // residuals.
                 let event = opts.cox.cause.unwrap_or(1);
@@ -623,11 +628,11 @@ pub fn residuals(
             }
             vec![Some(m)]
         }
-        ResidualKind::Score | ResidualKind::Dfbeta | ResidualKind::Dfbetas => {
+        CoxResidualKind::Score | CoxResidualKind::Dfbeta | CoxResidualKind::Dfbetas => {
             let mut columns = score_residuals(data, x, &fit.coefficients, &opts.cox)?;
             // The function returns the weighted residual, and zero for rows
             // not used.
-            if kind == ResidualKind::Score {
+            if kind == CoxResidualKind::Score {
                 if !weighted {
                     for column in columns.iter_mut().flatten() {
                         for (v, w) in column.iter_mut().zip(weight.iter()) {
@@ -643,13 +648,13 @@ pub fn residuals(
                     &columns,
                     fit,
                     p,
-                    kind == ResidualKind::Dfbetas,
+                    kind == CoxResidualKind::Dfbetas,
                     !weighted,
                     &weight,
                 )
             }
         }
-        ResidualKind::Schoenfeld | ResidualKind::ScaledSchoenfeld => unreachable!(),
+        CoxResidualKind::Schoenfeld | CoxResidualKind::ScaledSchoenfeld => unreachable!(),
     };
 
     let used: Vec<u32> = (0..rows as u32)
@@ -691,7 +696,7 @@ pub fn residuals(
             n_rows: rows,
             n_used: prep.n_used,
         };
-        if kind == ResidualKind::Deviance {
+        if kind == CoxResidualKind::Deviance {
             let status = status_sum.unwrap_or_default();
             if let Some(Some(m)) = result.columns.first_mut() {
                 for (v, &i) in m.iter_mut().zip(&result.rows) {
@@ -718,7 +723,7 @@ pub fn residuals(
         .iter()
         .map(|c| c.as_ref().map(|c| sum_by_group(c)))
         .collect();
-    if kind == ResidualKind::Deviance {
+    if kind == CoxResidualKind::Deviance {
         let status = sum_by_group(&status_sum.unwrap_or_default());
         if let Some(Some(m)) = collapsed.first_mut() {
             for (v, s) in m.iter_mut().zip(&status) {
@@ -929,7 +934,7 @@ fn schoenfeld_residuals(
     data: &SurvData<'_>,
     fit: &CoxModelFit,
     prep: &Prepared,
-    kind: ResidualKind,
+    kind: CoxResidualKind,
     weighted: bool,
 ) -> Result<CoxResiduals> {
     let mut rows = schoenfeld_rows(prep)?;
@@ -943,7 +948,7 @@ fn schoenfeld_residuals(
     }
     let p = fit.coefficients.len();
     let mut columns: Vec<Option<Vec<f64>>> = vec![None; p];
-    if kind == ResidualKind::ScaledSchoenfeld {
+    if kind == CoxResidualKind::ScaledSchoenfeld {
         let ndead = events as f64;
         for &j in &prep.keep {
             let beta = fit.coefficients[j].unwrap_or(0.0);

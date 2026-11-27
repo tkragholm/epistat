@@ -27,7 +27,7 @@ use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::ratetable::{LongDim, RateDim, RateTable};
 use epistat_survival::relsurv::{
-    ExpectedHazard, ExpectedMethod, ICSS, Method, NetOptions, Transform, crude_mortality,
+    ExpectedHazard, ExpectedMethod, ICSS, NetMethod, NetOptions, NetTransform, crude_mortality,
     expected_survival, net_survival, net_survival_test, standardise_net,
 };
 use epistat_testkit::load_json;
@@ -298,7 +298,7 @@ fn relative_survival_of_ederer_one_and_hakulinen() {
         &data,
         &expected,
         &NetOptions {
-            method: Method::EdererI,
+            method: NetMethod::EdererI,
             ..NetOptions::default()
         },
     )
@@ -319,7 +319,7 @@ fn relative_survival_of_ederer_one_and_hakulinen() {
         &data,
         &expected,
         &NetOptions {
-            method: Method::Hakulinen,
+            method: NetMethod::Hakulinen,
             potential: Some(&potential),
             ..NetOptions::default()
         },
@@ -362,7 +362,7 @@ fn age_standardised_net_survival() {
         &data,
         &expected,
         &NetOptions {
-            method: Method::EdererII,
+            method: NetMethod::EdererII,
             ..NetOptions::default()
         },
     )
@@ -373,7 +373,7 @@ fn age_standardised_net_survival() {
         &ICSS[0],
         &r.standardised.times,
         Level::default(),
-        Transform::LogLog,
+        NetTransform::LogLog,
     )
     .unwrap();
     let mut worst = Worst::default();
@@ -392,7 +392,7 @@ fn age_standardised_net_survival() {
         &ICSS[0],
         &[1e7],
         Level::default(),
-        Transform::LogLog,
+        NetTransform::LogLog,
     )
     .unwrap();
     assert_eq!(late.survival, vec![None]);

@@ -15,7 +15,9 @@
 
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::aalen_johansen::{AalenJohansenOptions, VarianceOptions, variance};
+use epistat_survival::aalen_johansen::{
+    AalenJohansenOptions, AalenJohansenVarianceOptions, variance,
+};
 use epistat_survival::timefix::TimeFix;
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -54,7 +56,7 @@ fn variance_does_not_depend_on_the_number_of_threads() {
     let opts = AalenJohansenOptions {
         timefix: TimeFix::Exact,
     };
-    let v = VarianceOptions {
+    let v = AalenJohansenVarianceOptions {
         horizons: vec![0.5, 3.0, 20.0, 40.0],
         influence_times: vec![0.5, 4.0, 9.0, 30.0],
     };

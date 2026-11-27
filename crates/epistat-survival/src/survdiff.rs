@@ -87,7 +87,7 @@ const STRATA_PER_BLOCK: usize = 1024;
 
 /// Settings of [`fn@test`].
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Options {
+pub struct SurvdiffOptions {
     /// The exponent of the weight `S(t-)^rho`. 0 is the log-rank test and 1
     /// the Peto and Peto test. Any finite value is accepted.
     pub rho: f64,
@@ -95,6 +95,10 @@ pub struct Options {
     /// `survival::aeqSurv` by default.
     pub timefix: TimeFix,
 }
+
+/// `SurvdiffOptions`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `SurvdiffOptions`")]
+pub type Options = SurvdiffOptions;
 
 /// The result of [`fn@test`]. Matrices are row-major.
 #[derive(Debug, Clone, PartialEq)]
@@ -155,7 +159,7 @@ pub struct OneSample {
 }
 
 /// What the data must be for survdiff, and the rows it uses.
-fn prepare<'a>(data: &SurvData<'a>, opts: &Options) -> Result<SurvData<'a>> {
+fn prepare<'a>(data: &SurvData<'a>, opts: &SurvdiffOptions) -> Result<SurvData<'a>> {
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     if surv.start().is_some() {
@@ -224,7 +228,7 @@ struct Block {
 ///
 /// Only on a broken internal invariant: a row's group missing from the groups
 /// found, or more groups than rows.
-pub fn test(data: &SurvData<'_>, group: &[u32], opts: &Options) -> Result<Survdiff> {
+pub fn test(data: &SurvData<'_>, group: &[u32], opts: &SurvdiffOptions) -> Result<Survdiff> {
     let data = prepare(data, opts)?;
     check_lengths(&[("time", data.n_rows()), ("group", group.len())])?;
     let surv = data.followup()?;
@@ -466,7 +470,7 @@ fn quadratic_form(v: &[f64], d: &[f64], event_times: usize) -> (Option<f64>, usi
 pub fn one_sample(
     data: &SurvData<'_>,
     expected_survival: &[f64],
-    opts: &Options,
+    opts: &SurvdiffOptions,
 ) -> Result<OneSample> {
     let data = prepare(data, opts)?;
     check_lengths(&[

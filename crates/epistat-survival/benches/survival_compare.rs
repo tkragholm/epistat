@@ -495,8 +495,12 @@ fn run_multistate(cut: bool, c: &Cohort, reps: usize) -> Timed {
     event_times.sort_by(f64::total_cmp);
     event_times.dedup();
     let (times, est) = timed(reps, || {
-        multistate::estimate(&data, &event_times, &multistate::Options::default())
-            .expect("multistate")
+        multistate::estimate(
+            &data,
+            &event_times,
+            &multistate::MultistateOptions::default(),
+        )
+        .expect("multistate")
     });
     let mut lines = String::new();
     for at in GRID {

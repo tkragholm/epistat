@@ -15,7 +15,9 @@
 mod influence_bound;
 
 use epistat_survival::SurvData;
-use epistat_survival::aalen_johansen::{AalenJohansenOptions, VarianceOptions, variance};
+use epistat_survival::aalen_johansen::{
+    AalenJohansenOptions, AalenJohansenVarianceOptions, variance,
+};
 use epistat_testkit::load_json;
 use influence_bound::{Row, influence_bound, kappa};
 use serde::Deserialize;
@@ -139,7 +141,7 @@ fn matches_r_survfit() {
             .collect();
         all_times.sort_by(f64::total_cmp);
         all_times.dedup();
-        let opts = VarianceOptions {
+        let opts = AalenJohansenVarianceOptions {
             horizons: case.tau.clone(),
             influence_times: all_times.clone(),
         };

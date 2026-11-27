@@ -6,8 +6,8 @@
 use epistat_survival::SurvData;
 use epistat_survival::ratetable::{RateDim, RateTable};
 use epistat_survival::relsurv::{
-    ExpectedHazard, ExpectedMethod, Grid, Method, NetOptions, crude_mortality, expected_survival,
-    net_survival, net_survival_test,
+    ExpectedHazard, ExpectedMethod, Grid, NetMethod, NetOptions, crude_mortality,
+    expected_survival, net_survival, net_survival_test,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -35,8 +35,8 @@ fn the_new_estimators_on_threads() {
             .collect::<Vec<f64>>()
     });
     for (method, potential) in [
-        (Method::EdererI, None),
-        (Method::Hakulinen, Some(&potential[..])),
+        (NetMethod::EdererI, None),
+        (NetMethod::Hakulinen, Some(&potential[..])),
     ] {
         for grid in [Grid::EventTimes, Grid::Width(30.4375)] {
             let opts = NetOptions {
@@ -87,7 +87,7 @@ fn the_conditional_curve_is_the_expected_part_of_ederer_two() {
         &data,
         &expected,
         &NetOptions {
-            method: Method::EdererII,
+            method: NetMethod::EdererII,
             ..NetOptions::default()
         },
     )
@@ -120,7 +120,7 @@ fn refusals() {
     let data = c.data(false);
     let expected = c.expected(&t, &data);
     let hakulinen = NetOptions {
-        method: Method::Hakulinen,
+        method: NetMethod::Hakulinen,
         ..NetOptions::default()
     };
     assert!(net_survival(&data, &expected, &hakulinen).is_err());
@@ -132,7 +132,7 @@ fn refusals() {
     assert!(net_survival(&data, &expected, &pohar).is_err());
     // Delayed entry has no Ederer I.
     let ederer = NetOptions {
-        method: Method::EdererI,
+        method: NetMethod::EdererI,
         ..NetOptions::default()
     };
     assert!(net_survival(&data, &expected, &ederer).is_err());

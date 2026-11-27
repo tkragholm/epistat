@@ -19,10 +19,13 @@ use std::collections::BTreeMap;
 use epistat_linalg::Mat;
 use epistat_survival::Level;
 use epistat_survival::SurvData;
-use epistat_survival::flexpar::{self, FlexParOptions, Predict, PredictOptions, Scale};
+use epistat_survival::flexpar::{
+    self, FlexParOptions, FlexparPredictOptions, FlexparScale, Predict,
+};
 use epistat_survival::ratetable::{RateDim, RateTable};
 use epistat_survival::relsurv::{
-    ExcessOptions, ExpectedHazard, Grid, Method, NetOptions, Transform, excess_hazard, net_survival,
+    ExcessOptions, ExpectedHazard, Grid, NetMethod, NetOptions, NetTransform, excess_hazard,
+    net_survival,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -310,13 +313,13 @@ fn net_survival_matches_relsurv() {
     let mut worst = Worst::default();
     for run in &r.relsurv {
         let method = match run.method.as_str() {
-            "pohar-perme" => Method::PoharPerme,
-            _ => Method::EdererII,
+            "pohar-perme" => NetMethod::PoharPerme,
+            _ => NetMethod::EdererII,
         };
         let transform = match run.conf.as_str() {
-            "log-log" => Transform::LogLog,
-            "log" => Transform::Log,
-            _ => Transform::Plain,
+            "log-log" => NetTransform::LogLog,
+            "log" => NetTransform::Log,
+            _ => NetTransform::Plain,
         };
         let opts = NetOptions {
             method,
@@ -338,7 +341,7 @@ fn net_survival_matches_relsurv() {
                 // steps, so rounding of about 1e-12 relative; Pohar Perme the
                 // bound of its rule. An error in Lambda is a relative error in
                 // exp(-Lambda).
-                let bound = if method == Method::PoharPerme {
+                let bound = if method == NetMethod::PoharPerme {
                     rule_bound
                 } else {
                     1e-11
@@ -391,8 +394,8 @@ fn exact_estimators_match_their_definition() {
         ExpectedHazard::from_table(&t, &data, &[&c.age0, &c.date0], &[&cols.sex]).unwrap();
     let mut worst = Worst::default();
     for (method, refs, name) in [
-        (Method::PoharPerme, &r.exact.pp, "pp"),
-        (Method::EdererII, &r.exact.e2, "e2"),
+        (NetMethod::PoharPerme, &r.exact.pp, "pp"),
+        (NetMethod::EdererII, &r.exact.e2, "e2"),
     ] {
         let opts = NetOptions {
             method,
@@ -456,9 +459,9 @@ fn interval_estimators_match_their_definition() {
     let mut worst = Worst::default();
     for run in &r.interval {
         let method = if run.method == "pp" {
-            Method::PoharPerme
+            NetMethod::PoharPerme
         } else {
-            Method::EdererII
+            NetMethod::EdererII
         };
         let opts = NetOptions {
             method,
@@ -606,7 +609,7 @@ fn flexible_excess_model_matches_stpm2() {
         let x = Mat::from_fn(n, 2, |i, j| if j == 0 { c.x1[i] } else { c.x2[i] });
         let opts = FlexParOptions {
             bhazard: Some(&bh),
-            ..FlexParOptions::new(Scale::Hazard, s.df)
+            ..FlexParOptions::new(FlexparScale::Hazard, s.df)
         };
         let f = flexpar::fit(&data, x.as_ref(), &opts).unwrap();
         assert!(f.converged);
@@ -650,7 +653,7 @@ fn flexible_excess_model_matches_stpm2() {
                 profiles.as_ref(),
                 &times,
                 what,
-                &PredictOptions::default(),
+                &FlexparPredictOptions::default(),
             )
             .unwrap();
             for (row, band) in p.iter().zip(bands.iter()) {

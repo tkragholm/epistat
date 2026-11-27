@@ -49,8 +49,8 @@
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::survreg::{
-    DfbetaOptions, Distribution, PredictOptions, PredictType, ResidualKind, SurvregOptions,
-    TermsReference, fit,
+    DfbetaOptions, Distribution, SurvregOptions, SurvregPredictOptions, SurvregPredictType,
+    SurvregResidualKind, TermsReference, fit,
 };
 use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};
 use serde::Deserialize;
@@ -479,10 +479,10 @@ fn extra_options_match_r() {
             let xm = Mat::from_fn(m, p, |i, j| r.x[i][j]);
             let strata: Vec<u32> = (0..m).map(|i| c.stratum[i]).collect();
             let offset: Vec<f64> = c.offset[..m].to_vec();
-            let run = |kind: PredictType, with_offset: bool| {
+            let run = |kind: SurvregPredictType, with_offset: bool| {
                 f.predict(
                     xm.as_ref(),
-                    &PredictOptions {
+                    &SurvregPredictOptions {
                         kind,
                         se_fit: true,
                         strata: r.use_strata.then(|| strata.clone()),
@@ -493,10 +493,10 @@ fn extra_options_match_r() {
                 .unwrap()
             };
             let pb = bound * (p as f64 + 1.0);
-            let lp = run(PredictType::LinearPredictor, true);
-            let resp = run(PredictType::Response, true);
+            let lp = run(SurvregPredictType::LinearPredictor, true);
+            let resp = run(SurvregPredictType::Response, true);
             let quant = run(
-                PredictType::Quantile {
+                SurvregPredictType::Quantile {
                     p: vec![0.1, 0.5, 0.9],
                 },
                 true,
@@ -534,9 +534,9 @@ fn extra_options_match_r() {
                 let lp_new: Vec<f64> = lp_new.iter().map(|v| v.unwrap()).collect();
                 let quantile_new = dense(quantile_new);
                 // R's predictions from new data take the offset as 0.
-                let lp0 = run(PredictType::LinearPredictor, false);
+                let lp0 = run(SurvregPredictType::LinearPredictor, false);
                 let q0 = run(
-                    PredictType::Quantile {
+                    SurvregPredictType::Quantile {
                         p: vec![0.1, 0.5, 0.9],
                     },
                     false,
@@ -558,23 +558,27 @@ fn extra_options_match_r() {
         // Residuals, as in r_survreg.rs.
         let kinds = [
             (
-                ResidualKind::Response,
+                SurvregResidualKind::Response,
                 &r.residuals.response,
                 "response residual",
             ),
             (
-                ResidualKind::Deviance,
+                SurvregResidualKind::Deviance,
                 &r.residuals.deviance,
                 "deviance residual",
             ),
             (
-                ResidualKind::Working,
+                SurvregResidualKind::Working,
                 &r.residuals.working,
                 "working residual",
             ),
-            (ResidualKind::LdCase, &r.residuals.ldcase, "ldcase"),
-            (ResidualKind::LdResp, &r.residuals.ldresp, "ldresp"),
-            (ResidualKind::LdShape, &r.residuals.ldshape, "ldshape"),
+            (SurvregResidualKind::LdCase, &r.residuals.ldcase, "ldcase"),
+            (SurvregResidualKind::LdResp, &r.residuals.ldresp, "ldresp"),
+            (
+                SurvregResidualKind::LdShape,
+                &r.residuals.ldshape,
+                "ldshape",
+            ),
         ];
         for (kind, want, what) in kinds {
             let got = f.residuals(&data, x.as_ref(), kind, false).unwrap();
@@ -583,25 +587,27 @@ fn extra_options_match_r() {
                 .filter(|&i| {
                     let interval = c.status[i] == 3;
                     let displaced = match kind {
-                        ResidualKind::LdShape => interval,
-                        ResidualKind::LdCase | ResidualKind::LdResp => {
+                        SurvregResidualKind::LdShape => interval,
+                        SurvregResidualKind::LdCase | SurvregResidualKind::LdResp => {
                             interval && f.scale_estimated
                         }
                         // R's deviance function of the t distribution is
                         // wrong for an interval: NaN, and a wrong centre.
-                        ResidualKind::Deviance | ResidualKind::Response => interval && is_t,
-                        ResidualKind::Working => false,
+                        SurvregResidualKind::Deviance | SurvregResidualKind::Response => {
+                            interval && is_t
+                        }
+                        SurvregResidualKind::Working => false,
                     };
                     !displaced
                 })
                 .collect();
-            if is_t && matches!(kind, ResidualKind::Deviance) {
+            if is_t && matches!(kind, SurvregResidualKind::Deviance) {
                 for i in (0..got.len()).filter(|&i| c.status[i] == 3) {
                     assert!(want[i].is_none_or(f64::is_nan), "{}", r.name);
                     assert!(got[i].is_some(), "{}", r.name);
                 }
             }
-            if is_t && matches!(kind, ResidualKind::Response) {
+            if is_t && matches!(kind, SurvregResidualKind::Response) {
                 let gap = (0..got.len())
                     .filter(|&i| c.status[i] == 3)
                     .map(|i| (got[i].unwrap() - want[i].unwrap()).abs())
@@ -610,7 +616,7 @@ fn extra_options_match_r() {
                     assert!(gap > 1e-3, "{}: R's interval centre agrees, {gap}", r.name);
                 }
             }
-            let squared = matches!(kind, ResidualKind::Deviance);
+            let squared = matches!(kind, SurvregResidualKind::Deviance);
             let pick = |v: &[Option<f64>]| -> Vec<f64> {
                 keep.iter()
                     .map(|&i| {
@@ -628,7 +634,7 @@ fn extra_options_match_r() {
             // grows by that factor. R's own evaluation has the same
             // cancellation.
             let curvature_condition = |i: usize| -> f64 {
-                if is_t && matches!(kind, ResidualKind::Working) && c.status[i] == 1 {
+                if is_t && matches!(kind, SurvregResidualKind::Working) && c.status[i] == 1 {
                     let stratum = if r.use_strata {
                         c.stratum[i] as usize
                     } else {
@@ -796,14 +802,14 @@ fn extra_options_match_r() {
             let pred = f
                 .predict(
                     xm.as_ref(),
-                    &PredictOptions {
-                        kind: PredictType::Terms {
+                    &SurvregPredictOptions {
+                        kind: SurvregPredictType::Terms {
                             groups: t.groups.clone(),
                             reference: TermsReference::Sample,
                         },
                         se_fit: true,
                         robust: r.robust != "none",
-                        ..PredictOptions::default()
+                        ..SurvregPredictOptions::default()
                     },
                 )
                 .unwrap();

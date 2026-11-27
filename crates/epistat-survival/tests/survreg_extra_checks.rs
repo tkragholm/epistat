@@ -5,7 +5,8 @@
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::survreg::{
-    DfbetaOptions, Distribution, PredictOptions, PredictType, SurvregOptions, TermsReference, fit,
+    DfbetaOptions, Distribution, SurvregOptions, SurvregPredictOptions, SurvregPredictType,
+    TermsReference, fit,
 };
 
 fn message<T>(result: epistat_survival::Result<T>) -> String {
@@ -116,11 +117,11 @@ fn the_robust_variance_needs_robust_or_clusters() {
     let ask = |robust| {
         g.predict(
             x.as_ref(),
-            &PredictOptions {
-                kind: PredictType::LinearPredictor,
+            &SurvregPredictOptions {
+                kind: SurvregPredictType::LinearPredictor,
                 se_fit: true,
                 robust,
-                ..PredictOptions::default()
+                ..SurvregPredictOptions::default()
             },
         )
         .unwrap()
@@ -131,10 +132,10 @@ fn the_robust_variance_needs_robust_or_clusters() {
     assert!(
         message(f.predict(
             x.as_ref(),
-            &PredictOptions {
+            &SurvregPredictOptions {
                 se_fit: true,
                 robust: true,
-                ..PredictOptions::default()
+                ..SurvregPredictOptions::default()
             },
         ))
         .contains("robust")
@@ -199,10 +200,10 @@ fn terms_sum_to_the_centred_linear_predictor() {
     let ask = |groups: Vec<Vec<usize>>, reference| {
         f.predict(
             x.as_ref(),
-            &PredictOptions {
-                kind: PredictType::Terms { groups, reference },
+            &SurvregPredictOptions {
+                kind: SurvregPredictType::Terms { groups, reference },
                 se_fit: true,
-                ..PredictOptions::default()
+                ..SurvregPredictOptions::default()
             },
         )
         .unwrap()
@@ -227,12 +228,12 @@ fn terms_sum_to_the_centred_linear_predictor() {
     assert!(
         message(f.predict(
             x.as_ref(),
-            &PredictOptions {
-                kind: PredictType::Terms {
+            &SurvregPredictOptions {
+                kind: SurvregPredictType::Terms {
                     groups: vec![vec![2]],
                     reference: TermsReference::Sample,
                 },
-                ..PredictOptions::default()
+                ..SurvregPredictOptions::default()
             },
         ))
         .contains("not a column")

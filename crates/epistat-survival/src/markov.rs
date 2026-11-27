@@ -478,17 +478,21 @@ fn run(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64]) -> Resu
 
 /// Settings of [`fn@test`].
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Options {
+pub struct MarkovOptions {
     /// How times that differ by rounding error are treated before the test.
     /// `survival::aeqSurv` by default.
     pub timefix: TimeFix,
 }
 
+/// `MarkovOptions`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `MarkovOptions`")]
+pub type Options = MarkovOptions;
+
 /// The result of [`fn@test`]. Per-landmark-and-state values are flattened
 /// `landmark * qualifying + state`, where state `j` is the status code
 /// `qualifying[j]`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Test {
+pub struct MarkovTest {
     /// The trace `Z_j(s)`, `grid * qualifying` values.
     pub trace: Vec<f64>,
     /// The variance estimate `V_j(s)`, `grid * qualifying` values.
@@ -514,6 +518,10 @@ pub struct Test {
     pub n_used: usize,
 }
 
+/// `MarkovTest`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `MarkovTest`")]
+pub type Test = MarkovTest;
+
 /// The Titman-Putter test of the transition from `qualifying[0]` to `target`,
 /// for follow-up data with several states.
 ///
@@ -522,7 +530,7 @@ pub struct Test {
 /// repeats. `target` is the status code that the transition ends in. `grid` holds
 /// the landmarks, and `bootstrap` gives the wild-bootstrap replicates: the
 /// multipliers of replicate `r` come from `replicate_seed(bootstrap.seed, r)`.
-/// See [`Test`] for what comes back and the module documentation for the method and for what the data
+/// See [`MarkovTest`] for what comes back and the module documentation for the method and for what the data
 /// supply.
 ///
 /// A landmark and state whose variance is not positive adds 0 to the statistic
@@ -545,8 +553,8 @@ pub fn test(
     target: u32,
     grid: &[f64],
     bootstrap: Bootstrap,
-    opts: &Options,
-) -> Result<Test> {
+    opts: &MarkovOptions,
+) -> Result<MarkovTest> {
     let data = data.clone().with_timefix(opts.timefix)?;
     let check = survcheck(&data)?;
     check.enforce(Policy::for_data(&data))?;
@@ -646,7 +654,7 @@ pub fn test(
         .zip(&defined)
         .map(|(&value, &ok)| if ok { value } else { None })
         .collect();
-    Ok(Test {
+    Ok(MarkovTest {
         trace: done.trace,
         variance: done.variance,
         n_occupied: done.n_occupied,

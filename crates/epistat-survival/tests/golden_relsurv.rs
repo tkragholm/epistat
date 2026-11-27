@@ -16,9 +16,9 @@ mod relsurv_sim;
 use epistat_linalg::Mat;
 use epistat_survival::Level;
 use epistat_survival::SurvData;
-use epistat_survival::flexpar::{self, FlexParOptions, Scale};
+use epistat_survival::flexpar::{self, FlexParOptions, FlexparScale};
 use epistat_survival::relsurv::{
-    ExcessOptions, Grid, Method, NetOptions, Transform, excess_hazard, net_survival,
+    ExcessOptions, Grid, NetMethod, NetOptions, NetTransform, excess_hazard, net_survival,
 };
 use epistat_testkit::Fingerprint;
 use relsurv_sim::{cohort, table};
@@ -41,8 +41,8 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
     let expected = c.expected(&t, &data);
     let mut out = Vec::new();
     for (name, method) in [
-        ("pohar perme", Method::PoharPerme),
-        ("ederer2", Method::EdererII),
+        ("pohar perme", NetMethod::PoharPerme),
+        ("ederer2", NetMethod::EdererII),
     ] {
         for (label, grid) in [
             ("exact", Grid::EventTimes),
@@ -52,7 +52,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
                 method,
                 grid,
                 level: Level::confidence(0.9).unwrap(),
-                transform: Transform::LogLog,
+                transform: NetTransform::LogLog,
                 potential: None,
             };
             let mut v = Vec::new();
@@ -124,7 +124,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
     let x = Mat::from_fn(n, 2, |i, j| if j == 0 { c.x1[i] } else { c.x2[i] });
     let opts = FlexParOptions {
         bhazard: Some(&bh),
-        ..FlexParOptions::new(Scale::Hazard, 4)
+        ..FlexParOptions::new(FlexparScale::Hazard, 4)
     };
     let f = flexpar::fit(&years, x.as_ref(), &opts).unwrap();
     let mut v = f.gamma.clone();

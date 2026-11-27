@@ -122,7 +122,7 @@
 //! a `survreg` formula does. The null model, the starting values, the
 //! iteration, the linear predictors of the fit and with them every residual
 //! use it. A prediction for new rows takes its offsets from
-//! [`PredictOptions::offset`] and is zero without them.
+//! [`SurvregPredictOptions::offset`] and is zero without them.
 //!
 //! # The t distribution
 //!
@@ -151,7 +151,7 @@
 //! # Residuals and terms
 //!
 //! [`SurvregFit::dfbeta`] gives the dfbeta and dfbetas residuals, weighted and
-//! summed by group as `residuals.survreg` does. [`PredictType::Terms`] gives
+//! summed by group as `residuals.survreg` does. [`SurvregPredictType::Terms`] gives
 //! the part of the linear predictor of each group of columns with its standard
 //! error. Both are described with their types.
 //!
@@ -229,8 +229,11 @@ use epistat_linalg::MatRef;
 use newton::{Control, Problem, factorise, newton};
 
 pub use predict::{
-    Dfbeta, DfbetaOptions, PredictOptions, PredictType, Prediction, ResidualKind, TermsReference,
+    Dfbeta, DfbetaOptions, SurvregPredictOptions, SurvregPredictType, SurvregPrediction,
+    SurvregResidualKind, TermsReference,
 };
+#[expect(deprecated, reason = "the 0.3 names stay for one release")]
+pub use predict::{PredictOptions, PredictType, Prediction, ResidualKind};
 
 use crate::error::{Error, Result};
 use crate::ldl;

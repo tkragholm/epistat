@@ -11,13 +11,14 @@
     reason = "the inputs have a few dozen rows, far below the limits of the casts"
 )]
 
+use epistat_core::Estimand;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::Weights;
 use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::ipcw::{self, CensoringModel, IpcwOptions};
-use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
+use epistat_survival::weighting::iptw::{self, IptwOptions};
 use epistat_survival::weighting::km::{self, KmOptions};
 
 fn design(n: usize) -> (Mat<f64>, Vec<bool>) {
@@ -44,7 +45,7 @@ fn propensity_model_input_is_checked() {
     let att = IptwOptions {
         estimand: Estimand::Att,
         stabilise: true,
-        alpha: None,
+        optimal_subset: None,
     };
     assert!(iptw::fit(&treat, z.as_ref(), &att).is_err());
     let aliased = Mat::from_fn(
@@ -71,7 +72,7 @@ fn weights_of_each_estimand() {
         &IptwOptions {
             estimand: Estimand::Att,
             stabilise: false,
-            alpha: None,
+            optimal_subset: None,
         },
     )
     .unwrap();
@@ -87,7 +88,7 @@ fn weights_of_each_estimand() {
         &IptwOptions {
             estimand: Estimand::Atc,
             stabilise: false,
-            alpha: None,
+            optimal_subset: None,
         },
     )
     .unwrap();

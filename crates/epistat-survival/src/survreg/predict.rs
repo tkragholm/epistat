@@ -12,7 +12,7 @@ use crate::surv::SurvData;
 
 /// What [`SurvregFit::predict`] returns for each row.
 #[derive(Debug, Clone, PartialEq, Default)]
-pub enum PredictType {
+pub enum SurvregPredictType {
     /// The linear predictor `x'beta`, the location of `ln T` or of `T`.
     #[default]
     LinearPredictor,
@@ -39,6 +39,10 @@ pub enum PredictType {
     },
 }
 
+/// `SurvregPredictType`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `SurvregPredictType`")]
+pub type PredictType = SurvregPredictType;
+
 /// The point `type = "terms"` measures the columns from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TermsReference {
@@ -54,9 +58,9 @@ pub enum TermsReference {
 
 /// The options of [`SurvregFit::predict`].
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct PredictOptions {
+pub struct SurvregPredictOptions {
     /// What to predict.
-    pub kind: PredictType,
+    pub kind: SurvregPredictType,
     /// Whether to return standard errors, by the delta method from the
     /// variance of the fit. For a quantile with an estimated scale the
     /// variance of the log scale and its covariance with the coefficients
@@ -77,10 +81,14 @@ pub struct PredictOptions {
     pub robust: bool,
 }
 
+/// `SurvregPredictOptions`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `SurvregPredictOptions`")]
+pub type PredictOptions = SurvregPredictOptions;
+
 /// Predictions, row-major: `width` values for each row of the design, that is
 /// one value, or one for each probability of a quantile prediction.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Prediction {
+pub struct SurvregPrediction {
     /// The predictions.
     pub fit: Vec<f64>,
     /// The standard errors, laid out as `fit`, when asked for.
@@ -89,10 +97,14 @@ pub struct Prediction {
     pub width: usize,
 }
 
+/// `SurvregPrediction`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `SurvregPrediction`")]
+pub type Prediction = SurvregPrediction;
+
 /// The kinds of residual of [`SurvregFit::residuals`], named as in
 /// `residuals.survreg`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResidualKind {
+pub enum SurvregResidualKind {
     /// The observed time less the fitted, on the scale of the time. For an
     /// interval, the observation is the point where the density within the
     /// interval is largest.
@@ -113,6 +125,10 @@ pub enum ResidualKind {
     /// scale.
     LdShape,
 }
+
+/// `SurvregResidualKind`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `SurvregResidualKind`")]
+pub type ResidualKind = SurvregResidualKind;
 
 /// The options of [`SurvregFit::dfbeta`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -195,7 +211,11 @@ impl SurvregFit {
     /// # Panics
     ///
     /// Never: the variance the standard errors use is present when they are asked for.
-    pub fn predict(&self, x: MatRef<'_, f64>, options: &PredictOptions) -> Result<Prediction> {
+    pub fn predict(
+        &self,
+        x: MatRef<'_, f64>,
+        options: &SurvregPredictOptions,
+    ) -> Result<SurvregPrediction> {
         let p = self.n_coef();
         let n = x.nrows();
         if x.ncols() != p {
@@ -210,7 +230,7 @@ impl SurvregFit {
             ));
         }
         let quantiles: &[f64] = match &options.kind {
-            PredictType::Quantile { p } => {
+            SurvregPredictType::Quantile { p } => {
                 if p.is_empty() || p.iter().any(|&v| !(v > 0.0 && v < 1.0)) {
                     return Err(Error::invalid(
                         "quantile probabilities must be in (0, 1), at least one".to_owned(),
@@ -221,7 +241,7 @@ impl SurvregFit {
             _ => &[],
         };
         let strata: Vec<usize> = match (&options.kind, &options.strata) {
-            (PredictType::Quantile { .. }, Some(codes)) => {
+            (SurvregPredictType::Quantile { .. }, Some(codes)) => {
                 if codes.len() != n || codes.iter().any(|&c| c as usize >= self.n_strata) {
                     return Err(Error::invalid(format!(
                         "strata need one code below {} for each of the {n} rows",
@@ -230,7 +250,7 @@ impl SurvregFit {
                 }
                 codes.iter().map(|&c| c as usize).collect()
             }
-            (PredictType::Quantile { .. }, None) if self.n_strata > 1 => {
+            (SurvregPredictType::Quantile { .. }, None) if self.n_strata > 1 => {
                 return Err(Error::invalid(
                     "a quantile of a fit with strata on the scale needs the stratum of each row"
                         .to_owned(),
@@ -246,7 +266,7 @@ impl SurvregFit {
             )));
         }
         let terms: &[Vec<usize>] = match &options.kind {
-            PredictType::Terms { groups, .. } => {
+            SurvregPredictType::Terms { groups, .. } => {
                 if groups.is_empty() {
                     return Err(Error::invalid("terms needs at least one group".to_owned()));
                 }
@@ -278,7 +298,7 @@ impl SurvregFit {
         let base = self.distribution.base(self.t_df);
         let offsets: Vec<f64> = quantiles.iter().map(|&pr| base.quantile(pr)).collect();
         let width = match &options.kind {
-            PredictType::Terms { groups, .. } => groups.len(),
+            SurvregPredictType::Terms { groups, .. } => groups.len(),
             _ => offsets.len().max(1),
         };
         let mut fit = Vec::with_capacity(n * width);
@@ -313,7 +333,7 @@ impl SurvregFit {
                 total.max(0.0).sqrt()
             };
             match &options.kind {
-                PredictType::Terms { reference, .. } => {
+                SurvregPredictType::Terms { reference, .. } => {
                     let mut centred = row.clone();
                     if *reference == TermsReference::Sample {
                         for (c, m) in centred.iter_mut().zip(&self.column_means) {
@@ -340,8 +360,8 @@ impl SurvregFit {
                         }
                     }
                 }
-                PredictType::LinearPredictor | PredictType::Response => {
-                    let value = if matches!(options.kind, PredictType::Response) && log {
+                SurvregPredictType::LinearPredictor | SurvregPredictType::Response => {
+                    let value = if matches!(options.kind, SurvregPredictType::Response) && log {
                         eta.exp()
                     } else {
                         eta
@@ -349,14 +369,16 @@ impl SurvregFit {
                     fit.push(value);
                     if let Some(se) = &mut se {
                         let s = quad(&t);
-                        se.push(if matches!(options.kind, PredictType::Response) && log {
-                            s * value
-                        } else {
-                            s
-                        });
+                        se.push(
+                            if matches!(options.kind, SurvregPredictType::Response) && log {
+                                s * value
+                            } else {
+                                s
+                            },
+                        );
                     }
                 }
-                PredictType::Quantile { .. } => {
+                SurvregPredictType::Quantile { .. } => {
                     let s = strata[i];
                     let sigma = self.log_scale[s].exp();
                     for &offset in &offsets {
@@ -379,7 +401,7 @@ impl SurvregFit {
                 }
             }
         }
-        Ok(Prediction { fit, se, width })
+        Ok(SurvregPrediction { fit, se, width })
     }
 
     /// Residuals of the model for `data`, the rows the model was fitted on
@@ -403,7 +425,7 @@ impl SurvregFit {
         &self,
         data: &SurvData<'_>,
         x: MatRef<'_, f64>,
-        kind: ResidualKind,
+        kind: SurvregResidualKind,
         weighted: bool,
     ) -> Result<Vec<Option<f64>>> {
         let n = data.n_rows();
@@ -425,7 +447,9 @@ impl SurvregFit {
         let q = self.n_params();
         let displacement = matches!(
             kind,
-            ResidualKind::LdCase | ResidualKind::LdResp | ResidualKind::LdShape
+            SurvregResidualKind::LdCase
+                | SurvregResidualKind::LdResp
+                | SurvregResidualKind::LdShape
         );
         let variance = if displacement {
             Some(self.dense_variance()?)
@@ -442,7 +466,7 @@ impl SurvregFit {
             let d = row_derivs(base, status, y1, y2, eta, ls);
             let working = (-d.g_eta / d.g_ee).is_finite().then(|| -d.g_eta / d.g_ee);
             let value: Option<f64> = match kind {
-                ResidualKind::Response => {
+                SurvregResidualKind::Response => {
                     let (center, _) = base.saturated(status, y1, y2, sigma);
                     let value = if log {
                         center.exp() - eta.exp()
@@ -451,8 +475,8 @@ impl SurvregFit {
                     };
                     value.is_finite().then_some(value)
                 }
-                ResidualKind::Working => working,
-                ResidualKind::Deviance => {
+                SurvregResidualKind::Working => working,
+                SurvregResidualKind::Deviance => {
                     let (_, saturated) = base.saturated(status, y1, y2, sigma);
                     let radicand = 2.0 * (saturated - d.g);
                     let rounding = 64.0 * f64::EPSILON * saturated.abs().max(d.g.abs()).max(1.0);
@@ -464,21 +488,23 @@ impl SurvregFit {
                         _ => None,
                     }
                 }
-                ResidualKind::LdCase | ResidualKind::LdResp | ResidualKind::LdShape => {
+                SurvregResidualKind::LdCase
+                | SurvregResidualKind::LdResp
+                | SurvregResidualKind::LdShape => {
                     let v = variance.as_ref().expect("a displacement has a variance");
                     let mut score = vec![0.0_f64; q];
                     for j in 0..p {
                         let xv = x[(i, j)];
                         score[j] = match kind {
-                            ResidualKind::LdCase => d.g_eta * xv,
-                            ResidualKind::LdResp => d.g_ee * sigma * xv,
+                            SurvregResidualKind::LdCase => d.g_eta * xv,
+                            SurvregResidualKind::LdResp => d.g_ee * sigma * xv,
                             _ => d.g_el * xv,
                         };
                     }
                     if self.scale_estimated {
                         score[p + s] = match kind {
-                            ResidualKind::LdCase => d.g_ls,
-                            ResidualKind::LdResp => d.g_el * sigma,
+                            SurvregResidualKind::LdCase => d.g_ls,
+                            SurvregResidualKind::LdResp => d.g_el * sigma,
                             _ => d.g_ll,
                         };
                     }

@@ -12,7 +12,7 @@ use epistat_survival::weighting::km::{self, KmOptions};
 use epistat_survival::weighting::pooled;
 use epistat_survival::weighting::pooled::PooledEvent;
 use epistat_survival::weighting::pooled::PooledOptions;
-use epistat_survival::weighting::{Censoring, WeightAt, Weights};
+use epistat_survival::weighting::{OutcomeCensoring, WeightAt, Weights};
 use epistat_survival::{Covariance, SurvData};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -135,7 +135,7 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
                 Weights {
                     iptw: None,
                     subject: None,
-                    censoring: Some(Censoring::Pooled {
+                    censoring: Some(OutcomeCensoring::Pooled {
                         fit: &pooled_fit,
                         at: WeightAt::Stop,
                     }),
@@ -143,7 +143,7 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
                 Weights {
                     iptw: Some(&propensity),
                     subject: Some(&s.id),
-                    censoring: Some(Censoring::Hazard {
+                    censoring: Some(OutcomeCensoring::Hazard {
                         model: CensoringModel::Cox { x: x.as_ref() },
                         options: &ipcw_opts,
                         at: WeightAt::Start,
@@ -152,7 +152,7 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
                 Weights {
                     iptw: None,
                     subject: None,
-                    censoring: Some(Censoring::Hazard {
+                    censoring: Some(OutcomeCensoring::Hazard {
                         model: CensoringModel::KaplanMeier,
                         options: &ipcw_opts,
                         at: WeightAt::Stop,
@@ -169,7 +169,7 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
                 Weights {
                     iptw: Some(&propensity),
                     subject: Some(&s.id),
-                    censoring: Some(Censoring::Pooled {
+                    censoring: Some(OutcomeCensoring::Pooled {
                         fit: &pooled_fit,
                         at: WeightAt::Start,
                     }),
@@ -177,7 +177,7 @@ fn estimated_weight_variances_are_the_same_on_every_pool() {
                 Weights {
                     iptw: None,
                     subject: None,
-                    censoring: Some(Censoring::Hazard {
+                    censoring: Some(OutcomeCensoring::Hazard {
                         model: CensoringModel::Cox { x: x.as_ref() },
                         options: &ipcw_opts,
                         at: WeightAt::Stop,

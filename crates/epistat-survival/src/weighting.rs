@@ -21,7 +21,7 @@
 //!   model, and inverse probability weights for a treatment that changes over
 //!   time from a pooled logistic model of treatment, as `ipwtm(type = "first"`
 //!   or `"all")`, with truncation. Its fit goes into [`Weights`] as a
-//!   [`Censoring::Pooled`], since the variance treats it as any other pooled
+//!   [`OutcomeCensoring::Pooled`], since the variance treats it as any other pooled
 //!   model of weights.
 //! - [`clone`] clones persons under treatment strategies with grace periods,
 //!   censors the clones at their first deviation, weights the artificial censoring
@@ -164,7 +164,9 @@ pub mod trials;
 
 pub use adjust::WeightAt;
 #[expect(deprecated, reason = "the 0.3 name stays for one release")]
+pub use estimated::Censoring;
+#[expect(deprecated, reason = "the 0.3 name stays for one release")]
 pub use estimated::Estimated;
-pub use estimated::{Censoring, Weights};
-pub use iptw::{Estimand, Iptw, IptwOptions, IptwSummary};
+pub use estimated::{OutcomeCensoring, Weights};
+pub use iptw::{Iptw, IptwOptions, IptwSummary, OptimalSubset};
 pub use summary::WeightSummary;

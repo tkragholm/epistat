@@ -5,7 +5,7 @@
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{
-    Collapse, CoxModelFit, CoxOptions, ResidualKind, ResidualOptions, ZphOptions, ZphTransform,
+    Collapse, CoxModelFit, CoxOptions, CoxResidualKind, ResidualOptions, ZphOptions, ZphTransform,
     fit, residuals, zph,
 };
 
@@ -24,7 +24,7 @@ fn model(data: &SurvData<'_>, x: &Mat<f64>) -> CoxModelFit {
     fit(data, x.as_ref(), &CoxOptions::default()).unwrap()
 }
 
-fn options(kind: ResidualKind) -> ResidualOptions<'static> {
+fn options(kind: CoxResidualKind) -> ResidualOptions<'static> {
     ResidualOptions::new(kind, CoxOptions::default())
 }
 
@@ -50,13 +50,13 @@ fn rows_of_weight_zero_are_dropped() {
     assert_eq!(mb.n_rows, 15);
     assert_eq!(mb.n_used, 12);
     for kind in [
-        ResidualKind::Martingale,
-        ResidualKind::Deviance,
-        ResidualKind::Score,
-        ResidualKind::Schoenfeld,
-        ResidualKind::ScaledSchoenfeld,
-        ResidualKind::Dfbeta,
-        ResidualKind::Dfbetas,
+        CoxResidualKind::Martingale,
+        CoxResidualKind::Deviance,
+        CoxResidualKind::Score,
+        CoxResidualKind::Schoenfeld,
+        CoxResidualKind::ScaledSchoenfeld,
+        CoxResidualKind::Dfbeta,
+        CoxResidualKind::Dfbetas,
     ] {
         let a = residuals(&small, xs.as_ref(), &ms, &options(kind)).unwrap();
         let b = residuals(&big, xb.as_ref(), &mb, &options(kind)).unwrap();
@@ -92,7 +92,7 @@ fn collapsing_adds_up() {
         &data,
         x.as_ref(),
         &fitted,
-        &options(ResidualKind::Martingale),
+        &options(CoxResidualKind::Martingale),
     )
     .unwrap();
     let grouped = residuals(
@@ -101,7 +101,7 @@ fn collapsing_adds_up() {
         &fitted,
         &ResidualOptions {
             collapse: Collapse::Cluster,
-            ..options(ResidualKind::Martingale)
+            ..options(CoxResidualKind::Martingale)
         },
     )
     .unwrap();
@@ -133,7 +133,10 @@ fn invalid_options_are_refused() {
     let x = x_matrix(&X);
     let fitted = model(&data, &x);
     let run = |opts: &ResidualOptions<'_>| residuals(&data, x.as_ref(), &fitted, opts);
-    for kind in [ResidualKind::Schoenfeld, ResidualKind::ScaledSchoenfeld] {
+    for kind in [
+        CoxResidualKind::Schoenfeld,
+        CoxResidualKind::ScaledSchoenfeld,
+    ] {
         let codes = [0u32; 12];
         let opts = ResidualOptions {
             collapse: Collapse::Codes(&codes),
@@ -144,19 +147,19 @@ fn invalid_options_are_refused() {
     for collapse in [Collapse::Cluster, Collapse::Id] {
         let opts = ResidualOptions {
             collapse,
-            ..options(ResidualKind::Martingale)
+            ..options(CoxResidualKind::Martingale)
         };
         assert!(run(&opts).is_err(), "{collapse:?} without the column");
     }
     let short = [0u32; 3];
     let opts = ResidualOptions {
         collapse: Collapse::Codes(&short),
-        ..options(ResidualKind::Score)
+        ..options(CoxResidualKind::Score)
     };
     assert!(run(&opts).is_err());
     let opts = ResidualOptions {
         weighted: Some(true),
-        ..options(ResidualKind::Deviance)
+        ..options(CoxResidualKind::Deviance)
     };
     assert!(run(&opts).is_err());
     // A fit of other data.
@@ -167,7 +170,7 @@ fn invalid_options_are_refused() {
             &other,
             x8.as_ref(),
             &fitted,
-            &options(ResidualKind::Martingale)
+            &options(CoxResidualKind::Martingale)
         )
         .is_err()
     );
@@ -186,7 +189,7 @@ fn a_fit_without_an_estimate_has_no_residuals() {
             &data,
             x.as_ref(),
             &fitted,
-            &options(ResidualKind::Martingale)
+            &options(CoxResidualKind::Martingale)
         )
         .is_err()
     );

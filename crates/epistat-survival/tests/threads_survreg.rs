@@ -5,7 +5,8 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::survreg::{
-    Distribution, PredictOptions, PredictType, ResidualKind, SurvregOptions, fit,
+    Distribution, SurvregOptions, SurvregPredictOptions, SurvregPredictType, SurvregResidualKind,
+    fit,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -79,23 +80,23 @@ fn survreg_fit_predict_residuals() {
             let p = f
                 .predict(
                     design.as_ref(),
-                    &PredictOptions {
-                        kind: PredictType::Quantile { p: vec![0.25, 0.5] },
+                    &SurvregPredictOptions {
+                        kind: SurvregPredictType::Quantile { p: vec![0.25, 0.5] },
                         se_fit: true,
                         strata: Some(stratum.clone()),
-                        ..PredictOptions::default()
+                        ..SurvregPredictOptions::default()
                     },
                 )
                 .unwrap();
             out.extend(p.fit);
             out.extend(p.se.unwrap());
             for kind in [
-                ResidualKind::Response,
-                ResidualKind::Deviance,
-                ResidualKind::Working,
-                ResidualKind::LdCase,
-                ResidualKind::LdResp,
-                ResidualKind::LdShape,
+                SurvregResidualKind::Response,
+                SurvregResidualKind::Deviance,
+                SurvregResidualKind::Working,
+                SurvregResidualKind::LdCase,
+                SurvregResidualKind::LdResp,
+                SurvregResidualKind::LdShape,
             ] {
                 out.extend(
                     f.residuals(&data, design.as_ref(), kind, true)

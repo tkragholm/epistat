@@ -5,12 +5,12 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
-use epistat_survival::cox::predict::HazardType;
+use epistat_survival::cox::predict::CoxHazardType;
 use epistat_survival::msreg::{
     MsBaseline, MsFitOptions, MsOptions, MsTerm, MsTerms, ProbTransOptions, fit,
     observed_transitions, probtrans,
 };
-use epistat_survival::multistate::{Options, estimate};
+use epistat_survival::multistate::{MultistateOptions, estimate};
 use epistat_survival::timefix::TimeFix;
 
 /// Illness-death data for `n` subjects with two covariates: rows with `start`,
@@ -109,7 +109,7 @@ fn the_model_without_covariates_is_the_aalen_johansen_estimate() {
         .msfit(
             &[],
             &MsFitOptions {
-                hazard: Some(HazardType::Breslow),
+                hazard: Some(CoxHazardType::Breslow),
                 se: false,
                 ..MsFitOptions::default()
             },
@@ -127,9 +127,9 @@ fn the_model_without_covariates_is_the_aalen_johansen_estimate() {
     let aj = estimate(
         &data,
         &h.time,
-        &Options {
+        &MultistateOptions {
             initial: Some(vec![1.0, 0.0, 0.0]),
-            ..Options::default()
+            ..MultistateOptions::default()
         },
     )
     .unwrap();
@@ -390,7 +390,7 @@ fn bad_input_is_refused_with_the_reason() {
     let msg = err(model.msfit(&[1.0, f64::NAN], &MsFitOptions::default()));
     assert!(msg.contains("not finite"), "{msg}");
     let robust = MsFitOptions {
-        variance: epistat_survival::cox::predict::Variance::Robust,
+        variance: epistat_survival::cox::predict::CoxVariance::Robust,
         ..MsFitOptions::default()
     };
     assert!(model.msfit(&[1.0, 0.0], &robust).is_ok());

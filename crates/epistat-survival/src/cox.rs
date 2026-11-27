@@ -28,12 +28,17 @@ pub use anova::{AnovaRow, AnovaTable, anova, anova_terms};
 pub use design::{ChiSquareTest, CoxModelFit, CoxOptions, CoxTests, fit, score_residuals};
 pub use predict::predict_expected_martingale;
 pub use predict::{
-    Baseline, BaselineOptions, Centring, ConfType, Curve, CurveTimes, CurveType, FittedModel,
-    HazardType, NewData, PathCurve, PathCurves, PathData, PredictOptions, PredictType, Prediction,
-    Reference, StratumBaseline, SurvCurves, SurvfitOptions, TermsPrediction, Variance, basehaz,
-    predict, predict_terms, reference_means, reference_offset, survfit, survfit_paths,
+    Baseline, BaselineOptions, Centring, ConfType, CoxHazardType, CoxPredictOptions,
+    CoxPredictType, CoxPrediction, CoxSurvfitOptions, CoxVariance, Curve, CurveTimes, CurveType,
+    FittedModel, NewData, PathCurve, PathCurves, PathData, Reference, StratumBaseline, SurvCurves,
+    TermsPrediction, basehaz, predict, predict_terms, reference_means, reference_offset, survfit,
+    survfit_paths,
 };
-pub use residuals::{Collapse, CoxResiduals, ResidualKind, ResidualOptions, residuals};
+#[expect(deprecated, reason = "the 0.3 names stay for one release")]
+pub use predict::{HazardType, PredictOptions, PredictType, Prediction, SurvfitOptions, Variance};
+#[expect(deprecated, reason = "the 0.3 name stays for one release")]
+pub use residuals::ResidualKind;
+pub use residuals::{Collapse, CoxResidualKind, CoxResiduals, ResidualOptions, residuals};
 pub use tt::{CoxTtFit, RiskSetTransform, TimeTransform, TtColumn, TtOptions, fit_tt};
 pub use zph::{CoxZph, ZphOptions, ZphTransform, zph};
 

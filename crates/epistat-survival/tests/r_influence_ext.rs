@@ -35,7 +35,7 @@ use epistat_survival::SurvData;
 use epistat_survival::absrisk::{CscOptions, SurvType};
 use epistat_survival::cox::{self, CoxModelFit, CoxOptions, Ties};
 use epistat_survival::standardise::{
-    Counterfactual, InfluenceForm, Level, StandardiseOptions, Standardised,
+    Counterfactual, ExposureLevel, InfluenceForm, StandardiseOptions, Standardised,
     standardise_cause_specific, standardise_cox,
 };
 use epistat_testkit::load_json;
@@ -198,9 +198,9 @@ fn run_case(case: &Case, std_err: bool, influence: InfluenceForm) -> Standardise
     let sets: Vec<Vec<(usize, f64)>> = (0..case.nlevels)
         .map(|l| setting(l, case.nlevels))
         .collect();
-    let levels: Vec<Level<'_>> = sets
+    let levels: Vec<ExposureLevel<'_>> = sets
         .iter()
-        .map(|set| Level {
+        .map(|set| ExposureLevel {
             designs: (0..refs.len())
                 .map(|_| Counterfactual::Columns(set))
                 .collect(),

@@ -22,8 +22,8 @@
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
-    BaselineOptions, FittedModel, HazardType, NewData, PredictOptions, PredictType, SurvfitOptions,
-    basehaz, predict, survfit,
+    BaselineOptions, CoxHazardType, CoxPredictOptions, CoxPredictType, CoxSurvfitOptions,
+    FittedModel, NewData, basehaz, predict, survfit,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::{NanRule, load_json, worst_deviation, worst_deviation_defined};
@@ -219,18 +219,24 @@ fn null_cox_matches_r() {
 
         // predict. With an offset the reference of the two differs by a
         // constant, so the differences from the first row are compared.
-        let se_opts = PredictOptions {
+        let se_opts = CoxPredictOptions {
             se_fit: true,
-            ..PredictOptions::default()
+            ..CoxPredictOptions::default()
         };
         let lp = predict(
             &fitted,
-            PredictType::LinearPredictor,
+            CoxPredictType::LinearPredictor,
             None,
-            &PredictOptions::default(),
+            &CoxPredictOptions::default(),
         )
         .unwrap();
-        let risk = predict(&fitted, PredictType::Risk, None, &PredictOptions::default()).unwrap();
+        let risk = predict(
+            &fitted,
+            CoxPredictType::Risk,
+            None,
+            &CoxPredictOptions::default(),
+        )
+        .unwrap();
         if r.offset {
             let rel = |v: &[f64]| v.iter().map(|x| x - v[0]).collect::<Vec<f64>>();
             note(
@@ -264,14 +270,14 @@ fn null_cox_matches_r() {
                 worst_deviation(&risk.fit, &r.risk, b_sum, 0.0, NanRule::Finite),
             );
         }
-        for kind in [PredictType::LinearPredictor, PredictType::Risk] {
+        for kind in [CoxPredictType::LinearPredictor, CoxPredictType::Risk] {
             let with_se = predict(&fitted, kind, None, &se_opts).unwrap();
             assert!(
                 with_se.se.as_ref().unwrap().iter().all(|&s| s == 0.0),
                 "{name}: no coefficients, no standard error"
             );
         }
-        let ex = predict(&fitted, PredictType::Expected, None, &se_opts).unwrap();
+        let ex = predict(&fitted, CoxPredictType::Expected, None, &se_opts).unwrap();
         // Rows with an event at a time shared with other events under Efron
         // ties have R's martingale form, which differs by definition.
         let mut tied = std::collections::BTreeMap::<(u32, u64), usize>::new();
@@ -342,20 +348,20 @@ fn null_cox_matches_r() {
         let mut new = NewData::new(new_x.as_ref());
         new.stratum = r.strata.then_some(levels.as_slice());
         new.offset = r.offset.then_some(offsets.as_slice());
-        let at_events = SurvfitOptions {
+        let at_events = CoxSurvfitOptions {
             censor_times: false,
-            ..SurvfitOptions::default()
+            ..CoxSurvfitOptions::default()
         };
         let curves = survfit(&fitted, &new, &at_events).unwrap();
         let alt_kind = if r.survfit_alt.ctype == 1 {
-            HazardType::Breslow
+            CoxHazardType::Breslow
         } else {
-            HazardType::Efron
+            CoxHazardType::Efron
         };
         let alt = survfit(
             &fitted,
             &new,
-            &SurvfitOptions {
+            &CoxSurvfitOptions {
                 hazard: Some(alt_kind),
                 ..at_events
             },

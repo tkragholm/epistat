@@ -6,9 +6,9 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
-use epistat_survival::flexpar::{self, FlexParOptions, Scale};
+use epistat_survival::flexpar::{self, FlexParOptions, FlexparScale};
 use epistat_survival::relsurv::{
-    ExcessOptions, ExpectedHazard, Grid, Method, NetOptions, excess_hazard, net_survival,
+    ExcessOptions, ExpectedHazard, Grid, NetMethod, NetOptions, excess_hazard, net_survival,
 };
 
 mod relsurv_sim;
@@ -30,7 +30,7 @@ fn interval_estimate_converges_to_the_exact_one() {
     }
     let data = c.data(false);
     let expected = c.expected(&t, &data);
-    for method in [Method::PoharPerme, Method::EdererII] {
+    for method in [NetMethod::PoharPerme, NetMethod::EdererII] {
         let exact = net_survival(
             &data,
             &expected,
@@ -70,8 +70,8 @@ fn interval_estimate_converges_to_the_exact_one() {
         // within `lambda_max w / 2` of 1, so each increment moves by at most
         // that share of its observed and expected parts.
         let bound = match method {
-            Method::EdererII | Method::EdererI | Method::Hakulinen => 1e-12,
-            Method::PoharPerme => {
+            NetMethod::EdererII | NetMethod::EdererI | NetMethod::Hakulinen => 1e-12,
+            NetMethod::PoharPerme => {
                 let observed: f64 = exact
                     .events
                     .iter()
@@ -144,23 +144,28 @@ fn zero_expected_hazard_gives_the_ordinary_flexible_model() {
         |i, j| if j == 0 { c.x1[i] } else { c.x2[i] },
     );
     let zero = vec![0.0; c.time.len()];
-    let plain = flexpar::fit(&data, x.as_ref(), &FlexParOptions::new(Scale::Hazard, 3)).unwrap();
+    let plain = flexpar::fit(
+        &data,
+        x.as_ref(),
+        &FlexParOptions::new(FlexparScale::Hazard, 3),
+    )
+    .unwrap();
     let opts = FlexParOptions {
         bhazard: Some(&zero),
-        ..FlexParOptions::new(Scale::Hazard, 3)
+        ..FlexParOptions::new(FlexparScale::Hazard, 3)
     };
     let excess = flexpar::fit(&data, x.as_ref(), &opts).unwrap();
     // Debug prints each float so that it reads back to the same bits.
     assert_eq!(format!("{plain:?}"), format!("{excess:?}"));
     let odds = FlexParOptions {
         bhazard: Some(&zero),
-        ..FlexParOptions::new(Scale::Odds, 3)
+        ..FlexParOptions::new(FlexparScale::Odds, 3)
     };
     assert!(flexpar::fit(&data, x.as_ref(), &odds).is_err());
     let negative = vec![-1e-3; c.time.len()];
     let bad = FlexParOptions {
         bhazard: Some(&negative),
-        ..FlexParOptions::new(Scale::Hazard, 3)
+        ..FlexParOptions::new(FlexparScale::Hazard, 3)
     };
     assert!(flexpar::fit(&data, x.as_ref(), &bad).is_err());
 }

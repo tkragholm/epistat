@@ -27,17 +27,18 @@
 //! The crate's own error is the rounding of sums of `n` terms, `64 n eps`
 //! relative to `sqrt(V_ii V_jj)`.
 
+use epistat_core::Estimand;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties};
 use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::ipcw::{self, CensoringModel, IpcwOptions};
-use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
+use epistat_survival::weighting::iptw::{self, IptwOptions};
 use epistat_survival::weighting::km::{self, KmOptions};
 use epistat_survival::weighting::pooled;
 use epistat_survival::weighting::pooled::PooledEvent;
 use epistat_survival::weighting::pooled::PooledOptions;
-use epistat_survival::weighting::{Censoring, WeightAt, Weights};
+use epistat_survival::weighting::{OutcomeCensoring, WeightAt, Weights};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -154,7 +155,7 @@ fn run(reference: &Reference, c: &Case) -> Output {
             &IptwOptions {
                 estimand: Estimand::Ate,
                 stabilise: s.stab,
-                alpha: None,
+                optimal_subset: None,
             },
         )
         .unwrap()
@@ -228,16 +229,16 @@ fn run(reference: &Reference, c: &Case) -> Output {
         c.name
     );
     let censoring = c.spec.cens.as_ref().map(|s| match s.model.as_str() {
-        "pooled" => Censoring::Pooled {
+        "pooled" => OutcomeCensoring::Pooled {
             fit: pooled_fit.as_ref().unwrap(),
             at: at(s),
         },
-        "km" => Censoring::Hazard {
+        "km" => OutcomeCensoring::Hazard {
             model: CensoringModel::KaplanMeier,
             options: ipcw_opts.as_ref().unwrap(),
             at: at(s),
         },
-        _ => Censoring::Hazard {
+        _ => OutcomeCensoring::Hazard {
             model: CensoringModel::Cox { x: x_cens.as_ref() },
             options: ipcw_opts.as_ref().unwrap(),
             at: at(s),

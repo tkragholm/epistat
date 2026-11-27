@@ -27,12 +27,13 @@
 //!   V_jj)`, plus twice the difference between the Richardson-extrapolated and
 //!   the plain central-difference covariance of the reference.
 
+use epistat_core::Estimand;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::Weights;
 use epistat_survival::weighting::cox as wcox;
-use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
+use epistat_survival::weighting::iptw::{self, IptwOptions, OptimalSubset};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -109,11 +110,12 @@ fn load() -> Reference {
     r
 }
 
-fn estimand(name: &str) -> Estimand {
+/// The estimand and the optimal subset that `WeightIt`'s name stands for.
+fn estimand(name: &str) -> (Estimand, Option<OptimalSubset>) {
     match name {
-        "ATO" => Estimand::Ato,
-        "ATM" => Estimand::Atm,
-        "ATOS" => Estimand::Atos,
+        "ATO" => (Estimand::Ato, None),
+        "ATM" => (Estimand::Atm, None),
+        "ATOS" => (Estimand::Ate, Some(OptimalSubset::Crump)),
         other => panic!("estimand {other}"),
     }
 }
@@ -144,10 +146,11 @@ fn weights_match_weightit_and_psweight() {
     let (z, treat) = inputs(&reference);
     let n = treat.len();
     for r in &reference.weights {
+        let (estimand, optimal_subset) = estimand(&r.estimand);
         let opts = IptwOptions {
-            estimand: estimand(&r.estimand),
+            estimand,
             stabilise: false,
-            alpha: None,
+            optimal_subset,
         };
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         let eta = eta_bounds(&z, &r.coefficients, r.kappa);
@@ -246,8 +249,7 @@ fn caller_alpha_trims_the_optimal_subset() {
         &treat,
         z.as_ref(),
         &IptwOptions {
-            estimand: Estimand::Atos,
-            alpha: None,
+            optimal_subset: Some(OptimalSubset::Crump),
             ..IptwOptions::default()
         },
     )
@@ -256,8 +258,7 @@ fn caller_alpha_trims_the_optimal_subset() {
         &treat,
         z.as_ref(),
         &IptwOptions {
-            estimand: Estimand::Atos,
-            alpha: crump.alpha,
+            optimal_subset: crump.alpha.map(OptimalSubset::Alpha),
             ..IptwOptions::default()
         },
     )
@@ -267,8 +268,7 @@ fn caller_alpha_trims_the_optimal_subset() {
         &treat,
         z.as_ref(),
         &IptwOptions {
-            estimand: Estimand::Atos,
-            alpha: Some(0.05),
+            optimal_subset: Some(OptimalSubset::Alpha(0.05)),
             ..IptwOptions::default()
         },
     )
@@ -282,8 +282,7 @@ fn caller_alpha_trims_the_optimal_subset() {
             &treat,
             z.as_ref(),
             &IptwOptions {
-                estimand: Estimand::Atos,
-                alpha: Some(0.5),
+                optimal_subset: Some(OptimalSubset::Alpha(0.5)),
                 ..IptwOptions::default()
             }
         )
@@ -294,8 +293,7 @@ fn caller_alpha_trims_the_optimal_subset() {
             &treat,
             z.as_ref(),
             &IptwOptions {
-                estimand: Estimand::Atos,
-                alpha: Some(-0.1),
+                optimal_subset: Some(OptimalSubset::Alpha(-0.1)),
                 ..IptwOptions::default()
             }
         )
@@ -315,10 +313,11 @@ fn cox_variances_match_finite_differences_of_refits() {
             .iter()
             .find(|r| r.estimand == c.estimand)
             .unwrap();
+        let (estimand, optimal_subset) = estimand(&c.estimand);
         let opts = IptwOptions {
-            estimand: estimand(&c.estimand),
+            estimand,
             stabilise: false,
-            alpha: None,
+            optimal_subset,
         };
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         // Rows of weight 0 do not enter the fit.

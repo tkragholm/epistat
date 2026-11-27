@@ -10,7 +10,7 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvBuf;
 use epistat_survival::cox::Ties;
-use epistat_survival::frailty::{FrailtyFit, FrailtyOptions, Method, Theta, fit};
+use epistat_survival::frailty::{FrailtyFit, FrailtyMethod, FrailtyOptions, Theta, fit};
 use epistat_testkit::Fingerprint;
 
 fn hash(f: &FrailtyFit) -> u64 {
@@ -146,7 +146,7 @@ fn bits_are_pinned() {
                 false,
                 false,
                 &FrailtyOptions {
-                    method: Method::Em {
+                    method: FrailtyMethod::Em {
                         max_iterations: 2000,
                         tolerance: 1e-12,
                     },

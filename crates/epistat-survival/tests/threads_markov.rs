@@ -14,7 +14,7 @@
 use epistat_core::Bootstrap;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::markov::{Options, test};
+use epistat_survival::markov::{MarkovOptions, test};
 use epistat_survival::timefix::TimeFix;
 use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 
@@ -61,7 +61,7 @@ fn markov_test_does_not_depend_on_the_number_of_threads() {
     let seeds = Bootstrap::new(33, 77);
     // Exact ties: the times carry rounding noise, and the comparison is
     // between thread counts.
-    let opts = Options {
+    let opts = MarkovOptions {
         timefix: TimeFix::Exact,
     };
     assert_same_on_pools(&POOLS, || {

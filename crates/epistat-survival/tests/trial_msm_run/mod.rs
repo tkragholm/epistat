@@ -10,8 +10,8 @@
 use epistat_linalg::Mat;
 use epistat_survival::weighting::trials::WeightRows;
 use epistat_survival::weighting::trials::{
-    CumulativeIncidence, Fit, MsmInput, PersonPeriod, TrialRows, WeightModel, censoring_weights,
-    cumulative_incidence, fit_msm, switch_weights, trial_weights,
+    CumulativeIncidence, MsmInput, PersonPeriod, TrialRows, TrialWeightFit, WeightModel,
+    censoring_weights, cumulative_incidence, fit_msm, switch_weights, trial_weights,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -118,7 +118,7 @@ pub fn run(a: &Analysis) -> Outputs {
             &data,
             &censored,
             &model,
-            Fit::ByPreviousTreatment,
+            TrialWeightFit::ByPreviousTreatment,
             &WeightRows::default(),
         )
         .unwrap();

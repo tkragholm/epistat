@@ -41,7 +41,9 @@ use epistat_survival::sccs::{
     ExposureSeries, PieceSpec, SccsOptions, WindowSpec, build_pieces, fit as sccs_fit,
 };
 use epistat_survival::standardise::attributable::af_from_standardised;
-use epistat_survival::standardise::{Counterfactual, Level, StandardiseOptions, standardise_cox};
+use epistat_survival::standardise::{
+    Counterfactual, ExposureLevel, StandardiseOptions, standardise_cox,
+};
 
 const SEED: u64 = 20_261_207;
 
@@ -259,8 +261,8 @@ fn main() {
                     &model,
                     &options,
                     &[
-                        Level::single(Counterfactual::Design(x0.as_ref())),
-                        Level::single(Counterfactual::Columns(&[])),
+                        ExposureLevel::single(Counterfactual::Design(x0.as_ref())),
+                        ExposureLevel::single(Counterfactual::Columns(&[])),
                     ],
                     &at,
                     &StandardiseOptions {

@@ -10,8 +10,8 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
-    BaselineOptions, ConfType, FittedModel, NewData, PredictOptions, PredictType, Reference,
-    SurvfitOptions, basehaz, predict, predict_terms, survfit,
+    BaselineOptions, ConfType, CoxPredictOptions, CoxPredictType, CoxSurvfitOptions, FittedModel,
+    NewData, Reference, basehaz, predict, predict_terms, survfit,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::{POOLS, assert_same_on_pools};
@@ -87,19 +87,19 @@ fn predictions_and_curves() {
             new.start = Some(&new_start);
             new.stop = Some(&new_stop);
             new.offset = Some(&new_offset);
-            let popts = PredictOptions {
+            let popts = CoxPredictOptions {
                 se_fit: true,
-                ..PredictOptions::default()
+                ..CoxPredictOptions::default()
             };
             for kind in [
-                PredictType::LinearPredictor,
-                PredictType::Risk,
-                PredictType::Expected,
-                PredictType::Survival,
+                CoxPredictType::LinearPredictor,
+                CoxPredictType::Risk,
+                CoxPredictType::Expected,
+                CoxPredictType::Survival,
             ] {
                 for newdata in [None, Some(&new)] {
                     for reference in [Reference::Strata, Reference::Sample, Reference::Zero] {
-                        let o = PredictOptions {
+                        let o = CoxPredictOptions {
                             reference: Some(reference),
                             ..popts
                         };
@@ -117,9 +117,9 @@ fn predictions_and_curves() {
                 let c = survfit(
                     &fitted,
                     &new,
-                    &SurvfitOptions {
+                    &CoxSurvfitOptions {
                         conf_type,
-                        ..SurvfitOptions::default()
+                        ..CoxSurvfitOptions::default()
                     },
                 )
                 .unwrap();

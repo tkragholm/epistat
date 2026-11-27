@@ -4,9 +4,9 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
-use epistat_survival::flexpar::{self, FlexParOptions, Scale};
+use epistat_survival::flexpar::{self, FlexParOptions, FlexparScale};
 use epistat_survival::relsurv::{
-    ExcessFit, ExcessOptions, Grid, Method, NetOptions, NetSurvival, excess_hazard, net_survival,
+    ExcessFit, ExcessOptions, Grid, NetMethod, NetOptions, NetSurvival, excess_hazard, net_survival,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -48,7 +48,7 @@ fn net_survival_on_threads() {
     let c = cohort(5000, 21, true);
     let data = c.data(true);
     let expected = c.expected(&t, &data);
-    for method in [Method::PoharPerme, Method::EdererII] {
+    for method in [NetMethod::PoharPerme, NetMethod::EdererII] {
         for grid in [Grid::Width(30.4375), Grid::EventTimes] {
             let opts = NetOptions {
                 method,
@@ -104,7 +104,7 @@ fn flexible_excess_model_on_threads() {
     let x = Mat::from_fn(n, 2, |i, j| if j == 0 { c.x1[i] } else { c.x2[i] });
     let opts = FlexParOptions {
         bhazard: Some(&bh),
-        ..FlexParOptions::new(Scale::Hazard, 3)
+        ..FlexParOptions::new(FlexparScale::Hazard, 3)
     };
     assert_same_on_pools(&POOLS, || {
         let f = flexpar::fit(&data, x.as_ref(), &opts).unwrap();

@@ -7,7 +7,9 @@ use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_survival::standardise::attributable::af_from_standardised;
-use epistat_survival::standardise::{Counterfactual, Level, StandardiseOptions, standardise_cox};
+use epistat_survival::standardise::{
+    Counterfactual, ExposureLevel, StandardiseOptions, standardise_cox,
+};
 use epistat_testkit::{POOLS, absent_all, assert_same_on_pools};
 
 #[test]
@@ -45,8 +47,8 @@ fn the_attributable_fraction_function_does_not_depend_on_the_number_of_threads()
             &model,
             &options,
             &[
-                Level::single(Counterfactual::Design(x0.as_ref())),
-                Level::single(Counterfactual::Columns(&[])),
+                ExposureLevel::single(Counterfactual::Design(x0.as_ref())),
+                ExposureLevel::single(Counterfactual::Columns(&[])),
             ],
             &times,
             &StandardiseOptions {

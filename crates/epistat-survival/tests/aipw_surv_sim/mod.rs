@@ -5,7 +5,7 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::aipw::{
-    AipwSurv, AipwSurvOptions, AipwSurvSpec, Censoring, Estimator, aipw_cox,
+    AipwCensoring, AipwSurv, AipwSurvOptions, AipwSurvSpec, Estimator, aipw_cox,
 };
 use epistat_survival::cox::Ties;
 use epistat_survival::standardise::Counterfactual;
@@ -58,11 +58,11 @@ pub fn run(s: &Simulated, estimator: Estimator, km: bool, times: &[f64]) -> Aipw
     let set0 = [(0usize, 0.0)];
     let set1 = [(0usize, 1.0)];
     let censoring = if km {
-        Censoring::KaplanMeier {
+        AipwCensoring::KaplanMeier {
             groups: Some(&s.group),
         }
     } else {
-        Censoring::Cox {
+        AipwCensoring::Cox {
             x: s.outcome_x.as_ref(),
         }
     };

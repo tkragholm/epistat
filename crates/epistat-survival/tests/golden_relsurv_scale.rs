@@ -21,7 +21,8 @@ mod relsurv_sim;
 use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::relsurv::{
-    ExcessOptions, ExpectedHazard, Grid, Method, NetOptions, Transform, excess_hazard, net_survival,
+    ExcessOptions, ExpectedHazard, Grid, NetMethod, NetOptions, NetTransform, excess_hazard,
+    net_survival,
 };
 use epistat_testkit::Fingerprint;
 use relsurv_sim::{cohort, table};
@@ -81,8 +82,8 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
     out.push(("lookups".to_string(), lookups));
 
     for (name, method) in [
-        ("pohar perme", Method::PoharPerme),
-        ("ederer2", Method::EdererII),
+        ("pohar perme", NetMethod::PoharPerme),
+        ("ederer2", NetMethod::EdererII),
     ] {
         for (label, grid) in [
             ("exact", Grid::EventTimes),
@@ -92,7 +93,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
                 method,
                 grid,
                 level: Level::default(),
-                transform: Transform::Log,
+                transform: NetTransform::Log,
                 potential: None,
             };
             let mut v = Vec::new();

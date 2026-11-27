@@ -108,7 +108,7 @@ pub use competing::{
     CompetingIncidence, MsmCompeting, cumulative_incidence_competing, fit_msm_competing,
 };
 pub use limits::WeightLimits;
-pub use protocol::{Panel, ProtocolRows, protocol_rows};
+pub use protocol::{ProtocolPanel, ProtocolRows, protocol_rows};
 
 /// The rows of a person-period data set, ordered by person and then period.
 #[derive(Debug, Clone, Copy)]
@@ -164,7 +164,7 @@ pub struct WeightModel<'a> {
 /// How the models of a weight are fitted over the values of the previous
 /// treatment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Fit {
+pub enum TrialWeightFit {
     /// One model for each value of the previous treatment.
     ByPreviousTreatment,
     /// One model on all rows.
@@ -306,7 +306,7 @@ fn ratio_weights(
     previous: &[bool],
     y: &[bool],
     model: &WeightModel<'_>,
-    fit: Fit,
+    fit: TrialWeightFit,
     observed_value: bool,
     rows: &WeightRows<'_>,
     what: &str,
@@ -317,8 +317,8 @@ fn ratio_weights(
     rows.check(n)?;
     let fitted = |r: usize| rows.fitted.is_none_or(|f| f[r]);
     let groups: Vec<Vec<usize>> = match fit {
-        Fit::Pooled => vec![(0..n).filter(|&r| fitted(r)).collect()],
-        Fit::ByPreviousTreatment => (0..2)
+        TrialWeightFit::Pooled => vec![(0..n).filter(|&r| fitted(r)).collect()],
+        TrialWeightFit::ByPreviousTreatment => (0..2)
             .map(|g| {
                 (0..n)
                     .filter(|&r| fitted(r) && previous[r] == (g == 1))
@@ -403,7 +403,7 @@ pub fn switch_weights(
         data.previous,
         data.treatment,
         model,
-        Fit::ByPreviousTreatment,
+        TrialWeightFit::ByPreviousTreatment,
         true,
         rows,
         "switch",
@@ -427,7 +427,7 @@ pub fn censoring_weights(
     data: &PersonPeriod<'_>,
     censored: &[bool],
     model: &WeightModel<'_>,
-    fit: Fit,
+    fit: TrialWeightFit,
     rows: &WeightRows<'_>,
 ) -> Result<RowWeights> {
     let n = data.check()?;

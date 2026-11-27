@@ -696,7 +696,7 @@ fn bootstrap_rows(
 
 /// Settings of [`estimate`] and [`bootstrap`].
 #[derive(Debug, Clone, PartialEq, Default)]
-pub struct Options {
+pub struct MultistateOptions {
     /// How times that differ by rounding error are treated before the
     /// estimate. `survival::aeqSurv` by default, as `survfit` applies it.
     pub timefix: TimeFix,
@@ -717,10 +717,14 @@ pub struct Options {
     pub initial: Option<Vec<f64>>,
 }
 
+/// `MultistateOptions`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `MultistateOptions`")]
+pub type Options = MultistateOptions;
+
 /// The tolerance of the leaving-rate check: the one given, checked, or the
-/// rounding bound of [`Options::rate_tolerance`] for `rows` rows and `states`
+/// rounding bound of [`MultistateOptions::rate_tolerance`] for `rows` rows and `states`
 /// states.
-fn rate_tolerance(opts: &Options, rows: usize, states: usize) -> Result<f64> {
+fn rate_tolerance(opts: &MultistateOptions, rows: usize, states: usize) -> Result<f64> {
     match opts.rate_tolerance {
         Some(tolerance) if tolerance.is_finite() && tolerance >= 0.0 => Ok(tolerance),
         Some(tolerance) => Err(Error::invalid(format!(
@@ -732,7 +736,7 @@ fn rate_tolerance(opts: &Options, rows: usize, states: usize) -> Result<f64> {
 
 /// The occupation probabilities at every time, with the rows behind them.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Estimate {
+pub struct OccupationEstimate {
     /// `time * state`, row-major: the probability of each state after each
     /// time. State `k` is status code `k + 1`.
     pub probabilities: Vec<f64>,
@@ -748,6 +752,10 @@ pub struct Estimate {
     /// The number of rows of positive weight, which are the rows used.
     pub n_used: usize,
 }
+
+/// `OccupationEstimate`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `OccupationEstimate`")]
+pub type Estimate = OccupationEstimate;
 
 /// The replicates of a clustered bootstrap, with the rows behind them.
 #[derive(Debug, Clone, PartialEq)]
@@ -936,7 +944,11 @@ struct Columns<'a> {
 /// wrong length, a negative or non-finite entry or a sum that is not 1, no
 /// weight is in the opening states when the distribution is formed from the
 /// data, or more weight leaves a state than was at risk in it.
-pub fn estimate(data: &SurvData<'_>, times: &[f64], opts: &Options) -> Result<Estimate> {
+pub fn estimate(
+    data: &SurvData<'_>,
+    times: &[f64],
+    opts: &MultistateOptions,
+) -> Result<OccupationEstimate> {
     let prepared = Prepared::new(data, opts.timefix, false)?;
     let Columns {
         starts,
@@ -964,7 +976,7 @@ pub fn estimate(data: &SurvData<'_>, times: &[f64], opts: &Options) -> Result<Es
     };
     let tolerance = rate_tolerance(opts, rows.len(), states)?;
     let occupation = occupation(rows, &weights, times, &initial, states, tolerance)?;
-    Ok(Estimate {
+    Ok(OccupationEstimate {
         probabilities: occupation.probabilities,
         at_risk: occupation.at_risk,
         initial,
@@ -1027,7 +1039,7 @@ pub fn bootstrap(
     horizons: &[f64],
     origin: f64,
     bootstrap: epistat_core::Bootstrap,
-    opts: &Options,
+    opts: &MultistateOptions,
 ) -> Result<Replicates> {
     if opts.initial.is_some() {
         return Err(Error::invalid(
@@ -1078,7 +1090,7 @@ pub fn bootstrap(
 
 /// What [`variance`] reports besides the standard errors at each time.
 #[derive(Debug, Clone, PartialEq)]
-pub struct VarianceOptions {
+pub struct OccupationVarianceOptions {
     /// The starting time of the curve, `fit$t0` of `survfit`: where the
     /// restricted time in state begins. It has no default, since `survfit` takes
     /// it from the data in ways that depend on the initial states. No time of
@@ -1091,11 +1103,11 @@ pub struct VarianceOptions {
     /// Times at which the influence of every cluster is returned. Ascending. The
     /// influence at a time is that after the last of `times` not after it, and
     /// that of the initial distribution before the first. The influence of all
-    /// clusters at all times is not kept, see [`Variance::influence`].
+    /// clusters at all times is not kept, see [`OccupationVariance::influence`].
     pub influence_times: Vec<f64>,
 }
 
-impl VarianceOptions {
+impl OccupationVarianceOptions {
     /// Options with the given starting time and nothing else requested.
     #[must_use]
     pub const fn new(origin: f64) -> Self {
@@ -1107,13 +1119,17 @@ impl VarianceOptions {
     }
 }
 
+/// `OccupationVarianceOptions`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `OccupationVarianceOptions`")]
+pub type VarianceOptions = OccupationVarianceOptions;
+
 /// The standard errors of the occupation probabilities and the cumulative
 /// hazards by the infinitesimal jackknife, with what is needed to read them.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Variance {
+pub struct OccupationVariance {
     /// `time * state`, row-major: the probability of each state after each
     /// time, from the recursion the standard errors come from. It equals
-    /// [`Estimate::probabilities`] up to rounding, and is the estimate the
+    /// [`OccupationEstimate::probabilities`] up to rounding, and is the estimate the
     /// errors belong to.
     pub probabilities: Vec<f64>,
     /// `time * state`, row-major: the standard error of the probability of each
@@ -1136,7 +1152,7 @@ pub struct Variance {
     /// The standard error of each state's initial probability, 0 when the
     /// initial distribution is given.
     pub std_initial: Vec<f64>,
-    /// The horizons of [`VarianceOptions::horizons`].
+    /// The horizons of [`OccupationVarianceOptions::horizons`].
     pub horizons: Vec<f64>,
     /// `horizon * state`: the standard error of the restricted time in each
     /// state from the origin to the horizon, the `se(rmean)` that
@@ -1150,7 +1166,7 @@ pub struct Variance {
     pub n_clusters: usize,
     /// The caller's code of each cluster, ascending.
     pub clusters: Vec<u32>,
-    /// The times of [`VarianceOptions::influence_times`].
+    /// The times of [`OccupationVarianceOptions::influence_times`].
     pub influence_times: Vec<f64>,
     /// The influence function of each cluster on the probability of each
     /// state at the influence times, per cluster, with the codes of `clusters`
@@ -1167,6 +1183,10 @@ pub struct Variance {
     /// The number of rows of positive weight, which are the rows used.
     pub n_used: usize,
 }
+
+/// `OccupationVariance`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `OccupationVariance`")]
+pub type Variance = OccupationVariance;
 
 /// For each of `at`, the index of the last of `times` not after it, or `None`
 /// when it is before the first.
@@ -1191,7 +1211,7 @@ pub(crate) fn snapshot_positions(times: &[f64], at: &[f64]) -> Vec<Option<usize>
 /// formed from the opening rows, and then its estimation adds to the variance,
 /// as in `survfit` without `p0`. See the module `influence` for the recursion
 /// and for how memory is bounded: the influence of every cluster at every time is
-/// never held, only that at [`VarianceOptions::influence_times`].
+/// never held, only that at [`OccupationVarianceOptions::influence_times`].
 ///
 /// # Errors
 ///
@@ -1201,9 +1221,9 @@ pub(crate) fn snapshot_positions(times: &[f64], at: &[f64]) -> Vec<Option<usize>
 pub fn variance(
     data: &SurvData<'_>,
     times: &[f64],
-    opts: &Options,
-    v: &VarianceOptions,
-) -> Result<Variance> {
+    opts: &MultistateOptions,
+    v: &OccupationVarianceOptions,
+) -> Result<OccupationVariance> {
     let (mut out, dfbeta) = variance_dfbeta(data, times, opts, v)?;
     out.influence = influence::per_cluster(
         &dfbeta,
@@ -1219,9 +1239,9 @@ pub fn variance(
 pub(crate) fn variance_dfbeta(
     data: &SurvData<'_>,
     times: &[f64],
-    opts: &Options,
-    v: &VarianceOptions,
-) -> Result<(Variance, Vec<f64>)> {
+    opts: &MultistateOptions,
+    v: &OccupationVarianceOptions,
+) -> Result<(OccupationVariance, Vec<f64>)> {
     check_ascending(times, "times", true)?;
     check_ascending(&v.horizons, "horizons", false)?;
     check_ascending(&v.influence_times, "influence_times", false)?;
@@ -1320,7 +1340,7 @@ pub(crate) fn variance_dfbeta(
             snapshots: &snapshots,
         },
     );
-    let variance = Variance {
+    let variance = OccupationVariance {
         probabilities: out.p,
         se: out.std_p,
         transitions: out.transitions,

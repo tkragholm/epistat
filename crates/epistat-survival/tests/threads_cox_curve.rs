@@ -11,7 +11,7 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
-    ConfType, CurveType, FittedModel, NewData, PathData, SurvfitOptions, survfit, survfit_paths,
+    ConfType, CoxSurvfitOptions, CurveType, FittedModel, NewData, PathData, survfit, survfit_paths,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::{POOLS, assert_same_on_pools};
@@ -90,12 +90,12 @@ fn product_limit_start_time_and_paths() {
             ] {
                 for start_time in [None, Some(1.0)] {
                     for conf_type in [ConfType::Log, ConfType::LogLog] {
-                        let o = SurvfitOptions {
+                        let o = CoxSurvfitOptions {
                             conf_type,
                             curve_type,
                             start_time,
                             censor_times: true,
-                            ..SurvfitOptions::default()
+                            ..CoxSurvfitOptions::default()
                         };
                         let c = survfit(&fitted, &new, &o).unwrap();
                         for t in &c.strata {

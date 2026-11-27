@@ -43,7 +43,7 @@
 //!
 //! as `WeightIt` computes it, 0 if none qualifies. Candidates that differ from
 //! the previous by less than `1e-8` are skipped, as there.
-//! [`IptwOptions::alpha`] takes an `alpha` of the caller instead.
+//! [`OptimalSubset::Alpha`] takes an `alpha` of the caller instead.
 //!
 //! The variance that accounts for the estimated propensity model (see
 //! [`weighting`](super)) takes the weights as functions of the coefficients and
@@ -75,49 +75,52 @@
 //! 5. Zhou T, Tong G, Li F, Thomas LE, Li F. PSweight: an R package for
 //!    propensity score weighting analysis. R J. 2022;14(1):282-300.
 
+use epistat_core::Estimand;
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef};
 
 use super::summary::WeightSummary;
 use crate::error::{Error, Result};
 
-/// The population the weights standardise to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Estimand {
-    /// The whole population, `estimand = "ATE"`.
+/// The subset of the population the weights are restricted to: the optimal
+/// subset of Crump, Hotz, Imbens and Mitnik, the subjects whose propensity is in
+/// `[alpha, 1 - alpha]`.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum OptimalSubset {
+    /// The cut-off `alpha` of Crump et al., as `WeightIt` finds it with
+    /// `estimand = "ATOS"`.
     #[default]
-    Ate,
-    /// The treated, `estimand = "ATT"`: controls are weighted to look like the
-    /// treated.
-    Att,
-    /// The controls, `estimand = "ATC"`.
-    Atc,
-    /// The population with the most overlap, weight `p (1 - p)`,
-    /// `estimand = "ATO"`: treated subjects are weighted by `1 - p` and controls
-    /// by `p`.
-    Ato,
-    /// The population of matching on the propensity score, `estimand = "ATM"`.
-    Atm,
-    /// The optimal subset of Crump et al., `estimand = "ATOS"`: the weights of the
-    /// average treatment effect on the subjects with propensity in `[alpha, 1 -
-    /// alpha]` and 0 outside.
-    Atos,
+    Crump,
+    /// A cut-off given by the caller, in `[0, 0.5)`.
+    Alpha(f64),
 }
 
 /// What [`fit`] does besides the data.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IptwOptions {
     /// The population the weights standardise to. The default is `ATE`, as in
     /// `weightit`.
     pub estimand: Estimand,
     /// Multiply the weights by the marginal probability of the treatment each
     /// subject received, `stabilize = TRUE` of `weightit`. Only for the average
-    /// treatment effect. The default is unstabilised weights.
+    /// treatment effect without an optimal subset. The default is unstabilised
+    /// weights.
     pub stabilise: bool,
-    /// The cut-off `alpha` of the optimal subset for [`Estimand::Atos`], in
-    /// `[0, 0.5)`, or `None` for the one of Crump et al. as `WeightIt` finds
-    /// it. Ignored for the other estimands.
-    pub alpha: Option<f64>,
+    /// Restrict the weights to an optimal subset, `estimand = "ATOS"` of
+    /// `weightit`: the weights of the average treatment effect for the
+    /// subjects inside it and 0 outside. Only with the estimand `Ate`. `None`,
+    /// the default, keeps everyone.
+    pub optimal_subset: Option<OptimalSubset>,
+}
+
+impl Default for IptwOptions {
+    fn default() -> Self {
+        Self {
+            estimand: Estimand::Ate,
+            stabilise: false,
+            optimal_subset: None,
+        }
+    }
 }
 
 /// The summary of the weights in each treatment group.
@@ -148,7 +151,8 @@ pub struct Iptw {
     pub coefficients: Vec<f64>,
     /// The proportion treated, used by stabilised weights, otherwise `None`.
     pub marginal: Option<f64>,
-    /// The cut-off `alpha` of the optimal subset, for `Atos` only.
+    /// The cut-off `alpha` of the optimal subset, `Some` only when the weights
+    /// are restricted to one.
     pub alpha: Option<f64>,
     /// The summary of the weights by treatment group.
     pub summary: IptwSummary,
@@ -174,29 +178,33 @@ impl Iptw {
 ///
 /// `design` holds one row per subject and includes the intercept column, as
 /// the design of `glm`. `treatment` is true for the treated. For
-/// [`Estimand::Atos`] the weights are those of the average treatment effect
-/// inside the optimal subset between `alpha` and `1 - alpha` and 0 outside,
-/// and [`Iptw::alpha`] holds the cut-off used.
+/// an [`OptimalSubset`] the weights are those of the average treatment effect
+/// inside the subset between `alpha` and `1 - alpha` and 0 outside, and
+/// [`Iptw::alpha`] holds the cut-off used.
 ///
 /// # Errors
 ///
 /// An input error when `design` has another number of rows than `treatment`,
 /// no column, or a value that is not finite, when everyone or no one is
-/// treated, when `stabilise` is set for an estimand other than `Ate`, when
-/// `alpha` is not in `[0, 0.5)`, and when a fitted probability is exactly 0
+/// treated, when `stabilise` is set for an estimand other than `Ate` or with
+/// an optimal subset, when an optimal subset is asked for with an estimand other
+/// than `Ate`, when the `alpha` of the subset is not in `[0, 0.5)`, and when a fitted probability is exactly 0
 /// or 1; [`Error::Model`] when the propensity model has an aliased column or
 /// does not converge.
 pub fn fit(treatment: &[bool], design: MatRef<'_, f64>, opts: &IptwOptions) -> Result<Iptw> {
-    if opts.estimand == Estimand::Atos
-        && let Some(a) = opts.alpha
+    if let Some(OptimalSubset::Alpha(a)) = opts.optimal_subset
         && !(0.0..0.5).contains(&a)
     {
         return Err(Error::invalid(format!("alpha: {a} is not in [0, 0.5)")));
     }
-    let alpha = if opts.estimand == Estimand::Atos {
-        opts.alpha
-    } else {
-        None
+    if opts.optimal_subset.is_some() && opts.estimand != Estimand::Ate {
+        return Err(Error::invalid(
+            "optimal_subset: the optimal subset is for the average treatment effect only",
+        ));
+    }
+    let alpha = match opts.optimal_subset {
+        Some(OptimalSubset::Alpha(a)) => Some(a),
+        _ => None,
     };
     fit_with(treatment, design, *opts, alpha)
 }
@@ -256,9 +264,9 @@ fn fit_with(
     if n_treated == 0 || n_treated == n {
         return Err(Error::invalid("treatment: both groups need subjects"));
     }
-    if opts.stabilise && opts.estimand != Estimand::Ate {
+    if opts.stabilise && (opts.estimand != Estimand::Ate || opts.optimal_subset.is_some()) {
         return Err(Error::invalid(
-            "stabilise: weights are stabilised for the average treatment effect only",
+            "stabilise: weights are stabilised for the average treatment effect without an optimal subset only",
         ));
     }
     let y: Vec<f64> = treatment.iter().map(|&a| f64::from(u8::from(a))).collect();
@@ -276,23 +284,18 @@ fn fit_with(
         )));
     }
     let marginal = opts.stabilise.then(|| n_treated as f64 / n as f64);
-    let alpha = (opts.estimand == Estimand::Atos)
-        .then(|| alpha.unwrap_or_else(|| crump_alpha(&propensity)));
-    let weights: Vec<f64> = treatment
+    let alpha = opts
+        .optimal_subset
+        .map(|_| alpha.unwrap_or_else(|| crump_alpha(&propensity)));
+    let weights = treatment
         .iter()
         .zip(&propensity)
         .map(|(&a, &p)| {
-            // The optimal subset weights as the average treatment effect inside it.
-            let estimand = if opts.estimand == Estimand::Atos {
-                Estimand::Ate
-            } else {
-                opts.estimand
-            };
             let outside = alpha.is_some_and(|al| p < al || p > 1.0 - al);
-            let base = match (estimand, a) {
+            let base = match (opts.estimand, a) {
                 _ if outside => 0.0,
-                (Estimand::Ate | Estimand::Atos, true) => 1.0 / p,
-                (Estimand::Ate | Estimand::Atos, false) => 1.0 / (1.0 - p),
+                (Estimand::Ate, true) => 1.0 / p,
+                (Estimand::Ate, false) => 1.0 / (1.0 - p),
                 (Estimand::Att, false) => p / (1.0 - p),
                 (Estimand::Atc, true) => (1.0 - p) / p,
                 (Estimand::Ato, true) => 1.0 - p,
@@ -300,14 +303,16 @@ fn fit_with(
                 (Estimand::Atm, true) if p > 0.5 => (1.0 - p) / p,
                 (Estimand::Atm, false) if p < 0.5 => p / (1.0 - p),
                 (Estimand::Att, true) | (Estimand::Atc, false) | (Estimand::Atm, _) => 1.0,
+                _ => return None,
             };
-            match marginal {
+            Some(match marginal {
                 Some(pi) if a => pi * base,
                 Some(pi) => (1.0 - pi) * base,
                 None => base,
-            }
+            })
         })
-        .collect();
+        .collect::<Option<Vec<f64>>>()
+        .ok_or_else(|| Error::unsupported(format!("estimand {}", opts.estimand)))?;
     let group = |treated: bool| {
         WeightSummary::new(
             weights

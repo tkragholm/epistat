@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 /// The panel of a sequential trial emulation in columns: one row per person and
 /// period, ordered by person and then period.
 #[derive(Debug, Clone, Copy)]
-pub struct Panel<'a> {
+pub struct ProtocolPanel<'a> {
     /// The person of each row. The rows of a person are next to each other.
     pub id: &'a [u64],
     /// The period of each row, increasing within a person.
@@ -60,7 +60,7 @@ pub struct ProtocolRows {
 ///
 /// An input error for columns of different lengths and rows that are not
 /// ordered by person and period.
-pub fn protocol_rows(panel: &Panel<'_>) -> Result<ProtocolRows> {
+pub fn protocol_rows(panel: &ProtocolPanel<'_>) -> Result<ProtocolRows> {
     let n = panel.id.len();
     for (name, len) in [
         ("period", panel.period.len()),
@@ -105,7 +105,7 @@ pub fn protocol_rows(panel: &Panel<'_>) -> Result<ProtocolRows> {
 
 /// The state machine of `censor_func` over the used rows `first..=last` of one
 /// person.
-fn follow(panel: &Panel<'_>, first: usize, last: usize, fitted: &mut [bool]) {
+fn follow(panel: &ProtocolPanel<'_>, first: usize, last: usize, fitted: &mut [bool]) {
     let (mut started0, mut started1, mut stop0, mut stop1) = (false, false, false, false);
     for i in first..=last {
         let a = panel.treatment[i];
@@ -157,7 +157,7 @@ mod tests {
         let t: Vec<bool> = treatment.iter().map(|&v| v == 1).collect();
         let e: Vec<bool> = eligible.iter().map(|&v| v == 1).collect();
         let o: Vec<bool> = outcome.iter().map(|&v| v == 1).collect();
-        protocol_rows(&Panel {
+        protocol_rows(&ProtocolPanel {
             id: &id,
             period: &period,
             treatment: &t,
@@ -211,7 +211,7 @@ mod tests {
         let period = [0, 0];
         let b = [false, false];
         assert!(
-            protocol_rows(&Panel {
+            protocol_rows(&ProtocolPanel {
                 id: &id,
                 period: &period,
                 treatment: &b,

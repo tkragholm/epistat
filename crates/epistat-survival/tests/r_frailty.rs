@@ -36,7 +36,9 @@
 use epistat_linalg::Mat;
 use epistat_survival::SurvBuf;
 use epistat_survival::cox::Ties;
-use epistat_survival::frailty::{FrailtyFit, FrailtyOptions, Method, Theta, ThetaStatus, fit};
+use epistat_survival::frailty::{
+    FrailtyFit, FrailtyMethod, FrailtyOptions, Theta, ThetaStatus, fit,
+};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -120,7 +122,7 @@ fn ties(name: &str) -> Ties {
     clippy::cast_sign_loss,
     reason = "statuses, clusters and strata are small whole numbers written by R as doubles"
 )]
-fn run(d: &Dataset, ties: Ties, theta: Theta, method: Method) -> FrailtyFit {
+fn run(d: &Dataset, ties: Ties, theta: Theta, method: FrailtyMethod) -> FrailtyFit {
     let n = d.time.len();
     let status: Vec<i32> = d.status.iter().map(|&s| s as i32).collect();
     let mut b = SurvBuf::builder(d.time.clone(), status)
@@ -280,7 +282,7 @@ fn fits_equal_coxph() {
                 outer_max: 30,
             }
         };
-        let got = run(d, ties(&f.ties), theta, Method::Penalised);
+        let got = run(d, ties(&f.ties), theta, FrailtyMethod::Penalised);
         assert!(got.converged, "{}", f.name);
         let worst = compare_fit(f, &got);
         println!("{:36} worst {:.3} ({})", f.name, worst.ratio, worst.what);
@@ -297,7 +299,7 @@ fn profile_equals_optimize() {
     let r = reference();
     for f in &r.profiles {
         let d = &r.datasets[&f.dataset];
-        let got = run(d, ties(&f.ties), Theta::Profile, Method::Penalised);
+        let got = run(d, ties(&f.ties), Theta::Profile, FrailtyMethod::Penalised);
         assert_eq!(got.theta_status, ThetaStatus::Interior, "{}", f.name);
         let m = got.marginal_log_likelihood.unwrap();
         let bound = 2.0 * R_EPS * (1.0 + m.abs()) + 1e-10;
@@ -328,7 +330,7 @@ fn profile_equals_optimize() {
 fn profile_on_the_boundary() {
     let r = reference();
     let d = &r.datasets["sim50_none"];
-    let got = run(d, Ties::Breslow, Theta::Profile, Method::Penalised);
+    let got = run(d, Ties::Breslow, Theta::Profile, FrailtyMethod::Penalised);
     assert_eq!(got.theta_status, ThetaStatus::Boundary);
     assert_eq!(got.theta.to_bits(), 0.0_f64.to_bits());
     assert!(got.frailties.iter().all(|w| w == &Some(0.0)));
@@ -352,13 +354,18 @@ fn profile_on_the_boundary() {
 #[test]
 fn em_equals_penalised() {
     let r = reference();
-    let em = Method::Em {
+    let em = FrailtyMethod::Em {
         max_iterations: 20_000,
         tolerance: 1e-14,
     };
     for (dataset, theta) in [("kidney", 0.5), ("sim50", 0.6), ("sim50_entry_unit", 0.6)] {
         let d = &r.datasets[dataset];
-        let a = run(d, Ties::Breslow, Theta::Fixed(theta), Method::Penalised);
+        let a = run(
+            d,
+            Ties::Breslow,
+            Theta::Fixed(theta),
+            FrailtyMethod::Penalised,
+        );
         let b = run(d, Ties::Breslow, Theta::Fixed(theta), em);
         assert!(b.converged, "{dataset}: EM in {} steps", b.iterations);
         let bound = (2e-14 * a.marginal_log_likelihood.unwrap().abs() / 1e-3).sqrt();

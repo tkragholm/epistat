@@ -4,20 +4,25 @@
 
 mod treatment_sim;
 
+use epistat_core::Estimand;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::cox as wcox;
-use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
+use epistat_survival::weighting::iptw::{self, IptwOptions, OptimalSubset};
 use epistat_survival::weighting::pooled::PooledOptions;
 use epistat_survival::weighting::pooled::{PooledEvent, TreatmentHistory};
-use epistat_survival::weighting::{Censoring, WeightAt, Weights};
+use epistat_survival::weighting::{OutcomeCensoring, WeightAt, Weights};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
 #[test]
 fn overlap_weights_are_the_same_on_every_pool() {
     let s = treatment_sim::simulate();
-    for estimand in [Estimand::Ato, Estimand::Atm, Estimand::Atos] {
+    for (estimand, optimal_subset) in [
+        (Estimand::Ato, None),
+        (Estimand::Atm, None),
+        (Estimand::Ate, Some(OptimalSubset::Crump)),
+    ] {
         assert_same_on_pools(&POOLS, || {
             let w = iptw::fit(
                 &s.treat,
@@ -25,7 +30,7 @@ fn overlap_weights_are_the_same_on_every_pool() {
                 &IptwOptions {
                     estimand,
                     stabilise: false,
-                    alpha: None,
+                    optimal_subset,
                 },
             )
             .unwrap();
@@ -90,7 +95,7 @@ fn treatment_weights_are_the_same_on_every_pool() {
             let estimated = Weights {
                 iptw: None,
                 subject: None,
-                censoring: Some(Censoring::Pooled {
+                censoring: Some(OutcomeCensoring::Pooled {
                     fit: &w,
                     at: WeightAt::Stop,
                 }),

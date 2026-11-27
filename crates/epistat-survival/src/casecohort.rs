@@ -136,7 +136,7 @@ use epistat_linalg::{Mat, MatRef};
 use crate::check::{check_lengths, refuse_non_finite, refuse_non_finite_matrix};
 use crate::covariance;
 use crate::cox::{
-    Collapse, CoxModelFit, CoxOptions, ResidualKind, ResidualOptions, Ties, fit as cox_fit,
+    Collapse, CoxModelFit, CoxOptions, CoxResidualKind, ResidualOptions, Ties, fit as cox_fit,
     residuals,
 };
 use crate::error::{Error, Result};
@@ -312,7 +312,7 @@ impl Stack {
         &self,
         control: Control,
         model: &CoxModelFit,
-        kind: ResidualKind,
+        kind: CoxResidualKind,
     ) -> Result<Vec<Option<Vec<f64>>>> {
         let mut options = ResidualOptions::new(kind, Self::options(control, None, ITER_DEFAULT));
         options.weighted = Some(false);
@@ -787,7 +787,7 @@ fn prentice(
         ));
     }
     let model = kept_covariance(&second, &kept)?;
-    let dfbeta = stacked.residuals(control, &second, ResidualKind::Dfbeta)?;
+    let dfbeta = stacked.residuals(control, &second, CoxResidualKind::Dfbeta)?;
     let subcohort_rows: Vec<usize> = (counts.cases..stacked.stop.len()).collect();
     let db = gather(&dfbeta, &kept, &subcohort_rows)?;
     let factor = 1.0 - counts.subcohort as f64 / cohort;
@@ -842,7 +842,7 @@ fn lin_ying(
     let kept = kept_columns(&model_fit);
     let q = kept.len();
     let model = kept_covariance(&model_fit, &kept)?;
-    let dfbeta = stack.residuals(control, &model_fit, ResidualKind::Dfbeta)?;
+    let dfbeta = stack.residuals(control, &model_fit, CoxResidualKind::Dfbeta)?;
     let everyone: Vec<usize> = (0..rows).collect();
     let db = gather(&dfbeta, &kept, &everyone)?;
     let noncase_rows: Vec<usize> = (0..rows).filter(|&i| !sample.event[i]).collect();
@@ -987,7 +987,7 @@ fn borgan(
     let kept = kept_columns(&model_fit);
     let q = kept.len();
     let vn = kept_covariance(&model_fit, &kept)?;
-    let scores = stack.residuals(control, &model_fit, ResidualKind::Score)?;
+    let scores = stack.residuals(control, &model_fit, CoxResidualKind::Score)?;
     let score_rows = gather(&scores, &kept, &kept_rows)?;
     // The stratum of each score row: the subcohort rows in input order.
     let row_stratum: Vec<usize> = if second {

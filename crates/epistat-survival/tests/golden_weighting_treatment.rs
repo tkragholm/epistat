@@ -13,14 +13,15 @@
 
 mod treatment_sim;
 
+use epistat_core::Estimand;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::cox as wcox;
-use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
+use epistat_survival::weighting::iptw::{self, IptwOptions, OptimalSubset};
 use epistat_survival::weighting::pooled::PooledOptions;
 use epistat_survival::weighting::pooled::{PooledEvent, TreatmentHistory};
-use epistat_survival::weighting::{Censoring, WeightAt, Weights};
+use epistat_survival::weighting::{OutcomeCensoring, WeightAt, Weights};
 use epistat_testkit::Fingerprint;
 
 /// `(name, length, digest)` of each recorded field.
@@ -54,10 +55,10 @@ const EXPECTED: &[(&str, usize, u64)] = &[
 fn fields() -> Vec<(String, Vec<f64>)> {
     let s = treatment_sim::simulate();
     let mut out = Vec::new();
-    for (name, estimand) in [
-        ("ato", Estimand::Ato),
-        ("atm", Estimand::Atm),
-        ("atos", Estimand::Atos),
+    for (name, estimand, optimal_subset) in [
+        ("ato", Estimand::Ato, None),
+        ("atm", Estimand::Atm, None),
+        ("atos", Estimand::Ate, Some(OptimalSubset::Crump)),
     ] {
         let w = iptw::fit(
             &s.treat,
@@ -65,7 +66,7 @@ fn fields() -> Vec<(String, Vec<f64>)> {
             &IptwOptions {
                 estimand,
                 stabilise: false,
-                alpha: None,
+                optimal_subset,
             },
         )
         .unwrap();
@@ -113,7 +114,7 @@ fn fields() -> Vec<(String, Vec<f64>)> {
         let estimated = Weights {
             iptw: None,
             subject: None,
-            censoring: Some(Censoring::Pooled {
+            censoring: Some(OutcomeCensoring::Pooled {
                 fit: &w,
                 at: WeightAt::Stop,
             }),

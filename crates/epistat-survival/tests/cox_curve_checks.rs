@@ -11,7 +11,8 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::cox::predict::{
-    CurveType, FittedModel, HazardType, NewData, PathData, SurvfitOptions, survfit, survfit_paths,
+    CoxHazardType, CoxSurvfitOptions, CurveType, FittedModel, NewData, PathData, survfit,
+    survfit_paths,
 };
 use epistat_survival::cox::{CoxModelFit, CoxOptions, Ties, fit};
 use epistat_survival::{Covariance, SurvData};
@@ -22,10 +23,10 @@ fn with_coefficients(mut model: CoxModelFit, beta: &[f64], variance: &[f64]) -> 
     model
 }
 
-fn kp() -> SurvfitOptions<'static> {
-    SurvfitOptions {
+fn kp() -> CoxSurvfitOptions<'static> {
+    CoxSurvfitOptions {
         curve_type: CurveType::KalbfleischPrentice,
-        ..SurvfitOptions::default()
+        ..CoxSurvfitOptions::default()
     }
 }
 
@@ -52,7 +53,7 @@ fn zero_coefficients_give_kaplan_meier() {
     let c = survfit(
         &fitted,
         &new,
-        &SurvfitOptions {
+        &CoxSurvfitOptions {
             censor_times: true,
             ..kp()
         },
@@ -115,7 +116,7 @@ fn tied_increment_solves_the_estimating_equation() {
     let c = survfit(
         &fitted,
         &new,
-        &SurvfitOptions {
+        &CoxSurvfitOptions {
             centring: epistat_survival::cox::predict::Centring::Given(&[0.0]),
             ..kp()
         },
@@ -164,10 +165,10 @@ fn constant_path_equals_the_curve() {
         CurveType::ExpCumulativeHazard,
         CurveType::KalbfleischPrentice,
     ] {
-        let o = SurvfitOptions {
+        let o = CoxSurvfitOptions {
             curve_type,
             censor_times: true,
-            ..SurvfitOptions::default()
+            ..CoxSurvfitOptions::default()
         };
         let c = survfit(&fitted, &new, &o).unwrap();
         let curve = &c.curves[0];
@@ -226,13 +227,13 @@ fn start_time_restarts_the_curve() {
     };
     let new_x = Mat::from_fn(1, 1, |_, _| 0.8);
     let new = NewData::new(new_x.as_ref());
-    let full = survfit(&fitted, &new, &SurvfitOptions::default()).unwrap();
+    let full = survfit(&fitted, &new, &CoxSurvfitOptions::default()).unwrap();
     let from = survfit(
         &fitted,
         &new,
-        &SurvfitOptions {
+        &CoxSurvfitOptions {
             start_time: Some(6.0),
-            ..SurvfitOptions::default()
+            ..CoxSurvfitOptions::default()
         },
     )
     .unwrap();
@@ -264,35 +265,35 @@ fn refusals() {
         options: &opts,
     };
     let new = NewData::new(x.as_ref().subrows(0, 1));
-    let bad = |o: SurvfitOptions<'_>| survfit(&fitted, &new, &o).map(|_| ());
+    let bad = |o: CoxSurvfitOptions<'_>| survfit(&fitted, &new, &o).map(|_| ());
     // The hazard form has no meaning for the product-limit curve.
     assert!(
-        bad(SurvfitOptions {
-            hazard: Some(HazardType::Efron),
+        bad(CoxSurvfitOptions {
+            hazard: Some(CoxHazardType::Efron),
             ..kp()
         })
         .is_err()
     );
     // No event at or after the start time.
     assert!(
-        bad(SurvfitOptions {
+        bad(CoxSurvfitOptions {
             start_time: Some(4.5),
-            ..SurvfitOptions::default()
+            ..CoxSurvfitOptions::default()
         })
         .is_err()
     );
     assert!(
-        bad(SurvfitOptions {
+        bad(CoxSurvfitOptions {
             start_time: Some(f64::NAN),
-            ..SurvfitOptions::default()
+            ..CoxSurvfitOptions::default()
         })
         .is_err()
     );
     // A row that leaves at the start time is kept.
     assert!(
-        bad(SurvfitOptions {
+        bad(CoxSurvfitOptions {
             start_time: Some(4.0),
-            ..SurvfitOptions::default()
+            ..CoxSurvfitOptions::default()
         })
         .is_ok()
     );
@@ -306,8 +307,8 @@ fn refusals() {
         stratum: None,
         offset: None,
     };
-    assert!(survfit_paths(&fitted, &ok, &SurvfitOptions::default()).is_ok());
-    let path_bad = |p: PathData<'_>| survfit_paths(&fitted, &p, &SurvfitOptions::default());
+    assert!(survfit_paths(&fitted, &ok, &CoxSurvfitOptions::default()).is_ok());
+    let path_bad = |p: PathData<'_>| survfit_paths(&fitted, &p, &CoxSurvfitOptions::default());
     assert!(
         path_bad(PathData {
             start: &[0.0, 1.5],

@@ -32,8 +32,9 @@ use epistat_matching::{
     expand_trial_columns,
 };
 use epistat_survival::weighting::trials::{
-    Fit, Msm, MsmInput, Panel, PersonPeriod, TrialRows, WeightModel, WeightRows, censoring_weights,
-    cumulative_incidence_rows, fit_msm, protocol_rows, switch_weights, trial_weights,
+    Msm, MsmInput, PersonPeriod, ProtocolPanel, TrialRows, TrialWeightFit, WeightModel, WeightRows,
+    censoring_weights, cumulative_incidence_rows, fit_msm, protocol_rows, switch_weights,
+    trial_weights,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -147,7 +148,7 @@ fn weights(a: &Analysis, p: &PanelJson, cols: &PanelColumns, t: &TrialColumns) -
         return vec![1.0; t.len()];
     }
     let treatment = cols.known_treatment().expect("known treatment");
-    let chosen = protocol_rows(&Panel {
+    let chosen = protocol_rows(&ProtocolPanel {
         id: &cols.person,
         period: &cols.period,
         treatment: &treatment,
@@ -204,7 +205,7 @@ fn weights(a: &Analysis, p: &PanelJson, cols: &PanelColumns, t: &TrialColumns) -
                 numerator: num.as_ref(),
                 denominator: den.as_ref(),
             },
-            Fit::ByPreviousTreatment,
+            TrialWeightFit::ByPreviousTreatment,
             &rows,
         )
         .expect("censoring weights");

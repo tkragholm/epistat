@@ -8,6 +8,7 @@
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 
+use epistat_core::Estimand;
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
@@ -15,7 +16,7 @@ use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::Weights;
 use epistat_survival::weighting::cox as wcox;
 use epistat_survival::weighting::ipcw::{self, CensoringModel, IpcwOptions};
-use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
+use epistat_survival::weighting::iptw::{self, IptwOptions};
 use epistat_survival::weighting::km::{self, KmOptions};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -109,7 +110,7 @@ fn weighting_is_the_same_on_every_pool() {
                 &IptwOptions {
                     estimand,
                     stabilise,
-                    alpha: None,
+                    optimal_subset: None,
                 },
             )
             .unwrap();

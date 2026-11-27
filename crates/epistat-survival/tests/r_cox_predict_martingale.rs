@@ -18,7 +18,7 @@
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
-    FittedModel, PredictOptions, PredictType, predict, predict_expected_martingale,
+    CoxPredictOptions, CoxPredictType, FittedModel, predict, predict_expected_martingale,
 };
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::load_json;
@@ -123,9 +123,9 @@ fn martingale_form_matches_r() {
         // The default form differs from R's exactly at Efron-tied events.
         let default = predict(
             &fitted,
-            PredictType::Expected,
+            CoxPredictType::Expected,
             None,
-            &PredictOptions::default(),
+            &CoxPredictOptions::default(),
         )
         .unwrap();
         let differs = default

@@ -47,7 +47,7 @@
 //! weights as known. The weights of the deaths at `t` and of the denominator
 //! are taken at `t`. The net survival is `exp(-Lambda)`, as `relsurv::rs.surv`
 //! gives with `type = "fleming-harrington"`, and the limits are normal on the
-//! scale of [`Transform`], as `rs.surv` forms them.
+//! scale of [`NetTransform`], as `rs.surv` forms them.
 //!
 //! # Exact evaluation
 //!
@@ -176,7 +176,7 @@
 //! between the points at which its set of rows changes; its documentation has
 //! the formulas. Ederer I and Hakulinen follow rows beyond their own
 //! follow-up through the table, as [`ExpectedHazard::cumulative`] does.
-//! [`Method::EdererI`] and [`Method::Hakulinen`] of [`net_survival`] are the
+//! [`NetMethod::EdererI`] and [`NetMethod::Hakulinen`] of [`net_survival`] are the
 //! relative survival estimators of `relsurv::rs.surv` with `type =
 //! "fleming-harrington"`: the observed survival `exp(-Lambda_O)` of Nelson and
 //! Aalen divided by the expected survival of the method, so that the reported
@@ -263,7 +263,7 @@ pub use cohort::{ExpectedCurve, ExpectedMethod, expected_survival};
 pub use crude::{CrudeMortality, crude_mortality};
 pub use difference::{NetSurvivalTest, net_survival_test};
 pub use estimator::{
-    Grid, Method, NetOptions, NetSurvival, NetSurvivalAt, Transform, net_survival,
+    Grid, NetMethod, NetOptions, NetSurvival, NetSurvivalAt, NetTransform, net_survival,
 };
 pub use excess::{ExcessFit, ExcessOptions, excess_hazard};
 pub use expected::ExpectedHazard;

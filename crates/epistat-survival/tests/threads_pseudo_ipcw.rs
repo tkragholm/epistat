@@ -16,7 +16,7 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::pseudo::{
-    IpcwMethod, IpcwOptions, PseudoRegressionOptions, Target, pseudo_ipcw,
+    IpcwMethod, PseudoIpcwOptions, PseudoRegressionOptions, Target, pseudo_ipcw,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -54,7 +54,7 @@ fn ipcw_pseudo_values_do_not_depend_on_the_number_of_threads() {
         (&single, Target::RestrictedMean),
     ] {
         for method in [IpcwMethod::Binder, IpcwMethod::Hajek] {
-            let mut opts = IpcwOptions::new(target);
+            let mut opts = PseudoIpcwOptions::new(target);
             opts.method = method;
             assert_same_on_pools(&POOLS, || {
                 let p = pseudo_ipcw(data, z.as_ref(), &times, &opts).unwrap();
@@ -65,7 +65,7 @@ fn ipcw_pseudo_values_do_not_depend_on_the_number_of_threads() {
         }
     }
     // The HC3 regression on the pseudo-values at one time.
-    let opts = IpcwOptions::new(Target::CumulativeIncidence { cause: 1 });
+    let opts = PseudoIpcwOptions::new(Target::CumulativeIncidence { cause: 1 });
     assert_same_on_pools(&POOLS, || {
         let p = pseudo_ipcw(&competing, z.as_ref(), &[3.0], &opts).unwrap();
         let mut gee = PseudoRegressionOptions::new(Link::Identity);

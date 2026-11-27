@@ -5,7 +5,7 @@ use epistat_linalg::MatRef;
 use epistat_stats::dist::normal;
 
 use super::link;
-use super::{FlexParFit, Scale};
+use super::{FlexParFit, FlexparScale};
 use crate::error::{Error, Result};
 
 /// What [`predict`] returns for a covariate row at a time.
@@ -21,7 +21,7 @@ pub enum Predict {
 
 /// What [`contrast`] returns for a covariate row against a reference row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Contrast {
+pub enum FlexparContrast {
     /// The ratio of the hazards, a function of time where the model has
     /// time-varying effects or is not on the hazard scale.
     HazardRatio,
@@ -33,7 +33,7 @@ pub enum Contrast {
 
 /// Settings of a prediction.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct PredictOptions {
+pub struct FlexparPredictOptions {
     /// The level of the limits.
     pub level: Level,
     /// Use the cluster-robust covariance, which the fit must have.
@@ -45,7 +45,7 @@ pub struct PredictOptions {
 
 /// An estimate at a time with its delta-method standard error and limits.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Prediction {
+pub struct FlexparPrediction {
     /// The time.
     pub time: f64,
     /// The estimate.
@@ -66,7 +66,7 @@ struct Point {
     slope: f64,
 }
 
-fn covariance<'a>(fit: &'a FlexParFit, opts: &PredictOptions) -> Result<&'a [Option<f64>]> {
+fn covariance<'a>(fit: &'a FlexParFit, opts: &FlexparPredictOptions) -> Result<&'a [Option<f64>]> {
     if !fit.monotone_on_data && !opts.allow_non_monotone {
         return Err(Error::invalid(
             "the fitted spline is not increasing on the data, so its curves are not survivor functions: set allow_non_monotone to predict anyway",
@@ -127,7 +127,7 @@ fn check_columns(fit: &FlexParFit, x: MatRef<'_, f64>) -> Result<()> {
 
 /// The log hazard and its gradient in the estimated parameters, `None` where
 /// the derivative in log time is not positive.
-fn log_hazard(scale: Scale, p: &Point, time: f64) -> Option<(f64, Vec<f64>)> {
+fn log_hazard(scale: FlexparScale, p: &Point, time: f64) -> Option<(f64, Vec<f64>)> {
     if p.slope <= 0.0 {
         return None;
     }
@@ -142,7 +142,7 @@ fn log_hazard(scale: Scale, p: &Point, time: f64) -> Option<(f64, Vec<f64>)> {
 }
 
 /// The hazard, its gradient, and the value of `m(eta) eta'(u) / t`.
-fn hazard(scale: Scale, p: &Point, time: f64) -> (f64, Vec<f64>) {
+fn hazard(scale: FlexparScale, p: &Point, time: f64) -> (f64, Vec<f64>) {
     // The hazard factor is m = H' and its derivative in eta is H''.
     let (_, m, dm) = link::cumulative(scale, p.eta);
     let value = m * p.slope / time;
@@ -154,7 +154,7 @@ fn hazard(scale: Scale, p: &Point, time: f64) -> (f64, Vec<f64>) {
     (value, grad)
 }
 
-fn survival_gradient(scale: Scale, p: &Point) -> (f64, Vec<f64>) {
+fn survival_gradient(scale: FlexparScale, p: &Point) -> (f64, Vec<f64>) {
     let s = link::survival(scale, p.eta);
     let (_, h1, _) = link::cumulative(scale, p.eta);
     (s, p.z.iter().map(|z| -s * h1 * z).collect())
@@ -174,8 +174,8 @@ pub fn predict(
     x_new: MatRef<'_, f64>,
     times: &[f64],
     what: Predict,
-    options: &PredictOptions,
-) -> Result<Vec<Vec<Prediction>>> {
+    options: &FlexparPredictOptions,
+) -> Result<Vec<Vec<FlexparPrediction>>> {
     let cov = covariance(fit, options)?;
     check_columns(fit, x_new)?;
     let z = normal::quantile(1.0 - (1.0 - options.level.confidence_value()) / 2.0);
@@ -191,7 +191,7 @@ pub fn predict(
                     let (s, grad) = survival_gradient(scale, &p);
                     let (h, h1, _) = link::cumulative(scale, p.eta);
                     let factor = (z * h1 / h * eta_se).exp();
-                    Prediction {
+                    FlexparPrediction {
                         time,
                         estimate: s,
                         se: variance(fit, cov, &grad).sqrt(),
@@ -203,7 +203,7 @@ pub fn predict(
                     let (h, h1, _) = link::cumulative(scale, p.eta);
                     let grad: Vec<f64> = p.z.iter().map(|v| h1 * v).collect();
                     let factor = (z * h1 / h * eta_se).exp();
-                    Prediction {
+                    FlexparPrediction {
                         time,
                         estimate: h,
                         se: variance(fit, cov, &grad).sqrt(),
@@ -218,7 +218,7 @@ pub fn predict(
                         let s = variance(fit, cov, &lg).sqrt();
                         (h * (-z * s).exp(), h * (z * s).exp())
                     });
-                    Prediction {
+                    FlexparPrediction {
                         time,
                         estimate: h,
                         se,
@@ -250,9 +250,9 @@ pub fn contrast(
     x_new: MatRef<'_, f64>,
     x_ref: MatRef<'_, f64>,
     times: &[f64],
-    what: Contrast,
-    options: &PredictOptions,
-) -> Result<Vec<Vec<Prediction>>> {
+    what: FlexparContrast,
+    options: &FlexparPredictOptions,
+) -> Result<Vec<Vec<FlexparPrediction>>> {
     let cov = covariance(fit, options)?;
     check_columns(fit, x_new)?;
     check_columns(fit, x_ref)?;
@@ -270,7 +270,7 @@ pub fn contrast(
         for &time in times {
             let a = point(fit, x_new, row, time)?;
             let b = point(fit, x_ref, ref_row, time)?;
-            let none = Prediction {
+            let none = FlexparPrediction {
                 time,
                 estimate: f64::NAN,
                 se: f64::NAN,
@@ -278,13 +278,13 @@ pub fn contrast(
                 upper: None,
             };
             curve.push(match what {
-                Contrast::HazardRatio => {
+                FlexparContrast::HazardRatio => {
                     match (log_hazard(scale, &a, time), log_hazard(scale, &b, time)) {
                         (Some((la, ga)), Some((lb, gb))) => {
                             let diff: Vec<f64> = ga.iter().zip(&gb).map(|(x, y)| x - y).collect();
                             let se_log = variance(fit, cov, &diff).sqrt();
                             let ratio = (la - lb).exp();
-                            Prediction {
+                            FlexparPrediction {
                                 time,
                                 estimate: ratio,
                                 se: ratio * se_log,
@@ -295,13 +295,13 @@ pub fn contrast(
                         _ => none,
                     }
                 }
-                Contrast::HazardDifference => {
+                FlexparContrast::HazardDifference => {
                     let (ha, ga) = hazard(scale, &a, time);
                     let (hb, gb) = hazard(scale, &b, time);
                     let diff: Vec<f64> = ga.iter().zip(&gb).map(|(x, y)| x - y).collect();
                     wald(time, ha - hb, variance(fit, cov, &diff).sqrt(), z)
                 }
-                Contrast::SurvivalDifference => {
+                FlexparContrast::SurvivalDifference => {
                     let (sa, ga) = survival_gradient(scale, &a);
                     let (sb, gb) = survival_gradient(scale, &b);
                     let diff: Vec<f64> = ga.iter().zip(&gb).map(|(x, y)| x - y).collect();
@@ -314,8 +314,8 @@ pub fn contrast(
     Ok(out)
 }
 
-fn wald(time: f64, estimate: f64, se: f64, z: f64) -> Prediction {
-    Prediction {
+fn wald(time: f64, estimate: f64, se: f64, z: f64) -> FlexparPrediction {
+    FlexparPrediction {
         time,
         estimate,
         se,

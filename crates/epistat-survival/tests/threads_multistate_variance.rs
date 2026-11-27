@@ -15,7 +15,7 @@
 
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::multistate::{Options, VarianceOptions, variance};
+use epistat_survival::multistate::{MultistateOptions, OccupationVarianceOptions, variance};
 use epistat_survival::timefix::TimeFix;
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -103,11 +103,11 @@ fn variance_does_not_depend_on_the_number_of_threads() {
     let p = process(1400, 33);
     let data = data(&p);
     let times = event_times(&p);
-    let opts = Options {
+    let opts = MultistateOptions {
         timefix: TimeFix::Exact,
-        ..Options::default()
+        ..MultistateOptions::default()
     };
-    let mut v = VarianceOptions::new(0.0);
+    let mut v = OccupationVarianceOptions::new(0.0);
     v.horizons = vec![0.5, 3.0, 20.0];
     v.influence_times = vec![0.0, 1.5, 6.0, 30.0];
     assert_same_on_pools(&POOLS, || {

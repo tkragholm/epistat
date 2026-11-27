@@ -154,7 +154,7 @@ use rayon::prelude::*;
 
 use crate::covariance;
 use crate::cox::{
-    BaselineOptions, Centring, CoxOptions, FittedModel, HazardType, Ties, Variance, basehaz,
+    BaselineOptions, Centring, CoxHazardType, CoxOptions, CoxVariance, FittedModel, Ties, basehaz,
     fit as cox_fit,
 };
 use crate::error::{Error, Result};
@@ -183,7 +183,7 @@ pub enum Estimator {
 
 /// The model of the censoring hazard.
 #[derive(Debug, Clone, Copy)]
-pub enum Censoring<'a> {
+pub enum AipwCensoring<'a> {
     /// No censoring before the times asked for: the censoring survival is 1. Rows
     /// with status 0 are an error.
     None,
@@ -214,7 +214,7 @@ pub struct AipwSurvSpec<'a> {
     /// The design of the logistic model of the treatment, with an intercept.
     pub propensity_x: MatRef<'a, f64>,
     /// The model of the censoring hazard.
-    pub censoring: Censoring<'a>,
+    pub censoring: AipwCensoring<'a>,
 }
 
 /// The options of [`aipw_cox`].
@@ -296,7 +296,7 @@ pub struct AipwSurv {
 /// than the data, times that are not finite, positive and increasing, a
 /// treatment that is the same for every row, a model that has an aliased column
 /// or does not converge, a propensity of exactly 0 or 1, a censoring survival of 0
-/// before an event, censoring with `Censoring::None`, truncation limits that
+/// before an event, censoring with `AipwCensoring::None`, truncation limits that
 /// are not ordered probabilities.
 pub fn aipw_cox(
     data: &SurvData<'_>,
@@ -424,8 +424,8 @@ fn cox_model(
         },
         &BaselineOptions {
             centring: Centring::Given(&zero),
-            hazard: Some(HazardType::Breslow),
-            variance: Variance::Model,
+            hazard: Some(CoxHazardType::Breslow),
+            variance: CoxVariance::Model,
         },
     )?;
     let steps = base.strata.first().map_or(
@@ -595,7 +595,7 @@ impl Model {
         let (h_before, h_at): (Vec<f64>, Vec<f64>) =
             jump.iter().map(|&u| (base.before(u), base.at(u))).unzip();
         let cens = match spec.censoring {
-            Censoring::None => {
+            AipwCensoring::None => {
                 if !jump.is_empty() {
                     return Err(Error::invalid(
                         "data: rows with status 0 need a censoring model",
@@ -603,7 +603,7 @@ impl Model {
                 }
                 CensTables::None
             }
-            Censoring::KaplanMeier { groups } => {
+            AipwCensoring::KaplanMeier { groups } => {
                 let group: Vec<u32> = match groups {
                     Some(g) if g.len() == n => g.to_vec(),
                     Some(g) => {
@@ -617,7 +617,7 @@ impl Model {
                 };
                 km_tables(&stop, &status, &group, &jump, opts.product_limit)
             }
-            Censoring::Cox { x } => {
+            AipwCensoring::Cox { x } => {
                 check_design("censoring x", x, n)?;
                 let flipped: Vec<i32> = status.iter().map(|&s| 1 - s).collect();
                 let cbuf = SurvBuf::builder(stop.clone(), flipped).build()?;
@@ -1728,11 +1728,11 @@ mod tests {
             levels: [Counterfactual::Columns(&c0), Counterfactual::Columns(&c1)],
             propensity_x: c.z.as_ref(),
             censoring: if km {
-                Censoring::KaplanMeier {
+                AipwCensoring::KaplanMeier {
                     groups: Some(&c.group),
                 }
             } else {
-                Censoring::Cox { x: c.x.as_ref() }
+                AipwCensoring::Cox { x: c.x.as_ref() }
             },
         };
         let opts = AipwSurvOptions {

@@ -30,7 +30,9 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxModelFit, Ties};
-use epistat_survival::fine_gray::{FineGrayOptions, Rows, RowsOptions, fit, risk_rows, rows};
+use epistat_survival::fine_gray::{
+    FineGrayOptions, FineGrayRows, RowsOptions, fit, risk_rows, rows,
+};
 use epistat_survival::lowlevel::float_codes;
 use epistat_survival::timefix::TimeFix;
 use epistat_testkit::Fingerprint;
@@ -120,7 +122,7 @@ fn bits(values: &[f64]) -> u64 {
     Fingerprint::new().f64s(values).finish()
 }
 
-fn rows_record(rows: &Rows) -> Vec<u64> {
+fn rows_record(rows: &FineGrayRows) -> Vec<u64> {
     let mut out = vec![rows.row.len() as u64];
     out.push(
         rows.row

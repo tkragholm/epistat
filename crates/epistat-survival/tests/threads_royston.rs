@@ -19,7 +19,7 @@ use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::cox::fit;
 use epistat_survival::metrics::royston::{
-    Adjustment, FitOptions, RoystonOptions, estimate, from_fit,
+    FitOptions, RoystonAdjustment, RoystonOptions, estimate, from_fit,
 };
 use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 
@@ -72,7 +72,7 @@ fn royston_does_not_depend_on_the_number_of_threads() {
                 &RoystonOptions {
                     cause: Some(1),
                     ties,
-                    adjust: Some(Adjustment {
+                    adjust: Some(RoystonAdjustment {
                         n_events: 900.0,
                         n_coef: 2,
                     }),

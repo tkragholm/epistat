@@ -16,7 +16,7 @@
 //! inside the recursion and returns only the sum of squares; an output of the
 //! integral at chosen horizons would make the area targets one pass.
 
-use crate::aalen_johansen::{AalenJohansenOptions, VarianceOptions, variance_dfbeta};
+use crate::aalen_johansen::{AalenJohansenOptions, AalenJohansenVarianceOptions, variance_dfbeta};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
@@ -88,7 +88,7 @@ pub(super) fn run(
                 &AalenJohansenOptions {
                     timefix: TimeFix::Exact,
                 },
-                &VarianceOptions {
+                &AalenJohansenVarianceOptions {
                     horizons: Vec::new(),
                     influence_times: chunk.to_vec(),
                 },

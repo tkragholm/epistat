@@ -19,6 +19,7 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
+use epistat_core::Estimand;
 use epistat_core::Level;
 use epistat_epi::rates::{direct_standardised, rate_ratio};
 use epistat_epi::sir::{SirInterval, sir};
@@ -28,7 +29,7 @@ use epistat_survival::pyears::{Dimension, PyearsOptions, pyears};
 use epistat_survival::ratetable::{RateDim, RateTable};
 use epistat_survival::weighting::pooled::PooledOptions;
 use epistat_survival::weighting::pooled::{PooledEvent, TreatmentHistory};
-use epistat_survival::weighting::{Estimand, IptwOptions, iptw};
+use epistat_survival::weighting::{IptwOptions, iptw};
 
 const SEED: u64 = 20_261_206;
 const YEAR_DAYS: f64 = 365.25;
@@ -231,7 +232,7 @@ fn main() {
             let options = IptwOptions {
                 estimand: Estimand::Ato,
                 stabilise: false,
-                alpha: None,
+                optimal_subset: None,
             };
             let (times, fit) = common::timed(common::reps(), || {
                 iptw::fit(&treated, design.as_ref(), &options).expect("overlap weights")

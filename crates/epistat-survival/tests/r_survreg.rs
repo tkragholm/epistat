@@ -16,7 +16,8 @@
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::survreg::{
-    Distribution, PredictOptions, PredictType, ResidualKind, SurvregFit, SurvregOptions, fit,
+    Distribution, SurvregFit, SurvregOptions, SurvregPredictOptions, SurvregPredictType,
+    SurvregResidualKind, fit,
 };
 use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};
 use serde::Deserialize;
@@ -325,22 +326,22 @@ fn fits_match_r() {
             let m = r.predict_rows;
             let xm = Mat::from_fn(m, p, |i, j| r.x[i][j]);
             let strata: Vec<u32> = (0..m).map(|i| c.stratum[i]).collect();
-            let run = |kind: PredictType| {
+            let run = |kind: SurvregPredictType| {
                 f.predict(
                     xm.as_ref(),
-                    &PredictOptions {
+                    &SurvregPredictOptions {
                         kind,
                         se_fit: true,
                         strata: r.use_strata.then(|| strata.clone()),
-                        ..PredictOptions::default()
+                        ..SurvregPredictOptions::default()
                     },
                 )
                 .unwrap()
             };
             let pb = bound * (p as f64 + 1.0);
-            let lp_pred = run(PredictType::LinearPredictor);
-            let resp = run(PredictType::Response);
-            let quant = run(PredictType::Quantile {
+            let lp_pred = run(SurvregPredictType::LinearPredictor);
+            let resp = run(SurvregPredictType::Response);
+            let quant = run(SurvregPredictType::Quantile {
                 p: vec![0.1, 0.5, 0.9],
             });
             let eq: Vec<f64> = r.quantile.iter().flatten().map(|v| v.unwrap()).collect();
@@ -363,23 +364,27 @@ fn fits_match_r() {
         let _ = &ones;
         let kinds = [
             (
-                ResidualKind::Response,
+                SurvregResidualKind::Response,
                 &r.residuals.response,
                 "response residual",
             ),
             (
-                ResidualKind::Deviance,
+                SurvregResidualKind::Deviance,
                 &r.residuals.deviance,
                 "deviance residual",
             ),
             (
-                ResidualKind::Working,
+                SurvregResidualKind::Working,
                 &r.residuals.working,
                 "working residual",
             ),
-            (ResidualKind::LdCase, &r.residuals.ldcase, "ldcase"),
-            (ResidualKind::LdResp, &r.residuals.ldresp, "ldresp"),
-            (ResidualKind::LdShape, &r.residuals.ldshape, "ldshape"),
+            (SurvregResidualKind::LdCase, &r.residuals.ldcase, "ldcase"),
+            (SurvregResidualKind::LdResp, &r.residuals.ldresp, "ldresp"),
+            (
+                SurvregResidualKind::LdShape,
+                &r.residuals.ldshape,
+                "ldshape",
+            ),
         ];
         for (kind, want, what) in kinds {
             let got = f.residuals(&data, x.as_ref(), kind, false).unwrap();
@@ -396,8 +401,8 @@ fn fits_match_r() {
                     let interval = c.status[i] == 3;
                     let zero_lower = interval && c.time[i] == 0.0;
                     let displaced = match kind {
-                        ResidualKind::LdShape => interval,
-                        ResidualKind::LdCase | ResidualKind::LdResp => {
+                        SurvregResidualKind::LdShape => interval,
+                        SurvregResidualKind::LdCase | SurvregResidualKind::LdResp => {
                             interval && f.scale_estimated
                         }
                         _ => false,
@@ -408,7 +413,7 @@ fn fits_match_r() {
             // The deviance residual is a square root, whose error grows without
             // bound as the radicand goes to zero, so its square is compared,
             // with the sign kept.
-            let squared = matches!(kind, ResidualKind::Deviance);
+            let squared = matches!(kind, SurvregResidualKind::Deviance);
             let pick = |v: &[Option<f64>]| -> Vec<f64> {
                 keep.iter()
                     .map(|&i| {

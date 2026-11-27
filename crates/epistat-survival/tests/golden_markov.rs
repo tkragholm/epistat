@@ -23,7 +23,7 @@
 
 use epistat_core::Bootstrap;
 use epistat_rng::Stream;
-use epistat_survival::markov::{Options, Test, test};
+use epistat_survival::markov::{MarkovOptions, MarkovTest, test};
 use epistat_survival::timefix::TimeFix;
 use epistat_survival::{SurvBuf, SurvData};
 use epistat_testkit::{Fingerprint, absent_all};
@@ -178,7 +178,7 @@ fn check_text(name: &str, text: &str) {
     check(name, &bytes);
 }
 
-fn check_test(name: &str, t: &Test) {
+fn check_test(name: &str, t: &MarkovTest) {
     check(&format!("{name}/trace"), &t.trace);
     check(&format!("{name}/variance"), &t.variance);
     check(&format!("{name}/n_occupied"), &t.n_occupied);
@@ -211,7 +211,7 @@ impl Columns {
 }
 
 /// The options of every test here: times are compared as they are.
-const OPTIONS: Options = Options {
+const OPTIONS: MarkovOptions = MarkovOptions {
     timefix: TimeFix::Exact,
 };
 
@@ -221,7 +221,7 @@ fn run(
     grid: &[f64],
     qualifying: &[u32],
     seeds: Bootstrap,
-) -> Result<Test, epistat_survival::Error> {
+) -> Result<MarkovTest, epistat_survival::Error> {
     let buf = c.buf()?;
     test(&buf.as_data(), qualifying, 2, grid, seeds, &OPTIONS)
 }
@@ -430,7 +430,7 @@ fn run_target(
     qualifying: &[u32],
     target: u32,
     seeds: Bootstrap,
-) -> Result<Test, epistat_survival::Error> {
+) -> Result<MarkovTest, epistat_survival::Error> {
     let buf = c.buf()?;
     test(&buf.as_data(), qualifying, target, grid, seeds, &OPTIONS)
 }

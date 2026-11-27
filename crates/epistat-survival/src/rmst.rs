@@ -186,7 +186,7 @@ pub struct GroupRmst {
 
 /// A contrast between the groups with its limits and p-value.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Contrast {
+pub struct RmstContrast {
     /// The difference or ratio, group 1 against group 0.
     pub estimate: Option<f64>,
     /// The standard error of the difference, or of the logarithm of a ratio.
@@ -198,6 +198,10 @@ pub struct Contrast {
     /// The two-sided p-value of no difference, or of a ratio of 1.
     pub p_value: Option<f64>,
 }
+
+/// `RmstContrast`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `RmstContrast`")]
+pub type Contrast = RmstContrast;
 
 /// The restricted means of two groups and their contrasts.
 #[derive(Debug, Clone, PartialEq)]
@@ -211,11 +215,11 @@ pub struct Rmst2 {
     /// The other group.
     pub group1: GroupRmst,
     /// `RMST1 - RMST0`.
-    pub difference: Contrast,
+    pub difference: RmstContrast,
     /// `RMST1 / RMST0`.
-    pub ratio: Contrast,
+    pub ratio: RmstContrast,
     /// `RMTL1 / RMTL0`.
-    pub loss_ratio: Contrast,
+    pub loss_ratio: RmstContrast,
     /// The confidence level of the limits.
     pub level: Level,
     /// The number of rows given.
@@ -261,7 +265,7 @@ pub fn rmst2(data: &SurvData<'_>, opts: &RmstOptions) -> Result<Rmst2> {
             let se = (v1 / (a * a) + v0 / (b * b)).sqrt();
             contrast((a / b).ln(), se, z, true)
         } else {
-            Contrast {
+            RmstContrast {
                 estimate: None,
                 se: None,
                 lower: None,
@@ -360,7 +364,7 @@ fn group_rmst(curve: &GroupCurve, tau: f64, z: f64) -> Result<GroupRmst> {
 /// A contrast of `centre`, on the scale the limits are formed on, with
 /// standard error `se`. What is reported is `exp(centre)` when `exponentiate`
 /// is set.
-fn contrast(centre: f64, se: f64, z: f64, exponentiate: bool) -> Contrast {
+fn contrast(centre: f64, se: f64, z: f64, exponentiate: bool) -> RmstContrast {
     let map = |v: f64| if exponentiate { v.exp() } else { v };
     let statistic = centre / se;
     let p_value = if statistic.is_nan() {
@@ -368,7 +372,7 @@ fn contrast(centre: f64, se: f64, z: f64, exponentiate: bool) -> Contrast {
     } else {
         Some(2.0 * epistat_stats::dist::normal::cdf(-statistic.abs()))
     };
-    Contrast {
+    RmstContrast {
         estimate: Some(map(centre)),
         se: Some(se),
         lower: Some(map(centre - z * se)),

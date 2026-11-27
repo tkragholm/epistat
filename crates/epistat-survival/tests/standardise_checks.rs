@@ -34,7 +34,7 @@ use epistat_survival::SurvData;
 use epistat_survival::absrisk::{CauseSpecificCox, CscOptions, NewRows, RiskOptions};
 use epistat_survival::cox::{self, CoxModelFit, CoxOptions, Ties};
 use epistat_survival::standardise::{
-    Counterfactual, InfluenceForm, Level, StandardiseOptions, standardise_cause_specific,
+    Counterfactual, ExposureLevel, InfluenceForm, StandardiseOptions, standardise_cause_specific,
     standardise_cox,
 };
 
@@ -163,8 +163,8 @@ fn influence_cox_tied_strata() {
     let s = sim(n, 5, true, 1);
     let times = [1.0, 3.0, 6.5, 11.0];
     let levels = [
-        Level::single(Counterfactual::Columns(&SET0)),
-        Level::single(Counterfactual::Columns(&SET1)),
+        ExposureLevel::single(Counterfactual::Columns(&SET0)),
+        ExposureLevel::single(Counterfactual::Columns(&SET1)),
     ];
     let status = &s.status;
     let estimator = |w: &[f64]| -> Vec<f64> {
@@ -231,13 +231,13 @@ fn csc_run(
         .map(|m| cox::fit(&data, designs[m], &precise(Some(m as u32 + 1))).unwrap())
         .collect();
     let levels = [
-        Level {
+        ExposureLevel {
             designs: vec![
                 Counterfactual::Columns(&SET0),
                 Counterfactual::Columns(&SET0),
             ],
         },
-        Level {
+        ExposureLevel {
             designs: vec![
                 Counterfactual::Columns(&SET1),
                 Counterfactual::Columns(&SET1),
@@ -522,7 +522,7 @@ fn one_profile_is_one_prediction() {
         stratum: None,
         offset: None,
     };
-    let levels = [Level {
+    let levels = [ExposureLevel {
         designs: vec![
             Counterfactual::Columns(&profile),
             Counterfactual::Columns(&profile2),

@@ -36,9 +36,9 @@
 //!
 //! `model.censoring = "independent"`, the default of `eventglm`, is not weighted.
 //! It is the exact jackknife of the Kaplan-Meier or Aalen-Johansen estimate of
-//! the whole sample, which is [`Method::Jackknife`](super::Method) without a
+//! the whole sample, which is [`PseudoMethod::Jackknife`](super::PseudoMethod) without a
 //! stratum column. `"stratified"` is the exact jackknife within the strata of the
-//! interaction of the censoring covariates, which is [`Method::Jackknife`](super::Method)
+//! interaction of the censoring covariates, which is [`PseudoMethod::Jackknife`](super::PseudoMethod)
 //! with that interaction as the stratum column. Both are checked against
 //! `eventglm`. `"aareg"`, a censoring model of Aalen's additive regression, is
 //! not provided.
@@ -63,7 +63,7 @@ use epistat_core::InputError;
 use epistat_linalg::MatRef;
 
 use crate::check::check_ascending;
-use crate::cox::predict::{FittedModel, NewData, PredictOptions, PredictType, predict};
+use crate::cox::predict::{CoxPredictOptions, CoxPredictType, FittedModel, NewData, predict};
 use crate::cox::{CoxOptions, fit};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
@@ -86,7 +86,7 @@ pub enum IpcwMethod {
 /// What [`pseudo_ipcw`] does besides the data, the censoring covariates and the
 /// times.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct IpcwOptions {
+pub struct PseudoIpcwOptions {
     /// What is estimated. It has no default. [`Target::CumulativeHazard`] and
     /// [`Target::CauseHazard`] are not outcomes of a subject and are refused.
     pub target: Target,
@@ -97,7 +97,7 @@ pub struct IpcwOptions {
     pub timefix: TimeFix,
 }
 
-impl IpcwOptions {
+impl PseudoIpcwOptions {
     /// Options for a target with `eventglm`'s Binder form and `survival`'s tie
     /// rule.
     #[must_use]
@@ -109,6 +109,10 @@ impl IpcwOptions {
         }
     }
 }
+
+/// `PseudoIpcwOptions`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `PseudoIpcwOptions`")]
+pub type IpcwOptions = PseudoIpcwOptions;
 
 /// The pseudo-observations of every row of `data` at `times`, by inverse
 /// probability of censoring weighting with a Cox model of the censoring on the
@@ -135,7 +139,7 @@ pub fn pseudo_ipcw(
     data: &SurvData<'_>,
     censoring: MatRef<'_, f64>,
     times: &[f64],
-    opts: &IpcwOptions,
+    opts: &PseudoIpcwOptions,
 ) -> Result<Pseudo> {
     if times.is_empty() {
         return Err(Error::from(InputError::Empty { what: "times" }));
@@ -224,7 +228,7 @@ pub fn pseudo_ipcw(
         }
         let prediction = predict(
             &fitted,
-            PredictType::Survival,
+            CoxPredictType::Survival,
             Some(&NewData {
                 x: censoring,
                 stratum: None,
@@ -232,7 +236,7 @@ pub fn pseudo_ipcw(
                 stop: Some(&at),
                 offset: None,
             }),
-            &PredictOptions::default(),
+            &CoxPredictOptions::default(),
         )?;
         let g = prediction.fit;
         // The weighted outcome, and whether the row is observed.

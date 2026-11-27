@@ -62,7 +62,7 @@ use rayon::prelude::*;
 
 use crate::check::check_ascending;
 use crate::error::{Error, Result};
-use crate::multistate::{self, Options, VarianceOptions};
+use crate::multistate::{self, MultistateOptions, OccupationVarianceOptions};
 use crate::order::{dense_index, dense_of_present};
 use crate::surv::{SurvBuf, SurvData};
 use crate::survcheck::{Policy, survcheck};
@@ -89,11 +89,11 @@ pub struct StateOptions {
     /// What is estimated. It has no default.
     pub target: StateTarget,
     /// The starting time of the curves, `fit$t0` of `survfit`. It has no
-    /// default, see [`multistate::VarianceOptions::origin`]. The first exit time
+    /// default, see [`multistate::OccupationVarianceOptions::origin`]. The first exit time
     /// must not be before it, and a time of a time-in-state target must not be.
     pub origin: f64,
     /// The distribution over the states before the first time, as in
-    /// [`multistate::Options::initial`]. `None` forms it from the opening rows.
+    /// [`multistate::MultistateOptions::initial`]. `None` forms it from the opening rows.
     pub initial: Option<Vec<f64>>,
     /// How near-equal times are treated, `survival`'s rule by default.
     pub timefix: TimeFix,
@@ -380,7 +380,7 @@ fn one_stratum(data: &SurvData<'_>, at: &[f64], opts: &StateOptions) -> Result<S
         )));
     }
     let beyond: Vec<bool> = at.iter().map(|&t| t > last).collect();
-    let ms = Options {
+    let ms = MultistateOptions {
         timefix: TimeFix::Exact,
         rate_tolerance: None,
         initial: opts.initial.clone(),
@@ -403,7 +403,7 @@ fn one_stratum(data: &SurvData<'_>, at: &[f64], opts: &StateOptions) -> Result<S
         data,
         &grid,
         &ms,
-        &VarianceOptions {
+        &OccupationVarianceOptions {
             origin: opts.origin,
             horizons: Vec::new(),
             influence_times: Vec::new(),
@@ -449,7 +449,7 @@ fn one_stratum(data: &SurvData<'_>, at: &[f64], opts: &StateOptions) -> Result<S
                 data,
                 &grid,
                 &ms,
-                &VarianceOptions {
+                &OccupationVarianceOptions {
                     origin: opts.origin,
                     horizons: Vec::new(),
                     influence_times: chunk.to_vec(),

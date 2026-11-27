@@ -49,7 +49,7 @@
 //!
 //! The adjustment of Royston and Sauerbrei for overfitting is off by default,
 //! as in `royston` (`adjust = FALSE`). It is requested with
-//! [`Adjustment`], the number of events `e` and of coefficients `p` of the
+//! [`RoystonAdjustment`], the number of events `e` and of coefficients `p` of the
 //! fitted model. With `r = e / (e - p)` and `t = (1 + b^2 - r) / r`,
 //!
 //! ```text
@@ -113,7 +113,7 @@ use epistat_linalg::{Mat, MatRef};
 use rayon::prelude::*;
 
 use crate::check::{check_lengths, check_row_count, refuse_non_finite};
-use crate::cox::predict::{FittedModel, PredictOptions, PredictType, predict};
+use crate::cox::predict::{CoxPredictOptions, CoxPredictType, FittedModel, predict};
 use crate::cox::{CoxModelFit, CoxOptions, Ties, fit};
 use crate::error::{Error, Result};
 use crate::order::par_sort_by_key;
@@ -125,13 +125,17 @@ use epistat_stats::sum::compensated;
 /// The correction for overfitting of Royston and Sauerbrei: the number of
 /// events and of coefficients of the model that produced the predictor.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Adjustment {
+pub struct RoystonAdjustment {
     /// The number of events the model was fitted on. It must exceed
     /// `n_coef`.
     pub n_events: f64,
     /// The number of coefficients of the model.
     pub n_coef: usize,
 }
+
+/// `RoystonAdjustment`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `RoystonAdjustment`")]
+pub type Adjustment = RoystonAdjustment;
 
 /// What [`estimate`] takes besides the data and the predictor.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -148,7 +152,7 @@ pub struct RoystonOptions {
     pub ties: bool,
     /// The correction for overfitting, `adjust` of `royston`. The default is
     /// `None`, no correction, as `adjust = FALSE`.
-    pub adjust: Option<Adjustment>,
+    pub adjust: Option<RoystonAdjustment>,
     /// Compute `C.GH`, which costs time quadratic in the rows used. The
     /// default is `true`, as `royston` always computes it.
     pub gonen_heller: bool,
@@ -365,9 +369,9 @@ pub fn from_fit(
             fit: fitted,
             options: cox,
         },
-        PredictType::LinearPredictor,
+        CoxPredictType::LinearPredictor,
         None,
-        &PredictOptions::default(),
+        &CoxPredictOptions::default(),
     )?
     .fit;
     let code = cox.cause;
@@ -383,7 +387,7 @@ pub fn from_fit(
                 ));
             }
         };
-        Some(Adjustment {
+        Some(RoystonAdjustment {
             n_events: timefixed.cause(k)?.n_events() as f64,
             n_coef: fitted.coefficients.len(),
         })

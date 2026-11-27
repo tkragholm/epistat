@@ -31,7 +31,8 @@ use common::{Lines, Rng, Table, Writer};
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::flexpar::{
-    Contrast, FlexParOptions, Predict, PredictOptions, Scale, TimeVarying, contrast, fit, predict,
+    FlexParOptions, FlexparContrast, FlexparPredictOptions, FlexparScale, Predict, TimeVarying,
+    contrast, fit, predict,
 };
 
 const SEED: u64 = 20_261_208;
@@ -74,9 +75,9 @@ fn main() {
     }
     let data = builder.build().expect("data");
     let scale = match method.as_str() {
-        "flexpar_odds" => Scale::Odds,
-        "flexpar_probit" => Scale::Probit,
-        "flexpar_hazard" | "flexpar_entry" | "flexpar_tvc" => Scale::Hazard,
+        "flexpar_odds" => FlexparScale::Odds,
+        "flexpar_probit" => FlexparScale::Probit,
+        "flexpar_hazard" | "flexpar_entry" | "flexpar_tvc" => FlexparScale::Hazard,
         other => panic!("unknown method {other}"),
     };
     let tvc = [TimeVarying { column: 1, df: 2 }];
@@ -99,7 +100,7 @@ fn main() {
         );
     }
     let profile = Mat::from_fn(1, 2, |_, j| [0.5, 1.0][j]);
-    let o = PredictOptions::default();
+    let o = FlexparPredictOptions::default();
     let s = predict(&f, profile.as_ref(), &AT, Predict::Survival, &o).expect("predict");
     for (p, &tau) in s[0].iter().zip(&AT) {
         lines.push(&format!("surv_{tau}"), p.estimate);
@@ -111,7 +112,7 @@ fn main() {
             profile.as_ref(),
             reference.as_ref(),
             &AT,
-            Contrast::HazardRatio,
+            FlexparContrast::HazardRatio,
             &o,
         )
         .expect("contrast");

@@ -13,9 +13,11 @@ use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{self, CoxOptions};
 use epistat_survival::standardise::yates::{
-    InverseLink, Test, YatesLevel, YatesOptions, wald_tests, yates,
+    InverseLink, YatesLevel, YatesOptions, YatesTest, wald_tests, yates,
 };
-use epistat_survival::standardise::{Counterfactual, Level, StandardiseOptions, standardise_cox};
+use epistat_survival::standardise::{
+    Counterfactual, ExposureLevel, StandardiseOptions, standardise_cox,
+};
 
 fn design() -> Mat<f64> {
     Mat::from_fn(6, 3, |i, j| match j {
@@ -200,7 +202,7 @@ fn weights_columns_and_matrices_agree() {
 fn global_test_of_two_levels_is_the_squared_contrast_over_its_variance() {
     let estimate = [1.0, 3.0];
     let cov = [0.5, 0.1, 0.1, 0.4];
-    let tests = wald_tests(&estimate, &cov, Test::Global).unwrap();
+    let tests = wald_tests(&estimate, &cov, YatesTest::Global).unwrap();
     assert_eq!(tests.len(), 1);
     assert_eq!(tests[0].label, "global");
     assert_eq!(tests[0].df, 1);
@@ -208,25 +210,25 @@ fn global_test_of_two_levels_is_the_squared_contrast_over_its_variance() {
     assert!((tests[0].chi_square - want).abs() <= 8.0 * f64::EPSILON * want);
     // Pairwise with two levels is one test labelled as the global one, and
     // three levels give three pairs and three tests against the mean.
-    let pair = wald_tests(&estimate, &cov, Test::Pairwise).unwrap();
+    let pair = wald_tests(&estimate, &cov, YatesTest::Pairwise).unwrap();
     assert_eq!(pair[0].label, "global");
     assert_eq!(pair[0].chi_square.to_bits(), tests[0].chi_square.to_bits());
     let e3 = [1.0, 2.0, 4.0];
     let c3 = [0.3, 0.0, 0.0, 0.0, 0.3, 0.0, 0.0, 0.0, 0.3];
-    let labels: Vec<String> = wald_tests(&e3, &c3, Test::Pairwise)
+    let labels: Vec<String> = wald_tests(&e3, &c3, YatesTest::Pairwise)
         .unwrap()
         .into_iter()
         .map(|t| t.label)
         .collect();
     assert_eq!(labels, ["1 vs 2", "1 vs 3", "2 vs 3"]);
-    let mean = wald_tests(&e3, &c3, Test::VersusMean).unwrap();
+    let mean = wald_tests(&e3, &c3, YatesTest::VersusMean).unwrap();
     assert_eq!(mean[2].label, "3 vs mean");
     // 3 vs mean: the contrast is 4 - 7/3 = 5/3 and its variance 0.3 (4/9 + 1/9 + 1/9).
     let want = (5.0f64 / 3.0).powi(2) / (0.3 * (4.0 / 9.0 + 1.0 / 9.0 + 1.0 / 9.0));
     assert!((mean[2].chi_square - want).abs() <= 8.0 * f64::EPSILON * want);
-    assert!(wald_tests(&[1.0], &[1.0], Test::Global).is_err());
+    assert!(wald_tests(&[1.0], &[1.0], YatesTest::Global).is_err());
     // A covariance of rank 0 has no degrees of freedom and no p-value.
-    let flat = wald_tests(&estimate, &[0.0; 4], Test::Global).unwrap();
+    let flat = wald_tests(&estimate, &[0.0; 4], YatesTest::Global).unwrap();
     assert_eq!(flat[0].df, 0);
     assert_eq!(flat[0].p_value, None);
 }
@@ -256,9 +258,9 @@ fn standardised_risks_are_tested_with_their_covariance() {
         vec![(0, 1.0), (1, 0.0)],
         vec![(0, 0.0), (1, 1.0)],
     ];
-    let levels: Vec<Level<'_>> = sets
+    let levels: Vec<ExposureLevel<'_>> = sets
         .iter()
-        .map(|s| Level::single(Counterfactual::Columns(s)))
+        .map(|s| ExposureLevel::single(Counterfactual::Columns(s)))
         .collect();
     let times = [2.0, 5.0];
     let with = standardise_cox(
@@ -274,11 +276,11 @@ fn standardised_risks_are_tested_with_their_covariance() {
         },
     )
     .unwrap();
-    let global = with.tests(1, Test::Global).unwrap();
+    let global = with.tests(1, YatesTest::Global).unwrap();
     assert_eq!(global[0].df, 2);
     assert!(global[0].chi_square.is_finite() && global[0].chi_square >= 0.0);
-    assert_eq!(with.tests(1, Test::Pairwise).unwrap().len(), 3);
-    assert!(with.tests(5, Test::Global).is_err());
+    assert_eq!(with.tests(1, YatesTest::Pairwise).unwrap().len(), 3);
+    assert!(with.tests(5, YatesTest::Global).is_err());
     let without = standardise_cox(
         &data,
         design.as_ref(),
@@ -289,5 +291,5 @@ fn standardised_risks_are_tested_with_their_covariance() {
         &StandardiseOptions::default(),
     )
     .unwrap();
-    assert!(without.tests(0, Test::Global).is_err());
+    assert!(without.tests(0, YatesTest::Global).is_err());
 }

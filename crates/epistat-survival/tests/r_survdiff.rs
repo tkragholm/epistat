@@ -33,7 +33,7 @@
 
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use epistat_survival::SurvData;
-use epistat_survival::survdiff::{Options, one_sample, test};
+use epistat_survival::survdiff::{SurvdiffOptions, one_sample, test};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -134,9 +134,9 @@ fn survdiff_matches_survival() {
         let got = test(
             &data,
             &case.group,
-            &Options {
+            &SurvdiffOptions {
                 rho,
-                ..Options::default()
+                ..SurvdiffOptions::default()
             },
         )
         .unwrap();
@@ -238,9 +238,9 @@ fn one_sample_matches_survival() {
         let got = one_sample(
             &data,
             &case.offset,
-            &Options {
+            &SurvdiffOptions {
                 rho: case.rho,
-                ..Options::default()
+                ..SurvdiffOptions::default()
             },
         )
         .unwrap();

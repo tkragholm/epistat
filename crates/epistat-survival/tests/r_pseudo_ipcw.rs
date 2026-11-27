@@ -2,7 +2,7 @@
 //! 1.4.5's pseudo-observation functions: `model.censoring = "coxph"` with the
 //! Binder and Hajek forms and the censoring covariates `x1 + x2` and `x1`,
 //! `"independent"` (the exact jackknife of the whole sample, which is
-//! `Method::Jackknife`) and `"stratified"` (the exact jackknife within the strata
+//! `PseudoMethod::Jackknife`) and `"stratified"` (the exact jackknife within the strata
 //! of a covariate), for the incidence of two causes, the restricted time lost,
 //! and on single-event data the survival and the restricted mean. See
 //! `data/pseudo_ipcw.R`.
@@ -47,7 +47,7 @@ use std::collections::HashMap;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::pseudo::{
-    IpcwMethod, IpcwOptions, Method, PseudoOptions, Target, pseudo, pseudo_ipcw,
+    IpcwMethod, PseudoIpcwOptions, PseudoMethod, PseudoOptions, Target, pseudo, pseudo_ipcw,
 };
 use epistat_testkit::{load_json, na_f64_vec};
 use serde::Deserialize;
@@ -178,7 +178,7 @@ fn eventglm_pseudo_observations_agree() {
                 .n_codes(codes)
                 .build()
                 .unwrap();
-            let mut opts = IpcwOptions::new(target);
+            let mut opts = PseudoIpcwOptions::new(target);
             opts.method = if case.method == "hajek" {
                 IpcwMethod::Hajek
             } else {
@@ -243,7 +243,7 @@ fn eventglm_pseudo_observations_agree() {
             }
             let data = builder.build().unwrap();
             let mut opts = PseudoOptions::new(target);
-            opts.method = Method::Jackknife;
+            opts.method = PseudoMethod::Jackknife;
             let got = pseudo(&data, &case.times, &opts).unwrap_or_else(|e| panic!("{label}: {e}"));
             // The subjects are in the order of the strata and then the rows, and
             // eventglm's are in the order of the rows.
@@ -293,13 +293,13 @@ fn ipcw_refuses_what_eventglm_does_not_take() {
     let time = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
     let status = [1, 0, 1, 1, 0, 1, 0, 1];
     let z = Mat::from_fn(8, 1, |i, _| [0.3, -0.5, 0.9, 0.1, -0.2, 0.7, -0.8, 0.4][i]);
-    let ok = IpcwOptions::new(Target::Survival);
+    let ok = PseudoIpcwOptions::new(Target::Survival);
     let data = SurvData::builder(&time, &status).build().unwrap();
     pseudo_ipcw(&data, z.as_ref(), &[3.0], &ok).unwrap();
     assert!(pseudo_ipcw(&data, z.as_ref(), &[], &ok).is_err());
     assert!(pseudo_ipcw(&data, z.as_ref(), &[3.0, 2.0], &ok).is_err());
     // A hazard is not the outcome of a subject.
-    let hazard = IpcwOptions::new(Target::CumulativeHazard);
+    let hazard = PseudoIpcwOptions::new(Target::CumulativeHazard);
     assert!(pseudo_ipcw(&data, z.as_ref(), &[3.0], &hazard).is_err());
     // The covariates have the wrong number of rows.
     let short = Mat::from_fn(7, 1, |i, _| i as f64);
@@ -330,9 +330,9 @@ fn ipcw_refuses_what_eventglm_does_not_take() {
         .build()
         .unwrap();
     assert!(pseudo_ipcw(&competing, z.as_ref(), &[3.0], &ok).is_err());
-    let missing = IpcwOptions::new(Target::CumulativeIncidence { cause: 3 });
+    let missing = PseudoIpcwOptions::new(Target::CumulativeIncidence { cause: 3 });
     assert!(pseudo_ipcw(&competing, z.as_ref(), &[3.0], &missing).is_err());
-    let present = IpcwOptions::new(Target::CumulativeIncidence { cause: 2 });
+    let present = PseudoIpcwOptions::new(Target::CumulativeIncidence { cause: 2 });
     pseudo_ipcw(&competing, z.as_ref(), &[3.0], &present).unwrap();
     // A censoring covariate that repeats another is aliased.
     let twice = Mat::from_fn(8, 2, |i, _| z[(i, 0)]);

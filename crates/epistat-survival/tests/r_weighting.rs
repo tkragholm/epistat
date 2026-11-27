@@ -31,12 +31,13 @@
 //! and from the plain central differences, which is an upper bound for the
 //! extrapolated one.
 
+use epistat_core::Estimand;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties};
 use epistat_survival::weighting::Weights;
 use epistat_survival::weighting::cox as wcox;
-use epistat_survival::weighting::iptw::{self, Estimand, IptwOptions};
+use epistat_survival::weighting::iptw::{self, IptwOptions};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -173,7 +174,7 @@ fn weights_and_summaries_match_weightit() {
         let opts = IptwOptions {
             estimand: estimand(&r.estimand),
             stabilise: r.stabilise,
-            alpha: None,
+            optimal_subset: None,
         };
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         let eta = eta_bounds(&z, &r.coefficients, r.kappa);
@@ -289,7 +290,7 @@ fn cox_case(reference: &Reference, c: &RCox) -> (f64, f64) {
     let opts = IptwOptions {
         estimand: estimand(&ri.estimand),
         stabilise: ri.stabilise,
-        alpha: None,
+        optimal_subset: None,
     };
     let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
     let rows = c.stop.len();

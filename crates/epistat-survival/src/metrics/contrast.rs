@@ -53,7 +53,7 @@ pub struct ContrastOptions {
 
 /// The difference between two models at each time.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Contrast {
+pub struct ScoreContrast {
     /// The times.
     pub times: Vec<f64>,
     /// The model minus the reference.
@@ -70,6 +70,10 @@ pub struct Contrast {
     pub n_used: usize,
 }
 
+/// `ScoreContrast`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `ScoreContrast`")]
+pub type Contrast = ScoreContrast;
+
 /// The Brier score of `model` minus that of `reference`.
 ///
 /// Both scores must have been made with `keep_influence` and
@@ -84,7 +88,7 @@ pub fn brier_difference(
     model: &Score,
     reference: &Score,
     opts: &ContrastOptions,
-) -> Result<Contrast> {
+) -> Result<ScoreContrast> {
     if model.times != reference.times
         || model.n_rows != reference.n_rows
         || model.n_used != reference.n_used
@@ -110,7 +114,11 @@ pub fn brier_difference(
 /// # Errors
 ///
 /// As [`brier_difference`].
-pub fn auc_difference(model: &Auc, reference: &Auc, opts: &ContrastOptions) -> Result<Contrast> {
+pub fn auc_difference(
+    model: &Auc,
+    reference: &Auc,
+    opts: &ContrastOptions,
+) -> Result<ScoreContrast> {
     if model.times != reference.times
         || model.n_rows != reference.n_rows
         || model.n_used != reference.n_used
@@ -138,7 +146,7 @@ fn contrast(
     model_influence: Option<&Influence>,
     reference_influence: Option<&Influence>,
     opts: ContrastOptions,
-) -> Result<Contrast> {
+) -> Result<ScoreContrast> {
     let (Some(a), Some(b)) = (model_influence, reference_influence) else {
         return Err(Error::invalid(
             "the scores need their influence functions: compute them with variance and \
@@ -151,7 +159,7 @@ fn contrast(
         ));
     }
     let z = epistat_stats::dist::normal::quantile(opts.level.upper_probability());
-    let mut out = Contrast {
+    let mut out = ScoreContrast {
         times: times.to_vec(),
         difference: Vec::new(),
         se: Vec::new(),

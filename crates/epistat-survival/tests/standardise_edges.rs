@@ -11,7 +11,9 @@ use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{self, CoxOptions, Ties};
-use epistat_survival::standardise::{Counterfactual, Level, StandardiseOptions, standardise_cox};
+use epistat_survival::standardise::{
+    Counterfactual, ExposureLevel, StandardiseOptions, standardise_cox,
+};
 
 fn sim(n: usize) -> (Vec<f64>, Vec<i32>, Mat<f64>) {
     let mut rng = Stream::seeded(3);
@@ -38,23 +40,23 @@ fn refused_input_and_undefined_times() {
     let data = SurvData::builder(&stop, &status).build().unwrap();
     let options = CoxOptions::default();
     let fit = cox::fit(&data, x.as_ref(), &options).unwrap();
-    let level = Level::single(Counterfactual::Columns(&SET));
-    let run = |levels: &[Level<'_>], times: &[f64], opts: &StandardiseOptions| {
+    let level = ExposureLevel::single(Counterfactual::Columns(&SET));
+    let run = |levels: &[ExposureLevel<'_>], times: &[f64], opts: &StandardiseOptions| {
         standardise_cox(&data, x.as_ref(), &fit, &options, levels, times, opts)
     };
     let plain = StandardiseOptions::default();
     assert!(run(&[], &[1.0], &plain).is_err());
     assert!(run(std::slice::from_ref(&level), &[f64::NAN], &plain).is_err());
-    let bad_column = Level::single(Counterfactual::Columns(&[(5, 1.0)]));
+    let bad_column = ExposureLevel::single(Counterfactual::Columns(&[(5, 1.0)]));
     assert!(run(&[bad_column], &[1.0], &plain).is_err());
-    let bad_value = Level::single(Counterfactual::Columns(&[(0, f64::INFINITY)]));
+    let bad_value = ExposureLevel::single(Counterfactual::Columns(&[(0, f64::INFINITY)]));
     assert!(run(&[bad_value], &[1.0], &plain).is_err());
-    let wrong_models = Level {
+    let wrong_models = ExposureLevel {
         designs: vec![Counterfactual::Columns(&SET), Counterfactual::Columns(&SET)],
     };
     assert!(run(&[wrong_models], &[1.0], &plain).is_err());
     let narrow = Mat::<f64>::zeros(80, 1);
-    let wrong_shape = Level::single(Counterfactual::Design(narrow.as_ref()));
+    let wrong_shape = ExposureLevel::single(Counterfactual::Design(narrow.as_ref()));
     assert!(run(&[wrong_shape], &[1.0], &plain).is_err());
     // A time before the first event has risk 0 and standard error 0, a time
     // after the last follow-up has none.
@@ -104,7 +106,7 @@ fn case_weights_act_as_repeated_rows() {
     let status2: Vec<i32> = rows.iter().map(|&i| status[i]).collect();
     let x2 = Mat::from_fn(rows.len(), 2, |i, j| x[(rows[i], j)]);
     let repeated = SurvData::builder(&stop2, &status2).build().unwrap();
-    let level = [Level::single(Counterfactual::Columns(&SET))];
+    let level = [ExposureLevel::single(Counterfactual::Columns(&SET))];
     let times = [1.0, 3.0, 6.0];
     let est = |data: &SurvData<'_>, design: &Mat<f64>| {
         let fit = cox::fit(data, design.as_ref(), &options).unwrap();

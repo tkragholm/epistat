@@ -19,7 +19,7 @@ use epistat_core::Bootstrap;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::lowlevel::integrate;
-use epistat_survival::multistate::{Options, bootstrap, estimate};
+use epistat_survival::multistate::{MultistateOptions, bootstrap, estimate};
 use epistat_survival::timefix::TimeFix;
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -102,10 +102,10 @@ fn event_times(p: &Process) -> Vec<f64> {
 
 // The times are on a grid of tenths and carry rounding noise, so the tie rule
 // is the exact one: the comparison is between thread counts, not with R.
-fn options() -> Options {
-    Options {
+fn options() -> MultistateOptions {
+    MultistateOptions {
         timefix: TimeFix::Exact,
-        ..Options::default()
+        ..MultistateOptions::default()
     }
 }
 

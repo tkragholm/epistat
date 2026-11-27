@@ -52,9 +52,9 @@
 //! `chi^2 = (C m)' (C S C')^+ (C m)` with `S` the covariance of the PMMs and
 //! `^+` the generalised inverse that drops the eigenvalues not above
 //! `sqrt(eps)` times the largest, and `df` the number kept, as `qform` of
-//! `yates`. [`Test::Global`] is the test that all PMMs are equal,
-//! [`Test::Pairwise`] one test for every pair of levels, and
-//! [`Test::VersusMean`] one test of each level against the mean of the levels.
+//! `yates`. [`YatesTest::Global`] is the test that all PMMs are equal,
+//! [`YatesTest::Pairwise`] one test for every pair of levels, and
+//! [`YatesTest::VersusMean`] one test of each level against the mean of the levels.
 //!
 //! # Where this differs from `yates`
 //!
@@ -165,7 +165,7 @@ pub struct YatesLevel<'a> {
 
 /// Which tests between the levels to compute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Test {
+pub enum YatesTest {
     /// All PMMs are equal.
     #[default]
     Global,
@@ -174,6 +174,10 @@ pub enum Test {
     /// One test for each level against the mean of the levels.
     VersusMean,
 }
+
+/// `YatesTest`, under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `YatesTest`")]
+pub type Test = YatesTest;
 
 /// The options of [`yates`].
 #[derive(Debug, Clone, Copy, Default)]
@@ -186,7 +190,7 @@ pub struct YatesOptions<'a> {
     /// with `Centring::Coxph`, or `None` for a model with an intercept.
     pub centre: Option<&'a [f64]>,
     /// The tests. `Global`, as `yates`.
-    pub test: Test,
+    pub test: YatesTest,
 }
 
 /// One Wald test of a contrast of the PMMs.
@@ -420,7 +424,7 @@ fn one_level(
 ///
 /// An input error for fewer than two estimates (a pairwise or mean test needs
 /// two), a covariance of the wrong size and a value that is not finite.
-pub fn wald_tests(estimate: &[f64], cov: &[f64], kind: Test) -> Result<Vec<WaldTest>> {
+pub fn wald_tests(estimate: &[f64], cov: &[f64], kind: YatesTest) -> Result<Vec<WaldTest>> {
     let n = estimate.len();
     if n < 2 {
         return Err(Error::invalid("tests: at least two levels are needed"));
@@ -432,7 +436,7 @@ pub fn wald_tests(estimate: &[f64], cov: &[f64], kind: Test) -> Result<Vec<WaldT
     }
     let mut contrasts: Vec<(String, Vec<f64>)> = Vec::new();
     match kind {
-        Test::Global => {
+        YatesTest::Global => {
             let rows: Vec<Vec<f64>> = (0..n - 1)
                 .map(|i| {
                     let mut row = vec![0.0; n];
@@ -443,7 +447,7 @@ pub fn wald_tests(estimate: &[f64], cov: &[f64], kind: Test) -> Result<Vec<WaldT
                 .collect();
             return Ok(vec![wald("global".to_string(), &rows, estimate, cov)]);
         }
-        Test::Pairwise => {
+        YatesTest::Pairwise => {
             for i in 0..n - 1 {
                 for j in i + 1..n {
                     let mut row = vec![0.0; n];
@@ -456,7 +460,7 @@ pub fn wald_tests(estimate: &[f64], cov: &[f64], kind: Test) -> Result<Vec<WaldT
                 contrasts[0].0 = "global".to_string();
             }
         }
-        Test::VersusMean => {
+        YatesTest::VersusMean => {
             let k = n as f64;
             for i in 0..n {
                 let mut row = vec![-1.0 / k; n];
