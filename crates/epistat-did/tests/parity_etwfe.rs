@@ -7,11 +7,11 @@
 mod feols_bound;
 
 use epistat_did::{
-    EtwfeConfig, EtwfeControl, EtwfeEffects, EtwfeTerm, EtwfeType, StaggeredPanel,
-    StaggeredPanelBuilder, did_covariance, estimate_etwfe,
+    EtwfeControl, EtwfeEffects, EtwfeOptions, EtwfeTerm, EtwfeType, EtwfeVcov, StaggeredPanel,
+    StaggeredPanelBuilder, etwfe,
 };
-use epistat_glm::{Absorb, Ssc, Vcov};
-use epistat_inference::Clusters;
+use epistat_glm::{Absorb, Ssc};
+use epistat_inference::{ClusterRule, Influence};
 use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
 use feols_bound::{EPS, Meat, feols_bound};
@@ -114,8 +114,8 @@ fn columns<'a>(
     panel
 }
 
-fn config<'a>(case: &Case, ways: &'a [&'a [u32]]) -> EtwfeConfig<'a> {
-    EtwfeConfig {
+fn config(case: &Case) -> EtwfeOptions {
+    EtwfeOptions {
         control: if case.spec.control == "never" {
             EtwfeControl::NeverTreated
         } else {
@@ -127,12 +127,13 @@ fn config<'a>(case: &Case, ways: &'a [&'a [u32]]) -> EtwfeConfig<'a> {
             EtwfeEffects::Cohort
         },
         vcov: match case.spec.vcov.as_str() {
-            "iid" => Vcov::Iid,
-            "hetero" => Vcov::Hetero,
-            _ => Vcov::Cluster(ways),
+            "iid" => EtwfeVcov::Iid,
+            "hetero" => EtwfeVcov::Hetero,
+            _ => EtwfeVcov::Clustered,
         },
         absorb: TIGHT,
         ssc: Ssc::new(),
+        ..EtwfeOptions::default()
     }
 }
 
@@ -149,6 +150,7 @@ fn name(term: EtwfeTerm) -> String {
             period,
             covariate,
         } => format!(".Dtreat:g::{cohort}:t::{period}:{}_dm", x(covariate)),
+        other => panic!("{other:?} is not a column of the linear model"),
     }
 }
 
@@ -157,8 +159,7 @@ fn name(term: EtwfeTerm) -> String {
 fn etwfe_matches_the_package() {
     for case in &reference().cases {
         let x = covariates(case);
-        let ways = [&case.unit[..]];
-        let result = estimate_etwfe(&panel(case, x.as_ref()), &config(case, &ways)).unwrap();
+        let result = etwfe::fit(&panel(case, x.as_ref()), &config(case)).unwrap();
         assert_eq!(result.n_rows, case.nobs, "{}", case.name);
         assert_eq!(result.df_k, case.df_k, "{}", case.name);
         let labels: Vec<String> = result.coefficients.iter().map(|c| name(c.term)).collect();
@@ -234,6 +235,7 @@ fn etwfe_matches_the_package() {
                         0.0
                     }
                 }
+                other => panic!("{other:?} is not a column of the linear model"),
             }
         });
         let weights: Vec<f64> = (0..n)
@@ -260,7 +262,7 @@ fn etwfe_matches_the_package() {
         };
         let nobs = case.nobs as f64;
         let k_df = case.df_k as f64;
-        let units = result.units.len() as f64;
+        let units = result.n_units as f64;
         let rows: Vec<u32> = (0..u32::try_from(n).unwrap()).collect();
         let (kind, factor) = match case.spec.vcov.as_str() {
             "iid" => (Meat::Iid, 1.0 / (nobs - k_df)),
@@ -288,14 +290,16 @@ fn etwfe_matches_the_package() {
         for (j, c) in b.coefficients.iter().enumerate() {
             assert_eq!(
                 c.map(f64::to_bits),
-                result.coefficients[j].estimate.map(f64::to_bits),
+                result.coefficients[j]
+                    .estimate
+                    .map(|e| e.estimate.to_bits()),
                 "{} {}",
                 case.name,
                 labels[j]
             );
         }
         for j in 0..q {
-            let got = result.coefficients[j].estimate.unwrap();
+            let got = result.coefficients[j].estimate.unwrap().estimate;
             assert!(
                 (got - case.coef[j]).abs() <= b.beta,
                 "{} {}: {got} {}",
@@ -304,7 +308,7 @@ fn etwfe_matches_the_package() {
                 case.coef[j]
             );
             for k in 0..q {
-                let got = result.covariance[j * q + k].unwrap();
+                let got = result.covariance.get(j, k).unwrap();
                 let want = case.vcov[j * q + k];
                 assert!(
                     (got - want).abs() <= b.covariance[j * q + k],
@@ -319,14 +323,15 @@ fn etwfe_matches_the_package() {
         // small-sample factors.
         let unit_factor = units / (units - 1.0) * (nobs - 1.0) / (nobs - k_df);
         let bu = bound(Meat::Cluster(&case.unit), unit_factor);
-        let of = Clusters::from_labels(&result.units);
-        let psi: Vec<Vec<f64>> = (0..q)
-            .map(|j| result.influence[j].clone().unwrap())
-            .collect();
-        let raw = did_covariance(&psi, &of).unwrap();
+        let influence = result.influence.as_ref().unwrap();
+        assert_eq!(influence.n_columns(), q);
+        let raw = influence
+            .variance_with(None, ClusterRule::NoSmallSample)
+            .unwrap();
         for j in 0..q * q {
             assert!(
-                (raw[j] - case.vcov_unadjusted[j]).abs() <= bu.covariance[j] / unit_factor,
+                (raw.as_slice()[j].unwrap() - case.vcov_unadjusted[j]).abs()
+                    <= bu.covariance[j] / unit_factor,
                 "{} influence {} {}",
                 case.name,
                 labels[j / q],
@@ -366,11 +371,11 @@ fn etwfe_matches_the_package() {
                 // most K + 2 terms, each rounded to (K + 2) eps M.
                 let round = 2.0 * (q as f64 + 2.0) * EPS * table.terms;
                 assert!(
-                    (effect.estimate - table.estimate[r]).abs()
-                        <= j_abs * b.beta + round + 16.0 * EPS * effect.estimate.abs(),
+                    (effect.estimate.estimate - table.estimate[r]).abs()
+                        <= j_abs * b.beta + round + 16.0 * EPS * effect.estimate.estimate.abs(),
                     "{} {term:?}: {} {}",
                     case.name,
-                    effect.estimate,
+                    effect.estimate.estimate,
                     table.estimate[r]
                 );
                 // J from means over at most n rows of values at most max_x.
@@ -392,7 +397,7 @@ fn etwfe_matches_the_package() {
                 let tol_v = quad(&abs_j, &abs_j, &|ij| b.covariance[ij])
                     + 2.0 * quad(&dj_v, &abs_j, &v_abs)
                     + quad(&dj_v, &dj_v, &v_abs);
-                let Some(se) = effect.std_error else {
+                let Some(se) = effect.estimate.se else {
                     assert!(table.se[r].is_none(), "{} {term:?}", case.name);
                     assert!(j_r.iter().all(|&v| v == 0.0));
                     continue;
@@ -422,7 +427,14 @@ fn etwfe_matches_the_package() {
                 );
                 // The influence function of the effect gives J V_unit J'
                 // without the small-sample factors.
-                let v = did_covariance(&[result.effect_influence[a].clone()], &of).unwrap()[0];
+                let v = result
+                    .effect_influence
+                    .as_ref()
+                    .unwrap()
+                    .variance_with(None, ClusterRule::NoSmallSample)
+                    .unwrap()
+                    .get(a, a)
+                    .unwrap();
                 let want = quad(&j_r, &j_r, &|ij| case.vcov_unadjusted[ij]);
                 let tol = quad(&abs_j, &abs_j, &|ij| bu.covariance[ij] / unit_factor)
                     + 2.0 * quad(&dj_v, &abs_j, &|ij| case.vcov_unadjusted[ij].abs());
@@ -445,12 +457,21 @@ fn never_treated_controls_need_never_treated_units() {
         .iter()
         .find(|c| c.name == "notyet_last_hetero")
         .unwrap();
-    let ways = [&case.unit[..]];
-    let config = EtwfeConfig {
+    let config = EtwfeOptions {
         control: EtwfeControl::NeverTreated,
-        ..config(case, &ways)
+        ..config(case)
     };
-    assert!(estimate_etwfe(&panel(case, None), &config).is_err());
+    assert!(matches!(
+        etwfe::fit(&panel(case, None), &config),
+        Err(epistat_did::Error::NoNeverTreated)
+    ));
+}
+
+/// The values of an influence function, column after column.
+fn influence_values(influence: Option<&Influence>) -> impl Iterator<Item = f64> + '_ {
+    influence
+        .into_iter()
+        .flat_map(|f| (0..f.n_columns()).flat_map(move |j| f.column(j).iter().copied()))
 }
 
 fn etwfe_bits() -> Vec<f64> {
@@ -458,16 +479,20 @@ fn etwfe_bits() -> Vec<f64> {
     let mut out = Vec::new();
     for case in &reference.cases {
         let x = covariates(case);
-        let ways = [&case.unit[..]];
-        let mut c = config(case, &ways);
+        let mut c = config(case);
         c.absorb = Absorb::new();
-        let result = estimate_etwfe(&panel(case, x.as_ref()), &c).unwrap();
-        out.extend(result.coefficients.iter().filter_map(|t| t.estimate));
-        out.extend(result.effects.iter().map(|e| e.estimate));
-        out.extend(result.effects.iter().filter_map(|e| e.std_error));
-        out.extend(result.covariance.iter().flatten().take(400));
-        out.extend(result.effect_influence.iter().flatten().take(40));
-        out.extend(result.influence.iter().flatten().flatten().take(40));
+        let result = etwfe::fit(&panel(case, x.as_ref()), &c).unwrap();
+        out.extend(
+            result
+                .coefficients
+                .iter()
+                .filter_map(|t| t.estimate.map(|e| e.estimate)),
+        );
+        out.extend(result.effects.iter().map(|e| e.estimate.estimate));
+        out.extend(result.effects.iter().filter_map(|e| e.estimate.se));
+        out.extend(result.covariance.as_slice().iter().flatten().take(400));
+        out.extend(influence_values(result.effect_influence.as_ref()).take(40));
+        out.extend(influence_values(result.influence.as_ref()).take(40));
     }
     out
 }

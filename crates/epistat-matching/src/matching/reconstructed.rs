@@ -1,3 +1,4 @@
+use crate::Error;
 use chrono::NaiveDate;
 use std::collections::{HashMap, HashSet};
 
@@ -59,28 +60,6 @@ pub struct ReconstructedMatchingOptions {
     pub match_caliper_days: Option<i64>,
 }
 
-/// Invalid options of [`reconstruct_case_control_pairs`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReconstructedMatchingError {
-    /// `max_ratio` is 0.
-    ZeroMaxRatio,
-    /// `match_caliper_days` is negative.
-    NegativeCaliper(i64),
-}
-
-impl std::fmt::Display for ReconstructedMatchingError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::ZeroMaxRatio => f.write_str("max_ratio must be at least 1"),
-            Self::NegativeCaliper(days) => {
-                write!(f, "match_caliper_days is {days}, which is negative")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ReconstructedMatchingError {}
-
 /// The result of [`reconstruct_case_control_pairs`].
 #[derive(Debug, Default)]
 pub struct ReconstructedMatchingOutput {
@@ -115,17 +94,17 @@ type CaseGroupIndex = HashMap<(NaiveDate, i32), HashMap<String, Vec<usize>>>;
 ///
 /// # Errors
 ///
-/// [`ReconstructedMatchingError`] for a `max_ratio` of 0 or a negative
+/// [`Error`] for a `max_ratio` of 0 or a negative
 /// caliper.
 pub fn reconstruct_case_control_pairs(
     rows: &[ReconstructedEpisode],
     options: ReconstructedMatchingOptions,
-) -> Result<ReconstructedMatchingOutput, ReconstructedMatchingError> {
+) -> Result<ReconstructedMatchingOutput, Error> {
     if options.max_ratio == 0 {
-        return Err(ReconstructedMatchingError::ZeroMaxRatio);
+        return Err(Error::ZeroMaxRatio);
     }
     if let Some(days) = options.match_caliper_days.filter(|days| *days < 0) {
-        return Err(ReconstructedMatchingError::NegativeCaliper(days));
+        return Err(Error::NegativeCaliperDays(days));
     }
     let max_ratio = options.max_ratio;
     let caliper_days = options.match_caliper_days;
@@ -364,9 +343,10 @@ fn normalized_group_value(value: Option<&str>) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ReconstructedEpisode, ReconstructedMatchingError, ReconstructedMatchingOptions,
-        ReconstructedMatchingTier, reconstruct_case_control_pairs,
+        ReconstructedEpisode, ReconstructedMatchingOptions, ReconstructedMatchingTier,
+        reconstruct_case_control_pairs,
     };
+    use crate::Error;
     use chrono::NaiveDate;
 
     fn d(year: i32, month: u32, day: u32) -> NaiveDate {
@@ -381,11 +361,11 @@ mod tests {
         };
         assert_eq!(
             reconstruct_case_control_pairs(&[], options(0, None)).unwrap_err(),
-            ReconstructedMatchingError::ZeroMaxRatio
+            Error::ZeroMaxRatio
         );
         assert_eq!(
             reconstruct_case_control_pairs(&[], options(1, Some(-1))).unwrap_err(),
-            ReconstructedMatchingError::NegativeCaliper(-1)
+            Error::NegativeCaliperDays(-1)
         );
     }
 

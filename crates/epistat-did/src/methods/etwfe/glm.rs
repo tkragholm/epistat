@@ -2,132 +2,28 @@
 //! and their average effects. See the [module](crate::etwfe) for the model, the
 //! effects and the covariances.
 
-use epistat_core::InputError;
+use epistat_core::Covariance;
 use epistat_glm::rows::{Block, Rows};
-use epistat_glm::{Error as GlmError, Family, Glm, Link, Ssc, Vcov};
+use epistat_glm::{Error as GlmError, Family, Glm, Link};
 use epistat_linalg::ROW_BLOCK;
 use rayon::prelude::*;
 
-use super::{EtwfeControl, EtwfeEffect, EtwfeError, EtwfeTerm, Layout, unit_codes};
+use super::{
+    EtwfeCoefficient, EtwfeEffect, EtwfeFamily, EtwfeFit, EtwfeOptions, EtwfeTerm, EtwfeVcov,
+    Layout, effect_influence, unit_codes,
+};
+use crate::error::Error;
+use crate::methods::fe_output::{self, Reference};
 use crate::methods::staggered::StaggeredPanel;
 
-/// The family of a nonlinear fit, each with its canonical link.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EtwfeFamily {
-    /// Poisson with the log link (`family = "poisson"`).
-    Poisson,
-    /// Binomial with the logit link (`family = "logit"`).
-    Logit,
-}
-
-impl EtwfeFamily {
-    const fn model(self) -> (Family, Link) {
-        match self {
-            Self::Poisson => (Family::Poisson, Link::Log),
-            Self::Logit => (Family::Binomial, Link::Logit),
-        }
+/// The family and link of a Poisson or logit model, `None` for the linear
+/// one.
+pub(super) const fn model(family: EtwfeFamily) -> Option<(Family, Link)> {
+    match family {
+        EtwfeFamily::Poisson => Some((Family::Poisson, Link::Log)),
+        EtwfeFamily::Logit => Some((Family::Binomial, Link::Logit)),
+        EtwfeFamily::Gaussian => None,
     }
-}
-
-/// The controls of [`estimate_etwfe_glm`].
-#[derive(Clone, Copy, Debug)]
-pub struct EtwfeGlmConfig<'a> {
-    /// The family.
-    pub family: EtwfeFamily,
-    /// The controls.
-    pub control: EtwfeControl,
-    /// The covariance of the coefficients: [`Vcov::Iid`], `fixest`'s default
-    /// here, [`Vcov::Hetero`] or [`Vcov::Cluster`] with one cluster
-    /// variable.
-    pub vcov: Vcov<'a>,
-    /// The small-sample correction; only `k_adj` and `g_adj` apply, as the
-    /// model has no fixed effects.
-    pub ssc: Ssc,
-    /// The convergence tolerance of the deviance, `glm.tol` of `fixest`.
-    pub tolerance: f64,
-    /// The largest number of iterations, `glm.iter`.
-    pub max_iterations: usize,
-}
-
-impl EtwfeGlmConfig<'_> {
-    /// The defaults of `etwfe` and `fixest::feglm` for `family`:
-    /// not-yet-treated controls, the iid covariance, `fixest`'s correction,
-    /// tolerance `1e-8` and 25 iterations.
-    #[must_use]
-    pub const fn new(family: EtwfeFamily) -> Self {
-        Self {
-            family,
-            control: EtwfeControl::NotYetTreated,
-            vcov: Vcov::Iid,
-            ssc: Ssc::new(),
-            tolerance: 1e-8,
-            max_iterations: 25,
-        }
-    }
-}
-
-/// A column of the nonlinear regression.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum EtwfeGlmTerm {
-    /// The intercept.
-    Intercept,
-    /// The dummy of a cohort other than the reference.
-    Cohort(i64),
-    /// The dummy of a period after the first.
-    Period(i64),
-    /// A column of the linear regression.
-    Term(EtwfeTerm),
-}
-
-/// One coefficient of a nonlinear fit.
-#[derive(Clone, Debug, PartialEq)]
-pub struct EtwfeGlmCoefficient {
-    /// Its column.
-    pub term: EtwfeGlmTerm,
-    /// The coefficient, `None` when the column is aliased.
-    pub estimate: Option<f64>,
-    /// Its standard error.
-    pub std_error: Option<f64>,
-}
-
-/// A nonlinear extended two-way fit and its average effects.
-#[derive(Clone, Debug)]
-pub struct EtwfeGlmResult {
-    /// The coefficients in `etwfe`'s order: the intercept, the covariates,
-    /// their cohort and period slopes, the cohort and period dummies, the
-    /// cells by cohort and period, and the cells' slopes by covariate.
-    pub coefficients: Vec<EtwfeGlmCoefficient>,
-    /// The covariance of the coefficients, row-major, `None` for aliased
-    /// columns and everywhere when a factor of the correction does not exist.
-    pub covariance: Vec<Option<f64>>,
-    /// The average effects on the scale of the mean: overall, by cohort, by
-    /// period and by event time, each in increasing key.
-    pub effects: Vec<EtwfeEffect>,
-    /// `J V J'` over the average effects, row-major.
-    pub effect_covariance: Vec<Option<f64>>,
-    /// The influence function of each average effect, one value per unit of
-    /// [`EtwfeGlmResult::units`].
-    pub effect_influence: Vec<Vec<f64>>,
-    /// The influence function of each coefficient, one value per unit;
-    /// `None` for aliased columns.
-    pub influence: Vec<Option<Vec<f64>>>,
-    /// The `K` of the small-sample correction: the coefficients that are not
-    /// aliased.
-    pub df_k: usize,
-    /// The units in the fit, in increasing code.
-    pub units: Vec<u32>,
-    /// The rows in the fit.
-    pub n_rows: usize,
-    /// The rows removed before the fit: those of always-treated cohorts,
-    /// those from the last cohort's first treated period on when it is the
-    /// reference, and those of weight zero.
-    pub excluded_rows: usize,
-    /// The residual deviance.
-    pub deviance: f64,
-    /// The iterations of the fit.
-    pub iterations: usize,
-    /// Whether the deviance converged within the iterations.
-    pub converged: bool,
 }
 
 /// The positions of the column groups of the nonlinear design.
@@ -284,8 +180,8 @@ fn blocked_sum(n: usize, len: usize, term: impl Fn(usize, usize, &mut [f64]) + S
     total
 }
 
-const fn glm_error(e: GlmError) -> EtwfeError {
-    EtwfeError::Fit(e)
+const fn glm_error(e: GlmError) -> Error {
+    Error::Glm(e)
 }
 
 /// `sum_g S_g S_g'` for the sums `sums`, one row of `q` values per group.
@@ -331,46 +227,21 @@ const fn count(v: f64) -> usize {
     v as usize
 }
 
-/// Fits the Poisson or logit extended two-way regression of `config` to
-/// `panel`, with cohort and period dummies, and its average effects on the
-/// scale of the mean. See the [module](crate::etwfe).
-///
-/// # Errors
-///
-/// [`EtwfeError`] for never-treated controls without never-treated units,
-/// no treated cell and periods out of range; [`EtwfeError::Fit`] with
-/// [`GlmError::Input`] for cluster codes of the wrong length, [`GlmError::Invalid`] for more than
-/// one cluster variable, and the errors of the fit, among them
-/// [`GlmError::Response`] for a response outside the family's support (its
-/// row that of the input row).
+/// The Poisson or logit model of [`fit`](super::fit), with cohort and
+/// period dummies, and its average effects on the scale of the mean.
 #[expect(
     clippy::too_many_lines,
     reason = "one pass from the layout to the fit, the covariance and the averages"
 )]
-pub fn estimate_etwfe_glm(
+pub(super) fn fit(
     panel: &StaggeredPanel<'_>,
-    config: &EtwfeGlmConfig<'_>,
-) -> Result<EtwfeGlmResult, EtwfeError> {
-    let layout = Layout::new(panel, config.control)?;
+    options: &EtwfeOptions,
+    family: Family,
+    link: Link,
+) -> Result<EtwfeFit, Error> {
+    let layout = Layout::new(panel, options.control)?;
     let n = layout.n();
-    let ways: Option<&[u32]> = match config.vcov {
-        Vcov::Cluster(ways) => {
-            let [way] = ways else {
-                return Err(EtwfeError::Fit(GlmError::Invalid(
-                    "the nonlinear fits take one cluster variable",
-                )));
-            };
-            if way.len() != n {
-                return Err(EtwfeError::Fit(GlmError::Input(InputError::Length {
-                    what: "cluster codes",
-                    expected: n,
-                    found: way.len(),
-                })));
-            }
-            Some(way)
-        }
-        Vcov::Iid | Vcov::Hetero => None,
-    };
+    let way = panel.clusters().unwrap_or(panel.unit());
     let columns = Columns::new(&layout);
     let k_all = columns.total;
     let rows: Vec<usize> = (0..n)
@@ -382,10 +253,9 @@ pub fn estimate_etwfe_glm(
         columns,
         rows,
     };
-    let (family, link) = config.family.model();
     let model = Glm {
-        tolerance: config.tolerance,
-        max_iterations: config.max_iterations,
+        tolerance: options.tolerance,
+        max_iterations: options.max_iterations,
         ..Glm::new(family, link)
     };
     let fit = model.fit_rows(&design).map_err(|e| match e {
@@ -446,16 +316,16 @@ pub fn estimate_etwfe_glm(
 
     let k = q;
     let factor_k = |numerator: usize| -> Option<f64> {
-        if !config.ssc.k_adj {
+        if !options.ssc.k_adj {
             return Some(1.0);
         }
         (n_fit > k).then(|| numerator as f64 / (n_fit - k) as f64)
     };
-    let covariance_kept: Option<Vec<f64>> = match config.vcov {
-        Vcov::Iid => {
+    let covariance_kept: Option<Vec<f64>> = match options.vcov {
+        EtwfeVcov::Iid => {
             factor_k(n_fit.saturating_sub(1)).map(|f| bread.iter().map(|v| f * v).collect())
         }
-        Vcov::Hetero => factor_k(n_fit).map(|f| {
+        EtwfeVcov::Hetero => factor_k(n_fit).map(|f| {
             let meat = blocked_sum(n_fit, q * q, |start, end, out| {
                 let mut entries: Vec<(usize, f64)> = Vec::new();
                 for r in start..end {
@@ -475,8 +345,7 @@ pub fn estimate_etwfe_glm(
             });
             sandwich(&bread, &meat, q).iter().map(|v| f * v).collect()
         }),
-        Vcov::Cluster(_) => {
-            let way = ways.unwrap_or(&[]);
+        EtwfeVcov::Clustered => {
             // Clusters numbered in order of first appearance among the rows.
             let mut number: std::collections::HashMap<u32, u32> = std::collections::HashMap::new();
             let codes: Vec<u32> = design
@@ -489,7 +358,7 @@ pub fn estimate_etwfe_glm(
                 .collect();
             let g = number.len();
             let meat = outer_sums(&group_sums(&codes, g), q);
-            let g_factor = if config.ssc.g_adj {
+            let g_factor = if options.ssc.g_adj {
                 (g >= 2).then(|| g as f64 / (g - 1) as f64)
             } else {
                 Some(1.0)
@@ -515,37 +384,21 @@ pub fn estimate_etwfe_glm(
     }
 
     // Terms.
-    let mut terms: Vec<EtwfeGlmTerm> = vec![EtwfeGlmTerm::Intercept];
+    let mut terms: Vec<EtwfeTerm> = vec![EtwfeTerm::Intercept];
     let linear = &layout.terms;
-    terms.extend(
-        linear[..layout.first_cell]
-            .iter()
-            .map(|&t| EtwfeGlmTerm::Term(t)),
-    );
-    terms.extend(
-        layout
-            .slope_cohorts
-            .iter()
-            .map(|&g| EtwfeGlmTerm::Cohort(g)),
-    );
-    terms.extend(
-        layout
-            .slope_periods
-            .iter()
-            .map(|&t| EtwfeGlmTerm::Period(t)),
-    );
-    terms.extend(
-        linear[layout.first_cell..]
-            .iter()
-            .map(|&t| EtwfeGlmTerm::Term(t)),
-    );
-    let coefficients: Vec<EtwfeGlmCoefficient> = terms
+    terms.extend_from_slice(&linear[..layout.first_cell]);
+    terms.extend(layout.slope_cohorts.iter().map(|&g| EtwfeTerm::Cohort(g)));
+    terms.extend(layout.slope_periods.iter().map(|&t| EtwfeTerm::Period(t)));
+    terms.extend_from_slice(&linear[layout.first_cell..]);
+    let coefficients: Vec<EtwfeCoefficient> = terms
         .iter()
         .enumerate()
-        .map(|(j, &term)| EtwfeGlmCoefficient {
+        .map(|(j, &term)| EtwfeCoefficient {
             term,
-            estimate: fit.coefficients[j],
-            std_error: covariance[j * k_all + j].map(|v| v.max(0.0).sqrt()),
+            estimate: fit.coefficients[j].map(|b| {
+                let se = covariance[j * k_all + j].map(|v| v.max(0.0).sqrt());
+                fe_output::estimate(b, se, options.level, Reference::Normal)
+            }),
         })
         .collect();
 
@@ -648,48 +501,40 @@ pub fn estimate_etwfe_glm(
         .enumerate()
         .map(|(a, &term)| {
             let zero = jacobian[a].iter().all(|&v| v == 0.0);
+            let se = if zero {
+                None
+            } else {
+                effect_covariance[a * m + a].map(|v| v.max(0.0).sqrt())
+            };
             EtwfeEffect {
                 term,
-                estimate: sums[a * width + 1] / rows_in[a],
-                std_error: if zero {
-                    None
-                } else {
-                    effect_covariance[a * m + a].map(|v| v.max(0.0).sqrt())
-                },
+                estimate: fe_output::estimate(
+                    sums[a * width + 1] / rows_in[a],
+                    se,
+                    options.level,
+                    Reference::Normal,
+                ),
                 n_rows: count(rows_in[a]),
             }
         })
         .collect();
-    let effect_influence: Vec<Vec<f64>> = jacobian
-        .iter()
-        .map(|row| {
-            let mut out = vec![0.0; n_units];
-            for (j, &v) in row.iter().enumerate() {
-                if v != 0.0
-                    && let Some(psi) = &influence[j]
-                {
-                    for (o, s) in out.iter_mut().zip(psi) {
-                        *o += v * s;
-                    }
-                }
-            }
-            out
-        })
-        .collect();
+    let effect_influence = effect_influence(&jacobian, &influence, n_units);
+    let rule = fe_output::fixest_rule(options.ssc.g_adj);
 
-    Ok(EtwfeGlmResult {
+    Ok(EtwfeFit {
         coefficients,
-        covariance,
+        covariance: Covariance::new(k_all, covariance)?,
         effects,
-        effect_covariance,
-        effect_influence,
-        influence,
+        effect_covariance: Covariance::new(m, effect_covariance)?,
+        effect_influence: fe_output::influence(effect_influence, units.clone(), rule)?,
+        influence: fe_output::influence(influence, units, rule)?,
         df_k: k,
-        units,
+        n_units,
         n_rows: n_fit,
+        removed_singletons: 0,
         excluded_rows,
-        deviance: fit.deviance,
-        iterations: fit.iterations,
+        deviance: Some(fit.deviance),
+        iterations: Some(fit.iterations),
         converged: fit.converged,
     })
 }

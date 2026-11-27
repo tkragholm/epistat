@@ -2,11 +2,9 @@
 //! `fixest::feols` 0.14.2 (`tests/data/generate_twfe_reference.R`).
 
 use epistat_core::InputError;
-use epistat_did::{
-    StaggeredPanel, TwfeConfig, TwfeSpec, did_covariance, did_standard_error, estimate_twfe,
-};
+use epistat_did::{StaggeredPanel, TwfeOptions, TwfeSpec, twfe};
 use epistat_glm::{Absorb, Feols, FixedEffects, Singletons, Ssc, Vcov};
-use epistat_inference::Clusters;
+use epistat_inference::{ClusterRule, Clusters};
 use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
 use serde::Deserialize;
@@ -75,7 +73,7 @@ fn covariate(case: &Case) -> Option<Mat<f64>> {
         .map(|x| Mat::from_fn(x.len(), 1, |i, _| x[i]))
 }
 
-fn config(case: &Case) -> TwfeConfig {
+fn config(case: &Case) -> TwfeOptions {
     let spec = if case.spec.kind == "static" {
         TwfeSpec::Static
     } else {
@@ -84,10 +82,11 @@ fn config(case: &Case) -> TwfeConfig {
             bins: case.spec.lo.zip(case.spec.hi),
         }
     };
-    TwfeConfig {
+    TwfeOptions {
         spec,
         absorb: TIGHT,
         ssc: Ssc::new(),
+        ..TwfeOptions::default()
     }
 }
 
@@ -125,7 +124,7 @@ fn name(case: &Case, period: Option<i64>) -> String {
 fn twfe_matches_fixest() {
     for case in &reference().cases {
         let x = covariate(case);
-        let result = estimate_twfe(&panel(case, x.as_ref()), &config(case)).unwrap();
+        let result = twfe::fit(&panel(case, x.as_ref()), &config(case)).unwrap();
         assert_eq!(result.n_rows, case.nobs, "{}", case.name);
         assert_eq!(result.df_k, case.df_k, "{}", case.name);
         // The terms and covariates in the order of the result, with fixest's
@@ -142,8 +141,13 @@ fn twfe_matches_fixest() {
         let estimates: Vec<Option<f64>> = result
             .terms
             .iter()
-            .map(|t| t.estimate)
-            .chain(result.covariate_coefficients.iter().copied())
+            .map(|t| t.estimate.map(|e| e.estimate))
+            .chain(
+                result
+                    .covariate_coefficients
+                    .iter()
+                    .map(|c| c.map(|e| e.estimate)),
+            )
             .collect();
         let position: Vec<Option<usize>> = labels
             .iter()
@@ -190,7 +194,7 @@ fn twfe_matches_fixest() {
         let pk = case.names.len();
         for (a, &i) in kept.iter().enumerate() {
             for (b, &j) in kept.iter().enumerate() {
-                let got = result.covariance[i * p + j].unwrap();
+                let got = result.covariance.get(i, j).unwrap();
                 let want = case.vcov[position[i].unwrap() * pk + position[j].unwrap()];
                 assert!(
                     (got - want).abs() <= bound[a * kept.len() + b],
@@ -200,7 +204,10 @@ fn twfe_matches_fixest() {
                     labels[j]
                 );
             }
-            let se = result.terms.get(i).and_then(|t| t.std_error);
+            let se = result
+                .terms
+                .get(i)
+                .and_then(|t| t.estimate.and_then(|e| e.se));
             if let Some(se) = se {
                 let want = case.se[position[i].unwrap()];
                 assert!(
@@ -215,8 +222,9 @@ fn twfe_matches_fixest() {
         // fixest's covariance without its small-sample factors. With unit
         // clusters directly; with coarser clusters through the clusters of
         // the units.
-        let unit_cluster: Vec<u32> = result
-            .units
+        let influence = result.influence.as_ref().unwrap();
+        let unit_cluster: Vec<u32> = influence
+            .units()
             .iter()
             .map(|&u| {
                 let row = case.unit.iter().position(|&v| v == u).unwrap();
@@ -224,11 +232,13 @@ fn twfe_matches_fixest() {
             })
             .collect();
         let clusters = Clusters::from_labels(&unit_cluster);
-        let psi: Vec<Vec<f64>> = kept
-            .iter()
-            .map(|&j| result.influence[j].clone().unwrap())
-            .collect();
-        let raw = did_covariance(&psi, &clusters).unwrap();
+        for (a, &j) in kept.iter().enumerate() {
+            assert_eq!(result.influence_of(j), Some(influence.column(a)));
+        }
+        assert_eq!(influence.n_columns(), kept.len());
+        let raw = influence
+            .variance_with(Some(&clusters), ClusterRule::NoSmallSample)
+            .unwrap();
         let factor_free: f64 = {
             // fixest's factor of this covariance over the unadjusted one.
             let g = clusters.count() as f64;
@@ -238,7 +248,7 @@ fn twfe_matches_fixest() {
         for (a, &i) in kept.iter().enumerate() {
             for (b, &j) in kept.iter().enumerate() {
                 let want = case.vcov_unadjusted[position[i].unwrap() * pk + position[j].unwrap()];
-                let got = raw[a * kept.len() + b];
+                let got = raw.get(a, b).unwrap();
                 // The influence functions sum to zero up to rounding, so
                 // centring them changes nothing above the bound.
                 assert!(
@@ -250,11 +260,14 @@ fn twfe_matches_fixest() {
                 );
             }
         }
-        // The diagonal of did_covariance is the square of did_standard_error
-        // up to the rounding of the square root.
-        let se = did_standard_error(&psi[0], &clusters).unwrap();
+        // The stored rule is fixest's factor G / (G - 1), so the influence
+        // gives the reported covariance up to its factor (n - 1) / (n - K).
+        assert_eq!(influence.rule(), ClusterRule::SmallSample);
+        let g = clusters.count() as f64;
+        let adjusted = influence.variance(Some(&clusters)).unwrap();
+        let (got, want) = (adjusted.get(0, 0).unwrap(), raw.get(0, 0).unwrap());
         assert!(
-            (se * se - raw[0]).abs() <= 4.0 * EPS * raw[0],
+            (got - g / (g - 1.0) * want).abs() <= 4.0 * EPS * got,
             "{}",
             case.name
         );
@@ -277,7 +290,7 @@ fn twfe_matches_fixest() {
 /// largest entry.
 fn covariance_bound(case: &Case, x: Option<&Mat<f64>>) -> (Vec<f64>, f64, f64) {
     // The same regression through epistat-glm, for its design and scores.
-    let result = estimate_twfe(&panel(case, x), &config(case)).unwrap();
+    let result = twfe::fit(&panel(case, x), &config(case)).unwrap();
     let t_min = *case.time.iter().min().unwrap();
     let time: Vec<u32> = case
         .time
@@ -317,10 +330,14 @@ fn covariance_bound(case: &Case, x: Option<&Mat<f64>>) -> (Vec<f64>, f64, f64) {
         .unwrap();
     // The wrapper is the plain fit.
     for (j, c) in fit.coefficients.iter().enumerate() {
-        let mine = result.terms.get(j).map_or_else(
-            || result.covariate_coefficients[j - terms.len()],
-            |t| t.estimate,
-        );
+        let mine = result
+            .terms
+            .get(j)
+            .map_or_else(
+                || result.covariate_coefficients[j - terms.len()],
+                |t| t.estimate,
+            )
+            .map(|e| e.estimate);
         assert_eq!(c.map(f64::to_bits), mine.map(f64::to_bits), "{}", case.name);
     }
     let rows = fe.rows();
@@ -449,7 +466,10 @@ fn bins_must_contain_the_reference() {
         reference: -1,
         bins: Some((0, 3)),
     };
-    assert!(estimate_twfe(&panel(case, None), &config).is_err());
+    assert!(matches!(
+        twfe::fit(&panel(case, None), &config),
+        Err(epistat_did::Error::Bins)
+    ));
 }
 
 #[test]
@@ -476,10 +496,21 @@ fn twfe_bits() -> Vec<f64> {
         let x = covariate(case);
         let mut c = config(case);
         c.absorb = Absorb::new();
-        let result = estimate_twfe(&panel(case, x.as_ref()), &c).unwrap();
-        out.extend(result.terms.iter().filter_map(|t| t.estimate));
-        out.extend(result.covariance.iter().flatten());
-        out.extend(result.influence.iter().flatten().flatten().take(40));
+        let result = twfe::fit(&panel(case, x.as_ref()), &c).unwrap();
+        out.extend(
+            result
+                .terms
+                .iter()
+                .filter_map(|t| t.estimate.map(|e| e.estimate)),
+        );
+        out.extend(result.covariance.as_slice().iter().flatten());
+        out.extend(
+            result
+                .influence
+                .iter()
+                .flat_map(|f| (0..f.n_columns()).flat_map(move |j| f.column(j)))
+                .take(40),
+        );
     }
     out
 }
@@ -496,4 +527,36 @@ fn twfe_has_its_recorded_bits() {
         .f64s(&twfe_bits())
         .finish();
     assert_eq!(hash, 5_214_096_018_603_673_576, "recorded hash");
+}
+
+#[test]
+fn the_event_study_holds_the_estimated_terms() {
+    for case in &reference().cases {
+        let x = covariate(case);
+        let fit = twfe::fit(&panel(case, x.as_ref()), &config(case)).unwrap();
+        let Some(reference) = fit.reference else {
+            assert!(matches!(
+                fit.event_study(),
+                Err(epistat_did::Error::Unsupported { .. })
+            ));
+            continue;
+        };
+        let study = fit.event_study().unwrap();
+        let kept: Vec<usize> = (0..fit.terms.len())
+            .filter(|&j| fit.terms[j].estimate.is_some())
+            .collect();
+        assert_eq!(study.reference(), reference, "{}", case.name);
+        assert_eq!(study.coefficients().len(), kept.len(), "{}", case.name);
+        for (a, &i) in kept.iter().enumerate() {
+            let term = &fit.terms[i];
+            assert_eq!(Some(study.relative_periods()[a]), term.relative_period);
+            assert_eq!(
+                study.coefficients()[a].to_bits(),
+                term.estimate.unwrap().estimate.to_bits()
+            );
+            for (b, &j) in kept.iter().enumerate() {
+                assert_eq!(study.covariance().get(a, b), fit.covariance.get(i, j));
+            }
+        }
+    }
 }

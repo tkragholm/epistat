@@ -3,7 +3,7 @@
 Matching for cohort studies. The methods follow MatchIt where it has them:
 nearest-neighbour, optimal, full, subclass, exact, coarsened exact, quick,
 genetic and cardinality matching, with propensity scores, Mahalanobis and
-Euclidean distances, calipers, common support and `mahvars`. Anchors can also
+Euclidean distances, calipers, common support and `mahvars`. Cases can also
 be matched greedily under calipers and constraints on sex, birth date, exact
 strata, family, alive and resident at the index date, and any numeric field.
 
@@ -15,14 +15,16 @@ at the rows of the panel, the input of the trial weights and outcome models of
 with each set's index date from its initiator, and on strata that change
 between periods. The output has the
 pairs or subclasses, matching weights for the ATT, ATC or ATE, a typed reason
-for every excluded candidate, balance before and after matching, effect
+for every excluded control, balance before and after matching, effect
 estimates with matched-set bootstrap and Abadie-Imbens variances, and
 Rosenbaum bounds and E-values: for continuous, binary and censored outcomes in
 matched pairs and sets, with sensitivity values, amplification and the
 interval of the effect under hidden bias.
 
 Seeds come from the caller, and results do not depend on the number of
-threads. Golden hashes pin the matched sets.
+threads. Golden hashes pin the matched sets. Invalid input, such as two
+units with one id or a case whose event is before its birth, is an `Error`
+with a stable code.
 
 A typed builder, `MatchJob`, suits Rust code. A serde `MatchSpec` and
 `run_spec` describe any method as plain values, for callers that read their
@@ -31,19 +33,19 @@ options at run time.
 ```rust,ignore
 use epistat_matching::prelude::*;
 
-let outcome = MatchJob::new_standard(&anchors, &candidates, 42)
+let outcome = MatchJob::new_standard(&cases, &controls, 42)
     .with_ratio(MatchRatio::new(4).expect("non-zero ratio"))
     .with_birth_window(BirthDateWindowDays::new(30).expect("non-negative window"))
     .with_gender_match()
     .with_exact_matches(["region"])
-    .run();
+    .run()?;
 
 let risk_sets = MatchJob::new_transition(&cohort, 42)
     .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
     .with_age_limit(AgeLimitYears::new(6).expect("positive age limit"))
     .with_alive_check()
     .with_resident_check()
-    .run();
+    .run()?;
 ```
 
 The matchers take any record type that implements the crate's traits. A
@@ -52,8 +54,7 @@ rows are records that give the same results as owned ones, so ten million
 units fit in memory.
 
 The `arrow` feature builds records or a `Cohort` from Apache Arrow arrays.
-The `reporting` feature writes the matching summary and the balance tables as
-CSV. The `test-utils` feature adds small fixtures for tests and benchmarks. The
+The `test-utils` feature adds small fixtures for tests and benchmarks. The
 `bench-internals` feature exposes the balance statistics that the benchmarks
 time. The `nightly` feature enables faer's AVX-512 kernels through
 `epistat-linalg`.

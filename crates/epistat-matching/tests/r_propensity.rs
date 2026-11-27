@@ -24,7 +24,12 @@
 mod r_reference;
 
 use chrono::NaiveDate;
-use epistat_matching::prelude::*;
+use epistat_matching::Error;
+use epistat_matching::{
+    BalanceRecord, CommonSupport, CovariateValue, LogisticRegressionConfig,
+    PropensityDistancePreparation, PropensityLink, PropensityScoreConfig,
+    PropensityScoreOutputScale, prepare_propensity_distance_config,
+};
 
 use r_reference::{Versions, reference as load_reference, unit_id as id};
 use serde::Deserialize;
@@ -127,15 +132,15 @@ fn fit_ours(fit: &RFit, options: &Options<'_>) -> PropensityDistancePreparation 
             candidates.push(record);
         }
     }
-    let mut config = PropensityScoreConfig::builder()
-        .output_scale(options.scale)
-        .logistic(
-            LogisticRegressionConfig::builder()
-                .link(options.link)
-                .build(),
-        )
-        .reestimate(options.discard.is_some())
-        .build();
+    let mut config = PropensityScoreConfig {
+        output_scale: options.scale,
+        logistic: LogisticRegressionConfig {
+            link: options.link,
+            ..LogisticRegressionConfig::default()
+        },
+        reestimate: options.discard.is_some(),
+        ..PropensityScoreConfig::default()
+    };
     config.sampling_weights = options.weights.map(|weights| {
         weights
             .iter()
@@ -143,7 +148,7 @@ fn fit_ours(fit: &RFit, options: &Options<'_>) -> PropensityDistancePreparation 
             .map(|(idx, w)| (id(idx), *w))
             .collect()
     });
-    prepare_propensity_distance_config_with_discard(&anchors, &candidates, &config, options.discard)
+    prepare_propensity_distance_config(&anchors, &candidates, &config, options.discard)
         .expect("the fit succeeds")
 }
 
@@ -362,10 +367,10 @@ fn invalid_sampling_weights_are_errors() {
             ),
             ..PropensityScoreConfig::default()
         };
-        let err = prepare_propensity_distance_config(&anchors, &candidates, &config)
+        let err = prepare_propensity_distance_config(&anchors, &candidates, &config, None)
             .expect_err("an invalid weight is refused");
         assert!(
-            matches!(err, EstimationError::InvalidSamplingWeight { ref record_id } if record_id == "u7"),
+            matches!(err, Error::InvalidSamplingWeight { ref id } if id == "u7"),
             "{err:?}"
         );
     }
@@ -420,9 +425,9 @@ fn reestimated_scores_match_matchit() {
                 );
                 let mut ours_discarded: Vec<String> = ours
                     .estimate
-                    .discarded_anchors
+                    .discarded_cases
                     .iter()
-                    .chain(&ours.estimate.discarded_candidates)
+                    .chain(&ours.estimate.discarded_controls)
                     .cloned()
                     .collect();
                 ours_discarded.sort();

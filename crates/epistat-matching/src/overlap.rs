@@ -58,12 +58,12 @@ pub(crate) fn finite_bounds(scores: impl IntoIterator<Item = f64>) -> Option<(f6
 }
 
 impl CommonSupport {
-    /// Whether the policy discards anchors, or cases, outside the overlap.
+    /// Whether the policy discards cases, or cases, outside the overlap.
     pub(crate) fn trims_anchors(self) -> bool {
         matches!(self, Self::Treated | Self::Both)
     }
 
-    /// Whether the policy discards candidates outside the overlap.
+    /// Whether the policy discards controls outside the overlap.
     pub(crate) fn trims_candidates(self) -> bool {
         matches!(self, Self::Control | Self::Both)
     }

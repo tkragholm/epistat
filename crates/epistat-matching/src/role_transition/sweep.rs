@@ -1046,7 +1046,7 @@ mod tests {
     type Member = RoleTransitionRecord<BaseRecord>;
 
     /// The default policy's rules without its token, so that matching scans
-    /// every candidate as it does for a policy of the caller's.
+    /// every control as it does for a policy of the caller's.
     struct Scanned;
 
     impl<R: RoleIndexedRecord> RiskSetPolicy<R> for Scanned {}
@@ -1143,15 +1143,17 @@ mod tests {
             .with_exact_matches(keys[..setup.strata].iter().copied());
         let job = job.with_risk_set_policy(policy);
         match (setup.alive, setup.rounds) {
-            (0, false) => job.run(),
+            (0, false) => job.run().expect("a valid job"),
             (0, true) => job
                 .with_strategy(Rounds(RandomSelection::seeded(seed)))
-                .run(),
-            (1, _) => job.with_alive_check().run(),
+                .run()
+                .expect("a valid job"),
+            (1, _) => job.with_alive_check().run().expect("a valid job"),
             _ => job
                 .with_alive_check()
                 .with_alive_check_by(emigration as fn(&Member) -> Option<NaiveDate>)
-                .run(),
+                .run()
+                .expect("a valid job"),
         }
     }
 
@@ -1357,26 +1359,30 @@ mod tests {
                 .with_resident_spells(spells)
                 .with_constraints(calipers())
                 .with_risk_set_policy(policy)
-                .run(),
+                .run()
+                .expect("a valid job"),
             (_, 0 | 1) => base
                 .with_alive_check()
                 .with_resident_check_by(resident)
                 .with_constraints(calipers())
                 .with_risk_set_policy(policy)
-                .run(),
+                .run()
+                .expect("a valid job"),
             // The caliper first, then residence and alive.
             (0, _) => base
                 .with_constraints(calipers())
                 .with_resident_spells(spells)
                 .with_alive_check()
                 .with_risk_set_policy(policy)
-                .run(),
+                .run()
+                .expect("a valid job"),
             (_, _) => base
                 .with_constraints(calipers())
                 .with_resident_check_by(resident)
                 .with_alive_check()
                 .with_risk_set_policy(policy)
-                .run(),
+                .run()
+                .expect("a valid job"),
         }
     }
 
@@ -1448,9 +1454,11 @@ mod tests {
                         .with_resident_spells(spells)
                         .with_alive_check();
                     if policy {
-                        job.run()
+                        job.run().expect("a valid job")
                     } else {
-                        job.with_risk_set_policy(Scanned).run()
+                        job.with_risk_set_policy(Scanned)
+                            .run()
+                            .expect("a valid job")
                     }
                 };
                 assert_eq!(format!("{:?}", job(true)), format!("{:?}", job(false)));
@@ -1460,9 +1468,11 @@ mod tests {
                         .with_age_limit(AgeLimitYears::new(6).expect("age limit"))
                         .with_constraints(vec![caliper_on_field::<Member>("parent_year", 1.0)]);
                     if policy {
-                        job.run()
+                        job.run().expect("a valid job")
                     } else {
-                        job.with_risk_set_policy(Scanned).run()
+                        job.with_risk_set_policy(Scanned)
+                            .run()
+                            .expect("a valid job")
                     }
                 };
                 assert_eq!(
@@ -1498,7 +1508,8 @@ mod tests {
         let before = SWEPT_RUNS.with(std::cell::Cell::get);
         let outcome = MatchJob::new_transition(&people, 3)
             .with_risk_set_policy(Entered)
-            .run();
+            .run()
+            .expect("a valid job");
         assert_eq!(SWEPT_RUNS.with(std::cell::Cell::get), before);
         assert_ne!(outcome.pairs.len(), 0);
     }
@@ -1511,13 +1522,16 @@ mod tests {
         let before = SWEPT_RUNS.with(std::cell::Cell::get);
         let _ = MatchJob::new_transition(&people, 3)
             .with_resident_check_by(|_: &Member, _| true)
-            .run();
+            .run()
+            .expect("a valid job");
         let _ = MatchJob::new_transition(&people, 3)
             .with_unique_by_key(Some("region".into()))
-            .run();
+            .run()
+            .expect("a valid job");
         let _ = MatchJob::new_transition(&people, 3)
             .with_strategy(DeterministicSelection)
-            .run();
+            .run()
+            .expect("a valid job");
         assert_eq!(SWEPT_RUNS.with(std::cell::Cell::get), before);
     }
 

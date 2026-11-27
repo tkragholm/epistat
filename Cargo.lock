@@ -751,10 +751,9 @@ dependencies = [
 
 [[package]]
 name = "epistat-matching"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "arrow-array",
- "bon",
  "chrono",
  "criterion",
  "epistat-core",
@@ -777,6 +776,7 @@ dependencies = [
  "rustc-hash",
  "serde",
  "serde_json",
+ "thiserror 2.0.21",
  "trybuild",
 ]
 
@@ -808,7 +808,7 @@ dependencies = [
 
 [[package]]
 name = "epistat-register"
-version = "0.1.2"
+version = "0.2.0"
 dependencies = [
  "epistat-core",
  "epistat-optim",
@@ -851,12 +851,13 @@ dependencies = [
 
 [[package]]
 name = "epistat-sequences"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "epistat-core",
  "epistat-optim",
  "epistat-rng",
  "epistat-stats",
+ "epistat-testkit",
  "rayon",
  "thiserror 2.0.21",
 ]

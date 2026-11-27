@@ -3,24 +3,40 @@ use chrono::NaiveDate;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-/// A unit that can be matched: an identifier, a birth date and the values the constraints and distances read.
+/// The empty map of strata that [`MatchingRecord::strata`] gives by default.
+fn empty_strata() -> &'static HashMap<String, String> {
+    static EMPTY: std::sync::LazyLock<HashMap<String, String>> =
+        std::sync::LazyLock::new(HashMap::new);
+    &EMPTY
+}
+
+/// A unit that can be matched: an identifier, a birth date and the values the
+/// constraints and distances read.
+///
+/// Three methods are required: [`id`](Self::id),
+/// [`birth_date`](Self::birth_date) and [`stratum`](Self::stratum). The rest
+/// have defaults for a record without numeric fields, slots, a unique key or
+/// dates of death, emigration and entry. A type that wraps a record forwards
+/// every method with [`delegate_matching_record!`](crate::delegate_matching_record),
+/// so a default of the trait never hides a value of the inner record.
 pub trait MatchingRecord: Send + Sync {
     /// Unique identifier for the record.
     fn id(&self) -> &str;
     /// The individual's birth date (used for caliper matching).
     fn birth_date(&self) -> NaiveDate;
-    /// Map of categorical values used for exact strata matching.
+    /// Every stratum of the record by key, for a caller that wants them all.
     ///
-    /// The matchers read one value at a time through [`stratum`](Self::stratum).
-    fn strata(&self) -> &HashMap<String, String>;
-    /// The value of the stratum `key`, `None` when the record has none.
-    ///
-    /// The default reads [`strata`](Self::strata). A record that keeps its
-    /// strata elsewhere, as a [`Cohort`](crate::Cohort) row keeps them in
-    /// columns, overrides it, and the matchers then never build the map.
-    fn stratum(&self, key: &str) -> Option<&str> {
-        self.strata().get(key).map(String::as_str)
+    /// The matchers read one value at a time through [`stratum`](Self::stratum)
+    /// and never this. The default is an empty map, for a record that keeps
+    /// its strata elsewhere, as a [`Cohort`](crate::Cohort) row keeps them in
+    /// columns.
+    fn strata(&self) -> &HashMap<String, String> {
+        empty_strata()
     }
+    /// The value of the stratum `key`, `None` when the record has none. This
+    /// is what exact matching, the trials' period strata and the balance
+    /// statistics read.
+    fn stratum(&self, key: &str) -> Option<&str>;
     /// A named numeric field, for [`crate::constraints::Caliper`] constraints.
     ///
     /// `strata()` carries categorical values for exact matching. This carries
@@ -152,6 +168,10 @@ impl MatchingRecord for BaseRecord {
         &self.id
     }
 
+    fn stratum(&self, key: &str) -> Option<&str> {
+        self.strata.get(key).map(String::as_str)
+    }
+
     fn birth_date(&self) -> NaiveDate {
         self.birth_date
     }
@@ -184,6 +204,10 @@ impl MatchingRecord for BaseRecord {
 impl MatchingRecord for BalanceRecord {
     fn id(&self) -> &str {
         self.core.id.as_str()
+    }
+
+    fn stratum(&self, key: &str) -> Option<&str> {
+        self.core.stratum(key)
     }
 
     fn birth_date(&self) -> NaiveDate {
@@ -502,23 +526,25 @@ mod tests {
             .with_ratio(ratio)
             .with_constraints(vec![caliper_on_field("mother_birth_year", 1.0)])
             .with_resident_check()
-            .run();
+            .run()
+            .expect("a valid job");
         let through_macro = MatchJob::new_transition(&wrapped, 42)
             .with_ratio(ratio)
             .with_constraints(vec![caliper_on_field("mother_birth_year", 1.0)])
             .with_resident_check()
-            .run();
+            .run()
+            .expect("a valid job");
 
         assert_eq!(direct.pairs.len(), 1);
         assert_eq!(direct.pairs[0].control_id, "near");
         assert_eq!(through_macro.pairs.len(), direct.pairs.len());
         assert_eq!(
-            through_macro.pairs[0].anchor_id(),
-            direct.pairs[0].anchor_id()
+            through_macro.pairs[0].case_id.as_str(),
+            direct.pairs[0].case_id.as_str()
         );
         assert_eq!(
-            through_macro.pairs[0].comparator_id(),
-            direct.pairs[0].comparator_id()
+            through_macro.pairs[0].control_id.as_str(),
+            direct.pairs[0].control_id.as_str()
         );
         assert_eq!(through_macro.matched_cases, direct.matched_cases);
         assert_eq!(through_macro.unmatched_cases, direct.unmatched_cases);

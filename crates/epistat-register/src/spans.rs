@@ -41,21 +41,8 @@
     reason = "row numbers are checked against the u32 limit before they are narrowed"
 )]
 
-use crate::RegisterError;
-
-/// Refuse columns of different lengths, naming the first that differs from the
-/// first column.
-fn check_lengths(columns: &[(&str, usize)]) -> Result<(), RegisterError> {
-    let Some(&(reference, expected)) = columns.first() else {
-        return Ok(());
-    };
-    match columns.iter().find(|&&(_, len)| len != expected) {
-        Some(&(name, len)) => Err(RegisterError::input(format!(
-            "columns differ in length: {name} has {len} values against {expected} in {reference}"
-        ))),
-        None => Ok(()),
-    }
-}
+use crate::Error;
+use crate::error::{length, row_count};
 
 /// The merged spans of a sorted set of intervals.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -64,6 +51,35 @@ pub struct MergedSpans {
     pub first_row: Vec<u32>,
     /// For each span, the first row whose end is the latest end of the span.
     pub last_row: Vec<u32>,
+}
+
+impl MergedSpans {
+    /// The start and the end of each span: the start of its first row and the
+    /// end of its last row, the row that holds the latest end.
+    ///
+    /// `start` and `end` are the columns the spans were merged from.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] when the columns differ in length, and
+    /// [`Error::Invalid`] when a span names a row beyond them.
+    pub fn bounds(&self, start: &[i64], end: &[i64]) -> Result<(Vec<i64>, Vec<i64>), Error> {
+        length("end", start.len(), end.len())?;
+        length("last_row", self.first_row.len(), self.last_row.len())?;
+        let row = |row: u32| {
+            let row = row as usize;
+            (row < start.len())
+                .then_some(row)
+                .ok_or_else(|| Error::invalid(format!("a span names row {row} of {}", start.len())))
+        };
+        let mut starts = Vec::with_capacity(self.first_row.len());
+        let mut ends = Vec::with_capacity(self.first_row.len());
+        for (&first, &last) in self.first_row.iter().zip(&self.last_row) {
+            starts.push(start[row(first)?]);
+            ends.push(end[row(last)?]);
+        }
+        Ok((starts, ends))
+    }
 }
 
 /// Merge intervals sorted by key, start and end.
@@ -75,7 +91,7 @@ pub struct MergedSpans {
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when the columns differ in length, the first row
+/// [`Error::Input`] when the columns differ in length, the first row
 /// does not begin a key, a row has an end before its start, or there are more
 /// rows than a `u32` row number holds.
 pub fn merge_sorted_spans(
@@ -83,22 +99,19 @@ pub fn merge_sorted_spans(
     start: &[i64],
     end: &[i64],
     grace: i64,
-) -> Result<MergedSpans, RegisterError> {
+) -> Result<MergedSpans, Error> {
     let n = start.len();
-    check_lengths(&[("start", n), ("end", end.len()), ("new_key", new_key.len())])?;
-    if u32::try_from(n).is_err() {
-        return Err(RegisterError::input(
-            "more rows than a UInt32 row number holds",
-        ));
-    }
+    length("end", n, end.len())?;
+    length("new_key", n, new_key.len())?;
+    row_count("start", n)?;
     if n == 0 {
         return Ok(MergedSpans::default());
     }
     if !new_key[0] {
-        return Err(RegisterError::input("the first row must begin a key"));
+        return Err(Error::invalid("the first row must begin a key"));
     }
     if let Some(row) = (0..n).find(|&row| end[row] < start[row]) {
-        return Err(RegisterError::input(format!(
+        return Err(Error::invalid(format!(
             "row {row} has an end before its start"
         )));
     }
@@ -187,6 +200,16 @@ mod tests {
             merge_sorted_spans(&[], &[], &[], 0).unwrap(),
             MergedSpans::default()
         );
+    }
+
+    #[test]
+    fn bounds_give_the_start_and_the_latest_end_of_each_span() {
+        let start = [0, 1, 20];
+        let end = [10, 3, 25];
+        let m = merge_sorted_spans(&[true, false, false], &start, &end, 0).unwrap();
+        assert_eq!(m.bounds(&start, &end).unwrap(), (vec![0, 20], vec![10, 25]));
+        assert!(m.bounds(&start[..2], &end[..2]).is_err());
+        assert!(m.bounds(&start, &end[..2]).is_err());
     }
 
     #[test]

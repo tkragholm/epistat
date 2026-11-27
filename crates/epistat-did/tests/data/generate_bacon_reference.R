@@ -1,4 +1,4 @@
-# Reference values for epistat_did::bacon_decomposition: bacondecomp 0.1.1
+# Reference values for epistat_did::bacon::decompose: bacondecomp 0.1.1
 # (CRAN) on a simulated balanced panel with an always-treated group and on
 # the package's castle data, without and with time-varying covariates, and
 # the static TWFE coefficient of fixest 0.14.2 that the weights reproduce.

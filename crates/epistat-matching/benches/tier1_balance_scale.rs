@@ -19,9 +19,10 @@ mod common;
 use chrono::NaiveDate;
 use common::{Lines, Rng};
 use epistat_matching::{
-    BalanceReportOptions, BalanceWeights, Cohort, CohortRow, Estimand, MatchedPair, RapidHashMap,
-    UnitWeightSet, balance_summary,
+    BalanceReportOptions, BalanceWeights, Cohort, CohortRow, Estimand, MatchedPair, UnitWeightSet,
+    balance_summary,
 };
+use rapidhash::RapidHashMap;
 
 const SEED: u64 = 20_261_126;
 const REGIONS: [&str; 5] = ["north", "central", "south", "zealand", "capital"];
@@ -89,7 +90,7 @@ fn main() {
             _ => controls.push(*row),
         }
     }
-    let weights = BalanceWeights::new(Estimand::Att, UnitWeightSet { anchor, candidate })
+    let weights = BalanceWeights::new(Estimand::Att, UnitWeightSet::new(anchor, candidate))
         .with_pairs(pairs)
         .with_discarded((0..n).filter(|i| i % 97 == 5).map(id));
     let options = BalanceReportOptions::default();

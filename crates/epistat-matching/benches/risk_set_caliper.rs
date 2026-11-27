@@ -13,6 +13,7 @@ mod common;
 
 use chrono::{Days, NaiveDate};
 use common::{Lcg, Person, Rec};
+use epistat_matching::RiskSetPolicy;
 use epistat_matching::constraints::{MissingPolicy, ResidenceSpell, caliper_on_field};
 use epistat_matching::prelude::*;
 use epistat_matching::{AtRiskSpan, DefaultRiskSetPolicy};
@@ -99,7 +100,8 @@ fn main() {
                 caliper_on_field::<Rec>("parent_year", 5.0).on_missing(MissingPolicy::Refuse),
             ])
             .with_risk_set_policy(Own { until: &until })
-            .run();
+            .run()
+            .expect("a valid job");
         let elapsed = start.elapsed().as_secs_f64();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         format!("{outcome:?}").hash(&mut hasher);

@@ -6,7 +6,7 @@
 
 use epistat_register::LeapBirthday;
 use epistat_register::events::{
-    CaseDate, ConfirmBy, EventRows, Lookback, Outcome, PersonWindows, PriorStatus, Rule, evaluate,
+    CaseDate, ConfirmBy, EventRows, Lookback, PersonWindows, PriorStatus, Rule, evaluate,
 };
 use epistat_testkit::{Fingerprint, load_json};
 use serde::Deserialize;
@@ -73,7 +73,7 @@ fn status(name: &str) -> PriorStatus {
     }
 }
 
-fn run(r: &Reference) -> Vec<Vec<Outcome>> {
+fn run(r: &Reference) -> epistat_register::events::Outcomes {
     let persons = r.entry.len();
     let mut offsets = vec![0_usize; persons + 1];
     for &p in &r.person {

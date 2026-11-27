@@ -1,4 +1,5 @@
 use super::*;
+use crate::person_time::days_from_civil;
 
 const MARCH1: LeapBirthday = LeapBirthday::March1;
 
@@ -28,7 +29,7 @@ fn run(
     };
     evaluate(&rows, &windows, rules)
         .unwrap()
-        .into_iter()
+        .iter()
         .map(|per_person| per_person[0])
         .collect()
 }

@@ -1,6 +1,6 @@
 //! Dense inversion, with a generalised inverse when the matrix is singular.
 
-use super::EstimationError;
+use crate::Error;
 use epistat_linalg::eigen::pinv;
 use epistat_linalg::{Attempt, Mat, MatRef, Method, inverse};
 
@@ -19,10 +19,10 @@ const MIN_PIVOT: f64 = 1e-14;
 pub(super) fn invert_or_generalise(
     matrix: &[f64],
     relative_tolerance: f64,
-) -> Result<(Vec<f64>, usize), EstimationError> {
-    let dimension = to_dimension(matrix.len()).ok_or(EstimationError::InvalidCovarianceMatrix)?;
+) -> Result<(Vec<f64>, usize), Error> {
+    let dimension = to_dimension(matrix.len()).ok_or(Error::InvalidCovariance)?;
     if dimension == 0 || matrix.iter().any(|value| !value.is_finite()) {
-        return Err(EstimationError::InvalidCovarianceMatrix);
+        return Err(Error::InvalidCovariance);
     }
     let largest = matrix
         .iter()
@@ -42,12 +42,12 @@ pub(super) fn invert_or_generalise(
 pub(super) fn pseudo_inverse(
     matrix: &[f64],
     relative_tolerance: f64,
-) -> Result<(Vec<f64>, usize), EstimationError> {
-    let dimension = to_dimension(matrix.len()).ok_or(EstimationError::InvalidCovarianceMatrix)?;
+) -> Result<(Vec<f64>, usize), Error> {
+    let dimension = to_dimension(matrix.len()).ok_or(Error::InvalidCovariance)?;
     if dimension == 0 || matrix.iter().any(|value| !value.is_finite()) {
-        return Err(EstimationError::InvalidCovarianceMatrix);
+        return Err(Error::InvalidCovariance);
     }
-    pinv(matrix, dimension, relative_tolerance).ok_or(EstimationError::InvalidCovarianceMatrix)
+    pinv(matrix, dimension, relative_tolerance).ok_or(Error::InvalidCovariance)
 }
 
 fn row_major(matrix: &Mat<f64>, dimension: usize) -> Vec<f64> {

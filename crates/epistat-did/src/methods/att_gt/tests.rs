@@ -723,32 +723,3 @@ fn bad_columns_are_input_errors() {
         Some(built.map(|fit| fit.cells().len()))
     });
 }
-
-#[test]
-fn the_codes_of_the_errors_are_unique() {
-    epistat_testkit::assert_codes_unique(
-        "did",
-        &[
-            Error::Unsupported { what: "x" },
-            Error::NoEstimableCells,
-            Error::NoNeverTreated,
-            Error::SmallNeverTreatedGroup {
-                per_period: 1.0,
-                required: 6,
-            },
-            Error::CellFailed {
-                group: 2,
-                time: 3,
-                base: 1,
-                reason: SkipReason::NoTreated,
-            },
-            Error::NoPrePeriods { group: 2 },
-            Error::NoPostPeriods { group: 2 },
-            Error::NoInfluence,
-            Error::NoPostTreatmentCells,
-            Error::NoPreTreatmentCells,
-            Error::Singular,
-            Error::NotFinite,
-        ],
-    );
-}

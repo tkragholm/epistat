@@ -43,11 +43,11 @@
 //! end of the run of its new count, which changes the order among equal counts.
 //!
 //! The partition depends on the order of the units, and for the updating method
-//! on the order of the arcs out of a unit. Units are taken anchors first, then
-//! candidates, each in the order given. The arcs out of a unit go to the
-//! nearest candidates, then the nearest anchors, then the nearest of either to
+//! on the order of the arcs out of a unit. Units are taken cases first, then
+//! controls, each in the order given. The arcs out of a unit go to the
+//! nearest controls, then the nearest cases, then the nearest of either to
 //! fill the size constraint, each nearest first. With the treated units as
-//! anchors and the data ordered treated first this is the order in which
+//! cases and the data ordered treated first this is the order in which
 //! `quickmatch` meets them under `matchit()`, where the factor level of the
 //! controls comes before that of the treated. The tie order among units at
 //! exactly equal distance is not reproduced: `quickmatch` leaves it to the
@@ -80,18 +80,18 @@
 //! does not depend on the number of threads.
 //!
 //! The weights are those of full matching and subclassification: for the effect
-//! in the anchors an anchor weighs 1 and a candidate weighs the anchor share of
-//! its subclass over the candidate share, and likewise for the other effects.
+//! in the cases an case weighs 1 and a control weighs the case share of
+//! its subclass over the control share, and likewise for the other effects.
 //! MatchIt rescales the weights of each group to sum to the number of its kept
 //! units.
 
 use super::exact::{SubclassedUnits, stratum_numbers, unit_ids};
 use super::records::MatchingRecord;
 use super::subclassification::build_subclass_summaries;
+use crate::Error;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
-use std::fmt;
 
 const NONE: u32 = u32::MAX;
 const LEAF: usize = 16;
@@ -116,12 +116,14 @@ pub enum SeedMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct QuickMatchOptions {
-    /// Fewest anchors in a subclass, at least 1.
-    pub min_anchors: usize,
-    /// Fewest candidates in a subclass, at least 1.
-    pub min_candidates: usize,
+    /// Fewest cases in a subclass, at least 1. `min_anchors` in 0.2.
+    #[serde(alias = "min_anchors")]
+    pub min_cases: usize,
+    /// Fewest controls in a subclass, at least 1. `min_candidates` in 0.2.
+    #[serde(alias = "min_candidates")]
+    pub min_controls: usize,
     /// Fewest units in a subclass, `size_constraint` of `quickmatch()`. The
-    /// default is `min_anchors + min_candidates`.
+    /// default is `min_cases + min_controls`.
     pub size: Option<usize>,
     /// Widest distance between two units of a subclass, `caliper` of
     /// `quickmatch()` in the units of the distance.
@@ -133,101 +135,14 @@ pub struct QuickMatchOptions {
 impl Default for QuickMatchOptions {
     fn default() -> Self {
         Self {
-            min_anchors: 1,
-            min_candidates: 1,
+            min_cases: 1,
+            min_controls: 1,
             size: None,
             caliper: None,
             seed_method: SeedMethod::default(),
         }
     }
 }
-
-/// Why generalised full matching could not run.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum QuickMatchError {
-    /// The number of coordinates is 0, or the coordinates do not fill whole
-    /// units.
-    Shape,
-    /// A coordinate is not a finite number.
-    NonFinite {
-        /// Position of the unit, anchors first.
-        unit: usize,
-    },
-    /// A minimum count is 0, which would leave subclasses without a group and
-    /// weights that are undefined.
-    MinimumBelowOne,
-    /// The size constraint is smaller than the two minimum counts together.
-    SizeBelowMinimums,
-    /// The caliper is not a positive finite number.
-    InvalidCaliper,
-    /// A group has fewer units than a subclass must hold of it, or all units
-    /// are fewer than the size constraint.
-    TooFewUnits {
-        /// The id of the stratum, if the units were stratified.
-        stratum: Option<String>,
-    },
-    /// No unit fits a subclass under the caliper.
-    NoSubclass,
-    /// A unit has no coordinates, or the wrong number of them.
-    MissingCoordinates {
-        /// Id of the unit.
-        id: String,
-    },
-    /// A unit lacks a value of an exact matching variable.
-    MissingValue {
-        /// Id of the unit.
-        id: String,
-        /// Name of the variable.
-        variable: String,
-    },
-    /// No stratum holds units of both groups.
-    NoSharedStratum,
-    /// There are more units than the search can index.
-    TooManyUnits,
-}
-
-impl fmt::Display for QuickMatchError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Shape => write!(f, "the coordinates do not make whole units"),
-            Self::NonFinite { unit } => {
-                write!(f, "unit {unit} has a coordinate that is not finite")
-            }
-            Self::MinimumBelowOne => write!(
-                f,
-                "a subclass must hold at least one anchor and one candidate; \
-                 use minimums of 1 or more"
-            ),
-            Self::SizeBelowMinimums => write!(
-                f,
-                "the size constraint is smaller than the minimum anchors and candidates together"
-            ),
-            Self::InvalidCaliper => write!(f, "the caliper must be positive and finite"),
-            Self::TooFewUnits { stratum: None } => write!(
-                f,
-                "too few units to make one subclass with the constraints given"
-            ),
-            Self::TooFewUnits {
-                stratum: Some(stratum),
-            } => write!(
-                f,
-                "the stratum {stratum} has too few units to make one subclass \
-                 with the constraints given"
-            ),
-            Self::NoSubclass => write!(f, "no unit fits a subclass within the caliper"),
-            Self::MissingCoordinates { id } => {
-                write!(f, "unit {id} has no coordinates of the right length")
-            }
-            Self::MissingValue { id, variable } => {
-                write!(f, "unit {id} has no value for the variable {variable}")
-            }
-            Self::NoSharedStratum => write!(f, "no stratum holds units of both groups"),
-            Self::TooManyUnits => write!(f, "there are more units than can be indexed"),
-        }
-    }
-}
-
-impl std::error::Error for QuickMatchError {}
 
 // ---------------------------------------------------------------------------
 // Nearest neighbour search
@@ -691,47 +606,47 @@ fn choose_seeds(graph: &Graph, n: usize, method: SeedMethod) -> (Vec<u32>, Vec<u
 /// each holds, or `None` for a unit that fits no subclass.
 ///
 /// `points` holds `dim` coordinates per unit in unit order and `anchor` says
-/// which units are anchors. Distances are Euclidean.
+/// which units are cases. Distances are Euclidean.
 ///
 /// # Errors
 ///
-/// A [`QuickMatchError`] when the input is malformed, when a group has too few
+/// A [`Error`] when the input is malformed, when a group has too few
 /// units, or when the caliper leaves no subclass.
 pub fn quick_clusters(
     points: &[f64],
     dim: usize,
     anchor: &[bool],
     options: &QuickMatchOptions,
-) -> Result<Vec<Option<usize>>, QuickMatchError> {
+) -> Result<Vec<Option<usize>>, Error> {
     let n = anchor.len();
     if dim == 0 || dim > 255 || points.len() != n * dim {
-        return Err(QuickMatchError::Shape);
+        return Err(Error::Coordinates);
     }
     let Ok(n32) = u32::try_from(n) else {
-        return Err(QuickMatchError::TooManyUnits);
+        return Err(Error::TooManyUnits);
     };
     if let Some(bad) = points.iter().position(|value| !value.is_finite()) {
-        return Err(QuickMatchError::NonFinite { unit: bad / dim });
+        return Err(Error::NonFiniteCoordinate { unit: bad / dim });
     }
-    if options.min_anchors == 0 || options.min_candidates == 0 {
-        return Err(QuickMatchError::MinimumBelowOne);
+    if options.min_cases == 0 || options.min_controls == 0 {
+        return Err(Error::SubclassMinimum);
     }
-    let minimum_total = options.min_anchors + options.min_candidates;
+    let minimum_total = options.min_cases + options.min_controls;
     let size = options.size.unwrap_or(minimum_total);
     if size < minimum_total {
-        return Err(QuickMatchError::SizeBelowMinimums);
+        return Err(Error::SizeBelowMinimums);
     }
     if let Some(caliper) = options.caliper
         && !(caliper.is_finite() && caliper > 0.0)
     {
-        return Err(QuickMatchError::InvalidCaliper);
+        return Err(Error::InvalidCaliper);
     }
     let anchors = anchor.iter().filter(|flag| **flag).count();
-    if anchors < options.min_anchors || n - anchors < options.min_candidates || n < size {
-        return Err(QuickMatchError::TooFewUnits { stratum: None });
+    if anchors < options.min_cases || n - anchors < options.min_controls || n < size {
+        return Err(Error::TooFewUnits { stratum: None });
     }
     let constraints = Constraints {
-        minimum: [options.min_anchors, options.min_candidates],
+        minimum: [options.min_cases, options.min_controls],
         size,
         radius: options.caliper.map(|caliper| caliper / 2.0),
     };
@@ -771,7 +686,7 @@ pub fn quick_clusters(
     let graph = build_graph(points, dim, anchor, &constraints, &all, &by_group);
     let (seeds, cluster) = choose_seeds(&graph, n, options.seed_method);
     if seeds.is_empty() {
-        return Err(QuickMatchError::NoSubclass);
+        return Err(Error::NoSubclass);
     }
 
     // Units in no neighbourhood join the nearest seed.
@@ -834,13 +749,6 @@ pub fn quick_clusters(
 // Units with identifiers
 // ---------------------------------------------------------------------------
 
-/// Result of generalised full matching.
-///
-/// Subclasses are numbered from 0 in the order of the first unit each holds,
-/// anchors first, then candidates, each in the order given. A unit that fits no
-/// subclass is dropped.
-pub type QuickMatchOutcome = SubclassedUnits;
-
 /// What one stratum of the units gave.
 enum StratumLabels {
     /// The stratum lacks one of the groups.
@@ -849,10 +757,10 @@ enum StratumLabels {
     Labels(Vec<Option<usize>>),
     /// No subclass can be made in the stratum, for the reason given: too few
     /// units, or no unit that fits a subclass under the caliper.
-    Lost(QuickMatchError),
+    Lost(Error),
 }
 
-/// Generalised full matching of anchors and candidates.
+/// Generalised full matching of cases and controls.
 ///
 /// `coordinates` gives the point of a unit: one number for a score, or the
 /// coordinates of a covariate distance made Euclidean, all of length
@@ -866,7 +774,7 @@ enum StratumLabels {
 ///
 /// # Errors
 ///
-/// A [`QuickMatchError`] when a unit lacks coordinates or an exact variable, or
+/// A [`Error`] when a unit lacks coordinates or an exact variable, or
 /// when nothing can be matched. A stratum that is too small for the constraints,
 /// or in which no unit fits a subclass under the caliper, loses its units, which
 /// are dropped; the call fails only when no stratum has a subclass, with the
@@ -878,7 +786,7 @@ pub fn quick_match_subclasses<'c, R, V, F>(
     dimension: usize,
     exact: &[V],
     options: &QuickMatchOptions,
-) -> Result<QuickMatchOutcome, QuickMatchError>
+) -> Result<SubclassedUnits, Error>
 where
     R: MatchingRecord,
     V: AsRef<str>,
@@ -892,13 +800,13 @@ where
             &candidates[position - anchors.len()]
         }
     };
-    let is_anchor = |position: usize| position < anchors.len();
+    let is_case = |position: usize| position < anchors.len();
 
     let (strata, stratum_count): (Vec<u32>, usize) = if exact.is_empty() {
         (vec![0; unit_count], 1)
     } else {
         stratum_numbers(anchors, candidates, exact).map_err(|(position, variable)| {
-            QuickMatchError::MissingValue {
+            Error::MissingValue {
                 id: unit(position).id().to_string(),
                 variable: exact[variable].as_ref().to_string(),
             }
@@ -921,13 +829,13 @@ where
     }
 
     let stratified = !exact.is_empty();
-    let results: Vec<Result<StratumLabels, QuickMatchError>> = (0..stratum_count)
+    let results: Vec<Result<StratumLabels, Error>> = (0..stratum_count)
         .into_par_iter()
         .map(|stratum| {
             let positions = &order[start[stratum]..start[stratum + 1]];
             // Anchors come first in position order.
-            let both = positions.first().is_some_and(|p| is_anchor(*p))
-                && positions.last().is_some_and(|p| !is_anchor(*p));
+            let both = positions.first().is_some_and(|p| is_case(*p))
+                && positions.last().is_some_and(|p| !is_case(*p));
             if !both {
                 return Ok(StratumLabels::Absent);
             }
@@ -936,22 +844,20 @@ where
                 let row = unit(*position);
                 let point = coordinates(row)
                     .filter(|point| point.len() == dimension)
-                    .ok_or_else(|| QuickMatchError::MissingCoordinates {
+                    .ok_or_else(|| Error::MissingCoordinates {
                         id: row.id().to_string(),
                     })?;
                 points.extend_from_slice(point);
             }
-            let flags: Vec<bool> = positions.iter().map(|p| is_anchor(*p)).collect();
+            let flags: Vec<bool> = positions.iter().map(|p| is_case(*p)).collect();
             match quick_clusters(&points, dimension, &flags, options) {
                 Ok(labels) => Ok(StratumLabels::Labels(labels)),
                 // With several strata, one with too few units or in which no
                 // unit fits a subclass under the caliper loses its units, which
                 // are dropped; the run fails only when no stratum has a subclass.
-                Err(QuickMatchError::NoSubclass) if stratified => {
-                    Ok(StratumLabels::Lost(QuickMatchError::NoSubclass))
-                }
-                Err(QuickMatchError::TooFewUnits { .. }) if stratified => {
-                    Ok(StratumLabels::Lost(QuickMatchError::TooFewUnits {
+                Err(Error::NoSubclass) if stratified => Ok(StratumLabels::Lost(Error::NoSubclass)),
+                Err(Error::TooFewUnits { .. }) if stratified => {
+                    Ok(StratumLabels::Lost(Error::TooFewUnits {
                         stratum: Some(stratum.to_string()),
                     }))
                 }
@@ -964,7 +870,7 @@ where
     // first position of its stratum in `order` name a subclass uniquely.
     let mut global = vec![NONE; unit_count];
     let mut shared = false;
-    let mut first_lost: Option<QuickMatchError> = None;
+    let mut first_lost: Option<Error> = None;
     for (stratum, result) in results.into_iter().enumerate() {
         match result? {
             StratumLabels::Absent => {}
@@ -978,14 +884,14 @@ where
                 for (position, label) in positions.iter().zip(labels) {
                     if let Some(label) = label {
                         global[*position] = u32::try_from(start[stratum] + label)
-                            .map_err(|_| QuickMatchError::TooManyUnits)?;
+                            .map_err(|_| Error::TooManyUnits)?;
                     }
                 }
             }
         }
     }
     if !shared {
-        return Err(QuickMatchError::NoSharedStratum);
+        return Err(Error::NoSharedStratum);
     }
 
     let mut number = vec![NONE; unit_count];
@@ -999,13 +905,12 @@ where
         }
         let slot = &mut number[*key as usize];
         if *slot == NONE {
-            *slot =
-                u32::try_from(anchor_counts.len()).map_err(|_| QuickMatchError::TooManyUnits)?;
+            *slot = u32::try_from(anchor_counts.len()).map_err(|_| Error::TooManyUnits)?;
             anchor_counts.push(0);
             candidate_counts.push(0);
         }
         let numbered = *slot as usize;
-        if is_anchor(position) {
+        if is_case(position) {
             anchor_counts[numbered] += 1;
         } else {
             candidate_counts[numbered] += 1;
@@ -1013,11 +918,11 @@ where
         subclass.push(Some(numbered));
     }
     if anchor_counts.is_empty() {
-        return Err(first_lost.unwrap_or(QuickMatchError::NoSubclass));
+        return Err(first_lost.unwrap_or(Error::NoSubclass));
     }
     Ok(SubclassedUnits {
         ids: unit_ids(anchors, candidates),
-        anchor_count: anchors.len(),
+        case_count: anchors.len(),
         subclass,
         subclasses: build_subclass_summaries(&anchor_counts, &candidate_counts),
         trimmed: crate::TrimmedUnits::default(),
@@ -1067,9 +972,9 @@ mod tests {
         let count = labels.iter().flatten().max().map_or(0, |m| m + 1);
         let mut anchors = vec![0; count];
         let mut candidates = vec![0; count];
-        for (label, is_anchor) in labels.iter().zip(anchor) {
+        for (label, is_case) in labels.iter().zip(anchor) {
             if let Some(label) = label {
-                if *is_anchor {
+                if *is_case {
                     anchors[*label] += 1;
                 } else {
                     candidates[*label] += 1;
@@ -1078,10 +983,10 @@ mod tests {
         }
         let size = options
             .size
-            .unwrap_or(options.min_anchors + options.min_candidates);
+            .unwrap_or(options.min_cases + options.min_controls);
         for subclass in 0..count {
-            assert!(anchors[subclass] >= options.min_anchors);
-            assert!(candidates[subclass] >= options.min_candidates);
+            assert!(anchors[subclass] >= options.min_cases);
+            assert!(candidates[subclass] >= options.min_controls);
             assert!(anchors[subclass] + candidates[subclass] >= size);
         }
     }
@@ -1104,7 +1009,7 @@ mod tests {
             dimension: usize,
             exact: &[V],
             options: &QuickMatchOptions,
-        ) -> Result<Maps, QuickMatchError>
+        ) -> Result<Maps, Error>
         where
             R: MatchingRecord,
             V: AsRef<str>,
@@ -1125,12 +1030,11 @@ mod tests {
                     let key: Vec<&str> = exact
                         .iter()
                         .map(|variable| {
-                            row.stratum(variable.as_ref()).ok_or_else(|| {
-                                QuickMatchError::MissingValue {
+                            row.stratum(variable.as_ref())
+                                .ok_or_else(|| Error::MissingValue {
                                     id: row.id().to_string(),
                                     variable: variable.as_ref().to_string(),
-                                }
-                            })
+                                })
                         })
                         .collect::<Result<_, _>>()?;
                     let next = seen.len();
@@ -1147,7 +1051,7 @@ mod tests {
             // Subclass of each unit, numbered over strata by first appearance.
             let mut global: Vec<Option<(usize, usize)>> = vec![None; units.len()];
             let mut shared = false;
-            let mut first_lost: Option<QuickMatchError> = None;
+            let mut first_lost: Option<Error> = None;
             for (stratum, positions) in members.iter().enumerate() {
                 let has_anchor = positions.iter().any(|p| units[*p].1);
                 let has_candidate = positions.iter().any(|p| !units[*p].1);
@@ -1160,7 +1064,7 @@ mod tests {
                     let row = units[*position].0;
                     let point = coordinates(row)
                         .filter(|point| point.len() == dimension)
-                        .ok_or_else(|| QuickMatchError::MissingCoordinates {
+                        .ok_or_else(|| Error::MissingCoordinates {
                             id: row.id().to_string(),
                         })?;
                     points.extend_from_slice(point);
@@ -1171,12 +1075,12 @@ mod tests {
                     // With several strata, one that is too small or in which no unit
                     // fits a subclass under the caliper loses its units, which are
                     // dropped; the run fails only when no stratum has a subclass.
-                    Err(QuickMatchError::NoSubclass) if !exact.is_empty() => {
-                        first_lost.get_or_insert(QuickMatchError::NoSubclass);
+                    Err(Error::NoSubclass) if !exact.is_empty() => {
+                        first_lost.get_or_insert(Error::NoSubclass);
                         continue;
                     }
-                    Err(QuickMatchError::TooFewUnits { .. }) if !exact.is_empty() => {
-                        first_lost.get_or_insert(QuickMatchError::TooFewUnits {
+                    Err(Error::TooFewUnits { .. }) if !exact.is_empty() => {
+                        first_lost.get_or_insert(Error::TooFewUnits {
                             stratum: Some(stratum.to_string()),
                         });
                         continue;
@@ -1188,14 +1092,14 @@ mod tests {
                 }
             }
             if !shared {
-                return Err(QuickMatchError::NoSharedStratum);
+                return Err(Error::NoSharedStratum);
             }
 
             let mut number: HashMap<(usize, usize), usize> = HashMap::new();
             let mut anchor_counts: Vec<usize> = Vec::new();
             let mut candidate_counts: Vec<usize> = Vec::new();
             let mut subclass_of: Vec<Option<usize>> = Vec::with_capacity(units.len());
-            for (key, (_, is_anchor)) in global.iter().zip(&units) {
+            for (key, (_, is_case)) in global.iter().zip(&units) {
                 let subclass = key.map(|key| {
                     let next = anchor_counts.len();
                     let subclass = *number.entry(key).or_insert(next);
@@ -1203,7 +1107,7 @@ mod tests {
                         anchor_counts.push(0);
                         candidate_counts.push(0);
                     }
-                    if *is_anchor {
+                    if *is_case {
                         anchor_counts[subclass] += 1;
                     } else {
                         candidate_counts[subclass] += 1;
@@ -1213,14 +1117,14 @@ mod tests {
                 subclass_of.push(subclass);
             }
             if anchor_counts.is_empty() {
-                return Err(first_lost.unwrap_or(QuickMatchError::NoSubclass));
+                return Err(first_lost.unwrap_or(Error::NoSubclass));
             }
             let subclasses = build_subclass_summaries(&anchor_counts, &candidate_counts);
             let mut outcome = Maps {
                 subclasses,
                 ..Maps::default()
             };
-            for ((row, is_anchor), subclass) in units.iter().zip(&subclass_of) {
+            for ((row, is_case), subclass) in units.iter().zip(&subclass_of) {
                 let id = row.id().to_string();
                 let Some(subclass) = subclass else {
                     outcome.dropped_ids.push(id);
@@ -1237,7 +1141,7 @@ mod tests {
                 ] {
                     weights.insert(
                         id.clone(),
-                        subclass_weight_for_estimand(estimand, share, *is_anchor),
+                        subclass_weight_for_estimand(estimand, share, *is_case),
                     );
                 }
                 outcome.assignments.insert(id, *subclass);
@@ -1288,8 +1192,8 @@ mod tests {
             for options in [
                 QuickMatchOptions::default(),
                 QuickMatchOptions {
-                    min_anchors: 2,
-                    min_candidates: 1,
+                    min_cases: 2,
+                    min_controls: 1,
                     caliper: Some(1.5),
                     seed_method: SeedMethod::Lexical,
                     ..QuickMatchOptions::default()
@@ -1317,7 +1221,7 @@ mod tests {
         assert!(agreed >= 12, "only {agreed} runs produced an outcome");
     }
 
-    /// Records with a stratum "g" and one coordinate each, anchors first.
+    /// Records with a stratum "g" and one coordinate each, cases first.
     fn grouped(
         groups: &[(&str, usize, usize)],
     ) -> (
@@ -1328,10 +1232,10 @@ mod tests {
         let date = chrono::NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid test date");
         let (mut anchors, mut candidates) = (Vec::new(), Vec::new());
         let mut points = HashMap::new();
-        for (group, anchor_count, candidate_count) in groups {
+        for (group, case_count, control_count) in groups {
             for (prefix, count, list) in [
-                ("a", *anchor_count, &mut anchors),
-                ("c", *candidate_count, &mut candidates),
+                ("a", *case_count, &mut anchors),
+                ("c", *control_count, &mut candidates),
             ] {
                 for i in 0..count {
                     let id = format!("{prefix}{group}{i}");
@@ -1350,7 +1254,7 @@ mod tests {
         let (anchors, candidates, points) = grouped(&[("x", 5, 5), ("y", 1, 0), ("z", 0, 1)]);
         let lookup = |row: &crate::types::BaseRecord| points.get(row.id()).map(Vec::as_slice);
         let options = QuickMatchOptions {
-            min_anchors: 2,
+            min_cases: 2,
             ..QuickMatchOptions::default()
         };
         let out = quick_match_subclasses(&anchors, &candidates, lookup, 1, &["g"], &options)
@@ -1361,7 +1265,7 @@ mod tests {
         let lookup = |row: &crate::types::BaseRecord| points.get(row.id()).map(Vec::as_slice);
         assert!(matches!(
             quick_match_subclasses(&anchors, &candidates, lookup, 1, &["g"], &options),
-            Err(QuickMatchError::TooFewUnits { stratum: Some(_) })
+            Err(Error::TooFewUnits { stratum: Some(_) })
         ));
     }
 
@@ -1393,12 +1297,11 @@ mod tests {
                 SeedMethod::Lexical,
             ] {
                 let (points, anchor) = sample(400, dim, 7 + dim as u64);
-                for (min_anchors, min_candidates, size) in
-                    [(1, 1, None), (1, 2, None), (2, 3, Some(7))]
+                for (min_cases, min_controls, size) in [(1, 1, None), (1, 2, None), (2, 3, Some(7))]
                 {
                     let options = QuickMatchOptions {
-                        min_anchors,
-                        min_candidates,
+                        min_cases,
+                        min_controls,
                         size,
                         caliper: None,
                         seed_method: method,
@@ -1481,19 +1384,19 @@ mod tests {
         let options = QuickMatchOptions::default();
         assert_eq!(
             quick_clusters(&points, 1, &[true, true, true], &options).unwrap_err(),
-            QuickMatchError::TooFewUnits { stratum: None }
+            Error::TooFewUnits { stratum: None }
         );
         let zero = QuickMatchOptions {
-            min_candidates: 0,
+            min_controls: 0,
             ..options
         };
         assert_eq!(
             quick_clusters(&points, 1, &[true, false, false], &zero).unwrap_err(),
-            QuickMatchError::MinimumBelowOne
+            Error::SubclassMinimum
         );
         assert_eq!(
             quick_clusters(&[0.0, f64::NAN], 1, &[true, false], &options).unwrap_err(),
-            QuickMatchError::NonFinite { unit: 1 }
+            Error::NonFiniteCoordinate { unit: 1 }
         );
         let tight = QuickMatchOptions {
             caliper: Some(0.1),
@@ -1501,7 +1404,7 @@ mod tests {
         };
         assert_eq!(
             quick_clusters(&points, 1, &[true, false, true], &tight).unwrap_err(),
-            QuickMatchError::NoSubclass
+            Error::NoSubclass
         );
     }
 

@@ -1,5 +1,6 @@
 //! A cohort held in columns, whose rows are records; see [`Cohort`].
 
+use crate::Error;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::OnceLock;
@@ -16,57 +17,6 @@ const NONE: u32 = u32::MAX;
 /// Up to this many names are searched in order; more are looked up by hash.
 const LINEAR_NAMES: usize = 8;
 
-/// Why a cohort could not be built.
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum CohortError {
-    /// A column has another length than the id column.
-    LengthMismatch {
-        /// The column.
-        column: String,
-        /// Its length.
-        found: usize,
-        /// The number of ids.
-        expected: usize,
-    },
-    /// Two columns of the same kind have the same name: two strata, two
-    /// numeric fields or two covariates.
-    DuplicateName {
-        /// The name.
-        column: String,
-    },
-    /// A column has more distinct values than a dictionary code can number.
-    TooManyValues {
-        /// The column.
-        column: String,
-    },
-}
-
-impl fmt::Display for CohortError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::LengthMismatch {
-                column,
-                found,
-                expected,
-            } => write!(
-                f,
-                "column {column} has {found} rows, but there are {expected} ids"
-            ),
-            Self::DuplicateName { column } => {
-                write!(f, "two columns of the same kind are called {column}")
-            }
-            Self::TooManyValues { column } => write!(
-                f,
-                "column {column} has more than {} distinct values",
-                NONE - 1
-            ),
-        }
-    }
-}
-
-impl std::error::Error for CohortError {}
-
 /// Names of the columns of one kind, with the position of each.
 #[derive(Debug, Clone, Default)]
 struct Names {
@@ -75,9 +25,9 @@ struct Names {
 }
 
 impl Names {
-    fn push(&mut self, name: String) -> Result<(), CohortError> {
+    fn push(&mut self, name: String) -> Result<(), Error> {
         if self.by_name.contains_key(&name) {
-            return Err(CohortError::DuplicateName { column: name });
+            return Err(Error::DuplicateColumn { column: name });
         }
         self.by_name.insert(name.clone(), self.names.len());
         self.names.push(name);
@@ -102,7 +52,7 @@ struct Dictionary {
 }
 
 impl Dictionary {
-    fn from_values<I, S>(name: &str, values: I) -> Result<Self, CohortError>
+    fn from_values<I, S>(name: &str, values: I) -> Result<Self, Error>
     where
         I: IntoIterator<Item = Option<S>>,
         S: AsRef<str>,
@@ -122,7 +72,7 @@ impl Dictionary {
                         let code = u32::try_from(distinct.len())
                             .ok()
                             .filter(|&code| code < NONE)
-                            .ok_or_else(|| CohortError::TooManyValues {
+                            .ok_or_else(|| Error::TooManyValues {
                                 column: name.to_string(),
                             })?;
                         let value: Box<str> = value.into();
@@ -496,7 +446,7 @@ impl Cohort {
 #[must_use]
 pub struct CohortBuilder {
     cohort: Cohort,
-    error: Option<CohortError>,
+    error: Option<Error>,
 }
 
 impl fmt::Debug for CohortBuilder {
@@ -511,7 +461,7 @@ impl fmt::Debug for CohortBuilder {
 impl CohortBuilder {
     fn check(&mut self, column: &str, found: usize) {
         if self.error.is_none() && found != self.cohort.len {
-            self.error = Some(CohortError::LengthMismatch {
+            self.error = Some(Error::ColumnLength {
                 column: column.to_string(),
                 found,
                 expected: self.cohort.len,
@@ -519,7 +469,7 @@ impl CohortBuilder {
         }
     }
 
-    fn fail(&mut self, error: Result<(), CohortError>) {
+    fn fail(&mut self, error: Result<(), Error>) {
         if let (None, Err(error)) = (&self.error, error) {
             self.error = Some(error);
         }
@@ -664,8 +614,8 @@ impl CohortBuilder {
     ///
     /// # Errors
     ///
-    /// The first [`CohortError`] met while the columns were added.
-    pub fn build(mut self) -> Result<Cohort, CohortError> {
+    /// The first [`Error`] met while the columns were added.
+    pub fn build(mut self) -> Result<Cohort, Error> {
         let birth = self.cohort.birth.len();
         self.check("birth_date", birth);
         match self.error {
@@ -881,7 +831,7 @@ mod tests {
             .build();
         assert_eq!(
             short.err(),
-            Some(CohortError::LengthMismatch {
+            Some(Error::ColumnLength {
                 column: "s".into(),
                 found: 1,
                 expected: 2
@@ -889,7 +839,7 @@ mod tests {
         );
         let births = Cohort::builder(["a", "b"], vec![date(2010, 1, 1)]).build();
         assert!(
-            matches!(births, Err(CohortError::LengthMismatch { column, .. }) if column == "birth_date")
+            matches!(births, Err(Error::ColumnLength { column, .. }) if column == "birth_date")
         );
         let twice = Cohort::builder(["a"], vec![date(2010, 1, 1)])
             .numeric("x", [Some(1.0)])
@@ -897,7 +847,7 @@ mod tests {
             .build();
         assert_eq!(
             twice.err(),
-            Some(CohortError::DuplicateName { column: "x".into() })
+            Some(Error::DuplicateColumn { column: "x".into() })
         );
         let kinds = Cohort::builder(["a"], vec![date(2010, 1, 1)])
             .stratum("x", [Some("1")])

@@ -102,8 +102,10 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
-use crate::RegisterError;
+use crate::Error;
+use crate::error::{length, row_count};
 use crate::relations::{DisjointSets, connected_components};
+use epistat_core::InputError;
 
 /// How [`consensus_parents`] picks one parent from the rows of a person.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -145,19 +147,16 @@ pub struct ConsensusParents {
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when the columns differ in length.
+/// [`Error::Input`] when the columns differ in length.
 pub fn consensus_parents(
     rows_person: &[u64],
     mother: &[Option<u64>],
     father: &[Option<u64>],
     rule: ParentRule,
-) -> Result<ConsensusParents, RegisterError> {
+) -> Result<ConsensusParents, Error> {
     let n = rows_person.len();
-    if mother.len() != n || father.len() != n {
-        return Err(RegisterError::input(
-            "person, mother and father must have one entry per row",
-        ));
-    }
+    length("mother", n, mother.len())?;
+    length("father", n, father.len())?;
     let mut order: Vec<usize> = (0..n).collect();
     order.sort_by_key(|&row| (rows_person[row], row));
     let mut out = ConsensusParents {
@@ -405,13 +404,13 @@ fn deliveries(
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when the columns differ in length or there are more
+/// [`Error::Input`] when the columns differ in length or there are more
 /// than `u32::MAX` rows.
 pub fn multiple_birth_groups(
     mother: &[Option<u64>],
     birth_day: &[Option<i64>],
     tolerance_days: u32,
-) -> Result<MultipleBirths, RegisterError> {
+) -> Result<MultipleBirths, Error> {
     let n = mother.len();
     check_rows(n, birth_day.len())?;
     let (rows, delivery) = deliveries(mother, birth_day, tolerance_days);
@@ -451,13 +450,13 @@ pub fn multiple_birth_groups(
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when the columns differ in length or there are more
+/// [`Error::Input`] when the columns differ in length or there are more
 /// than `u32::MAX` rows.
 pub fn delivery_order(
     mother: &[Option<u64>],
     birth_day: &[Option<i64>],
     tolerance_days: u32,
-) -> Result<Vec<Option<u32>>, RegisterError> {
+) -> Result<Vec<Option<u32>>, Error> {
     let n = mother.len();
     check_rows(n, birth_day.len())?;
     let (rows, delivery) = deliveries(mother, birth_day, tolerance_days);
@@ -472,15 +471,9 @@ pub fn delivery_order(
     Ok(out)
 }
 
-fn check_rows(n: usize, other: usize) -> Result<(), RegisterError> {
-    if other != n {
-        return Err(RegisterError::input("columns must have one entry per row"));
-    }
-    if u32::try_from(n).is_err() {
-        return Err(RegisterError::input(format!(
-            "{n} rows is more than a u32 row number holds"
-        )));
-    }
+fn check_rows(n: usize, other: usize) -> Result<(), Error> {
+    length("columns", n, other)?;
+    row_count("columns", n)?;
     Ok(())
 }
 
@@ -502,7 +495,7 @@ impl Pedigree {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when the columns differ in length, a person
+    /// [`Error::Input`] when the columns differ in length, a person
     /// occurs twice, a person has the same mother and father, there are more
     /// nodes than a `u32` holds, or a person is their own ancestor (the error
     /// names a person on the cycle).
@@ -510,17 +503,17 @@ impl Pedigree {
         person_id: &[u64],
         mother_id: &[Option<u64>],
         father_id: &[Option<u64>],
-    ) -> Result<Self, RegisterError> {
+    ) -> Result<Self, Error> {
         let n = person_id.len();
-        if mother_id.len() != n || father_id.len() != n {
-            return Err(RegisterError::input(
-                "person, mother and father must have one entry per row",
-            ));
-        }
+        length("mother_id", n, mother_id.len())?;
+        length("father_id", n, father_id.len())?;
         if u32::try_from(n.saturating_mul(3)).is_err() {
-            return Err(RegisterError::input(format!(
-                "{n} persons is more than a pedigree takes"
-            )));
+            return Err(InputError::TooLarge {
+                what: "person_id",
+                limit: u64::from(u32::MAX) / 3,
+                found: n as u64,
+            }
+            .into());
         }
         let (ids, mut mother, mut father) = code_nodes(person_id, mother_id, father_id)?;
         mother.resize(ids.len(), None);
@@ -538,7 +531,7 @@ impl Pedigree {
     }
 
     /// Levels and a parents-before-children order, or the cycle.
-    fn order(&mut self) -> Result<(), RegisterError> {
+    fn order(&mut self) -> Result<(), Error> {
         let m = self.ids.len();
         let mut pending = vec![0_u8; m];
         let mut child_count = vec![0_usize; m + 1];
@@ -590,7 +583,7 @@ impl Pedigree {
                     .find(|&p| pending[p] > 0)
                     .unwrap_or(x);
             }
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "person {} is their own ancestor",
                 self.ids[x]
             )));
@@ -673,17 +666,17 @@ impl Pedigree {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] if the pedigree is too large for
+    /// [`Error::Input`] if the pedigree is too large for
     /// [`connected_components`], which cannot happen for one built by
     /// [`Pedigree::new`].
-    pub fn family_clusters(&self, links: FamilyLinks) -> Result<Vec<u32>, RegisterError> {
+    pub fn family_clusters(&self, links: FamilyLinks) -> Result<Vec<u32>, Error> {
         match links {
             FamilyLinks::SharedParents => self.sibship_clusters(),
             FamilyLinks::ParentsAndChildren => Ok(self.pedigree_components()),
         }
     }
 
-    fn sibship_clusters(&self) -> Result<Vec<u32>, RegisterError> {
+    fn sibship_clusters(&self) -> Result<Vec<u32>, Error> {
         // The same code in the mother and the father column is two parents, and
         // a column holds at most one distinct parent per person, so each
         // column is renumbered from 0 and stays below the number of rows.
@@ -768,13 +761,13 @@ impl Pedigree {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when a parent has more than `max_group_size`
+    /// [`Error::Input`] when a parent has more than `max_group_size`
     /// children among the rows; the error names the parent.
     pub fn sibling_pairs(
         &self,
         kinds: SiblingKinds,
         max_group_size: usize,
-    ) -> Result<SiblingPairs, RegisterError> {
+    ) -> Result<SiblingPairs, Error> {
         let mut out = SiblingPairs::default();
         self.for_each_sibling_pair(kinds, max_group_size, |a, b, kind| {
             out.a.push(a);
@@ -795,7 +788,7 @@ impl Pedigree {
         kinds: SiblingKinds,
         max_group_size: usize,
         mut emit: impl FnMut(u32, u32, SiblingKind),
-    ) -> Result<(), RegisterError> {
+    ) -> Result<(), Error> {
         let nodes = self.ids.len();
         let by_mother = Groups::new(&self.mother[..self.persons], nodes);
         let by_father = Groups::new(&self.father[..self.persons], nodes);
@@ -803,7 +796,7 @@ impl Pedigree {
             .large_groups_of([&by_mother, &by_father], max_group_size)
             .first()
         {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "{:?} {} has {} children among the rows, more than the limit {max_group_size}",
                 g.role, g.parent, g.size
             )));
@@ -889,7 +882,7 @@ impl Pedigree {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when `degree` is 0 or more than 10, or a
+    /// [`Error::Input`] when `degree` is 0 or more than 10, or a
     /// shared ancestor has more than `max_group_size` descendants of the
     /// cousin generation among the rows; the error names the ancestor.
     pub fn cousin_pairs(
@@ -897,7 +890,7 @@ impl Pedigree {
         degree: u32,
         kinds: CousinKinds,
         max_group_size: usize,
-    ) -> Result<CousinPairs, RegisterError> {
+    ) -> Result<CousinPairs, Error> {
         let mut out = CousinPairs::default();
         self.for_each_cousin_pair(degree, kinds, max_group_size, |a, b, kind| {
             out.a.push(a);
@@ -919,11 +912,9 @@ impl Pedigree {
         kinds: CousinKinds,
         max_group_size: usize,
         mut emit: impl FnMut(u32, u32, CousinKind),
-    ) -> Result<(), RegisterError> {
+    ) -> Result<(), Error> {
         if degree == 0 || degree > 10 {
-            return Err(RegisterError::input(
-                "the cousin degree must be from 1 to 10",
-            ));
+            return Err(Error::invalid("the cousin degree must be from 1 to 10"));
         }
         let top = degree as usize + 1;
         // levels[k - 1] holds the distinct ancestors of each person exactly k
@@ -954,7 +945,7 @@ impl Pedigree {
         if let Some(anc) =
             (0..nodes).find(|&a| group_start[a + 1] - group_start[a] > max_group_size)
         {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "ancestor {} has {} descendants {top} generations down among the rows, more than the limit {max_group_size}",
                 self.ids[anc],
                 group_start[anc + 1] - group_start[anc]
@@ -1056,17 +1047,17 @@ impl Pedigree {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when a row is not below the number of persons.
+    /// [`Error::Input`] when a row is not below the number of persons.
     pub fn relatedness(
         &self,
         pairs: &[(u32, u32)],
         complete_generations: u32,
-    ) -> Result<Vec<Option<f64>>, RegisterError> {
+    ) -> Result<Vec<Option<f64>>, Error> {
         if let Some(&(a, b)) = pairs
             .iter()
             .find(|&&(a, b)| a as usize >= self.persons || b as usize >= self.persons)
         {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "pair ({a}, {b}) has a row not below the number of persons, {}",
                 self.persons
             )));
@@ -1138,7 +1129,7 @@ fn code_nodes(
     person_id: &[u64],
     mother_id: &[Option<u64>],
     father_id: &[Option<u64>],
-) -> Result<(Vec<u64>, Vec<Option<u32>>, Vec<Option<u32>>), RegisterError> {
+) -> Result<(Vec<u64>, Vec<Option<u32>>, Vec<Option<u32>>), Error> {
     let n = person_id.len();
     let dense = (n as u64).saturating_mul(4).saturating_add(64);
     let mut table: Vec<u32> = Vec::new();
@@ -1155,7 +1146,7 @@ fn code_nodes(
             sparse.insert(id, row as u32).is_none()
         };
         if !fresh {
-            return Err(RegisterError::input(format!("person {id} occurs twice")));
+            return Err(Error::invalid(format!("person {id} occurs twice")));
         }
     }
     let mut code = |id: u64, ids: &mut Vec<u64>| -> u32 {
@@ -1183,7 +1174,7 @@ fn code_nodes(
         if let (Some(m), Some(f)) = (mother_id[row], father_id[row])
             && m == f
         {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "person {} has the same mother and father, {m}",
                 person_id[row]
             )));

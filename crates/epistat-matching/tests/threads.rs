@@ -11,18 +11,32 @@
 
 mod common;
 
+#[path = "common/trial_panel.rs"]
+mod trial_panel;
 use chrono::NaiveDate;
 use common::{Level, cohort, records, two_pass};
 use epistat_matching::prelude::*;
+use epistat_matching::spec::MatchMode;
 use epistat_matching::{
-    CbpsConfig, CbpsEstimand, CbpsMethod, DeterministicSelection, NearestBirthDateSelection,
-    ReconstructedEpisode, ReconstructedMatchingOptions, SubclassificationConfig,
-    balance_report_with_options, estimate_propensity_and_match, prepare_euclidean_distance_config,
+    BalanceRecord, BalanceReportOptions, ControlReuse, CovariateEncodingConfig, CovariateValue,
+    DistanceCaliper, DistanceConfig, ElasticNetCvConfig, ElasticNetLogisticConfig, Estimand,
+    EuclideanPreparationConfig, EuclideanScale, LogisticRegressionConfig,
+    MahalanobisCovarianceStrategy, MahalanobisPreparationConfig, MahalanobisTransform, MatchOrder,
+    MatchWeightMethod, MatchingCriteria, MissingValuePolicy, NumericBalanceTransform,
+    PairDistanceMatrix, PropensityEstimator, PropensityLink, PropensityScoreConfig,
+    PropensityScoreEstimate, PropensityScoreOutputScale, SpecOutput, SupplementalBalanceCovariates,
+    TrialOptions, balance_diagnostics, match_weights_from_pairs, pair_weights_from_pairs,
+};
+use epistat_matching::{
+    CbpsConfig, CbpsMethod, DeterministicSelection, NearestBirthDateSelection,
+    ReconstructedEpisode, ReconstructedMatchingOptions, SubclassificationConfig, balance_report,
+    estimate_propensity_and_match, prepare_euclidean_distance_config,
     prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
     reconstruct_case_control_pairs, subclassify_by_propensity_score_map,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools};
 use std::collections::HashMap;
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows};
 
 /// A list of 64-bit values read back as floats so that the pool check can
 /// compare them by bits.
@@ -71,13 +85,14 @@ impl Digest {
         }
     }
 
-    fn floats(&mut self, values: &HashMap<String, f64, impl std::hash::BuildHasher>) {
-        let mut entries: Vec<_> = values.iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(b.0));
+    /// The weights of one group, in the order of the ids, as the set gives
+    /// them.
+    fn weight_group<'a>(&mut self, values: impl Iterator<Item = (&'a str, f64)>) {
+        let entries: Vec<_> = values.collect();
         self.int(entries.len());
         for (key, value) in entries {
             self.text(key);
-            self.float(*value);
+            self.float(value);
         }
     }
 
@@ -108,12 +123,12 @@ impl Digest {
     fn weights(&mut self, outcome: &MatchOutcome) {
         for method in [
             MatchWeightMethod::PairCount,
-            MatchWeightMethod::AnchorUnitCandidateFractional,
-            MatchWeightMethod::CandidateUnitAnchorFractional,
+            MatchWeightMethod::CaseUnitControlFractional,
+            MatchWeightMethod::ControlUnitCaseFractional,
         ] {
             let unit = match_weights_from_pairs(&outcome.pairs, method);
-            self.floats(&unit.anchor);
-            self.floats(&unit.candidate);
+            self.weight_group(unit.cases());
+            self.weight_group(unit.controls());
             self.debug(&unit.to_table());
             self.debug(&pair_weights_from_pairs(&outcome.pairs, method).to_table());
         }
@@ -183,12 +198,13 @@ fn balance_inputs(
 }
 
 fn criteria(ratio: usize, replacement: bool) -> MatchingCriteria {
-    MatchingCriteria::builder()
-        .birth_date_window_days(45)
-        .match_ratio(ratio)
-        .required_strata(vec!["sex".to_string(), "region".to_string()])
-        .allow_replacement(replacement)
-        .build()
+    MatchingCriteria {
+        birth_date_window_days: 45,
+        match_ratio: ratio,
+        required_strata: vec!["sex".to_string(), "region".to_string()],
+        allow_replacement: replacement,
+        ..MatchingCriteria::default()
+    }
 }
 
 fn base_pair(
@@ -218,9 +234,15 @@ fn standard_matching_and_weights() {
                     .with_replacement(replacement)
             };
             for outcome in [
-                job().run(),
-                job().with_strategy(NearestBirthDateSelection).run(),
-                job().with_strategy(DeterministicSelection).run(),
+                job().run().expect("a valid job"),
+                job()
+                    .with_strategy(NearestBirthDateSelection)
+                    .run()
+                    .expect("a valid job"),
+                job()
+                    .with_strategy(DeterministicSelection)
+                    .run()
+                    .expect("a valid job"),
             ] {
                 assert!(!outcome.pairs.is_empty(), "no output, test is vacuous");
                 d.outcome(&outcome);
@@ -242,7 +264,8 @@ fn standard_matching_with_unique_key_and_without_strata() {
         let out = MatchJob::new_standard(&anchors, &candidates, 5)
             .with_ratio(MatchRatio::new(2).unwrap())
             .with_birth_window(BirthDateWindowDays::new(10).unwrap())
-            .run();
+            .run()
+            .expect("a valid job");
         assert!(!out.pairs.is_empty(), "no output, test is vacuous");
         d.outcome(&out);
         let out = MatchJob::new_standard(&anchors, &candidates, 5)
@@ -250,7 +273,8 @@ fn standard_matching_with_unique_key_and_without_strata() {
             .with_birth_window(BirthDateWindowDays::new(10).unwrap())
             .with_exact_matches(["sex", "region"])
             .with_unique_by_key(Some("unique".to_string()))
-            .run();
+            .run()
+            .expect("a valid job");
         d.outcome(&out);
         d.0
     });
@@ -281,13 +305,19 @@ fn transition_matching() {
                 .with_exact_matches(["sex", "municipality"])
                 .with_alive_check()
         };
-        let out = job().run();
+        let out = job().run().expect("a valid job");
         assert!(!out.pairs.is_empty(), "no output, test is vacuous");
         d.outcome(&out);
         d.weights(&out);
-        let out = job().with_strategy(NearestBirthDateSelection).run();
+        let out = job()
+            .with_strategy(NearestBirthDateSelection)
+            .run()
+            .expect("a valid job");
         d.outcome(&out);
-        let out = job().with_strategy(DeterministicSelection).run();
+        let out = job()
+            .with_strategy(DeterministicSelection)
+            .run()
+            .expect("a valid job");
         d.outcome(&out);
         let (pass1, pass2) = two_pass(&people, 7, true);
         d.outcome(&pass1);
@@ -346,7 +376,7 @@ fn sequential_trials() {
     // Eight periods of 180 days. A person starts treatment at a period set by
     // the position in the cohort, stops again after two or three periods for
     // some, and is eligible while never treated.
-    let panel: Vec<TrialPerson<BalanceRecord>> = rows
+    let panel: Vec<PanelPerson<BalanceRecord>> = rows
         .into_iter()
         .enumerate()
         .map(|(i, row)| {
@@ -363,7 +393,7 @@ fn sequential_trials() {
                     continue;
                 }
                 let on = i % 5 != 0 && p >= first_on && p < first_on + length;
-                periods.push(TrialPeriod {
+                periods.push(PanelPeriod {
                     period: i64::try_from(p).expect("small"),
                     date,
                     eligible: p <= first_on || i % 5 == 0,
@@ -371,7 +401,7 @@ fn sequential_trials() {
                     event: false,
                 });
             }
-            TrialPerson {
+            PanelPerson {
                 record: BalanceRecord {
                     core: row.record,
                     covariates: HashMap::new(),
@@ -398,9 +428,13 @@ fn sequential_trials() {
             },
             ..MatchSpec::default()
         };
-        let SpecOutput::Trials(out) =
-            run_spec(&spec, SpecInput::Trials { panel: &panel }).expect("valid spec")
-        else {
+        let SpecOutput::Trials(out) = run_spec(
+            &spec,
+            SpecInput::Trials {
+                panel: &PanelRows::of(&panel).panel(),
+            },
+        )
+        .expect("valid spec") else {
             panic!("expected trials");
         };
         assert!(
@@ -451,7 +485,8 @@ fn run_with_balance_and_balance_reports() {
         .with_ratio(MatchRatio::new(2).unwrap())
         .with_birth_window(BirthDateWindowDays::new(45).unwrap())
         .with_exact_matches(["sex", "region"])
-        .run();
+        .run()
+        .expect("a valid job");
 
     assert_same_on_pools(&POOLS, || {
         let mut d = Digest::default();
@@ -461,12 +496,33 @@ fn run_with_balance_and_balance_reports() {
                 .with_birth_window(BirthDateWindowDays::new(45).unwrap())
                 .with_exact_matches(["sex", "region"])
         };
-        let (outcome, report) = job().run_with_balance(&cases, &controls);
+        let (outcome, report) = job()
+            .run()
+            .map(|outcome| {
+                let report = balance_report(
+                    &cases,
+                    &controls,
+                    &outcome,
+                    &BalanceReportOptions::default(),
+                );
+                (outcome, report)
+            })
+            .expect("a valid job");
         d.outcome(&outcome);
         d.debug(&report);
         let (outcome, report) = job()
             .with_strategy(NearestBirthDateSelection)
-            .run_with_balance(&cases, &controls);
+            .run()
+            .map(|outcome| {
+                let report = balance_report(
+                    &cases,
+                    &controls,
+                    &outcome,
+                    &BalanceReportOptions::default(),
+                );
+                (outcome, report)
+            })
+            .expect("a valid job");
         d.outcome(&outcome);
         d.debug(&report);
         for transform in [
@@ -475,15 +531,15 @@ fn run_with_balance_and_balance_reports() {
             NumericBalanceTransform::SquaresAndPairwiseInteractions,
         ] {
             for with_supplement in [false, true] {
-                let options = BalanceReportOptions::builder()
-                    .numeric_transforms(transform)
-                    .supplemental_covariates(if with_supplement {
+                let options = BalanceReportOptions {
+                    numeric_transforms: transform,
+                    supplemental_covariates: if with_supplement {
                         supplemental.clone()
                     } else {
                         SupplementalBalanceCovariates::default()
-                    })
-                    .build();
-                let report = balance_report_with_options(&cases, &controls, &first, &options);
+                    },
+                };
+                let report = balance_report(&cases, &controls, &first, &options);
                 assert!(!report.numeric.is_empty(), "no output, test is vacuous");
                 d.debug(&report);
             }
@@ -535,7 +591,17 @@ fn transition_run_with_balance() {
             .with_age_limit(AgeLimitYears::new(6).unwrap())
             .with_exact_matches(["sex", "municipality"])
             .with_alive_check()
-            .run_with_balance(&cases, &controls);
+            .run()
+            .map(|outcome| {
+                let report = balance_report(
+                    &cases,
+                    &controls,
+                    &outcome,
+                    &BalanceReportOptions::default(),
+                );
+                (outcome, report)
+            })
+            .expect("a valid job");
         assert!(!out.pairs.is_empty(), "no output, test is vacuous");
         let mut d = Digest::default();
         d.outcome(&out);
@@ -548,13 +614,11 @@ fn transition_run_with_balance() {
 fn propensity_estimation_and_matching() {
     let (anchors, candidates) = balance_inputs(600, 2_400, 4);
     let elastic = PropensityEstimator::ElasticNetLogit(ElasticNetLogisticConfig::default());
-    let cross_validated = PropensityEstimator::ElasticNetCv(
-        ElasticNetCvConfig::builder()
-            .seed(11)
-            .nfolds(3)
-            .nlambda(12)
-            .build(),
-    );
+    let cross_validated = PropensityEstimator::ElasticNetCv(ElasticNetCvConfig {
+        nfolds: 3,
+        nlambda: 12,
+        ..ElasticNetCvConfig::new(11)
+    });
     let logit = PropensityLink::Logit;
     for (name, estimator, scale, link) in [
         (
@@ -589,12 +653,11 @@ fn propensity_estimation_and_matching() {
         ),
         (
             "cbps_exact_ate",
-            PropensityEstimator::Cbps(
-                CbpsConfig::builder()
-                    .estimand(CbpsEstimand::Ate)
-                    .method(CbpsMethod::Exact)
-                    .build(),
-            ),
+            PropensityEstimator::Cbps(CbpsConfig {
+                estimand: Estimand::Ate,
+                method: CbpsMethod::Exact,
+                ..CbpsConfig::default()
+            }),
             PropensityScoreOutputScale::LinearPredictor,
             logit,
         ),
@@ -611,22 +674,26 @@ fn propensity_estimation_and_matching() {
             logit,
         ),
     ] {
-        let config = PropensityScoreConfig::builder()
-            .estimator(estimator)
-            .output_scale(scale)
-            .logistic(LogisticRegressionConfig::builder().link(link).build())
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .include_intercept(true)
-                    .missing_value_policy(MissingValuePolicy::Impute)
-                    .build(),
-            )
-            .build();
+        let config = PropensityScoreConfig {
+            estimator,
+            output_scale: scale,
+            logistic: LogisticRegressionConfig {
+                link,
+                ..LogisticRegressionConfig::default()
+            },
+            encoding: CovariateEncodingConfig {
+                include_intercept: true,
+                missing_value_policy: MissingValuePolicy::Impute,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        };
         for replacement in [false, true] {
             assert_same_on_pools(&POOLS, || {
                 let mut d = Digest::default();
                 let prepared =
-                    prepare_propensity_distance_config(&anchors, &candidates, &config).unwrap();
+                    prepare_propensity_distance_config(&anchors, &candidates, &config, None)
+                        .unwrap();
                 d.estimate(&prepared.estimate);
                 let matched = estimate_propensity_and_match(
                     &anchors,
@@ -647,7 +714,8 @@ fn propensity_estimation_and_matching() {
                     .with_birth_window(BirthDateWindowDays::new(45).unwrap())
                     .with_exact_matches(["sex", "region"])
                     .with_distance_config(prepared.distance_config)
-                    .run();
+                    .run()
+                    .expect("a valid job");
                 d.outcome(&outcome);
                 d.0
             });
@@ -659,15 +727,15 @@ fn propensity_estimation_and_matching() {
 fn reestimated_propensity_and_nearest_matching() {
     use epistat_matching::{CommonSupport, NearestSelection};
     let (anchors, candidates) = balance_inputs(600, 2_400, 4);
-    let config = PropensityScoreConfig::builder()
-        .reestimate(true)
-        .encoding(
-            CovariateEncodingConfig::builder()
-                .include_intercept(true)
-                .missing_value_policy(MissingValuePolicy::Impute)
-                .build(),
-        )
-        .build();
+    let config = PropensityScoreConfig {
+        reestimate: true,
+        encoding: CovariateEncodingConfig {
+            include_intercept: true,
+            missing_value_policy: MissingValuePolicy::Impute,
+            ..CovariateEncodingConfig::default()
+        },
+        ..PropensityScoreConfig::default()
+    };
     for policy in [
         CommonSupport::Treated,
         CommonSupport::Control,
@@ -675,10 +743,11 @@ fn reestimated_propensity_and_nearest_matching() {
     ] {
         assert_same_on_pools(&POOLS, || {
             let mut d = Digest::default();
-            let criteria = MatchingCriteria::builder()
-                .match_ratio(2)
-                .common_support(policy)
-                .build();
+            let criteria = MatchingCriteria {
+                match_ratio: 2,
+                common_support: Some(policy),
+                ..MatchingCriteria::default()
+            };
             let matched = estimate_propensity_and_match(
                 &anchors,
                 &candidates,
@@ -705,39 +774,41 @@ fn reestimated_propensity_and_nearest_matching() {
 fn nearest_matching_on_prepared_distances() {
     use epistat_matching::MatchOrder;
     let (anchors, candidates) = balance_inputs(150, 600, 9);
-    let impute = CovariateEncodingConfig::builder()
-        .missing_value_policy(MissingValuePolicy::Impute)
-        .build();
+    let impute = CovariateEncodingConfig {
+        missing_value_policy: MissingValuePolicy::Impute,
+        ..CovariateEncodingConfig::default()
+    };
     assert_same_on_pools(&POOLS, || {
         let mut d = Digest::default();
         let mahalanobis = prepare_mahalanobis_distance_config(
             &anchors,
             &candidates,
             None,
-            &MahalanobisPreparationConfig::builder()
-                .encoding(impute.clone())
-                .build(),
+            &MahalanobisPreparationConfig {
+                encoding: impute.clone(),
+                ..MahalanobisPreparationConfig::default()
+            },
         )
         .unwrap();
         let robust = prepare_mahalanobis_distance_config(
             &anchors,
             &candidates,
             None,
-            &MahalanobisPreparationConfig::builder()
-                .encoding(impute.clone())
-                .covariance_strategy(MahalanobisCovarianceStrategy::FullSample)
-                .transform(MahalanobisTransform::RankTieAdjusted)
-                .build(),
+            &MahalanobisPreparationConfig {
+                encoding: impute.clone(),
+                covariance_strategy: MahalanobisCovarianceStrategy::FullSample,
+                transform: MahalanobisTransform::RankTieAdjusted,
+            },
         )
         .unwrap();
         let euclidean = prepare_euclidean_distance_config(
             &anchors,
             &candidates,
             None,
-            &EuclideanPreparationConfig::builder()
-                .encoding(impute.clone())
-                .scale(EuclideanScale::PooledWithinGroupSd)
-                .build(),
+            &EuclideanPreparationConfig {
+                encoding: impute.clone(),
+                scale: EuclideanScale::PooledWithinGroupSd,
+            },
         )
         .unwrap();
         for config in [
@@ -752,7 +823,8 @@ fn nearest_matching_on_prepared_distances() {
                     .with_ratio(MatchRatio::new(2).unwrap())
                     .with_exact_matches(["sex"])
                     .with_distance_config(config.clone())
-                    .run();
+                    .run()
+                    .expect("a valid job");
                 assert!(!out.pairs.is_empty(), "no output, test is vacuous");
                 d.outcome(&out);
             }
@@ -774,15 +846,14 @@ fn mahalanobis_preparation_and_matching() {
             MahalanobisTransform::Rank,
             MahalanobisTransform::RankTieAdjusted,
         ] {
-            let config = MahalanobisPreparationConfig::builder()
-                .covariance_strategy(strategy)
-                .transform(transform)
-                .encoding(
-                    CovariateEncodingConfig::builder()
-                        .missing_value_policy(MissingValuePolicy::Impute)
-                        .build(),
-                )
-                .build();
+            let config = MahalanobisPreparationConfig {
+                covariance_strategy: strategy,
+                transform,
+                encoding: CovariateEncodingConfig {
+                    missing_value_policy: MissingValuePolicy::Impute,
+                    ..CovariateEncodingConfig::default()
+                },
+            };
             assert_same_on_pools(&POOLS, || {
                 let mut d = Digest::default();
                 let prepared =
@@ -808,7 +879,8 @@ fn mahalanobis_preparation_and_matching() {
                     .with_birth_window(BirthDateWindowDays::new(45).unwrap())
                     .with_exact_matches(["sex", "region"])
                     .with_distance_config(prepared.distance_config)
-                    .run();
+                    .run()
+                    .expect("a valid job");
                 assert!(!outcome.pairs.is_empty(), "no output, test is vacuous");
                 d.outcome(&outcome);
                 d.0
@@ -821,14 +893,13 @@ fn mahalanobis_preparation_and_matching() {
 fn euclidean_preparation_and_matching() {
     let (anchors, candidates) = balance_inputs(600, 2_400, 5);
     for scale in [EuclideanScale::None, EuclideanScale::PooledWithinGroupSd] {
-        let config = EuclideanPreparationConfig::builder()
-            .scale(scale)
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .missing_value_policy(MissingValuePolicy::Impute)
-                    .build(),
-            )
-            .build();
+        let config = EuclideanPreparationConfig {
+            scale,
+            encoding: CovariateEncodingConfig {
+                missing_value_policy: MissingValuePolicy::Impute,
+                ..CovariateEncodingConfig::default()
+            },
+        };
         assert_same_on_pools(&POOLS, || {
             let mut d = Digest::default();
             let prepared = prepare_euclidean_distance_config(
@@ -857,7 +928,8 @@ fn euclidean_preparation_and_matching() {
                 .with_birth_window(BirthDateWindowDays::new(45).unwrap())
                 .with_exact_matches(["sex", "region"])
                 .with_distance_config(prepared.distance_config)
-                .run();
+                .run()
+                .expect("a valid job");
             assert!(!outcome.pairs.is_empty(), "no output, test is vacuous");
             d.outcome(&outcome);
             d.0
@@ -871,14 +943,15 @@ fn subclassification() {
     let prepared = prepare_propensity_distance_config(
         &anchors,
         &candidates,
-        &PropensityScoreConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .include_intercept(true)
-                    .missing_value_policy(MissingValuePolicy::Impute)
-                    .build(),
-            )
-            .build(),
+        &PropensityScoreConfig {
+            encoding: CovariateEncodingConfig {
+                include_intercept: true,
+                missing_value_policy: MissingValuePolicy::Impute,
+                ..CovariateEncodingConfig::default()
+            },
+            ..PropensityScoreConfig::default()
+        },
+        None,
     )
     .unwrap();
     let scores: HashMap<String, f64> = prepared
@@ -974,7 +1047,8 @@ fn reconstructed_pairs() {
 #[test]
 fn nearest_matching_in_every_order() {
     use epistat_matching::constraints::caliper_on_field;
-    use epistat_matching::{Assignment, MatchOrder, RapidHashMap, VariableRatio};
+    use epistat_matching::{Assignment, MatchOrder, VariableRatio};
+    use rapidhash::RapidHashMap;
     let (mut anchors, mut candidates) = base_pair(300, 1_200, 21);
     let mut rng = common::Lcg::new(77);
     let mut scores: RapidHashMap<String, f64> = RapidHashMap::default();
@@ -1030,7 +1104,7 @@ fn nearest_matching_in_every_order() {
                         caliper,
                     ))
                     .with_constraints(vec![caliper_on_field::<BaseRecord>("age", 20.0)]);
-                let out = job.with_antiexact("fam").run();
+                let out = job.with_antiexact("fam").run().expect("a valid job");
                 assert!(!out.pairs.is_empty(), "no output, test is vacuous");
                 d.outcome(&out);
                 d.weights(&out);
@@ -1045,7 +1119,8 @@ fn nearest_matching_in_every_order() {
                     DistanceCaliper::new(0.2),
                 ))
                 .with_mahvars(maha())
-                .run();
+                .run()
+                .expect("a valid job");
             assert!(!out.pairs.is_empty(), "no output, test is vacuous");
             d.outcome(&out);
             for replace in [false, true] {
@@ -1060,7 +1135,8 @@ fn nearest_matching_in_every_order() {
                         DistanceCaliper::new(0.4),
                     ))
                     .with_std_caliper(true)
-                    .run();
+                    .run()
+                    .expect("a valid job");
                 assert!(!out.pairs.is_empty(), "no output, test is vacuous");
                 d.outcome(&out);
                 d.weights(&out);
@@ -1073,7 +1149,8 @@ fn nearest_matching_in_every_order() {
                 .with_ratio(MatchRatio::new(2).unwrap())
                 .with_exact_matches(["sex", "region"])
                 .with_distance_config(maha())
-                .run();
+                .run()
+                .expect("a valid job");
             assert!(!out.pairs.is_empty(), "no output, test is vacuous");
             d.outcome(&out);
         }
@@ -1083,7 +1160,8 @@ fn nearest_matching_in_every_order() {
             .with_ratio(MatchRatio::new(3).unwrap())
             .with_birth_window(BirthDateWindowDays::new(45).unwrap())
             .with_exact_matches(["sex", "region"])
-            .run();
+            .run()
+            .expect("a valid job");
         assert!(!out.pairs.is_empty(), "no output, test is vacuous");
         d.outcome(&out);
         d.0
@@ -1116,13 +1194,13 @@ fn coarsened_exact_matching() {
         &anchors,
         &candidates,
         None,
-        &EuclideanPreparationConfig::builder()
-            .encoding(
-                CovariateEncodingConfig::builder()
-                    .missing_value_policy(MissingValuePolicy::Impute)
-                    .build(),
-            )
-            .build(),
+        &EuclideanPreparationConfig {
+            encoding: CovariateEncodingConfig {
+                missing_value_policy: MissingValuePolicy::Impute,
+                ..CovariateEncodingConfig::default()
+            },
+            ..EuclideanPreparationConfig::default()
+        },
     )
     .unwrap()
     .distance_config;
@@ -1199,7 +1277,8 @@ fn nearest_matching_on_a_distance_matrix() {
                         matrix.clone(),
                         DistanceCaliper::new(1.5),
                     ))
-                    .run();
+                    .run()
+                    .expect("a valid job");
                 assert!(!out.pairs.is_empty(), "no output, test is vacuous");
                 d.outcome(&out);
                 d.weights(&out);
@@ -1251,14 +1330,14 @@ fn generalised_full_matching() {
             SeedMethod::InwardsOrder,
             SeedMethod::Lexical,
         ] {
-            for (min_anchors, min_candidates, size, caliper) in [
+            for (min_cases, min_controls, size, caliper) in [
                 (1, 1, None, None),
                 (2, 3, Some(7), None),
                 (1, 1, None, Some(0.002)),
             ] {
                 let options = QuickMatchOptions {
-                    min_anchors,
-                    min_candidates,
+                    min_cases,
+                    min_controls,
                     size,
                     caliper,
                     seed_method: method,
@@ -1299,9 +1378,8 @@ fn generalised_full_matching() {
 /// join the strata in order, so the result is the same in every pool.
 #[test]
 fn optimal_and_full_matching() {
-    use epistat_matching::{
-        FullMatchConfig, OptimalRequest, RapidHashMap, match_full, match_optimal,
-    };
+    use epistat_matching::{FullMatchConfig, OptimalRequest, match_full, match_optimal};
+    use rapidhash::RapidHashMap;
 
     let mut state = 0x2545_f491_4f6c_dd1d_u64;
     let mut draw = move || {
@@ -1329,10 +1407,11 @@ fn optimal_and_full_matching() {
         }
     }
     let distance = DistanceConfig::propensity_score_map(scores, None);
-    let criteria = MatchingCriteria::builder()
-        .match_ratio(2)
-        .required_strata(vec!["g".to_string()])
-        .build();
+    let criteria = MatchingCriteria {
+        match_ratio: 2,
+        required_strata: vec!["g".to_string()],
+        ..MatchingCriteria::default()
+    };
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
     assert_same_on_pools(&POOLS, || {
         let mut d = Digest::default();
@@ -1364,7 +1443,8 @@ fn optimal_and_full_matching() {
 /// network, so the result is the same in every pool.
 #[test]
 fn fine_balance_matching() {
-    use epistat_matching::{FineBalance, OptimalRequest, RapidHashMap, match_fine_balance};
+    use epistat_matching::{FineBalance, OptimalRequest, match_fine_balance};
+    use rapidhash::RapidHashMap;
 
     let mut state = 0x1f83_d9ab_fb41_bd6b_u64;
     let mut draw = move || {
@@ -1398,10 +1478,11 @@ fn fine_balance_matching() {
         }
     }
     let distance = DistanceConfig::propensity_score_map(scores, None);
-    let criteria = MatchingCriteria::builder()
-        .match_ratio(2)
-        .required_strata(vec!["g".to_string()])
-        .build();
+    let criteria = MatchingCriteria {
+        match_ratio: 2,
+        required_strata: vec!["g".to_string()],
+        ..MatchingCriteria::default()
+    };
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&distance);
     let balance = FineBalance {
         levels: vec![vec!["coarse".into()], vec!["fine".into()]],

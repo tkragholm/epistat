@@ -14,6 +14,9 @@ use chrono::NaiveDate;
 use common::{Level, Person, Rec, cohort, records, two_pass};
 use epistat_matching::prelude::*;
 use epistat_matching::{DeterministicSelection, NearestBirthDateSelection};
+use epistat_matching::{
+    MatchDiagnostics, MatchWeightMethod, match_weights_from_pairs, pair_weights_from_pairs,
+};
 use std::collections::HashMap;
 
 fn fnv(text: &str) -> u64 {
@@ -30,17 +33,16 @@ fn outcome_hash(outcome: &MatchOutcome) -> u64 {
 }
 
 fn weights_hash(outcome: &MatchOutcome) -> u64 {
-    let unit = match_weights_from_pairs(
-        &outcome.pairs,
-        MatchWeightMethod::AnchorUnitCandidateFractional,
-    )
-    .to_table();
-    let pair = pair_weights_from_pairs(
-        &outcome.pairs,
-        MatchWeightMethod::AnchorUnitCandidateFractional,
-    )
-    .to_table();
-    fnv(&format!("{unit:?}{pair:?}"))
+    let unit =
+        match_weights_from_pairs(&outcome.pairs, MatchWeightMethod::CaseUnitControlFractional)
+            .to_table();
+    let pair =
+        pair_weights_from_pairs(&outcome.pairs, MatchWeightMethod::CaseUnitControlFractional)
+            .to_table();
+    fnv(&common::golden_weights_debug(
+        &format!("{unit:?}"),
+        &format!("{pair:?}"),
+    ))
 }
 
 fn check(name: &str, outcome: &MatchOutcome, expected: (u64, u64), nonempty: bool) {
@@ -108,9 +110,11 @@ fn transition(
         .with_unique_by_key(unique.map(str::to_string))
         .with_alive_check();
     if nearest {
-        job.with_strategy(NearestBirthDateSelection).run()
+        job.with_strategy(NearestBirthDateSelection)
+            .run()
+            .expect("a valid job")
     } else {
-        job.run()
+        job.run().expect("a valid job")
     }
 }
 
@@ -168,7 +172,8 @@ fn required_key_missing_on_some_records() {
         .with_birth_window(BirthDateWindowDays::new(45).unwrap())
         .with_age_limit(AgeLimitYears::new(6).unwrap())
         .with_exact_matches(["sex", "municipality"])
-        .run();
+        .run()
+        .expect("a valid job");
     check("missing_key", &out, E_MISSING_KEY, true);
 }
 
@@ -208,7 +213,8 @@ fn standard_without_replacement_with_fallback() {
         ])
         .with_birth_window(BirthDateWindowDays::new(20).unwrap())
         .with_exact_matches(["sex", "municipality"])
-        .run();
+        .run()
+        .expect("a valid job");
     check("std_norepl", &out, E_STD_NOREPL, true);
 }
 
@@ -220,7 +226,8 @@ fn standard_with_replacement() {
         .with_birth_window(BirthDateWindowDays::new(30).unwrap())
         .with_exact_matches(["sex", "municipality"])
         .with_replacement(true)
-        .run();
+        .run()
+        .expect("a valid job");
     check("std_repl", &out, E_STD_REPL, true);
 }
 
@@ -232,7 +239,8 @@ fn standard_unique_by_key() {
         .with_birth_window(BirthDateWindowDays::new(40).unwrap())
         .with_exact_matches(["sex"])
         .with_unique_by_key(Some("family".to_string()))
-        .run();
+        .run()
+        .expect("a valid job");
     check("std_unique", &out, E_STD_UNIQUE, true);
 }
 
@@ -243,7 +251,8 @@ fn standard_no_strata_deterministic() {
         .with_ratio(MatchRatio::new(2).unwrap())
         .with_birth_window(BirthDateWindowDays::new(10).unwrap())
         .with_strategy(DeterministicSelection)
-        .run();
+        .run()
+        .expect("a valid job");
     check("std_nostrata", &out, E_STD_NOSTRATA, true);
 }
 

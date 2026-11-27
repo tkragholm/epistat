@@ -74,10 +74,10 @@ fn episodes_agree_with_adherer_at_every_permitted_gap() {
         assert!(e.id.len() > persons, "some person has several episodes");
         for i in 0..p.len() {
             let label = format!("gap {} episode {i}", e.gap);
-            assert_eq!(p.person[i], e.id[i], "{label} person");
-            assert_close(&[p.start[i] as f64], &[e.start[i]], Tolerance::exact());
-            assert_close(&[p.end[i]], &[e.end[i]], Tolerance::exact());
-            fp = fp.u64(p.start[i].cast_unsigned()).f64(p.end[i]);
+            assert_eq!(p.person()[i], e.id[i], "{label} person");
+            assert_close(&[p.start()[i] as f64], &[e.start[i]], Tolerance::exact());
+            assert_close(&[p.end()[i]], &[e.end[i]], Tolerance::exact());
+            fp = fp.u64(p.start()[i].cast_unsigned()).f64(p.end()[i]);
         }
     }
     assert_eq!(fp.finish(), 7_957_771_175_707_055_590, "golden hash");

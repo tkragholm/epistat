@@ -141,7 +141,7 @@ fn sample(matches: &Matches, case: &Case, binary: bool) -> MatchedSample {
     .with_covariate("educ", l.educ.clone())
     .unwrap();
     let id: Vec<String> = case.rows.iter().map(|r| format!("u{r}")).collect();
-    let role = vec![UnitRole::Anchor; id.len()];
+    let role = vec![UnitRole::Case; id.len()];
     if case.name.starts_with("replace") {
         let long = LongMatches {
             id,

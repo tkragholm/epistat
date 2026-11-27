@@ -58,7 +58,7 @@ fn sample() -> MatchedSample {
     .unwrap();
     let id: Vec<String> = case.rows.iter().map(|r| format!("u{r}")).collect();
     let long = LongMatches {
-        role: vec![UnitRole::Anchor; id.len()],
+        role: vec![UnitRole::Case; id.len()],
         id,
         pair_id: case.subclass.clone(),
         weight: case.weight.clone(),

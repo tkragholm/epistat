@@ -28,11 +28,13 @@
 //!
 //! # Edge cases
 //!
-//! - Fewer than two clusters give 0.
+//! - Fewer than two clusters give `None`.
 //! - A cluster of zero total weight is left out of `b(i)`.
 //! - A sequence is not scored when its own cluster has zero weight, when no
 //!   other cluster has positive weight, or when `a(i) = b(i) = 0`.
-//! - When no sequence is scored the result is 0.
+//! - When no sequence is scored the result is `None`. WeightedCluster gives 0
+//!   for these cases; the silhouette is undefined there, and a 0 would be
+//!   read as a measured value.
 //!
 //! # References
 //!
@@ -57,7 +59,7 @@
 // `usize as u32` on a rank, bounded by the number of labels, which the callers
 // bound by `u32::MAX`.
 #[must_use]
-pub fn rank_labels(labels: &[i64]) -> (Vec<u32>, usize) {
+pub(crate) fn rank_labels(labels: &[u32]) -> (Vec<u32>, usize) {
     let mut distinct = labels.to_vec();
     distinct.sort_unstable();
     distinct.dedup();
@@ -77,18 +79,18 @@ pub fn rank_labels(labels: &[i64]) -> (Vec<u32>, usize) {
 ///
 /// The cluster weights and the two running totals accumulate in the caller's
 /// order, and the nearest other cluster is the first strict minimum in rank
-/// order. Returns 0.0 when fewer than two clusters are given or no sequence
-/// can be scored.
+/// order. Returns [`None`] when fewer than two clusters are given or no
+/// sequence can be scored.
 #[must_use]
-pub fn weighted_average(
+pub(crate) fn weighted_average(
     sums: &[f64],
     k: usize,
     row: impl Fn(usize) -> usize,
     weights: &[f64],
     ranks: &[u32],
-) -> f64 {
+) -> Option<f64> {
     if k < 2 {
-        return 0.0;
+        return None;
     }
     let mut cluster_weight = vec![0.0f64; k];
     for (&weight, &rank) in weights.iter().zip(ranks) {
@@ -126,11 +128,7 @@ pub fn weighted_average(
         total += (nearest - own) / scale * weight;
         total_weight += weight;
     }
-    if total_weight == 0.0 {
-        0.0
-    } else {
-        total / total_weight
-    }
+    (total_weight != 0.0).then(|| total / total_weight)
 }
 
 #[cfg(test)]
@@ -139,7 +137,7 @@ mod tests {
 
     #[test]
     fn labels_are_ranked_densely_in_ascending_order() {
-        let (ranks, k) = rank_labels(&[7, -2, 7, 3, -2]);
+        let (ranks, k) = rank_labels(&[7, 2, 7, 3, 2]);
         assert_eq!(k, 3);
         assert_eq!(ranks, vec![2, 0, 2, 1, 0]);
         assert_eq!(rank_labels(&[]), (vec![], 0));
@@ -148,8 +146,9 @@ mod tests {
     #[test]
     fn one_cluster_has_no_silhouette() {
         let sums = [0.0, 1.0, 1.0];
-        assert!(
-            weighted_average(&sums, 1, |i| i, &[1.0, 1.0, 1.0], &[0, 0, 0]).abs() < f64::EPSILON
+        assert_eq!(
+            weighted_average(&sums, 1, |i| i, &[1.0, 1.0, 1.0], &[0, 0, 0]),
+            None
         );
     }
 
@@ -167,7 +166,7 @@ mod tests {
                 sums[i * 2 + ranks[j] as usize] += (x - y).abs();
             }
         }
-        let value = weighted_average(&sums, 2, |i| i, &[1.0; 4], &ranks);
+        let value = weighted_average(&sums, 2, |i| i, &[1.0; 4], &ranks).unwrap();
         let expected = f64::midpoint(20.0 / 21.0, 18.0 / 19.0);
         assert!(
             (value - expected).abs() < 1e-15,
@@ -180,9 +179,9 @@ mod tests {
         // The third cluster carries no weight, so it can be no one's nearest
         // other cluster, and its member is not scored.
         let sums = [0.0, 5.0, 1.0, 5.0, 0.0, 1.0, 1.0, 1.0, 0.0];
-        let with_empty = weighted_average(&sums, 3, |i| i, &[1.0, 1.0, 0.0], &[0, 1, 2]);
+        let with_empty = weighted_average(&sums, 3, |i| i, &[1.0, 1.0, 0.0], &[0, 1, 2]).unwrap();
         let two = [0.0, 5.0, 5.0, 0.0];
-        let without = weighted_average(&two, 2, |i| i, &[1.0, 1.0], &[0, 1]);
+        let without = weighted_average(&two, 2, |i| i, &[1.0, 1.0], &[0, 1]).unwrap();
         assert!((with_empty - without).abs() < 1e-15);
         assert!((without - 1.0).abs() < 1e-15);
     }
@@ -198,8 +197,9 @@ mod tests {
             }
         }
         // The same sums, with the caller's order reversed against the rows.
-        let direct = weighted_average(&sums, 2, |i| i, &[1.0, 2.0, 3.0, 4.0], &ranks);
-        let reversed = weighted_average(&sums, 2, |i| 3 - i, &[4.0, 3.0, 2.0, 1.0], &[1, 1, 0, 0]);
+        let direct = weighted_average(&sums, 2, |i| i, &[1.0, 2.0, 3.0, 4.0], &ranks).unwrap();
+        let reversed =
+            weighted_average(&sums, 2, |i| 3 - i, &[4.0, 3.0, 2.0, 1.0], &[1, 1, 0, 0]).unwrap();
         assert!((direct - reversed).abs() < 1e-15);
     }
 }

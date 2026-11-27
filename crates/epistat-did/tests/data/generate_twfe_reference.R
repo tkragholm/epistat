@@ -1,4 +1,4 @@
-# Reference values for epistat_did::estimate_twfe: two-way fixed-effects
+# Reference values for epistat_did::twfe::fit: two-way fixed-effects
 # regressions with fixest 0.14.2, static (y ~ treat | id + t) and event study
 # (y ~ i(rel, ref = c(-1, -1000)) | id + t, the never treated at -1000), on
 # unbalanced weighted panels with singletons, with binned end points, a

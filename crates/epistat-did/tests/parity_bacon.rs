@@ -2,7 +2,7 @@
 //! 0.1.1 and the static TWFE coefficient of `fixest::feols` 0.14.2
 //! (`tests/data/generate_bacon_reference.R`).
 
-use epistat_did::{BaconError, BaconKind, StaggeredPanel, bacon_decomposition};
+use epistat_did::{BaconKind, Error, StaggeredPanel, bacon};
 use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
 use serde::Deserialize;
@@ -55,6 +55,7 @@ fn label(kind: BaconKind) -> &'static str {
         BaconKind::LaterVsEarlierTreated => "Later vs Earlier Treated",
         BaconKind::LaterVsAlwaysTreated => "Later vs Always Treated",
         BaconKind::BothTreated => "Both Treated",
+        other => panic!("{other:?} has no label in bacondecomp"),
     }
 }
 
@@ -103,7 +104,7 @@ fn the_decomposition_matches_bacondecomp() {
                 panel = panel.covariates(x.as_ref());
             }
             let panel = panel.build().unwrap();
-            let out = bacon_decomposition(&panel).unwrap();
+            let out = bacon::decompose(&panel).unwrap();
             assert_eq!(out.comparisons.len(), table.treated.len(), "{}", case.name);
             // Plain: one fit per estimate; with covariates, four chained fits
             // (the treatment on the covariates, D~ on the group means, B_D
@@ -188,10 +189,7 @@ fn an_unbalanced_panel_a_varying_cohort_or_weights_are_errors() {
     )
     .build()
     .unwrap();
-    assert_eq!(
-        bacon_decomposition(&short).unwrap_err(),
-        BaconError::Unbalanced
-    );
+    assert_eq!(bacon::decompose(&short).unwrap_err(), Error::Unbalanced);
     let mut varying = g.clone();
     let row = varying.iter().position(Option::is_some).unwrap();
     varying[row] = varying[row].map(|g| g + 1);
@@ -206,8 +204,10 @@ fn an_unbalanced_panel_a_varying_cohort_or_weights_are_errors() {
         .build()
         .unwrap();
     assert_eq!(
-        bacon_decomposition(&weighted).unwrap_err(),
-        BaconError::Weights
+        bacon::decompose(&weighted).unwrap_err(),
+        Error::Unsupported {
+            what: "prior weights in the Goodman-Bacon decomposition"
+        }
     );
 }
 
@@ -222,7 +222,7 @@ fn the_decomposition_does_not_depend_on_the_number_of_threads() {
             .covariates(x.as_ref())
             .build()
             .unwrap();
-        let out = bacon_decomposition(&panel).unwrap();
+        let out = bacon::decompose(&panel).unwrap();
         out.comparisons
             .iter()
             .flat_map(|c| [c.estimate.unwrap(), c.weight])

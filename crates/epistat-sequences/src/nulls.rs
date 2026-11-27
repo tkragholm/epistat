@@ -66,7 +66,8 @@
 
 use epistat_rng::Stream;
 
-use crate::SequenceError;
+use crate::Error;
+use crate::error::length;
 use crate::positionwise::Panel;
 
 /// Which aspects of the observed sequences a null draw preserves.
@@ -153,23 +154,17 @@ fn spells(sequence: &[u8]) -> Vec<(u8, usize)> {
 ///
 /// # Errors
 ///
-/// [`SequenceError::Input`] when the weights do not match the panel one to
+/// [`Error::Input`] when the weights do not match the panel one to
 /// one, or the panel has sequences and none has a positive weight.
 pub fn null_sequences(
     panel: &Panel<'_>,
     weights: &[f64],
     model: NullModel,
     seed: u64,
-) -> Result<Vec<u8>, SequenceError> {
-    if weights.len() != panel.count {
-        return Err(SequenceError::input(format!(
-            "{} sequences but {} weights; they must correspond one to one",
-            panel.count,
-            weights.len()
-        )));
-    }
+) -> Result<Vec<u8>, Error> {
+    length("weights", panel.count, weights.len())?;
     if panel.count > 0 && !weights.iter().any(|&weight| weight > 0.0) {
-        return Err(SequenceError::input(
+        return Err(Error::invalid(
             "no sequence has a positive weight; there is nothing to draw from",
         ));
     }
