@@ -251,6 +251,27 @@ pub struct Cloned {
 }
 
 impl Cloned {
+    /// The value of `column`, one value per row of the input, at the input row
+    /// of each clone row.
+    ///
+    /// # Errors
+    ///
+    /// An input error when `column` has no value at some input row.
+    pub fn gather<T: Copy>(&self, column: &[T]) -> Result<Vec<T>> {
+        match self.source.iter().find(|&&r| r >= column.len()) {
+            Some(_) => {
+                let needed = self.source.iter().max().map_or(0, |&r| r + 1);
+                Err(epistat_core::InputError::Length {
+                    what: "column",
+                    expected: needed,
+                    found: column.len(),
+                }
+                .into())
+            }
+            None => Ok(self.source.iter().map(|&r| column[r]).collect()),
+        }
+    }
+
     /// The number of clone rows.
     #[must_use]
     pub fn len(&self) -> usize {

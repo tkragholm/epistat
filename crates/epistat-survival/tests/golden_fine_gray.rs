@@ -131,7 +131,7 @@ fn rows_record(rows: &Rows) -> Vec<u64> {
     out.push(bits(&rows.start));
     out.push(bits(&rows.stop));
     out.push(
-        rows.event
+        rows.status
             .iter()
             .fold(Fingerprint::new(), |hash, &e| hash.u64(e as u64))
             .finish(),

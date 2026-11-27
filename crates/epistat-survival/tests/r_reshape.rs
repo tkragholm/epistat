@@ -255,12 +255,12 @@ fn tmerge_matches_tmerge_exactly() {
         assert_eq!(&got.id(), case.out_id.as_ref().unwrap(), "{name} id");
         assert_eq!(&got.row(), case.out_row.as_ref().unwrap(), "{name} row");
         assert_eq!(
-            bits(got.tstart()),
+            bits(got.start()),
             bits(case.out_tstart.as_ref().unwrap()),
             "{name} tstart"
         );
         assert_eq!(
-            bits(got.tstop()),
+            bits(got.stop()),
             bits(case.out_tstop.as_ref().unwrap()),
             "{name} tstop"
         );

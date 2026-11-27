@@ -96,8 +96,8 @@ fn tmerge_does_not_depend_on_the_number_of_threads() {
         tm.event("e", &obs).unwrap();
         tm.cumevent("k", &obs).unwrap();
         let mut out: Vec<f64> = Vec::new();
-        out.extend(tm.tstart());
-        out.extend(tm.tstop());
+        out.extend(tm.start());
+        out.extend(tm.stop());
         out.extend(tm.row().iter().map(|&r| f64::from(r)));
         for v in tm.variables() {
             out.extend(v.values.iter().map(|x| x.unwrap_or(f64::NAN)));

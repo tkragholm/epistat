@@ -66,7 +66,7 @@ fn rows_bits(rows: &Rows) -> Vec<f64> {
     let mut out: Vec<f64> = rows.row.iter().map(|&r| f64::from(r)).collect();
     out.extend(&rows.start);
     out.extend(&rows.stop);
-    out.extend(rows.event.iter().map(|&e| f64::from(e)));
+    out.extend(rows.status.iter().map(|&e| f64::from(e)));
     out.extend(&rows.weight);
     out
 }

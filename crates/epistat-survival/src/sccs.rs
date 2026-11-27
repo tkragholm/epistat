@@ -910,6 +910,17 @@ pub struct WindowSummary {
 }
 
 impl Pieces {
+    /// The value of `per_person`, one value per person of the input, at the
+    /// person of each piece, for a covariate of the person.
+    ///
+    /// # Errors
+    ///
+    /// An input error when `per_person` has no value for the person of some
+    /// piece.
+    pub fn gather<T: Copy>(&self, per_person: &[T]) -> Result<Vec<T>> {
+        crate::expanded::gather(&self.person, per_person, "per_person")
+    }
+
     /// The length of each piece, `end - start`.
     #[must_use]
     pub fn length(&self) -> Vec<f64> {

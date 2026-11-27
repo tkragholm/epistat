@@ -433,13 +433,27 @@ impl Tmerge {
         &self.id
     }
 
-    /// The start of each output row.
+    /// The start of each output row, `tstart` of `tmerge`.
+    #[must_use]
+    pub fn start(&self) -> &[f64] {
+        &self.tstart
+    }
+
+    /// The stop of each output row, `tstop` of `tmerge`.
+    #[must_use]
+    pub fn stop(&self) -> &[f64] {
+        &self.tstop
+    }
+
+    /// The start of each output row, under its name in 0.3.
+    #[deprecated(since = "0.4.0", note = "use `start`")]
     #[must_use]
     pub fn tstart(&self) -> &[f64] {
         &self.tstart
     }
 
-    /// The stop of each output row.
+    /// The stop of each output row, under its name in 0.3.
+    #[deprecated(since = "0.4.0", note = "use `stop`")]
     #[must_use]
     pub fn tstop(&self) -> &[f64] {
         &self.tstop
@@ -449,6 +463,16 @@ impl Tmerge {
     #[must_use]
     pub fn row(&self) -> &[u32] {
         &self.row
+    }
+
+    /// The value of `column`, one value per row of the base table, at the
+    /// base row of each output row.
+    ///
+    /// # Errors
+    ///
+    /// An input error when `column` has no value at some base row.
+    pub fn gather<T: Copy>(&self, column: &[T]) -> Result<Vec<T>> {
+        crate::expanded::gather(&self.row, column, "column")
     }
 
     /// The variables, in the order they were first made.

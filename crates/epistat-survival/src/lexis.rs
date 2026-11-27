@@ -184,6 +184,18 @@ pub struct Lexis {
 }
 
 impl Lexis {
+    /// The value of `column`, one value per row of the input, at the input row
+    /// of each row here.
+    ///
+    /// # Errors
+    ///
+    /// An input error when `column` has no value at some input row.
+    pub fn gather<T: Copy>(&self, column: &[T]) -> Result<Vec<T>> {
+        crate::expanded::gather(&self.row, column, "column")
+    }
+}
+
+impl Lexis {
     /// The number of pieces.
     #[must_use]
     pub fn len(&self) -> usize {

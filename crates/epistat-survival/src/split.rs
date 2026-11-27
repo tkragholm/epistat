@@ -107,6 +107,28 @@ pub struct Split {
 }
 
 impl Split {
+    /// The value of `column`, one value per row of the input, at the input row
+    /// of each row here.
+    ///
+    /// # Errors
+    ///
+    /// An input error when `column` has no value at some input row.
+    pub fn gather<T: Copy>(&self, column: &[T]) -> Result<Vec<T>> {
+        crate::expanded::gather(&self.row, column, "column")
+    }
+
+    /// The rows as follow-up data, with the largest status as the number of
+    /// codes, at least 1, for a fit on them.
+    ///
+    /// # Errors
+    ///
+    /// The errors of building a [`SurvBuf`](crate::SurvBuf) from the columns.
+    pub fn to_surv_buf(&self) -> Result<crate::SurvBuf> {
+        crate::expanded::surv_buf(Some(&self.start), &self.stop, &self.status, None)
+    }
+}
+
+impl Split {
     /// The number of pieces.
     #[must_use]
     pub fn len(&self) -> usize {

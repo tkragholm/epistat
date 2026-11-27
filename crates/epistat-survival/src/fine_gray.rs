@@ -292,10 +292,38 @@ pub struct Rows {
     pub start: Vec<f64>,
     /// Interval stop.
     pub stop: Vec<f64>,
-    /// 1 when the interval ends in the cause of interest, 0 otherwise.
-    pub event: Vec<i32>,
+    /// 1 when the interval ends in the cause of interest, 0 otherwise, the
+    /// status of the row as `finegray`'s `fgstatus`.
+    pub status: Vec<i32>,
     /// Weight of the row.
     pub weight: Vec<f64>,
+}
+
+impl Rows {
+    /// The value of `column`, one value per row of the input, at the input row
+    /// of each row here.
+    ///
+    /// # Errors
+    ///
+    /// An input error when `column` has no value at some input row.
+    pub fn gather<T: Copy>(&self, column: &[T]) -> Result<Vec<T>> {
+        crate::expanded::gather(&self.row, column, "column")
+    }
+
+    /// The rows as follow-up data, with their weights and the largest status as the number of
+    /// codes, at least 1, for a fit on them.
+    ///
+    /// # Errors
+    ///
+    /// The errors of building a [`SurvBuf`](crate::SurvBuf) from the columns.
+    pub fn to_surv_buf(&self) -> Result<crate::SurvBuf> {
+        crate::expanded::surv_buf(
+            Some(&self.start),
+            &self.stop,
+            &self.status,
+            Some(&self.weight),
+        )
+    }
 }
 
 impl Rows {
@@ -303,7 +331,7 @@ impl Rows {
         self.row.push(row as u32);
         self.start.push(start);
         self.stop.push(stop);
-        self.event.push(i32::from(event));
+        self.status.push(i32::from(event));
         self.weight.push(weight);
     }
 }
@@ -1099,7 +1127,7 @@ mod tests {
             let cluster: Option<Vec<u32>> = data
                 .cluster()
                 .map(|cluster| rows.row.iter().map(|&row| cluster[source(row)]).collect());
-            let mut builder = SurvData::builder(&rows.stop, &rows.event)
+            let mut builder = SurvData::builder(&rows.stop, &rows.status)
                 .n_codes(1)
                 .start(&rows.start)
                 .weight(&rows.weight);
@@ -1182,7 +1210,7 @@ mod tests {
 
     fn fit_rows(rows: &Rows, x: &[f64]) -> CoxModelFit {
         let design = Mat::from_fn(rows.row.len(), 1, |k, _| x[rows.row[k] as usize]);
-        let data = SurvData::builder(&rows.stop, &rows.event)
+        let data = SurvData::builder(&rows.stop, &rows.status)
             .n_codes(1)
             .start(&rows.start)
             .weight(&rows.weight)
@@ -1513,7 +1541,7 @@ mod tests {
         assert_eq!(full.row, renumbered);
         assert_eq!(full.start, small.start);
         assert_eq!(full.stop, small.stop);
-        assert_eq!(full.event, small.event);
+        assert_eq!(full.status, small.status);
         assert_eq!(full.weight, small.weight);
         for ties in [Ties::Breslow, Ties::Efron] {
             let a = fit(&all, column(&x).as_ref(), &options(1, ties)).unwrap();

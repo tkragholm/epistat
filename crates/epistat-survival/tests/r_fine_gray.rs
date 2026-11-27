@@ -288,7 +288,7 @@ fn compare_rows(
             let first = own[next];
             assert_eq!(ours.start[first], theirs.start[p], "{label} start");
             assert_eq!(
-                ours.event[first], theirs.status[p],
+                ours.status[first], theirs.status[p],
                 "{label} status of individual {individual}"
             );
             let ours_weight = ours.weight[first] * scale[individual];
@@ -436,7 +436,7 @@ fn collapsed_rows_carry_the_risk_sets_of_finegray() {
                 let theirs = &result.rows;
                 let their_levels: Vec<u32> = theirs.orig.iter().map(|&o| levels[o - 1]).collect();
                 let ours_sums = risk_sums(
-                    (&ours.start, &ours.stop, &ours.event, &ours.weight),
+                    (&ours.start, &ours.stop, &ours.status, &ours.weight),
                     &our_levels,
                     &events,
                 );

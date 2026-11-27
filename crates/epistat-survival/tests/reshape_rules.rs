@@ -175,3 +175,22 @@ fn a_missing_value_in_cumevent_is_refused() {
     tm.cumevent("k", &obs).unwrap();
     assert_eq!(tm.variable("k").unwrap().values, [Some(0.0)]);
 }
+
+#[test]
+fn split_rows_carry_input_columns_and_refit_as_follow_up() {
+    let stop = [4.0, 7.0, 2.0];
+    let status = [1, 0, 1];
+    let data = SurvData::builder(&stop, &status).build().unwrap();
+    let got = split(&data, &[3.0, 5.0], &SplitOptions::default()).unwrap();
+    let age = [61.0, 47.0, 70.0];
+    let gathered = got.gather(&age).unwrap();
+    let by_hand: Vec<f64> = got.row.iter().map(|&r| age[r as usize]).collect();
+    assert_eq!(gathered, by_hand);
+    assert!(got.gather(&age[..2]).is_err());
+    let buf = got.to_surv_buf().unwrap();
+    let back = buf.as_data();
+    assert_eq!(back.n_rows(), got.row.len());
+    let follow = back.followup().unwrap();
+    assert_eq!(follow.stop(), &got.stop[..]);
+    assert_eq!(follow.start(), Some(&got.start[..]));
+}

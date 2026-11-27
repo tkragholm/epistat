@@ -158,6 +158,7 @@ pub mod condense;
 pub mod cox;
 pub mod crossover;
 mod error;
+mod expanded;
 pub mod fine_gray;
 pub mod flexpar;
 pub mod frailty;
