@@ -31,11 +31,10 @@ mod common;
 
 use common::{Lines, Rng, Table, Writer};
 use epistat_did::{
-    EtwfeConfig, EtwfeFamily, EtwfeGlmConfig, EtwfeType, ImputationConfig, ImputationTerm,
-    StaggeredPanel, SunabConfig, SunabTerm, TwoStageConfig, estimate_did_imputation,
-    estimate_did2s, estimate_etwfe, estimate_etwfe_glm, estimate_sunab,
+    EtwfeFamily, EtwfeOptions, EtwfeType, EtwfeVcov, ImputationOptions, ImputationTarget,
+    ImputationTerm, StaggeredPanel, SunabOptions, SunabTerm, TwoStageOptions, TwoStageSpec, etwfe,
+    imputation, sunab, two_stage,
 };
-use epistat_glm::Vcov;
 use epistat_linalg::Mat;
 
 const SEED: u64 = 20_261_125;
@@ -127,59 +126,65 @@ fn main() {
         _ => "y",
     });
     let columns = StaggeredPanel::builder(&unit, &time, &g, outcome).covariates(x.as_ref());
-    let panel = columns.build().expect("panel");
     let clustered = columns.clusters(&cl).build().expect("panel");
     let mut lines = Lines::default();
     let times = match method.as_str() {
         "imputation_es" => {
-            let config = ImputationConfig::event_study();
+            let config = ImputationOptions {
+                target: ImputationTarget::Horizons(None),
+                ..ImputationOptions::default()
+            };
             let (times, out) = common::timed(common::reps(), || {
-                estimate_did_imputation(&clustered, &config).expect("imputation")
+                imputation::estimate(&clustered, &config).expect("imputation")
             });
-            for e in &out.estimates {
+            for e in &out.effects {
                 if let ImputationTerm::Horizon(h) = e.term {
-                    lines.push_opt(&format!("est_{h}"), e.estimate);
-                    lines.push_opt(&format!("se_{h}"), e.std_error);
+                    lines.push_opt(&format!("est_{h}"), e.estimate.map(|e| e.estimate));
+                    lines.push_opt(&format!("se_{h}"), e.estimate.and_then(|e| e.se));
                 }
             }
             times
         }
         "did2s_es" => {
-            let config = TwoStageConfig::event_study();
+            let config = TwoStageOptions {
+                spec: TwoStageSpec::EventStudy {
+                    references: vec![-1],
+                },
+                ..TwoStageOptions::default()
+            };
             let (times, out) = common::timed(common::reps(), || {
-                estimate_did2s(&clustered, &config).expect("did2s")
+                two_stage::estimate(&clustered, &config).expect("did2s")
             });
             for term in &out.terms {
                 let r = term.relative_period.expect("event study");
-                lines.push_opt(&format!("est_{r}"), term.estimate);
-                lines.push_opt(&format!("se_{r}"), term.std_error);
+                lines.push_opt(&format!("est_{r}"), term.estimate.map(|e| e.estimate));
+                lines.push_opt(&format!("se_{r}"), term.estimate.and_then(|e| e.se));
             }
             times
         }
         "sunab_es" => {
-            let config = SunabConfig::new();
+            let config = SunabOptions::default();
             let (times, out) = common::timed(common::reps(), || {
-                estimate_sunab(&clustered, &config).expect("sunab")
+                sunab::fit(&clustered, &config).expect("sunab")
             });
-            for e in &out.estimates {
+            for e in &out.aggregates {
                 let name = match e.term {
                     SunabTerm::Period(r) => format!("{r}"),
                     SunabTerm::Att => "att".to_string(),
-                    SunabTerm::Cohort(_) => continue,
+                    _ => continue,
                 };
-                lines.push(&format!("est_{name}"), e.estimate);
-                lines.push_opt(&format!("se_{name}"), e.std_error);
+                lines.push(&format!("est_{name}"), e.estimate.estimate);
+                lines.push_opt(&format!("se_{name}"), e.estimate.se);
             }
             times
         }
         "etwfe_es" => {
-            let ways = [&cl[..]];
-            let config = EtwfeConfig {
-                vcov: Vcov::Cluster(&ways),
-                ..EtwfeConfig::new()
+            let config = EtwfeOptions {
+                vcov: EtwfeVcov::Clustered,
+                ..EtwfeOptions::default()
             };
             let (times, out) = common::timed(common::reps(), || {
-                estimate_etwfe(&panel, &config).expect("etwfe")
+                etwfe::fit(&clustered, &config).expect("etwfe")
             });
             for e in &out.effects {
                 let name = match e.term {
@@ -187,24 +192,24 @@ fn main() {
                     EtwfeType::Event(r) => format!("{r}"),
                     _ => continue,
                 };
-                lines.push(&format!("est_{name}"), e.estimate);
-                lines.push_opt(&format!("se_{name}"), e.std_error);
+                lines.push(&format!("est_{name}"), e.estimate.estimate);
+                lines.push_opt(&format!("se_{name}"), e.estimate.se);
             }
             times
         }
         "etwfe_poisson" | "etwfe_logit" => {
-            let ways = [&cl[..]];
             let family = if method == "etwfe_poisson" {
                 EtwfeFamily::Poisson
             } else {
                 EtwfeFamily::Logit
             };
-            let config = EtwfeGlmConfig {
-                vcov: Vcov::Cluster(&ways),
-                ..EtwfeGlmConfig::new(family)
+            let config = EtwfeOptions {
+                family,
+                vcov: EtwfeVcov::Clustered,
+                ..EtwfeOptions::default()
             };
             let (times, out) = common::timed(common::reps(), || {
-                estimate_etwfe_glm(&panel, &config).expect("etwfe glm")
+                etwfe::fit(&clustered, &config).expect("etwfe glm")
             });
             for e in &out.effects {
                 let name = match e.term {
@@ -212,8 +217,8 @@ fn main() {
                     EtwfeType::Event(r) => format!("{r}"),
                     _ => continue,
                 };
-                lines.push(&format!("est_{name}"), e.estimate);
-                lines.push_opt(&format!("se_{name}"), e.std_error);
+                lines.push(&format!("est_{name}"), e.estimate.estimate);
+                lines.push_opt(&format!("se_{name}"), e.estimate.se);
             }
             times
         }

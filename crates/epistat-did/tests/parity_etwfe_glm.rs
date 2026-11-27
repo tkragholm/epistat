@@ -247,9 +247,7 @@ impl Plain<'_> {
             EtwfeTerm::Cohort(g) => one(in_cohort(g)),
             EtwfeTerm::Period(t) => one(case.time[i] == t),
             EtwfeTerm::Covariate(k) => xv(k),
-            EtwfeTerm::CohortSlope { cohort, covariate } => {
-                one(in_cohort(cohort)) * xv(covariate)
-            }
+            EtwfeTerm::CohortSlope { cohort, covariate } => one(in_cohort(cohort)) * xv(covariate),
             EtwfeTerm::PeriodSlope { period, covariate } => {
                 one(case.time[i] == period) * xv(covariate)
             }
@@ -373,7 +371,9 @@ fn etwfe_glm_matches_the_package() {
         for j in 0..q {
             assert_eq!(
                 plain_fit.coefficients[j].map(f64::to_bits),
-                result.coefficients[j].estimate.map(|e| e.estimate.to_bits()),
+                result.coefficients[j]
+                    .estimate
+                    .map(|e| e.estimate.to_bits()),
                 "{} {}",
                 case.name,
                 labels[j]

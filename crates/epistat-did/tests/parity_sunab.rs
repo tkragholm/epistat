@@ -660,7 +660,9 @@ fn always_treated_rows_are_removed() {
 }
 
 /// The values of an influence function, column after column.
-fn influence_values(influence: Option<&epistat_inference::Influence>) -> impl Iterator<Item = f64> + '_ {
+fn influence_values(
+    influence: Option<&epistat_inference::Influence>,
+) -> impl Iterator<Item = f64> + '_ {
     influence
         .into_iter()
         .flat_map(|f| (0..f.n_columns()).flat_map(move |j| f.column(j).iter().copied()))

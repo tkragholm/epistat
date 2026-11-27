@@ -38,9 +38,9 @@
 //! - The average causal response to a continuous treatment \[6\]:
 //!   [`estimate_acrt_sieve`].
 //! - Two-way fixed-effects regressions, static and event study with binned
-//!   end points, as `fixest::feols` fits them: [`estimate_twfe`], and the
+//!   end points, as `fixest::feols` fits them: [`twfe::fit`], and the
 //!   Goodman-Bacon decomposition \[11\] of the static estimate into its 2x2
-//!   comparisons as `bacondecomp::bacon`: [`bacon_decomposition`].
+//!   comparisons as `bacondecomp::bacon`: [`bacon::decompose`].
 //! - Event-study effects for treatments that switch on and off or take
 //!   several values, as `DIDmultiplegtDYN` of de Chaisemartin and
 //!   D'Haultfoeuille \[8\]: [`estimate_dcdh`].
@@ -53,18 +53,25 @@
 //! - The power of the pre-trends test and the distortion after passing it,
 //!   after Roth \[10\], in [`pretrends`].
 //! - The imputation estimator of Borusyak, Jaravel and Spiess \[12\]:
-//!   [`estimate_did_imputation`], with the algorithm in [`imputation`]; and
-//!   the two-stage estimator of Gardner \[13\]: [`estimate_did2s`], in
-//!   [`two_stage`]. Both absorb the unit and period effects of the untreated
-//!   rows with `epistat_glm::absorb`, so their cost is linear in the rows.
+//!   [`imputation::estimate`]; and the two-stage estimator of Gardner \[13\]:
+//!   [`two_stage::estimate`]. Both absorb the unit and period effects of the
+//!   untreated rows with `epistat_glm::absorb`, so their cost is linear in
+//!   the rows.
 //! - The interaction-weighted event study of Sun and Abraham \[14\], as
-//!   `fixest::sunab` and `fixest::aggregate` compute it: [`estimate_sunab`],
-//!   with the cohort and relative period coefficients and their summaries by
+//!   `fixest::sunab` and `fixest::aggregate` compute it: [`sunab::fit`], with
+//!   the cohort and relative period coefficients and their aggregates by
 //!   relative period, by cohort and overall.
 //! - Wooldridge's extended two-way fixed-effects regression \[15\] and its
 //!   average effects, as `etwfe::etwfe` and `etwfe::emfx` compute them:
-//!   [`estimate_etwfe`] for linear models and [`estimate_etwfe_glm`] for the
-//!   Poisson and logit models.
+//!   [`etwfe::fit`], for linear models and, by [`EtwfeOptions::family`], for
+//!   the Poisson and logit models.
+//!
+//! The fixed-effects family takes a validated [`StaggeredPanel`], with the
+//! clusters of its covariances in the panel, and returns its estimates as
+//! [`epistat_core::Estimate`]s with intervals at the options' `level`, its
+//! covariances as [`epistat_core::Covariance`] and its influence functions as
+//! [`epistat_inference::Influence`], each under the cluster rule of its R
+//! reference.
 //! - The two-period ATT when the pre-treatment outcome is missing at random,
 //!   after Testa, Kennedy and Reimherr \[16\]: [`att_missing_pre`] with
 //!   parametric nuisance models, with or without cross-fitting, and
@@ -241,9 +248,8 @@ pub use methods::att_gt::{
     estimate_att_gt_or_panel_with_influence, estimate_att_gt_or_with_influence, pretrend_wald_test,
     row_panel, unit_panel,
 };
-pub use methods::bacon::{
-    BaconComparison, BaconDecomposition, BaconError, BaconKind, BaconWithin, bacon_decomposition,
-};
+pub use methods::bacon;
+pub use methods::bacon::{BaconComparison, BaconDecomposition, BaconKind, BaconWithin};
 pub use methods::continuous::sieve::estimate_acrt_sieve;
 pub use methods::dcdh::{
     DcdhAvgTimePeriods, DcdhBootstrap, DcdhBootstrapEstimate, DcdhConfig, DcdhDesign,
@@ -276,8 +282,8 @@ pub use methods::efficient::{
 };
 pub use methods::etwfe;
 pub use methods::etwfe::{
-    EtwfeCoefficient, EtwfeControl, EtwfeEffect, EtwfeEffects, EtwfeFamily, EtwfeFit,
-    EtwfeOptions, EtwfeTerm, EtwfeType, EtwfeVcov,
+    EtwfeCoefficient, EtwfeControl, EtwfeEffect, EtwfeEffects, EtwfeFamily, EtwfeFit, EtwfeOptions,
+    EtwfeTerm, EtwfeType, EtwfeVcov,
 };
 pub use methods::imputation;
 pub use methods::imputation::{

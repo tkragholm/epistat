@@ -162,6 +162,9 @@ mod tests {
             ErrorKind::Unsupported
         );
         let glm = Error::from(epistat_glm::Error::Singular);
-        assert_eq!((glm.kind(), glm.code()), (ErrorKind::Numerical, "glm.singular"));
+        assert_eq!(
+            (glm.kind(), glm.code()),
+            (ErrorKind::Numerical, "glm.singular")
+        );
     }
 }

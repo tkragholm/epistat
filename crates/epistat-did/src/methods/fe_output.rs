@@ -43,10 +43,9 @@ impl Reference {
     /// `cov` of `n` rows: t with `G - 1` degrees of freedom when the
     /// covariance is clustered, `n - K` otherwise, and at least one.
     pub(crate) fn fixest_linear(cov: &FeolsCovariance, n: usize) -> Self {
-        let nu = cov.min_clusters.map_or_else(
-            || n.saturating_sub(cov.df_k),
-            |g| g.saturating_sub(1),
-        );
+        let nu = cov
+            .min_clusters
+            .map_or_else(|| n.saturating_sub(cov.df_k), |g| g.saturating_sub(1));
         Self::StudentT(nu.max(1) as f64)
     }
 }

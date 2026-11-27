@@ -292,9 +292,7 @@ fn cohort_rows(
         if let Some(g) = *g
             && !excluded[i]
         {
-            let e = panel.period()[i]
-                .checked_sub(g)
-                .ok_or(Error::Periods)?;
+            let e = panel.period()[i].checked_sub(g).ok_or(Error::Periods)?;
             let entry = seen.entry(g).or_default();
             if e < 0 {
                 entry.0 = true;

@@ -100,10 +100,19 @@ fn results_do_not_depend_on_the_number_of_threads() {
             .effects
             .iter()
             .map(|e| e.estimate)
-            .chain(imp.pretrends.iter().flat_map(|p| p.terms.iter().map(|t| t.estimate)))
+            .chain(
+                imp.pretrends
+                    .iter()
+                    .flat_map(|p| p.terms.iter().map(|t| t.estimate)),
+            )
             .chain(two.terms.iter().map(|t| t.estimate));
         for e in estimates.flatten() {
-            out.extend([e.estimate, e.se.unwrap(), e.lower().unwrap(), e.upper().unwrap()]);
+            out.extend([
+                e.estimate,
+                e.se.unwrap(),
+                e.lower().unwrap(),
+                e.upper().unwrap(),
+            ]);
         }
         for inf in imp.influence.iter().chain(&two.influence) {
             for j in 0..inf.n_columns() {

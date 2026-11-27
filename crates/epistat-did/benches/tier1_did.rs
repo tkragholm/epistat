@@ -142,9 +142,8 @@ fn twfe(n: usize) {
         },
         ..TwfeOptions::default()
     };
-    let (times, result) = common::timed(common::reps(), || {
-        twfe::fit(&panel, &config).expect("twfe")
-    });
+    let (times, result) =
+        common::timed(common::reps(), || twfe::fit(&panel, &config).expect("twfe"));
     let mut lines = Lines::default();
     for term in &result.terms {
         let r = term.relative_period.unwrap_or(0);

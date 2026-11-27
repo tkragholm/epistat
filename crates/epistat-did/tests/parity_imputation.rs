@@ -529,7 +529,8 @@ fn did2s_matches_the_exact_values_and_the_package() {
                 keep_projections: true,
                 ..TwoStageOptions::default()
             };
-            let out = two_stage::estimate(&panel(case, spec.weighted, x.as_ref()), &config).unwrap();
+            let out =
+                two_stage::estimate(&panel(case, spec.weighted, x.as_ref()), &config).unwrap();
             let b = Bounds::new(
                 case,
                 spec.weighted,

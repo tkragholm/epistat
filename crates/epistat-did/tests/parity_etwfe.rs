@@ -290,7 +290,9 @@ fn etwfe_matches_the_package() {
         for (j, c) in b.coefficients.iter().enumerate() {
             assert_eq!(
                 c.map(f64::to_bits),
-                result.coefficients[j].estimate.map(|e| e.estimate.to_bits()),
+                result.coefficients[j]
+                    .estimate
+                    .map(|e| e.estimate.to_bits()),
                 "{} {}",
                 case.name,
                 labels[j]
@@ -323,7 +325,9 @@ fn etwfe_matches_the_package() {
         let bu = bound(Meat::Cluster(&case.unit), unit_factor);
         let influence = result.influence.as_ref().unwrap();
         assert_eq!(influence.n_columns(), q);
-        let raw = influence.variance_with(None, ClusterRule::NoSmallSample).unwrap();
+        let raw = influence
+            .variance_with(None, ClusterRule::NoSmallSample)
+            .unwrap();
         for j in 0..q * q {
             assert!(
                 (raw.as_slice()[j].unwrap() - case.vcov_unadjusted[j]).abs()

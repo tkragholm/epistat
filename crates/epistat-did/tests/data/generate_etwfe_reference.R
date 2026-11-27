@@ -1,4 +1,4 @@
-# Reference values for epistat_did::estimate_etwfe: Wooldridge's extended
+# Reference values for epistat_did::etwfe::fit: Wooldridge's extended
 # two-way fixed-effects regression as etwfe 0.6.2 fits it (on fixest 0.14.2)
 # and the average effects of emfx(type = "simple", "group", "calendar",
 # "event") with their delta-method standard errors (marginaleffects 1.0.0).

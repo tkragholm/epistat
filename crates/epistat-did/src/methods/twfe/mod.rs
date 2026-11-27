@@ -55,7 +55,7 @@
 //! With staggered adoption and effects that change over time or differ
 //! between cohorts, the static coefficient is a weighted mean of all 2x2
 //! comparisons, some with already treated units as controls and weights that
-//! can be negative \[1\]; [`bacon_decomposition`](crate::bacon_decomposition)
+//! can be negative \[1\]; [`bacon::decompose`](crate::bacon::decompose)
 //! shows those comparisons. The event-study coefficients are contaminated by
 //! the effects at other relative periods in the same way \[2\]. They are
 //! reported as the comparison readers expect next to the heterogeneity-robust
@@ -295,7 +295,8 @@ pub fn fit(panel: &StaggeredPanel<'_>, options: &TwfeOptions) -> Result<TwfeFit,
                 .collect(),
         );
     }
-    let influence = fe_output::influence(columns, units, fe_output::fixest_rule(options.ssc.g_adj))?;
+    let influence =
+        fe_output::influence(columns, units, fe_output::fixest_rule(options.ssc.g_adj))?;
     Ok(TwfeFit {
         terms,
         covariate_coefficients,

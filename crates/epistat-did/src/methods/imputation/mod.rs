@@ -736,10 +736,6 @@ fn pretrend_regression(
     Ok(ImputationPretrends {
         terms,
         covariance: Covariance::new(m, covariance)?,
-        influence: fe_output::influence(
-            influence,
-            index.units.clone(),
-            ClusterRule::SmallSample,
-        )?,
+        influence: fe_output::influence(influence, index.units.clone(), ClusterRule::SmallSample)?,
     })
 }
