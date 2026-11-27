@@ -22,7 +22,7 @@
 //! the p-value is `None` unless the standard error is positive, as in
 //! [`epistat_stats::wald`], which forms the normal case.
 
-use epistat_core::{Estimate, Interval, Level, Scale};
+use epistat_core::{Covariance, Estimate, EventStudy, Interval, Level, Scale};
 use epistat_glm::FeolsCovariance;
 use epistat_inference::{ClusterRule, Influence};
 use epistat_stats::dist::t;
@@ -107,6 +107,31 @@ pub(crate) fn column_of(
         position += usize::from(defined.next()?);
     }
     defined.next()?.then(|| influence.column(position))
+}
+
+/// The event study of the coefficients `estimates` at the relative periods
+/// `periods`, with their covariance `covariance` and the reference period
+/// `reference`: the coefficients that were estimated and the block of the
+/// covariance between them.
+pub(crate) fn event_study(
+    estimates: &[Option<f64>],
+    periods: &[i64],
+    covariance: &Covariance,
+    reference: i64,
+) -> Result<EventStudy, Error> {
+    let kept: Vec<usize> = (0..estimates.len())
+        .filter(|&j| estimates[j].is_some())
+        .collect();
+    let values = kept
+        .iter()
+        .flat_map(|&i| kept.iter().map(move |&j| covariance.get(i, j)))
+        .collect();
+    Ok(EventStudy::new(
+        kept.iter().filter_map(|&j| estimates[j]).collect(),
+        Covariance::new(kept.len(), values)?,
+        kept.iter().map(|&j| periods[j]).collect(),
+        reference,
+    )?)
 }
 
 /// The cluster rule of a covariance with `fixest`'s factor `G / (G - 1)` when

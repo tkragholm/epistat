@@ -705,3 +705,46 @@ fn sunab_has_its_recorded_bits() {
         .finish();
     assert_eq!(hash, 12_002_447_259_631_101_414, "recorded hash");
 }
+
+#[test]
+fn the_event_study_holds_the_aggregates_by_relative_period() {
+    let reference = reference();
+    for case in &reference.cases {
+        let s = setting(case);
+        let x = covariate(case);
+        let fit = sunab::fit(&panel(case, x.as_ref()), &config(case, &s)).unwrap();
+        let Some(&before) = fit.references.iter().rev().find(|&&r| r < 0) else {
+            assert!(fit.event_study().is_err(), "{}", case.name);
+            continue;
+        };
+        let study = fit.event_study().unwrap();
+        assert_eq!(study.reference(), before, "{}", case.name);
+        let periods: Vec<(usize, i64)> = fit
+            .aggregates
+            .iter()
+            .enumerate()
+            .filter_map(|(a, g)| match g.term {
+                SunabTerm::Period(e) => Some((a, e)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            study.relative_periods(),
+            periods.iter().map(|p| p.1).collect::<Vec<_>>().as_slice(),
+            "{}",
+            case.name
+        );
+        for (k, &(a, _)) in periods.iter().enumerate() {
+            assert_eq!(
+                study.coefficients()[k].to_bits(),
+                fit.aggregates[a].estimate.estimate.to_bits()
+            );
+            for (l, &(b, _)) in periods.iter().enumerate() {
+                assert_eq!(
+                    study.covariance().get(k, l),
+                    fit.aggregate_covariance.get(a, b)
+                );
+            }
+        }
+    }
+}

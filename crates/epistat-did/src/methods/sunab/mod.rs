@@ -87,7 +87,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use epistat_core::{Covariance, Estimate, Level};
+use epistat_core::{Covariance, Estimate, EventStudy, Level};
 use epistat_glm::{Absorb, Feols, FixedEffects, Singletons, Ssc, Vcov};
 use epistat_inference::Influence;
 use epistat_linalg::Mat;
@@ -236,6 +236,9 @@ pub struct SunabFit {
     pub aggregates: Vec<SunabAggregate>,
     /// The clustered covariance of the aggregates, `None` where undefined.
     pub aggregate_covariance: Covariance,
+    /// The relative periods left out of the interactions, resolved and in
+    /// increasing order.
+    pub references: Vec<i64>,
     /// The influence function of each aggregate, one column each in their
     /// order with one value per unit in the fit in increasing code; `None`
     /// when there is no aggregate.
@@ -279,6 +282,47 @@ impl SunabFit {
             .map(|c| c.estimate.is_some())
             .chain(self.covariate_coefficients.iter().map(Option::is_some));
         fe_output::column_of(self.influence.as_ref(), defined, j)
+    }
+
+    /// The event study of the aggregates by relative period, the
+    /// interaction-weighted estimates of Sun and Abraham, with their block of
+    /// [`SunabFit::aggregate_covariance`], the input of HonestDiD and of the
+    /// pre-trend power. Its reference is the last relative period left out
+    /// before 0.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] when no reference period lies before 0, and
+    /// [`Error::Input`] when a binned period carries the reference's label.
+    pub fn event_study(&self) -> Result<EventStudy, Error> {
+        let Some(&reference) = self.references.iter().rev().find(|&&r| r < 0) else {
+            return Err(Error::Unsupported {
+                what: "an event study without a reference period before treatment",
+            });
+        };
+        let (positions, periods): (Vec<usize>, Vec<i64>) = self
+            .aggregates
+            .iter()
+            .enumerate()
+            .filter_map(|(a, aggregate)| match aggregate.term {
+                SunabTerm::Period(e) => Some((a, e)),
+                _ => None,
+            })
+            .unzip();
+        let estimates: Vec<Option<f64>> = positions
+            .iter()
+            .map(|&a| Some(self.aggregates[a].estimate.estimate))
+            .collect();
+        let values = positions
+            .iter()
+            .flat_map(|&a| {
+                positions
+                    .iter()
+                    .map(move |&b| self.aggregate_covariance.get(a, b))
+            })
+            .collect();
+        let covariance = Covariance::new(positions.len(), values)?;
+        fe_output::event_study(&estimates, &periods, &covariance, reference)
     }
 }
 
@@ -601,6 +645,12 @@ pub fn fit(panel: &StaggeredPanel<'_>, options: &SunabOptions) -> Result<SunabFi
         cells: cell_results,
         aggregates,
         aggregate_covariance: Covariance::new(m, estimate_covariance)?,
+        references: references
+            .iter()
+            .copied()
+            .collect::<BTreeSet<i64>>()
+            .into_iter()
+            .collect(),
         aggregate_influence: fe_output::influence(aggregate_influence, units.clone(), rule)?,
         covariate_coefficients,
         covariance: cov.matrix,

@@ -528,3 +528,35 @@ fn twfe_has_its_recorded_bits() {
         .finish();
     assert_eq!(hash, 5_214_096_018_603_673_576, "recorded hash");
 }
+
+#[test]
+fn the_event_study_holds_the_estimated_terms() {
+    for case in &reference().cases {
+        let x = covariate(case);
+        let fit = twfe::fit(&panel(case, x.as_ref()), &config(case)).unwrap();
+        let Some(reference) = fit.reference else {
+            assert!(matches!(
+                fit.event_study(),
+                Err(epistat_did::Error::Unsupported { .. })
+            ));
+            continue;
+        };
+        let study = fit.event_study().unwrap();
+        let kept: Vec<usize> = (0..fit.terms.len())
+            .filter(|&j| fit.terms[j].estimate.is_some())
+            .collect();
+        assert_eq!(study.reference(), reference, "{}", case.name);
+        assert_eq!(study.coefficients().len(), kept.len(), "{}", case.name);
+        for (a, &i) in kept.iter().enumerate() {
+            let term = &fit.terms[i];
+            assert_eq!(Some(study.relative_periods()[a]), term.relative_period);
+            assert_eq!(
+                study.coefficients()[a].to_bits(),
+                term.estimate.unwrap().estimate.to_bits()
+            );
+            for (b, &j) in kept.iter().enumerate() {
+                assert_eq!(study.covariance().get(a, b), fit.covariance.get(i, j));
+            }
+        }
+    }
+}

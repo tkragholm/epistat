@@ -73,7 +73,7 @@
 
 use std::collections::BTreeSet;
 
-use epistat_core::{Covariance, Estimate, Level};
+use epistat_core::{Covariance, Estimate, EventStudy, Level};
 use epistat_glm::{Absorb, Feols, FixedEffects, Singletons, Ssc, Vcov};
 use epistat_inference::Influence;
 use epistat_linalg::Mat;
@@ -140,6 +140,9 @@ pub struct TwfeTerm {
 pub struct TwfeFit {
     /// The treatment coefficients, in increasing relative period.
     pub terms: Vec<TwfeTerm>,
+    /// The relative period left out of the event study, `None` for the
+    /// static regression.
+    pub reference: Option<i64>,
     /// The coefficients of the covariates, `None` when aliased.
     pub covariate_coefficients: Vec<Option<Estimate>>,
     /// The clustered covariance of the treatment terms and then the
@@ -175,6 +178,34 @@ impl TwfeFit {
             .map(|t| t.estimate.is_some())
             .chain(self.covariate_coefficients.iter().map(Option::is_some));
         fe_output::column_of(self.influence.as_ref(), defined, j)
+    }
+
+    /// The event study of the relative-period coefficients that were
+    /// estimated, with their block of the covariance, the input of HonestDiD
+    /// and of the pre-trend power.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] for the static regression, and [`Error::Input`]
+    /// when no coefficient was estimated or a binned period carries the
+    /// reference's label.
+    pub fn event_study(&self) -> Result<EventStudy, Error> {
+        let Some(reference) = self.reference else {
+            return Err(Error::Unsupported {
+                what: "an event study of the static regression",
+            });
+        };
+        let estimates: Vec<Option<f64>> = self
+            .terms
+            .iter()
+            .map(|t| t.estimate.map(|e| e.estimate))
+            .collect();
+        let periods: Vec<i64> = self
+            .terms
+            .iter()
+            .map(|t| t.relative_period.unwrap_or(reference))
+            .collect();
+        fe_output::event_study(&estimates, &periods, &self.covariance, reference)
     }
 }
 
@@ -297,8 +328,13 @@ pub fn fit(panel: &StaggeredPanel<'_>, options: &TwfeOptions) -> Result<TwfeFit,
     }
     let influence =
         fe_output::influence(columns, units, fe_output::fixest_rule(options.ssc.g_adj))?;
+    let reference = match options.spec {
+        TwfeSpec::Static => None,
+        TwfeSpec::EventStudy { reference, .. } => Some(reference),
+    };
     Ok(TwfeFit {
         terms,
+        reference,
         covariate_coefficients,
         covariance: cov.matrix,
         df_k: cov.df_k,

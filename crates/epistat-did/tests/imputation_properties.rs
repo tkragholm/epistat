@@ -8,7 +8,7 @@ use epistat_did::{
     StaggeredPanelBuilder, TwoStageOptions, TwoStageSpec, imputation, two_stage,
 };
 use epistat_linalg::Mat;
-use epistat_testkit::{SplitMix64, assert_same_on_threads};
+use epistat_testkit::{BadInput, SplitMix64, assert_rejects_bad_input, assert_same_on_threads};
 
 /// A staggered panel: `units` units over periods 1..=periods, cohorts 3, 5,
 /// 7 and never, one covariate, row weights and a fifth of the rows dropped.
@@ -264,6 +264,28 @@ fn invalid_input_is_an_error() {
             row: 4
         })
     );
+}
+
+#[test]
+fn bad_target_weights_are_input_errors() {
+    let sim = simulate(50, 8, 5);
+    let panel = sim.panel();
+    let treated: Vec<f64> = (0..sim.y.len())
+        .map(|i| f64::from(u8::from(sim.g[i].is_some_and(|g| sim.time[i] >= g))))
+        .collect();
+    assert_rejects_bad_input("imputation::estimate target weights", |bad| {
+        // Reversed weights fall on untreated rows, which is its own error.
+        (bad != BadInput::Unsorted).then(|| {
+            imputation::estimate(
+                &panel,
+                &ImputationOptions {
+                    target: ImputationTarget::Weights(vec![bad.column(&treated)]),
+                    ..ImputationOptions::default()
+                },
+            )
+            .map(|out| out.effects.len())
+        })
+    });
 }
 
 #[test]
