@@ -33,7 +33,7 @@
 //! - [`ComorbidityMap::charlson_quan_icd10`] with [`charlson_original`]
 //!   (Charlson 1987) or [`charlson_quan2011`] (Quan 2011, Table 4).
 //! - [`ComorbidityMap::elixhauser_quan_icd10`] with
-//!   [`elixhauser_van_walraven`] (van Walraven 2009, Table 3).
+//!   [`elixhauser_van_walraven`] (van Walraven 2009).
 //!
 //! - [`ComorbidityMap::charlson_denmark`] with [`charlson_denmark_weights`]:
 //!   the 19 conditions of the Danish coding, with the ICD-10 codes of
