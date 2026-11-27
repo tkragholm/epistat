@@ -252,10 +252,12 @@ fn the_covariance_does_not_depend_on_the_number_of_threads() {
 }
 
 #[test]
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn the_covariance_has_its_recorded_bits() {
     let hash = epistat_testkit::Fingerprint::new()
         .f64s(&covariance_bits())
         .finish();
-    assert_eq!(hash, 5_813_520_643_598_786_199, "recorded hash");
+    epistat_testkit::hash_out("the_covariance_has_its_recorded_bits", hash);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(hash, 5_813_520_643_598_786_199, "recorded hash");
+    }
 }

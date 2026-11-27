@@ -5,11 +5,11 @@
 //! field, with its length, and they must not change. To record again, run with
 //! `GOLDEN_RECORD=1 -- --nocapture` and paste the lines.
 //!
-//! The bits depend on the platform's `ln` and `exp`, so the test runs only on
-//! the target it was recorded on, aarch64 macOS. Thread-count independence is
-//! checked everywhere by `threads_sccs`.
-
-#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
+//! The bits depend on the platform's `ln` and `exp`, so the test asserts the
+//! recorded values only on the target it was recorded on, aarch64 macOS.
+//! Thread-count independence is checked everywhere by `threads_sccs`. Elsewhere
+//! it computes the hashes and, when `EPISTAT_HASH_OUT` is set, appends them to
+//! that file.
 
 use epistat_rng::Stream;
 use epistat_survival::sccs::{
@@ -37,10 +37,14 @@ fn digest(values: &[f64]) -> u64 {
 #[track_caller]
 fn check(name: &str, values: &[f64]) {
     let got = (values.len(), digest(values));
+    epistat_testkit::hash_out(name, got.1);
     if std::env::var_os("GOLDEN_RECORD").is_some() {
         let hex = format!("{:016x}", got.1);
         let hex: Vec<&str> = (0..4).map(|i| &hex[4 * i..4 * i + 4]).collect();
         println!("    (\"{name}\", {}, 0x{}),", got.0, hex.join("_"));
+        return;
+    }
+    if !epistat_testkit::RECORDED_PLATFORM {
         return;
     }
     let want = EXPECTED

@@ -216,8 +216,9 @@ fn exact_test_grid() {
 /// The values go through `ln`, `exp` and `powf`, whose last bits depend on
 /// the maths library and, on Windows, on the processor the library dispatches
 /// for, so the bits are checked only on aarch64 macOS, where they were recorded.
+/// Elsewhere the test computes the hash and, when `EPISTAT_HASH_OUT` is set,
+/// appends it to that file.
 #[test]
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn fingerprint_of_a_fixed_table() {
     let s = &reference().standardised[0];
     let level = Level::default();
@@ -239,5 +240,8 @@ fn fingerprint_of_a_fixed_table() {
         .option_f64(p)
         .finish();
     eprintln!("rates fingerprint {hash:#018x}");
-    assert_eq!(hash, 0x7057_77d0_691f_1a11);
+    epistat_testkit::hash_out("fingerprint_of_a_fixed_table", hash);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(hash, 0x7057_77d0_691f_1a11);
+    }
 }

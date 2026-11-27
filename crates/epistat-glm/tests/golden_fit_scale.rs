@@ -7,10 +7,10 @@
 //! rows, so they show that the parallel fit takes the same floating-point
 //! steps.
 //!
-//! The bits depend on the platform's `ln` and `exp`, so the test runs only on
-//! the target it was recorded on, aarch64 macOS.
-
-#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
+//! The bits depend on the platform's `ln` and `exp`, so the hashes are
+//! asserted only on the target they were recorded on, aarch64 macOS. Elsewhere
+//! the test computes them and, when `EPISTAT_HASH_OUT` is set, appends them to
+//! that file.
 
 use epistat_glm::{Family, Fit, Glm, Link};
 use epistat_linalg::Mat;
@@ -171,7 +171,17 @@ fn the_fits_keep_their_bits_on_every_pool() {
         2_265_443_942_968_990_635,
         1_716_175_949_192_639_765,
     ];
-    for (threads, got) in [1, 3, 8].into_iter().zip(on_threads(&[1, 3, 8], fits)) {
-        assert_eq!(got, expected, "{threads} threads");
+    let results = on_threads(&[1, 3, 8], fits);
+    for (i, hash) in results[0].iter().enumerate() {
+        epistat_testkit::hash_out(&format!("fit/{i}"), *hash);
+    }
+    // Off the recording target the pools still have to agree with each other.
+    let want: Vec<u64> = if epistat_testkit::RECORDED_PLATFORM {
+        expected.to_vec()
+    } else {
+        results[0].clone()
+    };
+    for (threads, got) in [1, 3, 8].into_iter().zip(results) {
+        assert_eq!(got, want, "{threads} threads");
     }
 }

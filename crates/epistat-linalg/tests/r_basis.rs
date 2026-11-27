@@ -248,7 +248,6 @@ fn design_matrices_do_not_depend_on_the_number_of_threads() {
 }
 
 #[test]
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn design_matrices_have_their_recorded_bits() {
     // The bits depend on the platform's maths library for none of the
     // operations used (sums, products, quotients, square roots), but the
@@ -256,5 +255,8 @@ fn design_matrices_have_their_recorded_bits() {
     let hash = epistat_testkit::Fingerprint::new()
         .f64s(&designs())
         .finish();
-    assert_eq!(hash, 14_909_619_049_344_926_689, "recorded hash");
+    epistat_testkit::hash_out("design_matrices_have_their_recorded_bits", hash);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(hash, 14_909_619_049_344_926_689, "recorded hash");
+    }
 }

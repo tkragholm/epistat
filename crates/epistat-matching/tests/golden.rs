@@ -61,6 +61,8 @@ fn check(name: &str, outcome: &MatchOutcome, expected: (u64, u64), nonempty: boo
         got.0,
         got.1
     );
+    epistat_testkit::hash_out(&format!("{name}/outcome"), got.0);
+    epistat_testkit::hash_out(&format!("{name}/weights"), got.1);
     if std::env::var_os("GOLDEN_RECORD").is_none() {
         assert_eq!(got, expected, "{name}");
     }

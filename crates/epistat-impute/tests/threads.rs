@@ -8,7 +8,8 @@
 //! draw that depended on how rows or chains were divided would show.
 //!
 //! The fingerprint depends on the platform's `ln`, `exp` and `cos`, so it is
-//! checked only on aarch64 macOS, where it was recorded.
+//! checked only on aarch64 macOS, where it was recorded. Elsewhere the test
+//! computes it and, when `EPISTAT_HASH_OUT` is set, appends it to that file.
 
 use epistat_impute::{
     Column, ImputeOptions, ImputeSpec, Imputed, Incomplete, Method, PassiveFn, impute,
@@ -120,12 +121,13 @@ fn the_seed_changes_the_values_and_a_repeat_does_not() {
 }
 
 #[test]
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn golden_fingerprint() {
     let values = flatten(&run(20_261_123));
     let hash = epistat_testkit::Fingerprint::new().f64s(&values).finish();
-    assert_eq!(hash, GOLDEN, "{hash:#018x}");
+    epistat_testkit::hash_out("golden_fingerprint", hash);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(hash, GOLDEN, "{hash:#018x}");
+    }
 }
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const GOLDEN: u64 = 0x302e_bd21_86b8_c47c;

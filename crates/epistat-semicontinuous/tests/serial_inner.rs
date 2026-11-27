@@ -257,7 +257,6 @@ fn serial_fits_stay_close_to_the_parallel_fits() {
     }
 }
 
-#[cfg(all(target_arch = "aarch64", target_os = "macos"))]
 #[test]
 fn serial_fits_match_the_recorded_bit_patterns() {
     const GOLDEN: &[(&str, u64)] = &[
@@ -272,6 +271,12 @@ fn serial_fits_match_the_recorded_bit_patterns() {
         for (name, hash) in &actual {
             println!("    (\"{name}\", {hash:#018x}),");
         }
+    }
+    for (name, hash) in &actual {
+        epistat_testkit::hash_out(name, *hash);
+    }
+    if !epistat_testkit::RECORDED_PLATFORM {
+        return;
     }
     assert_eq!(actual.len(), GOLDEN.len(), "golden table is out of date");
     for ((name, hash), (golden_name, golden_hash)) in actual.iter().zip(GOLDEN) {

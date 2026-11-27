@@ -519,10 +519,12 @@ fn results_do_not_depend_on_the_number_of_threads() {
 }
 
 #[test]
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn the_fits_have_their_recorded_bits() {
     let hash = epistat_testkit::Fingerprint::new()
         .f64s(&all_bits())
         .finish();
-    assert_eq!(hash, 11_258_002_169_801_411_814, "recorded hash");
+    epistat_testkit::hash_out("the_fits_have_their_recorded_bits", hash);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(hash, 11_258_002_169_801_411_814, "recorded hash");
+    }
 }

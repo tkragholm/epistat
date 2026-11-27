@@ -289,8 +289,9 @@ fn excess_absolute_risk_by_hand() {
 /// The values go through `ln`, `exp` and `powf`, whose last bits depend on
 /// the maths library and, on Windows, on the processor the library dispatches
 /// for, so the bits are checked only on aarch64 macOS, where they were recorded.
+/// Elsewhere the test computes the hash and, when `EPISTAT_HASH_OUT` is set,
+/// appends it to that file.
 #[test]
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn fingerprint_of_the_strata() {
     let r = reference();
     let mut hash = epistat_testkit::Fingerprint::new();
@@ -324,5 +325,8 @@ fn fingerprint_of_the_strata() {
         .unwrap();
     let hash = hash.f64(h.statistic).f64(t.statistic).finish();
     eprintln!("sir fingerprint {hash:#018x}");
-    assert_eq!(hash, 0xfd35_816f_3da9_0113);
+    epistat_testkit::hash_out("fingerprint_of_the_strata", hash);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(hash, 0xfd35_816f_3da9_0113);
+    }
 }

@@ -1,10 +1,9 @@
-//! The bits of `frailty::fit` on varied inputs, pinned by a hash of every output
-//! field, so that a change to any last bit is a failure here. The bits depend on
-//! the platform's `ln` and `exp`, so the test runs only on the target it was
-//! recorded on, aarch64 macOS. Thread-count independence is checked by
-//! `threads_frailty`.
-
-#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
+//! The bits of `frailty::fit` on varied inputs, pinned by a hash of every
+//! output field, so that a change to any last bit is a failure here. The bits
+//! depend on the platform's `ln` and `exp`, so the test asserts the recorded
+//! values only on the target it was recorded on, aarch64 macOS. Thread-count
+//! independence is checked by `threads_frailty`. Elsewhere it computes the
+//! hashes and, when `EPISTAT_HASH_OUT` is set, appends them to that file.
 
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
@@ -159,6 +158,12 @@ fn bits_are_pinned() {
         .iter()
         .map(|(name, h)| format!("(\"{name}\", {h:#018x}),"))
         .collect();
+    for (name, hash) in &cases {
+        epistat_testkit::hash_out(name, *hash);
+    }
+    if !epistat_testkit::RECORDED_PLATFORM {
+        return;
+    }
     let want: Vec<(&str, u64)> = EXPECTED.to_vec();
     assert_eq!(cases, want, "recorded:\n{}", recorded.join("\n"));
 }

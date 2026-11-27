@@ -10,7 +10,8 @@
 //! They must not change. To record again, run with `GOLDEN_RECORD=1 --
 //! --nocapture` and paste the lines. The bits depend on the platform's `ln`
 //! and `exp`, so the digests are checked only on aarch64 macOS, where they
-//! were recorded.
+//! were recorded. Elsewhere the test computes them and, when `EPISTAT_HASH_OUT`
+//! is set, appends them to that file.
 
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
@@ -293,7 +294,6 @@ fn weights_bits(w: &DeviationWeights) -> Vec<u64> {
 }
 
 /// `(name, length, digest)` of each recorded output.
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 const EXPECTED: &[(&str, usize, u64)] = &[
     ("trial msm", 32, 0xe0e2_53ac_13f3_a6d9),
     ("trial msm", 32, 0xe0e2_53ac_13f3_a6d9),
@@ -301,7 +301,6 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ("ccw", 32, 0x989c_fdab_8314_0c48),
 ];
 
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn outputs() -> Vec<(String, Vec<f64>)> {
     let trials = periods(3000, 8, 20_261_124);
     let ccw = periods(3000, 10, 20_261_125);
@@ -360,7 +359,6 @@ fn spans_are_checked() {
 }
 
 #[test]
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn bits_are_unchanged() {
     use epistat_testkit::Fingerprint;
 
@@ -371,10 +369,16 @@ fn bits_are_unchanged() {
             (name, v.len(), digest)
         })
         .collect();
+    for (i, (name, _, digest)) in got.iter().enumerate() {
+        epistat_testkit::hash_out(&format!("{name}/{i}"), *digest);
+    }
     if std::env::var_os("GOLDEN_RECORD").is_some() {
         for (name, len, digest) in &got {
             println!("    ({name:?}, {len}, {digest:#020x}),");
         }
+        return;
+    }
+    if !epistat_testkit::RECORDED_PLATFORM {
         return;
     }
     let expected: Vec<(String, usize, u64)> = EXPECTED

@@ -521,12 +521,14 @@ fn twfe_does_not_depend_on_the_number_of_threads() {
 }
 
 #[test]
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn twfe_has_its_recorded_bits() {
     let hash = epistat_testkit::Fingerprint::new()
         .f64s(&twfe_bits())
         .finish();
-    assert_eq!(hash, 5_214_096_018_603_673_576, "recorded hash");
+    epistat_testkit::hash_out("twfe_has_its_recorded_bits", hash);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(hash, 5_214_096_018_603_673_576, "recorded hash");
+    }
 }
 
 #[test]

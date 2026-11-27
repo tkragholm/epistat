@@ -8,10 +8,10 @@
 //! show that the report is the same.
 //!
 //! The hash is of the summary written as JSON, whose numbers round-trip, so a
-//! change to any last bit changes it. The test runs only on aarch64 macOS,
-//! where the other pinned hashes of the workspace are recorded.
-
-#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
+//! change to any last bit changes it. The hashes are asserted only on
+//! aarch64 macOS, where the other pinned hashes of the workspace are recorded.
+//! Elsewhere the test computes them and, when `EPISTAT_HASH_OUT` is set,
+//! appends them to that file.
 
 use chrono::NaiveDate;
 use epistat_matching::{
@@ -206,7 +206,17 @@ fn the_summaries_keep_their_bits_on_every_pool() {
         8_386_241_516_838_501_912,
         5_585_345_883_895_415_797,
     ];
-    for (threads, got) in [1, 3, 8].into_iter().zip(on_threads(&[1, 3, 8], summaries)) {
-        assert_eq!(got, expected, "{threads} threads");
+    let results = on_threads(&[1, 3, 8], summaries);
+    for (i, hash) in results[0].iter().enumerate() {
+        epistat_testkit::hash_out(&format!("summary/{i}"), *hash);
+    }
+    // Off the recording target the pools still have to agree with each other.
+    let want: Vec<u64> = if epistat_testkit::RECORDED_PLATFORM {
+        expected.to_vec()
+    } else {
+        results[0].clone()
+    };
+    for (threads, got) in [1, 3, 8].into_iter().zip(results) {
+        assert_eq!(got, want, "{threads} threads");
     }
 }

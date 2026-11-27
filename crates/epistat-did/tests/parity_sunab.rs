@@ -669,12 +669,14 @@ fn sunab_does_not_depend_on_the_number_of_threads() {
 }
 
 #[test]
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn sunab_has_its_recorded_bits() {
     let hash = epistat_testkit::Fingerprint::new()
         .f64s(&sunab_bits())
         .finish();
-    assert_eq!(hash, 12_002_447_259_631_101_414, "recorded hash");
+    epistat_testkit::hash_out("sunab_has_its_recorded_bits", hash);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(hash, 12_002_447_259_631_101_414, "recorded hash");
+    }
 }
 
 #[test]

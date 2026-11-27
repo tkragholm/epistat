@@ -1,11 +1,10 @@
-//! The bits of `flexpar::fit`, `predict` and `contrast` on varied inputs, pinned
-//! by a hash of every output field, so that a change to any last bit is a failure
-//! here. The bits depend on the platform's `ln` and `exp`, which come from its
-//! maths library, so the test runs only on the target it was recorded on,
-//! aarch64 macOS. Thread-count independence is checked everywhere by
-//! `threads_flexpar`.
-
-#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
+//! The bits of `flexpar::fit`, `predict` and `contrast` on varied inputs,
+//! pinned by a hash of every output field, so that a change to any last bit is
+//! a failure here. The bits depend on the platform's `ln` and `exp`, which come
+//! from its maths library, so the test asserts the recorded values only on the
+//! target it was recorded on, aarch64 macOS. Thread-count independence is
+//! checked everywhere by `threads_flexpar`. Elsewhere it computes the hashes
+//! and, when `EPISTAT_HASH_OUT` is set, appends them to that file.
 
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
@@ -145,6 +144,13 @@ fn run(scale: FlexparScale, case: &Case) -> (u64, u64) {
 type Line = (String, u64, u64);
 
 fn check(lines: &[Line], expected: &[(&str, u64, u64)]) {
+    for (name, a, b) in lines {
+        epistat_testkit::hash_out(&format!("{name}/0"), *a);
+        epistat_testkit::hash_out(&format!("{name}/1"), *b);
+    }
+    if !epistat_testkit::RECORDED_PLATFORM {
+        return;
+    }
     let want: Vec<Line> = expected
         .iter()
         .map(|&(name, a, b)| (name.to_string(), a, b))

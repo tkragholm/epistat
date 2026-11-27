@@ -13,11 +13,12 @@
 //! paste the printed lines into `EXPECTED`.
 //!
 //! The bits depend on the platform's `ln` and `exp`, which come from its maths
-//! library, so the test runs only on the target it was recorded on, aarch64
-//! macOS. CI's macOS runner is that target. Thread-count independence, which
-//! does not depend on the platform, is checked everywhere by the thread tests.
+//! library, so the test asserts the recorded values only on the target it was
+//! recorded on, aarch64 macOS. CI's macOS runner is that target. Thread-count
+//! independence, which does not depend on the platform, is checked everywhere
+//! by the thread tests. Elsewhere it computes the hashes and, when
+//! `EPISTAT_HASH_OUT` is set, appends them to that file.
 
-#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #![expect(
     clippy::unreadable_literal,
     clippy::cast_possible_truncation,
@@ -266,10 +267,16 @@ fn refusals_keep_their_messages() {
 #[test]
 fn rows_and_fits_keep_their_bits() {
     let lines = record();
+    for (label, values) in &lines {
+        epistat_testkit::hash_out_words(label, values);
+    }
     if std::env::var_os("GOLDEN_RECORD").is_some() {
         for (label, values) in &lines {
             println!("    (\"{label}\", &{values:?}),");
         }
+        return;
+    }
+    if !epistat_testkit::RECORDED_PLATFORM {
         return;
     }
     assert_eq!(lines.len(), EXPECTED.len());

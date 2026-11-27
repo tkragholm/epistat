@@ -11,10 +11,10 @@
 //! weight 0; the lookups within the follow-up of the used rows kept their
 //! bits.
 //!
-//! The bits depend on the platform's `ln` and `exp`, so the test runs only on
-//! aarch64 macOS, where it was recorded.
-
-#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
+//! The bits depend on the platform's `ln` and `exp`, so the test asserts the
+//! recorded values only on aarch64 macOS, where it was recorded. Elsewhere it
+//! computes the hashes and, when `EPISTAT_HASH_OUT` is set, appends them to
+//! that file.
 
 mod relsurv_sim;
 
@@ -170,10 +170,16 @@ fn bits_are_unchanged() {
             (name, v.len(), digest)
         })
         .collect();
+    for (name, _, digest) in &got {
+        epistat_testkit::hash_out(name, *digest);
+    }
     if std::env::var_os("GOLDEN_RECORD").is_some() {
         for (name, len, digest) in &got {
             println!("    ({name:?}, {len}, {digest:#020x}),");
         }
+        return;
+    }
+    if !epistat_testkit::RECORDED_PLATFORM {
         return;
     }
     let expected: Vec<(String, usize, u64)> = EXPECTED

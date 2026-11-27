@@ -44,10 +44,14 @@ const EXPECTED: &[(&str, usize, u64)] = &[
 #[track_caller]
 fn check(name: &str, values: &[f64]) {
     let got = (values.len(), Fingerprint::new().f64s(values).finish());
+    epistat_testkit::hash_out(name, got.1);
     if std::env::var_os("GOLDEN_RECORD").is_some() {
         let hex = format!("{:016x}", got.1);
         let hex: Vec<&str> = (0..4).map(|i| &hex[4 * i..4 * i + 4]).collect();
         println!("    (\"{name}\", {}, 0x{}),", got.0, hex.join("_"));
+        return;
+    }
+    if !epistat_testkit::RECORDED_PLATFORM {
         return;
     }
     let want = EXPECTED

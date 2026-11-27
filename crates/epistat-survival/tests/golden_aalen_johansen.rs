@@ -9,11 +9,12 @@
 //! first and after the last event time.
 //!
 //! The bits depend on the platform's `ln` and `exp`, which come from its maths
-//! library, so the test runs only on the target it was recorded on, aarch64
-//! macOS. CI's macOS runner is that target. Thread-count independence, which
-//! does not depend on the platform, is checked everywhere by the thread tests.
+//! library, so the test asserts the recorded values only on the target it was
+//! recorded on, aarch64 macOS. CI's macOS runner is that target. Thread-count
+//! independence, which does not depend on the platform, is checked everywhere
+//! by the thread tests. Elsewhere it computes the hashes and, when
+//! `EPISTAT_HASH_OUT` is set, appends them to that file.
 
-#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #![expect(
     clippy::cast_possible_truncation,
     clippy::cast_possible_wrap,
@@ -321,6 +322,13 @@ fn compute() -> Vec<(String, Vec<u64>)> {
 #[test]
 fn outputs_have_the_recorded_bits() {
     let got = compute();
+    // Two cases share a name, so the position is part of the case.
+    for (i, (name, values)) in got.iter().enumerate() {
+        epistat_testkit::hash_out_words(&format!("{i}/{name}"), values);
+    }
+    if !epistat_testkit::RECORDED_PLATFORM {
+        return;
+    }
     let expected = golden_values::EXPECTED;
     assert_eq!(got.len(), expected.len(), "number of recorded outputs");
     for ((name, values), (expected_name, expected_values)) in got.iter().zip(expected) {

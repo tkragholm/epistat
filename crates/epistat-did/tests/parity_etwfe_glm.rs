@@ -693,10 +693,12 @@ fn etwfe_glm_does_not_depend_on_the_number_of_threads() {
 }
 
 #[test]
-#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 fn etwfe_glm_has_its_recorded_bits() {
     let hash = epistat_testkit::Fingerprint::new()
         .f64s(&etwfe_glm_bits())
         .finish();
-    assert_eq!(hash, 17_652_008_239_643_160_384, "recorded hash");
+    epistat_testkit::hash_out("etwfe_glm_has_its_recorded_bits", hash);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(hash, 17_652_008_239_643_160_384, "recorded hash");
+    }
 }

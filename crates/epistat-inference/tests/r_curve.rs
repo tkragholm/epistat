@@ -244,16 +244,17 @@ fn simultaneous_band_uses_the_sup_t_value() {
     // The band goes through `ln`, `exp` and the normal draws' `cos`, whose last
     // bits depend on the maths library and, on Windows, on the processor the
     // library dispatches for, so the bits are checked only on aarch64 macOS,
-    // where they were recorded.
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        let r = run();
-        let hash = epistat_testkit::Fingerprint::new()
-            .f64(r.critical)
-            .f64s(&r.lower)
-            .f64s(&r.upper)
-            .finish();
-        eprintln!("curve fingerprint {hash:#018x}");
+    // where they were recorded. Elsewhere the hash is written to
+    // `EPISTAT_HASH_OUT` when that is set.
+    let r = run();
+    let hash = epistat_testkit::Fingerprint::new()
+        .f64(r.critical)
+        .f64s(&r.lower)
+        .f64s(&r.upper)
+        .finish();
+    eprintln!("curve fingerprint {hash:#018x}");
+    epistat_testkit::hash_out("curve", hash);
+    if epistat_testkit::RECORDED_PLATFORM {
         assert_eq!(hash, 0x5f9d_e54c_4f54_6a2d);
     }
 }

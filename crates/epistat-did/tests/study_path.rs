@@ -27,9 +27,11 @@
 //! 111, 112 and 117 move named parts at the switch), so a port of these calls
 //! to new names must reproduce every hash.
 //!
-//! The hashes were recorded on aarch64 macOS. Print them with
+//! The hashes were recorded on aarch64 macOS and are asserted only there.
+//! Elsewhere the test computes them and, when `EPISTAT_HASH_OUT` is set,
+//! appends them to that file. Print them with
 //! `STUDY_PATH_PRINT=1 cargo test --features honest --test study_path -- --nocapture`.
-#![cfg(all(target_os = "macos", target_arch = "aarch64", feature = "honest"))]
+#![cfg(feature = "honest")]
 
 use std::collections::BTreeSet;
 
@@ -846,6 +848,9 @@ const GOLDEN: &[(&str, u64)] = &[
 #[test]
 fn study_paths_are_bit_identical_to_the_recorded_hashes() {
     let current = cases();
+    for (name, hash) in &current {
+        epistat_testkit::hash_out(name, *hash);
+    }
     if std::env::var_os("STUDY_PATH_PRINT").is_some() {
         for (name, hash) in &current {
             println!(
@@ -857,5 +862,7 @@ fn study_paths_are_bit_identical_to_the_recorded_hashes() {
             );
         }
     }
-    assert_eq!(current.as_slice(), GOLDEN);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(current.as_slice(), GOLDEN);
+    }
 }

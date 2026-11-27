@@ -6,9 +6,8 @@
 //! coefficients, a binary one by logistic regression, a nominal one by
 //! multinomial regression without drawn coefficients and a sampled one.
 //! The fingerprint depends on the platform's `ln`, `exp` and `cos`, so it is
-//! checked only on aarch64 macOS, where it was recorded.
-
-#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
+//! checked only on aarch64 macOS, where it was recorded. Elsewhere the test
+//! computes it and, when `EPISTAT_HASH_OUT` is set, appends it to that file.
 
 use epistat_impute::{
     Column, ImputeOptions, ImputeSpec, Imputed, Incomplete, MatchType, Method, impute,
@@ -116,7 +115,10 @@ fn golden_fingerprint() {
         .u64(values.len() as u64)
         .f64s(&values)
         .finish();
-    assert_eq!(hash, GOLDEN, "{hash:#018x}");
+    epistat_testkit::hash_out("golden_fingerprint", hash);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(hash, GOLDEN, "{hash:#018x}");
+    }
 }
 
 const GOLDEN: u64 = 0xe70e_91fe_78d7_f186;

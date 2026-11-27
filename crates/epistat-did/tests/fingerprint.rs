@@ -5,7 +5,9 @@
 //! returns, in order, so a field that is renamed or wrapped in `Option` leaves
 //! the hash alone and a value that moves in its last bit changes it. `Debug`
 //! prints an `f64` with the fewest digits that read back to the same bits.
-//! Run with `--nocapture` to print the current hashes.
+//! Run with `--nocapture` to print the current hashes. They are asserted only
+//! on aarch64 macOS, where they were recorded. Elsewhere the test computes them
+//! and, when `EPISTAT_HASH_OUT` is set, appends them to that file.
 
 use std::fmt::Debug;
 
@@ -1255,10 +1257,6 @@ const GOLDEN: &[(&str, u64)] = &[
 ];
 
 #[test]
-#[cfg_attr(
-    not(all(target_os = "macos", target_arch = "aarch64")),
-    ignore = "the hashes were recorded on aarch64 macOS; other platforms' maths libraries differ in the last bits"
-)]
 fn estimator_outputs_are_bit_identical_to_the_recorded_hashes() {
     let data = data();
     let runs = on_threads(&[1, 4, 12], || cases(&data));
@@ -1266,6 +1264,14 @@ fn estimator_outputs_are_bit_identical_to_the_recorded_hashes() {
         assert_eq!(run, &runs[0], "the hashes depend on the thread count");
     }
     let current = &runs[0];
+    for (name, hash) in current {
+        epistat_testkit::hash_out(name, *hash);
+    }
+    // The hashes were recorded on aarch64 macOS; other platforms' maths
+    // libraries differ in the last bits.
+    if !epistat_testkit::RECORDED_PLATFORM {
+        return;
+    }
     if current
         .iter()
         .map(|(n, h)| (*n, *h))

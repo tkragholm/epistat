@@ -6,11 +6,11 @@
 //! the fitters changes a hash.
 //!
 //! The hashes were recorded on aarch64 macOS. The libm `exp` and `ln` and the
-//! gemm kernels faer selects differ between CPUs, so the test is compiled only
-//! on that target. Regenerate with `GOLDEN_PRINT=1 cargo test --test fit_golden
-//! -- --nocapture` after a change that is meant to alter results.
-#![cfg(all(target_arch = "aarch64", target_os = "macos"))]
-
+//! gemm kernels faer selects differ between CPUs, so the test asserts them only
+//! on that target. Elsewhere it computes them and, when `EPISTAT_HASH_OUT` is
+//! set, appends them to that file. Regenerate with
+//! `GOLDEN_PRINT=1 cargo test --test fit_golden -- --nocapture` after a change
+//! that is meant to alter results.
 use epistat_linalg::Mat;
 use epistat_semicontinuous::{
     FitOptions, LogNormalOptions, Model, ModelInput, TweedieOptions, TwoPartWarmStart,
@@ -349,6 +349,12 @@ fn fits_match_the_recorded_bit_patterns() {
         for (name, hash) in &actual {
             println!("    (\"{name}\", {hash:#018x}),");
         }
+    }
+    for (name, hash) in &actual {
+        epistat_testkit::hash_out(name, *hash);
+    }
+    if !epistat_testkit::RECORDED_PLATFORM {
+        return;
     }
     assert_eq!(actual.len(), GOLDEN.len(), "golden table is out of date");
     for ((name, hash), (golden_name, golden_hash)) in actual.iter().zip(GOLDEN) {

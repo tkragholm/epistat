@@ -5,10 +5,9 @@
 //!
 //! Each entry is a testkit fingerprint over the bit patterns of every number the call
 //! returns. The hashes were recorded on aarch64 macOS, for the reason `fit_golden`
-//! gives, and the test is compiled only on that target. Print them with
+//! gives, and the test asserts them only on that target. Elsewhere it computes them
+//! and, when `EPISTAT_HASH_OUT` is set, appends them to that file. Print them with
 //! `GOLDEN_PRINT=1 cargo test --test estimator_fingerprints -- --nocapture`.
-#![cfg(all(target_arch = "aarch64", target_os = "macos"))]
-
 use epistat_linalg::Mat;
 use epistat_rng::Stream as Draws;
 use epistat_semicontinuous::{
@@ -591,6 +590,12 @@ fn estimators_match_the_recorded_bit_patterns() {
         for (name, hash) in &actual {
             println!("    (\"{name}\", {hash:#018x}),");
         }
+    }
+    for (name, hash) in &actual {
+        epistat_testkit::hash_out(name, *hash);
+    }
+    if !epistat_testkit::RECORDED_PLATFORM {
+        return;
     }
     assert_eq!(actual.len(), GOLDEN.len(), "golden table is out of date");
     for ((name, hash), (golden_name, golden_hash)) in actual.iter().zip(GOLDEN) {

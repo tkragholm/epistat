@@ -9,10 +9,11 @@
 //! sweep; the others are swept as one running sum, as before the sweep ran in
 //! blocks.
 //!
-//! The bits depend on the platform's `ln` and `exp`, so the test runs only on
-//! the target it was recorded on, aarch64 macOS.
+//! The bits depend on the platform's `ln` and `exp`, so the test asserts the
+//! recorded values only on the target it was recorded on, aarch64 macOS.
+//! Elsewhere it computes the hashes and, when `EPISTAT_HASH_OUT` is set,
+//! appends them to that file.
 
-#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 #![expect(
     clippy::cast_possible_truncation,
     reason = "the inputs are tens of thousands of rows, far below the limits of the casts"
@@ -247,7 +248,17 @@ fn the_fits_keep_their_bits_on_every_pool() {
         5_105_298_889_272_943_880,
         6_564_290_637_452_342_372,
     ];
-    for (threads, got) in [1, 3, 8].into_iter().zip(on_threads(&[1, 3, 8], fits)) {
-        assert_eq!(got, expected, "{threads} threads");
+    let results = on_threads(&[1, 3, 8], fits);
+    for (i, hash) in results[0].iter().enumerate() {
+        epistat_testkit::hash_out(&format!("fits/{i}"), *hash);
+    }
+    // Off the recording target the pools still have to agree with each other.
+    let want: Vec<u64> = if epistat_testkit::RECORDED_PLATFORM {
+        expected.to_vec()
+    } else {
+        results[0].clone()
+    };
+    for (threads, got) in [1, 3, 8].into_iter().zip(results) {
+        assert_eq!(got, want, "{threads} threads");
     }
 }

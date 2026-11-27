@@ -91,7 +91,10 @@ fn the_lane_reductions_have_fixed_bits() {
     // which go through `exp`, `ln` and `cos`, whose last bits depend on the
     // maths library and, on Windows, on the processor the library dispatches
     // for, so the constant is checked only on aarch64 macOS, where it was
-    // recorded. The thread counts above must agree everywhere.
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    assert_eq!(expected, 0xf4a0_3bd1_4db8_f150);
+    // recorded. The thread counts above must agree everywhere. Elsewhere the
+    // digest is written to `EPISTAT_HASH_OUT` when that is set.
+    epistat_testkit::hash_out("lane_reductions", expected);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(expected, 0xf4a0_3bd1_4db8_f150);
+    }
 }

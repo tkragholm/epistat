@@ -1,9 +1,9 @@
 //! Golden hashes of the probabilistic bias analyses: the risk ratio and odds
 //! ratio summaries and the counts of draws, for misclassification of the
 //! exposure and the outcome with and without random error, selection and
-//! confounding. Recorded on aarch64 macOS.
-#![cfg(all(target_os = "macos", target_arch = "aarch64"))]
-
+//! confounding. Recorded on aarch64 macOS and asserted only there. Elsewhere the
+//! test computes the hash and, when `EPISTAT_HASH_OUT` is set, appends it to
+//! that file.
 use epistat_core::{Estimate, Level};
 use epistat_epi::Counts2x2;
 use epistat_epi::bias::{
@@ -114,5 +114,9 @@ fn probabilistic_results_are_unchanged() {
         fp = summary(fp, a.adjusted_total);
         fp = fp.u64(a.n_discarded as u64);
     }
-    assert_eq!(fp.finish(), 8_580_821_384_644_866_469, "golden hash");
+    let hash = fp.finish();
+    epistat_testkit::hash_out("probabilistic_results_are_unchanged", hash);
+    if epistat_testkit::RECORDED_PLATFORM {
+        assert_eq!(hash, 8_580_821_384_644_866_469, "golden hash");
+    }
 }
