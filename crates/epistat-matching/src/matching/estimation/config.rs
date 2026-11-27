@@ -1,6 +1,6 @@
 //! Configuration for covariate encoding, propensity estimation and Mahalanobis preparation.
 
-use crate::types::DistanceCaliper;
+use crate::types::{DistanceCaliper, Estimand};
 use rapidhash::RapidHashMap;
 
 /// Missing-value handling for in-crate covariate preprocessing.
@@ -15,19 +15,15 @@ pub enum MissingValuePolicy {
 }
 
 /// Covariate encoding options for design-matrix construction.
-#[derive(bon::Builder, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct CovariateEncodingConfig {
     /// Explicit covariate keys. Empty means all observed keys in deterministic order.
-    #[builder(default)]
     pub covariate_keys: Vec<String>,
     /// Include an intercept column.
-    #[builder(default = false)]
     pub include_intercept: bool,
     /// Drop the first categorical level for each encoded factor.
-    #[builder(default = true)]
     pub drop_first_categorical_level: bool,
     /// Missing-value policy.
-    #[builder(default)]
     pub missing_value_policy: MissingValuePolicy,
 }
 
@@ -62,17 +58,14 @@ pub enum PropensityLink {
 ///
 /// The defaults are those of R's `glm.control`: 25 iterations and a relative
 /// deviance change of 1e-8.
-#[derive(bon::Builder, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct LogisticRegressionConfig {
     /// Maximum IRLS iterations.
-    #[builder(default = 25_usize)]
     pub max_iter: usize,
     /// Convergence tolerance on the relative change of the deviance, R's
     /// `epsilon`.
-    #[builder(default = 1e-8_f64)]
     pub tolerance: f64,
     /// The link between the propensity score and the linear predictor.
-    #[builder(default)]
     pub link: PropensityLink,
 }
 
@@ -105,22 +98,17 @@ impl Default for LogisticRegressionConfig {
 /// 1e-20 corresponds to a coefficient change of about 1e-10. The defaults
 /// converge on correlated designs and on covariates of large scale. [`PropensityScoreEstimate::converged`](crate::PropensityScoreEstimate::converged)
 /// is `false` when `max_iter` IRLS steps are not enough.
-#[derive(bon::Builder, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct ElasticNetLogisticConfig {
     /// Maximum IRLS steps.
-    #[builder(default = 100_usize)]
     pub max_iter: usize,
     /// Convergence tolerance on the largest variance-weighted squared coefficient change.
-    #[builder(default = 1e-20_f64)]
     pub tolerance: f64,
     /// Elastic-net penalty strength.
-    #[builder(default = 1e-2_f64)]
     pub lambda: f64,
     /// Elastic-net mixing parameter (0 = ridge, 1 = lasso).
-    #[builder(default = 0.5_f64)]
     pub alpha: f64,
     /// Numeric stability clipping for predicted probabilities.
-    #[builder(default = 1e-8_f64)]
     pub probability_clip: f64,
     /// Scale each penalised column to unit weighted standard deviation before
     /// fitting, as `glmnet(standardize = TRUE)` does. The coefficients are
@@ -130,7 +118,6 @@ pub struct ElasticNetLogisticConfig {
     /// `lambda` is compared with `glmnet` for false only (`tests/r_glmnet.rs`);
     /// true is compared through the cross-validated fit
     /// (`tests/r_cv_glmnet.rs`), which uses the same fitting code.
-    #[builder(default = false)]
     pub standardize: bool,
 }
 
@@ -172,51 +159,53 @@ pub enum LambdaRule {
 /// zero down to that value times `lambda_min_ratio`, equally spaced on the log
 /// scale. The deviance is the binomial deviance with probabilities clipped to
 /// `[1e-5, 1 - 1e-5]`. A column is standardised by default, as `glmnet` does.
-#[derive(bon::Builder, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct ElasticNetCvConfig {
     /// Seed of the random number stream that assigns the folds.
     pub seed: u64,
     /// Elastic-net mixing parameter (0 = ridge, 1 = lasso).
-    #[builder(default = 0.5_f64)]
     pub alpha: f64,
     /// Number of folds, at least 3.
-    #[builder(default = 10_usize)]
     pub nfolds: usize,
     /// Number of `lambda` values on the path.
-    #[builder(default = 100_usize)]
     pub nlambda: usize,
     /// Smallest `lambda` as a fraction of the largest. `None` is `glmnet`'s
     /// default, 1e-2 when there are fewer rows than covariates and 1e-4
     /// otherwise.
     pub lambda_min_ratio: Option<f64>,
     /// The rule that picks `lambda` from the cross-validation curve.
-    #[builder(default)]
     pub rule: LambdaRule,
     /// Scale each penalised column to unit weighted standard deviation.
-    #[builder(default = true)]
     pub standardize: bool,
     /// Maximum IRLS steps per fit.
-    #[builder(default = 100_usize)]
     pub max_iter: usize,
     /// Convergence tolerance of each fit, as in [`ElasticNetLogisticConfig`].
-    #[builder(default = 1e-20_f64)]
     pub tolerance: f64,
     /// Numeric stability clipping for predicted probabilities.
-    #[builder(default = 1e-8_f64)]
     pub probability_clip: f64,
 }
 
-/// The estimand whose balance conditions a covariate balancing propensity
-/// score satisfies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CbpsEstimand {
-    /// The average treatment effect in the treated: the controls, weighted by
-    /// the odds of treatment, are balanced to the treated. MatchIt's default.
-    #[default]
-    Att,
-    /// The average treatment effect: both groups, weighted by the inverse of
-    /// the probability of their own treatment, are balanced to the sample.
-    Ate,
+impl ElasticNetCvConfig {
+    /// The defaults of `cv.glmnet()` with the folds drawn from `seed`: alpha
+    /// 0.5, 10 folds, 100 values of `lambda`, the minimum ratio of `glmnet`,
+    /// the `lambda` within one standard error of the smallest error, as MatchIt
+    /// takes it, standardised columns, 100 steps of
+    /// at most a tolerance of 1e-20 and probabilities clipped at 1e-8.
+    #[must_use]
+    pub const fn new(seed: u64) -> Self {
+        Self {
+            seed,
+            alpha: 0.5,
+            nfolds: 10,
+            nlambda: 100,
+            lambda_min_ratio: None,
+            rule: LambdaRule::OneStandardError,
+            standardize: true,
+            max_iter: 100,
+            tolerance: 1e-20,
+            probability_clip: 1e-8,
+        }
+    }
 }
 
 /// The estimator of a covariate balancing propensity score.
@@ -248,25 +237,26 @@ pub enum CbpsMethod {
 /// minimum, with `lambda` the smallest eigenvalue of the Hessian of the loss.
 /// The reference fits have `lambda` between 3e-4 and 3e-3, so the default
 /// puts the linear predictor within about 1e-7 of the minimum.
-#[derive(bon::Builder, Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct CbpsConfig {
     /// The estimand.
-    #[builder(default)]
-    pub estimand: CbpsEstimand,
+    pub estimand: Estimand,
     /// Over-identified or exact.
-    #[builder(default)]
     pub method: CbpsMethod,
     /// Maximum BFGS iterations of each optimisation, CBPS's `iterations`.
-    #[builder(default = 1000_usize)]
     pub max_iter: usize,
     /// Gradient norm at which an optimisation has converged.
-    #[builder(default = f64::EPSILON.powf(2.0 / 3.0))]
     pub gradient_tolerance: f64,
 }
 
 impl Default for CbpsConfig {
     fn default() -> Self {
-        Self::builder().build()
+        Self {
+            estimand: Estimand::default(),
+            method: CbpsMethod::default(),
+            max_iter: 1000,
+            gradient_tolerance: f64::EPSILON.powf(2.0 / 3.0),
+        }
     }
 }
 
@@ -299,19 +289,15 @@ pub enum PropensityScoreOutputScale {
 }
 
 /// Combined configuration for in-crate propensity score estimation.
-#[derive(bon::Builder, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct PropensityScoreConfig {
     /// Covariate encoding options.
-    #[builder(default = CovariateEncodingConfig::builder().include_intercept(true).build())]
     pub encoding: CovariateEncodingConfig,
     /// Estimator configuration.
-    #[builder(default)]
     pub estimator: PropensityEstimator,
     /// Solver options.
-    #[builder(default)]
     pub logistic: LogisticRegressionConfig,
     /// Output scale used for matching distance.
-    #[builder(default)]
     pub output_scale: PropensityScoreOutputScale,
     /// Optional caliper on selected output scale.
     pub caliper: Option<DistanceCaliper>,
@@ -321,19 +307,19 @@ pub struct PropensityScoreConfig {
     pub sampling_weights: Option<RapidHashMap<String, f64>>,
     /// Refit the model on the units that common-support trimming keeps, as
     /// `matchit(reestimate = TRUE)` does. It needs a trimming policy, which
-    /// [`prepare_propensity_distance_config_with_discard`](super::prepare_propensity_distance_config_with_discard)
+    /// [`prepare_propensity_distance_config`](super::prepare_propensity_distance_config)
     /// and [`estimate_propensity_and_match`](super::estimate_propensity_and_match)
     /// take from the caller and the matching criteria.
-    #[builder(default = false)]
     pub reestimate: bool,
 }
 
 impl Default for PropensityScoreConfig {
     fn default() -> Self {
         Self {
-            encoding: CovariateEncodingConfig::builder()
-                .include_intercept(true)
-                .build(),
+            encoding: CovariateEncodingConfig {
+                include_intercept: true,
+                ..CovariateEncodingConfig::default()
+            },
             estimator: PropensityEstimator::default(),
             logistic: LogisticRegressionConfig::default(),
             output_scale: PropensityScoreOutputScale::Probability,
@@ -345,16 +331,13 @@ impl Default for PropensityScoreConfig {
 }
 
 /// Mahalanobis preprocessing configuration using in-crate covariate encoding.
-#[derive(bon::Builder, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct MahalanobisPreparationConfig {
     /// Covariate encoding options.
-    #[builder(default)]
     pub encoding: CovariateEncodingConfig,
     /// Covariance estimation strategy. The default is MatchIt's.
-    #[builder(default = MahalanobisCovarianceStrategy::PooledByDegreesOfFreedom)]
     pub covariance_strategy: MahalanobisCovarianceStrategy,
     /// Optional covariate transformation before covariance estimation.
-    #[builder(default = MahalanobisTransform::Raw)]
     pub transform: MahalanobisTransform,
 }
 
@@ -371,7 +354,7 @@ impl Default for MahalanobisPreparationConfig {
 /// Covariance strategy used for Mahalanobis preparation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MahalanobisCovarianceStrategy {
-    /// Average of the anchor and candidate covariance matrices, each with the
+    /// Average of the case and control covariance matrices, each with the
     /// same weight, whatever the group sizes.
     PooledWithinGroups,
     /// Pooled within-group covariance: the sums of squares and cross-products
@@ -413,7 +396,7 @@ pub enum EuclideanScale {
     #[default]
     None,
     /// Each column divided by its pooled within-group standard deviation, the
-    /// two groups being the anchors and the candidates. This is MatchIt's
+    /// two groups being the cases and the controls. This is MatchIt's
     /// `scaled_euclidean_dist()`: a column of only 0 and 1 has the variance
     /// `sum_g n_g p_g (1 - p_g) / n`, any other column the sum of squares about
     /// its group mean over `n - 2`.
@@ -425,12 +408,10 @@ pub enum EuclideanScale {
 /// Categorical covariates get a column for every level, each scaled by
 /// `1 / sqrt(2)`, so that two units in different levels are 1 apart, as in
 /// MatchIt. `encoding.drop_first_categorical_level` is ignored.
-#[derive(bon::Builder, Debug, Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct EuclideanPreparationConfig {
     /// Covariate encoding options.
-    #[builder(default)]
     pub encoding: CovariateEncodingConfig,
     /// Scaling of the columns.
-    #[builder(default)]
     pub scale: EuclideanScale,
 }

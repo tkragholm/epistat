@@ -48,9 +48,9 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+use epistat_matching::Error;
 use epistat_matching::{
-    CardinalityError, CardinalityLimits, CardinalityRequest, Estimand, match_cardinality,
-    pair_units,
+    CardinalityLimits, CardinalityRequest, Estimand, match_cardinality, pair_units,
 };
 use epistat_testkit::{assert_same_on_pools, load_json};
 use r_reference::Versions;
@@ -427,7 +427,7 @@ fn selection_sizes_and_balance_agree_with_matchit() {
         let t0 = std::time::Instant::now();
         let outcome = match match_cardinality(&request(case, data, &treated)) {
             Ok(outcome) => outcome,
-            Err(CardinalityError::NoSolutionInTime { .. }) => {
+            Err(Error::NoSolutionInTime { .. }) => {
                 eprintln!("{}: no subset found within the node limit", case.name);
                 not_found += 1;
                 continue;
@@ -698,7 +698,7 @@ fn impossible_tolerances_are_infeasible() {
     r.ratio = None;
     assert_eq!(
         match_cardinality(&r).unwrap_err(),
-        CardinalityError::Infeasible { key: 0 }
+        Error::InfeasibleBalance { stratum: 0 }
     );
 }
 
@@ -731,7 +731,7 @@ fn a_node_limit_is_reported_as_not_proven() {
                 report.bound
             );
         }
-        Err(CardinalityError::NoSolutionInTime { .. }) => {}
+        Err(Error::NoSolutionInTime { .. }) => {}
         Err(e) => panic!("{e}"),
     }
 }

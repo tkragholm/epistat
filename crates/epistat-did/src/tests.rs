@@ -1,8 +1,3 @@
-#![expect(
-    deprecated,
-    reason = "these tests cover the deprecated aggregation until it is removed"
-)]
-
 use super::*;
 use epistat_linalg::Mat;
 
@@ -15,6 +10,7 @@ use crate::estimators::outcome::linear::LinearOutcome;
 use crate::estimators::outcome::model::OutcomeModel;
 use crate::estimators::propensity::common::logistic_scores;
 use crate::estimators::propensity::irls::irls as irls_fit;
+use crate::methods::standard::summarize_two_by_two;
 use crate::types::{DidCell, TimePeriod, TreatmentGroup};
 
 use rstest::rstest;
@@ -107,73 +103,6 @@ fn summarizes_two_by_two_cells() {
     assert!((summary.cell(DidCell::TreatedPost).mean_outcome - 14.0).abs() < 1e-12);
     assert!((summary.cell(DidCell::ControlPre).mean_outcome - 8.0).abs() < 1e-12);
     assert!((summary.cell(DidCell::ControlPost).mean_outcome - 10.0).abs() < 1e-12);
-}
-
-#[test]
-fn aggregates_event_time_equal_weights() {
-    let points = [
-        EventTimePoint::new(-1, 0.1, 0.2),
-        EventTimePoint::new(-1, 0.3, 0.4),
-        EventTimePoint::new(0, 0.6, 0.5),
-    ];
-    let output = aggregate_event_time(&points, 0.95, EventTimeWeighting::Equal)
-        .expect("aggregate event-time");
-    assert_eq!(output.len(), 2);
-    assert!((output[0].estimate - 0.2).abs() < 1e-12);
-    assert_eq!(output[0].event_time, -1);
-    assert_eq!(output[1].event_time, 0);
-}
-
-#[test]
-fn aggregates_event_time_by_weight() {
-    let points = [
-        EventTimePoint {
-            weight: 1.0,
-            ..EventTimePoint::new(0, 1.0, 0.2)
-        },
-        EventTimePoint {
-            weight: 3.0,
-            ..EventTimePoint::new(0, 3.0, 0.4)
-        },
-    ];
-    let output = aggregate_event_time(&points, 0.95, EventTimeWeighting::ByWeight)
-        .expect("aggregate event-time");
-    assert_eq!(output.len(), 1);
-    assert!((output[0].estimate - 2.5).abs() < 1e-12);
-}
-
-#[test]
-fn uses_generic_confidence_levels_for_event_time_ci() {
-    let points = [EventTimePoint::new(0, 0.0, 1.0)];
-    let output = aggregate_event_time(&points, 0.92, EventTimeWeighting::Equal)
-        .expect("aggregate event-time");
-    let margin = output[0].ci_high - output[0].estimate;
-    // Two-sided z critical value at 92% confidence.
-    assert!((margin - 1.750_686_071_252_17).abs() < 1e-6);
-}
-
-#[test]
-fn confidence_interval_width_increases_with_confidence_level() {
-    let points = [EventTimePoint::new(0, 0.0, 1.0)];
-    let ci90 = aggregate_event_time(&points, 0.90, EventTimeWeighting::Equal).expect("ci90")[0];
-    let ci95 = aggregate_event_time(&points, 0.95, EventTimeWeighting::Equal).expect("ci95")[0];
-    let ci99 = aggregate_event_time(&points, 0.99, EventTimeWeighting::Equal).expect("ci99")[0];
-    let width90 = ci90.ci_high - ci90.ci_low;
-    let width95 = ci95.ci_high - ci95.ci_low;
-    let width99 = ci99.ci_high - ci99.ci_low;
-    assert!(width90 < width95);
-    assert!(width95 < width99);
-}
-
-#[test]
-fn rejects_invalid_event_time_weight() {
-    let points = [EventTimePoint {
-        weight: 0.0,
-        ..EventTimePoint::new(0, 1.0, 0.1)
-    }];
-    let error =
-        aggregate_event_time(&points, 0.95, EventTimeWeighting::ByWeight).expect_err("must fail");
-    assert_eq!(error, EventTimeError::InvalidPointWeight);
 }
 
 #[test]

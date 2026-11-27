@@ -1,4 +1,4 @@
-# Reference values for epistat_did::estimate_etwfe_glm: the Poisson and
+# Reference values for epistat_did::etwfe::fit with a Poisson or logit family: the Poisson and
 # logit extended two-way regressions as etwfe 0.6.2 fits them
 # (etwfe(family = "poisson" / "logit"), which calls fixest 0.14.2's feglm
 # with cohort and period dummies and no fixed effects), and the average

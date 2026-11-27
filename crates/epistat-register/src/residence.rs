@@ -51,8 +51,10 @@
 //! 2. Schmidt M, Pedersen L, Sorensen HT. The Danish Civil Registration System
 //!    as a tool in epidemiology. Eur J Epidemiol. 2014;29(8):541-9.
 
-use crate::RegisterError;
+use crate::Error;
+use crate::error::{csr, length};
 use crate::intervals::SpanSet;
+use epistat_core::{InputError, check};
 
 /// The direction of a move.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -109,27 +111,17 @@ impl Spells {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when the window columns do not have one entry
+    /// [`Error::Input`] when the window columns do not have one entry
     /// per person, a window ends before it starts, or the spells are not a
     /// layout of sorted, disjoint spells, which [`residence_spells`] always
     /// gives.
-    pub fn span_set(
-        &self,
-        window_start: &[i64],
-        window_end: &[i64],
-    ) -> Result<SpanSet, RegisterError> {
+    pub fn span_set(&self, window_start: &[i64], window_end: &[i64]) -> Result<SpanSet, Error> {
         let persons = self.person_offsets.len().saturating_sub(1);
-        if window_start.len() != persons || window_end.len() != persons {
-            return Err(RegisterError::input(format!(
-                "the window needs one entry per person, {persons}; got {} and {}",
-                window_start.len(),
-                window_end.len()
-            )));
-        }
-        if self.from.len() != self.to.len() {
-            return Err(RegisterError::input(
-                "from and to must have one entry per spell",
-            ));
+        length("window start", persons, window_start.len())?;
+        length("window end", persons, window_end.len())?;
+        length("to", self.from.len(), self.to.len())?;
+        if !self.person_offsets.is_empty() {
+            csr("person offsets", &self.person_offsets, self.from.len())?;
         }
         // A person with no spell is given one spell open at both ends.
         let mut from = Vec::with_capacity(self.from.len() + persons);
@@ -138,11 +130,6 @@ impl Spells {
         offsets.push(0);
         for p in 0..persons {
             let (a, b) = (self.person_offsets[p], self.person_offsets[p + 1]);
-            if a > b || b > self.from.len() {
-                return Err(RegisterError::input(
-                    "person offsets must be non-decreasing from 0 to the number of spells",
-                ));
-            }
             if a == b {
                 from.push(None);
                 to.push(None);
@@ -157,27 +144,20 @@ impl Spells {
 }
 
 impl Events<'_> {
-    fn check(&self) -> Result<(), RegisterError> {
+    fn check(&self) -> Result<(), Error> {
         let n = self.day.len();
-        if self.direction.len() != n {
-            return Err(RegisterError::input(
-                "day and direction must have one entry per event",
-            ));
-        }
-        if self.person_offsets.first() != Some(&0)
-            || self.person_offsets.last() != Some(&n)
-            || self.person_offsets.windows(2).any(|w| w[0] > w[1])
-        {
-            return Err(RegisterError::input(
-                "person offsets must be non-decreasing from 0 to the number of events",
-            ));
-        }
-        for (person, w) in self.person_offsets.windows(2).enumerate() {
-            if self.day[w[0]..w[1]].windows(2).any(|d| d[0] > d[1]) {
-                return Err(RegisterError::input(format!(
-                    "person {person} has events that are not in order of day"
-                )));
-            }
+        length("direction", n, self.direction.len())?;
+        csr("person offsets", self.person_offsets, n)?;
+        for w in self.person_offsets.windows(2) {
+            check::sorted_by("day", &self.day[w[0]..w[1]], i64::cmp).map_err(
+                |error| match error {
+                    InputError::Unsorted { what, row } => InputError::Unsorted {
+                        what,
+                        row: w[0] + row,
+                    },
+                    other => other,
+                },
+            )?;
         }
         Ok(())
     }
@@ -219,9 +199,9 @@ fn alternating(e: &Events<'_>, person: usize, same_day: SameDay, out: &mut Vec<(
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when the columns differ in length, the offsets are
+/// [`Error::Input`] when the columns differ in length, the offsets are
 /// not a layout over the events, or a person's days decrease.
-pub fn residence_spells(e: &Events<'_>, same_day: SameDay) -> Result<Spells, RegisterError> {
+pub fn residence_spells(e: &Events<'_>, same_day: SameDay) -> Result<Spells, Error> {
     e.check()?;
     let mut out = Spells {
         person_offsets: vec![0],
@@ -253,18 +233,10 @@ pub fn residence_spells(e: &Events<'_>, same_day: SameDay) -> Result<Spells, Reg
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when the query columns differ in length or a person
+/// [`Error::Input`] when the query columns differ in length or a person
 /// is not below the number of persons of `spells`.
-pub fn resident_on(
-    spells: &Spells,
-    person: &[u32],
-    day: &[i64],
-) -> Result<Vec<bool>, RegisterError> {
-    if person.len() != day.len() {
-        return Err(RegisterError::input(
-            "person and day must have one entry per query",
-        ));
-    }
+pub fn resident_on(spells: &Spells, person: &[u32], day: &[i64]) -> Result<Vec<bool>, Error> {
+    length("day", person.len(), day.len())?;
     let persons = spells.person_offsets.len().saturating_sub(1);
     person
         .iter()
@@ -272,7 +244,7 @@ pub fn resident_on(
         .map(|(&p, &d)| {
             let p = p as usize;
             if p >= persons {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "person {p} is not below the number of persons, {persons}"
                 )));
             }
@@ -302,13 +274,9 @@ pub fn first_departure_on_or_after(
     same_day: SameDay,
     person: &[u32],
     day: &[i64],
-) -> Result<Vec<Option<i64>>, RegisterError> {
+) -> Result<Vec<Option<i64>>, Error> {
     e.check()?;
-    if person.len() != day.len() {
-        return Err(RegisterError::input(
-            "person and day must have one entry per query",
-        ));
-    }
+    length("day", person.len(), day.len())?;
     let mut events = Vec::new();
     person
         .iter()
@@ -316,7 +284,7 @@ pub fn first_departure_on_or_after(
         .map(|(&p, &d)| {
             let p = p as usize;
             if p >= e.persons() {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "person {p} is not below the number of persons, {}",
                     e.persons()
                 )));

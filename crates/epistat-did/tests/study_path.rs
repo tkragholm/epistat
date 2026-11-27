@@ -33,23 +33,23 @@
 
 use std::collections::BTreeSet;
 
+use epistat_core::{Bootstrap, Level};
+use epistat_did::att_gt::{
+    self, Aggte, AggteOptions, AggteType, AggteWeights, AttGt, AttGtOptions, BasePeriod,
+    ComparisonGroup, FitFailure, NuisanceOptions, SkipReason, UnbalancedPanel,
+};
 use epistat_did::{
-    AggteConfig, AggteResult, AggteType, AttGtAggregatedEstimate, AttGtAggregationConfig,
-    AttGtAggregationWeighting, AttGtConfig, AttGtDrConfig, AttGtDrObservation, AttGtEstimate,
-    AttGtInfluenceOutput, BasePeriod, ComparisonGroup, DesignPruning, DrDidConfig,
-    DrDidObservation, HonestEventStudyInput, HonestJointPathConfig, HonestJointPathMethod,
-    HonestRelativeMagnitudeBound, HonestSensitivity, InferenceConfig, LeastFavorableSimulation,
-    PanelFlatInput, RelativeMagnitudeConfidenceSetConfig, UnbalancedPanel, UnitPanel,
-    aggregate_att_gt, aggregate_att_gt_by_calendar_time, aggregate_att_gt_by_cohort,
-    aggregate_att_gt_event_time_with_influence, aggregate_att_gt_overall,
+    DesignPruning, DrDidConfig, DrDidObservation, HonestEventStudyInput, HonestJointPathConfig,
+    HonestJointPathMethod, HonestRelativeMagnitudeBound, HonestSensitivity, InferenceConfig,
+    LeastFavorableSimulation, PanelFlatInput, RelativeMagnitudeConfidenceSetConfig, StaggeredPanel,
     assess_honest_event_study_joint_path_region_with_config, did_cluster_sums,
-    estimate_att_gt_dr_panel_with_influence, estimate_drdid_panel,
-    estimate_smoothness_upper_bound_from_pretrends, fit_drdid_panel_nuisance,
+    estimate_drdid_panel, estimate_smoothness_upper_bound_from_pretrends, fit_drdid_panel_nuisance,
     fit_drdid_panel_propensity_coefficients, independent_design_columns,
     summarize_relative_magnitude_sensitivity_many_with_simulation,
     summarize_smoothness_sensitivity_with_simulation,
 };
 use epistat_inference::Clusters;
+use epistat_linalg::MatRef;
 use epistat_testkit::{Fingerprint, SplitMix64};
 
 const CONFIDENCE: f64 = 0.95;
@@ -102,41 +102,50 @@ impl Hash {
         }
     }
 
-    fn estimate(&mut self, e: &AttGtEstimate) {
-        self.int(i64::from(e.group));
-        self.int(i64::from(e.time));
-        self.int(i64::from(e.event_time));
-        self.f(e.att);
-        self.f(e.se);
-        self.f(e.ci_low);
-        self.f(e.ci_high);
-        self.word(e.treated_n as u64);
-        self.word(e.control_n as u64);
-        self.f(e.total_weight);
+    /// A cell as `AttGtEstimate` hashed it: cohort, period, event time,
+    /// estimate, standard error, interval, counts and total weight.
+    fn cell(&mut self, cell: &att_gt::AttGtCell) {
+        let estimate = cell.estimate.expect("an estimated cell");
+        self.int(cell.group);
+        self.int(cell.time);
+        self.int(cell.event_time);
+        self.f(estimate.estimate);
+        self.o(estimate.se);
+        self.o(estimate.lower());
+        self.o(estimate.upper());
+        self.word(cell.n_treated as u64);
+        self.word(cell.n_control as u64);
+        self.f(cell.total_weight);
     }
 
-    fn summary(&mut self, s: &AttGtAggregatedEstimate) {
-        self.f(s.estimate);
-        self.f(s.se);
-        self.f(s.ci_low);
-        self.f(s.ci_high);
-        self.word(s.components as u64);
-        self.f(s.total_weight);
+    /// A point as `AttGtAggregatedEstimate` hashed it.
+    fn summary(&mut self, estimate: &epistat_core::Estimate, n_cells: usize, total_weight: f64) {
+        self.f(estimate.estimate);
+        self.o(estimate.se);
+        self.o(estimate.lower());
+        self.o(estimate.upper());
+        self.word(n_cells as u64);
+        self.f(total_weight);
     }
 
-    fn aggte(&mut self, result: &AggteResult) {
-        self.f(result.overall_att);
-        self.f(result.overall_se);
-        self.f(result.overall_ci_low);
-        self.f(result.overall_ci_high);
-        self.fs(&result.overall_influence);
-        for row in &result.by_key {
-            self.int(i64::from(row.key));
-            self.f(row.att);
-            self.f(row.se);
-            self.f(row.ci_low);
-            self.f(row.ci_high);
-            self.fs(&row.influence);
+    /// A summary as `AggteResult` hashed it: the overall effect and its
+    /// influence function, then each point with its influence function, the
+    /// critical value and whether the band is uniform.
+    fn aggte(&mut self, result: &Aggte) {
+        let overall = result.overall.expect("an overall effect");
+        let influence = result.influence();
+        self.f(overall.estimate.estimate);
+        self.o(overall.estimate.se);
+        self.o(overall.estimate.lower());
+        self.o(overall.estimate.upper());
+        self.fs(influence.column(result.points.len()));
+        for (j, point) in result.points.iter().enumerate() {
+            self.int(point.key);
+            self.f(point.estimate.estimate);
+            self.o(point.estimate.se);
+            self.o(point.estimate.lower());
+            self.o(point.estimate.upper());
+            self.fs(influence.column(j));
         }
         self.f(result.critical_value);
         self.word(u64::from(result.uniform_band));
@@ -232,85 +241,147 @@ fn panel() -> Vec<Row> {
     rows
 }
 
-/// `kernels::did::observations`.
-fn observations(rows: &[Row]) -> Vec<AttGtDrObservation> {
-    rows.iter()
-        .map(|row| AttGtDrObservation {
-            unit_id: Some(i64::from(row.unit)),
-            first_treated_time: (row.group != 0).then_some(row.group),
-            time: row.time,
-            outcome: row.outcome,
-            weight: row.weight,
-            covariates: row.covariates.to_vec(),
-            comparison_cohort: (row.comparison_cohort != 0).then_some(row.comparison_cohort),
-        })
-        .collect()
+/// The analysis table as panel columns, sorted by unit and then period, as
+/// `kernels::did` hands it to the estimator.
+struct Columns {
+    unit: Vec<u32>,
+    period: Vec<i64>,
+    cohort: Vec<Option<i64>>,
+    outcome: Vec<f64>,
+    weight: Vec<f64>,
+    /// Column-major, three columns.
+    covariates: Vec<f64>,
+    matched: Vec<Option<i64>>,
+    cluster: Vec<u32>,
 }
 
-fn att_gt_config(comparison_group: ComparisonGroup, anticipation_periods: i32) -> AttGtDrConfig {
-    let inference = InferenceConfig {
-        confidence_level: CONFIDENCE,
+fn columns(rows: &[Row]) -> Columns {
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by_key(|&i| (rows[i].unit, rows[i].time));
+    let pick = |f: &dyn Fn(&Row) -> f64| order.iter().map(|&i| f(&rows[i])).collect::<Vec<_>>();
+    let covariates = (0..3)
+        .flat_map(|j| order.iter().map(move |&i| rows[i].covariates[j]))
+        .collect();
+    Columns {
+        unit: order.iter().map(|&i| rows[i].unit).collect(),
+        period: order.iter().map(|&i| i64::from(rows[i].time)).collect(),
+        cohort: order
+            .iter()
+            .map(|&i| (rows[i].group != 0).then_some(i64::from(rows[i].group)))
+            .collect(),
+        outcome: pick(&|row| row.outcome),
+        weight: pick(&|row| row.weight),
+        covariates,
+        matched: order
+            .iter()
+            .map(|&i| {
+                (rows[i].comparison_cohort != 0).then_some(i64::from(rows[i].comparison_cohort))
+            })
+            .collect(),
+        cluster: order.iter().map(|&i| rows[i].cluster).collect(),
+    }
+}
+
+/// Study I's ATT(g,t): the matched or pooled never-treated comparators, a
+/// universal base, the per-cell panel, no overlap refusal, the legacy
+/// repeated cross-section computation, and the one-replicate cell bootstrap
+/// the kernels set, seeded as the estimator's former default.
+fn study_att_gt(
+    data: &Columns,
+    comparison_group: ComparisonGroup,
+    anticipation: i64,
+    clustered: bool,
+) -> AttGt {
+    let covariates = MatRef::from_column_major_slice(&data.covariates, data.unit.len(), 3);
+    let builder = StaggeredPanel::builder(&data.unit, &data.period, &data.cohort, &data.outcome)
+        .weights(&data.weight)
+        .covariates(covariates)
+        .comparison_cohort(&data.matched);
+    let builder = if clustered {
+        builder.clusters(&data.cluster)
+    } else {
+        builder
     };
-    AttGtDrConfig {
-        att_gt: AttGtConfig {
-            confidence_level: inference,
-            comparison_group,
-            base_period: BasePeriod::Universal,
-            anticipation_periods,
-            skip_incomplete_pairs: true,
-            unbalanced_panel: UnbalancedPanel::PerCell,
-            refuse_small_never_treated: true,
-            refuse_poor_overlap: false,
+    let panel = builder.build().expect("panel");
+    let options = AttGtOptions {
+        comparison_group,
+        base_period: BasePeriod::Universal,
+        anticipation,
+        unbalanced: UnbalancedPanel::PerCell,
+        refuse_poor_overlap: false,
+        nuisance: NuisanceOptions {
+            legacy_repeated_cross_section: true,
+            ..NuisanceOptions::default()
         },
-        drdid: drdid_config(),
+        level: Level::confidence(CONFIDENCE).expect("level"),
+        bootstrap: (!clustered).then_some(Bootstrap::new(1, 17_431)),
+        ..AttGtOptions::default()
+    };
+    att_gt::estimate(&panel, &options).expect("ATT(g,t)")
+}
+
+/// The label the panel route gave each reason before the reasons were an
+/// enum.
+fn panel_reason(reason: SkipReason) -> &'static str {
+    match reason {
+        SkipReason::NoTreated => "treated_panel",
+        SkipReason::NoComparison => "control_panel",
+        SkipReason::PoorOverlap => "overlap",
+        SkipReason::OverlapFitFailed => "overlap_fit",
+        SkipReason::NotFinite => "non_finite",
+        SkipReason::FitFailed(failure) => match failure {
+            FitFailure::Empty => "panel_fit:empty",
+            FitFailure::NoTreated => "panel_fit:no_treated",
+            FitFailure::NoComparison => "panel_fit:no_control",
+            FitFailure::InvalidWeight => "panel_fit:invalid_weight",
+            FitFailure::InvalidOutcome => "panel_fit:invalid_outcome",
+            FitFailure::InvalidCovariate => "panel_fit:invalid_covariate",
+            FitFailure::Singular => "panel_fit:singular",
+            _ => "panel_fit:other",
+        },
+        other => panic!("not a reason of the panel route: {other:?}"),
     }
 }
 
-fn drdid_config() -> DrDidConfig {
-    DrDidConfig {
-        confidence_level: CONFIDENCE,
-        propensity_clip: 1e-6,
-        ridge: 1e-8,
-        max_iter: 200,
-        tol: 1e-8,
-        bootstrap_reps: 1,
-        legacy_repeated_cross_section: true,
-        ..DrDidConfig::default()
-    }
-}
-
-fn att_gt_digest(fitted: &AttGtInfluenceOutput) -> u64 {
+fn att_gt_digest(fitted: &AttGt) -> u64 {
     let mut h = Hash::new();
-    for (estimate, influence) in fitted.estimates.iter().zip(&fitted.influence_functions) {
-        h.estimate(estimate);
-        h.fs(influence);
-    }
-    for cell in &fitted.skipped {
-        h.int(i64::from(cell.group));
-        h.int(i64::from(cell.time));
-        h.int(i64::from(cell.baseline_time));
-        h.text(cell.reason);
-    }
-    for cell in &fitted.pruned {
-        h.int(i64::from(cell.group));
-        h.int(i64::from(cell.time));
-        h.int(i64::from(cell.baseline_time));
-        h.word(cell.columns_dropped as u64);
-    }
-    let sample = &fitted.sample;
-    for &id in &sample.ids {
-        h.int(id);
-    }
-    sample
-        .groups
+    let influence = fitted.influence().expect("influence");
+    for (j, cell) in fitted
+        .cells()
         .iter()
-        .for_each(|g| h.int(g.map_or(-1, i64::from)));
+        .filter(|cell| cell.estimate.is_some())
+        .enumerate()
+    {
+        h.cell(cell);
+        h.fs(influence.column(j));
+    }
+    for cell in fitted.cells() {
+        if let Some(reason) = cell.skipped {
+            h.int(cell.group);
+            h.int(cell.time);
+            h.int(cell.base);
+            h.text(panel_reason(reason));
+        }
+    }
+    for cell in fitted.cells() {
+        if cell.estimate.is_some() && cell.columns_dropped > 0 {
+            h.int(cell.group);
+            h.int(cell.time);
+            h.int(cell.base);
+            h.word(cell.columns_dropped as u64);
+        }
+    }
+    let sample = fitted.sample();
+    for &id in &sample.units {
+        h.int(i64::from(id));
+    }
+    sample.groups.iter().for_each(|g| h.int(g.unwrap_or(-1)));
     h.fs(&sample.weights);
     for &p in &sample.periods {
-        h.int(i64::from(p));
+        h.int(p);
     }
     for &c in &sample.cohorts {
-        h.int(i64::from(c));
+        h.int(c);
     }
     for count in [
         sample.recoded_never_treated,
@@ -320,48 +391,17 @@ fn att_gt_digest(fitted: &AttGtInfluenceOutput) -> u64 {
     ] {
         h.word(count as u64);
     }
-    h.int(sample.last_cohort_as_comparison.map_or(-1, i64::from));
+    h.int(sample.last_cohort_as_comparison.unwrap_or(-1));
     h.word(u64::from(sample.unbalanced_as_repeated_cross_section));
-    for cell in &fitted.overlap {
-        h.int(i64::from(cell.group));
-        h.int(i64::from(cell.time));
-        h.int(i64::from(cell.baseline_time));
-        h.o(cell.max_propensity);
+    for cell in fitted.cells() {
+        if let Some(overlap) = cell.overlap {
+            h.int(cell.group);
+            h.int(cell.time);
+            h.int(cell.base);
+            h.o(overlap.max_propensity);
+        }
     }
     h.finish()
-}
-
-/// The family of each influence position, as the kernels align clusters to the
-/// units the estimator kept.
-fn unit_clusters(rows: &[Row], ids: &[i64]) -> Vec<u32> {
-    ids.iter()
-        .map(|&id| {
-            rows.iter()
-                .find(|row| i64::from(row.unit) == id)
-                .expect("a kept unit has rows")
-                .cluster
-        })
-        .collect()
-}
-
-/// `kernels::did::event_study`'s `restrict_dynamic_cells` for `balance_e`.
-fn balanced(
-    estimates: &[AttGtEstimate],
-    influence: &[Vec<f64>],
-    balance_e: i32,
-) -> (Vec<AttGtEstimate>, Vec<Vec<f64>>) {
-    let max_time = estimates.iter().map(|e| e.time).max().expect("cells");
-    let kept: BTreeSet<i32> = estimates
-        .iter()
-        .map(|e| e.group)
-        .filter(|g| max_time - g >= balance_e)
-        .collect();
-    estimates
-        .iter()
-        .zip(influence)
-        .filter(|(e, _)| kept.contains(&e.group) && e.event_time <= balance_e)
-        .map(|(e, psi)| (*e, psi.clone()))
-        .unzip()
 }
 
 /// `kernels::did::honest`'s scale: the root of the largest variance.
@@ -394,15 +434,17 @@ fn scaled(input: &HonestEventStudyInput, scale: f64) -> HonestEventStudyInput {
 /// The event-time curve with its family-clustered covariance, as the kernels
 /// form it from the aggregated influence functions, without the reference
 /// period -1 and within event times -5 to 8.
-fn event_study(dynamic: &AggteResult, clusters: &Clusters) -> HonestEventStudyInput {
+fn event_study(dynamic: &Aggte, clusters: &Clusters) -> HonestEventStudyInput {
+    let influence = dynamic.influence();
     let rows: Vec<_> = dynamic
-        .by_key
+        .points
         .iter()
-        .filter(|row| row.key != -1 && (-5..=8).contains(&row.key))
+        .enumerate()
+        .filter(|(_, row)| row.key != -1 && (-5..=8).contains(&row.key))
         .collect();
     let sums: Vec<Vec<f64>> = rows
         .iter()
-        .map(|row| did_cluster_sums(&row.influence, clusters).expect("sums"))
+        .map(|(j, _)| did_cluster_sums(influence.column(*j), clusters).expect("sums"))
         .collect();
     let covariance = sums
         .iter()
@@ -412,102 +454,94 @@ fn event_study(dynamic: &AggteResult, clusters: &Clusters) -> HonestEventStudyIn
                 .collect()
         })
         .collect();
+    let key = |k: i64| i32::try_from(k).expect("small");
     HonestEventStudyInput {
-        betahat: rows.iter().map(|row| row.att).collect(),
+        betahat: rows.iter().map(|(_, row)| row.estimate.estimate).collect(),
         covariance,
-        pre_periods: rows.iter().map(|row| row.key).filter(|&k| k < 0).collect(),
-        post_periods: rows.iter().map(|row| row.key).filter(|&k| k >= 0).collect(),
+        pre_periods: rows
+            .iter()
+            .map(|(_, row)| key(row.key))
+            .filter(|&k| k < 0)
+            .collect(),
+        post_periods: rows
+            .iter()
+            .map(|(_, row)| key(row.key))
+            .filter(|&k| k >= 0)
+            .collect(),
     }
 }
 
+/// The aggregations of the kernels: `did::aggte`'s four summaries on the
+/// family-clustered fit, the event study restricted by `balance_e`, and the
+/// fixed-weight summaries, whose event-time path is unclustered.
 fn aggregations(
     out: &mut Vec<(&'static str, u64)>,
-    rows: &[Row],
-    fitted: &AttGtInfluenceOutput,
-) -> (AggteResult, Clusters) {
-    let inference = InferenceConfig {
-        confidence_level: CONFIDENCE,
-    };
-    let families = unit_clusters(rows, &fitted.sample.ids);
+    fitted: &AttGt,
+    clustered: &AttGt,
+) -> (Aggte, Clusters) {
+    let level = Level::confidence(CONFIDENCE).expect("level");
+    let families = clustered.clusters().expect("clusters").to_vec();
     let clusters = Clusters::from_labels(&families);
-    let panel: UnitPanel = fitted
-        .sample
-        .unit_panel()
-        .clustered_by(families.iter().map(|&f| i64::from(f)).collect());
-    let (estimates, influence) = (&fitted.estimates, &fitted.influence_functions);
-
-    let run = |aggregation, estimates: &[AttGtEstimate], influence: &[Vec<f64>]| {
-        aggregate_att_gt(
-            estimates,
-            influence,
-            &panel,
-            AggteConfig {
-                aggregation,
-                confidence_level: inference,
-                ..AggteConfig::default()
-            },
-        )
-        .expect("aggregation")
+    let run = |fit: &AttGt, options: AggteOptions| fit.aggregate(&options).expect("aggregation");
+    let by_share = |aggregation| AggteOptions {
+        aggregation,
+        level,
+        ..AggteOptions::default()
     };
-    let dynamic = run(AggteType::Dynamic, estimates, influence);
+
+    let dynamic = run(clustered, by_share(AggteType::Dynamic));
     let mut h = Hash::new();
     h.aggte(&dynamic);
     for kind in [AggteType::Group, AggteType::Calendar, AggteType::Simple] {
-        h.aggte(&run(kind, estimates, influence));
+        h.aggte(&run(clustered, by_share(kind)));
     }
     out.push(("aggte/by_treated_count", h.finish()));
 
-    let (kept, kept_influence) = balanced(estimates, influence, 5);
     let mut h = Hash::new();
-    h.aggte(&run(AggteType::Dynamic, &kept, &kept_influence));
+    h.aggte(&run(
+        clustered,
+        AggteOptions {
+            balance_e: Some(5),
+            ..by_share(AggteType::Dynamic)
+        },
+    ));
     out.push(("aggte/balance_e_5", h.finish()));
 
-    for (name, weighting) in [
-        (
-            "fixed_weights/by_total_weight",
-            AttGtAggregationWeighting::ByTotalWeight,
-        ),
-        ("fixed_weights/equal", AttGtAggregationWeighting::Equal),
+    for (name, weights) in [
+        ("fixed_weights/by_total_weight", AggteWeights::TotalWeight),
+        ("fixed_weights/equal", AggteWeights::Equal),
     ] {
-        let config = AttGtAggregationConfig {
-            confidence_level: inference,
-            weighting,
+        let fixed = |aggregation| AggteOptions {
+            weights,
+            ..by_share(aggregation)
         };
         let mut h = Hash::new();
-        let event_time = aggregate_att_gt_event_time_with_influence(estimates, influence, config)
-            .expect("event time");
-        for (row, psi) in event_time
-            .estimates
-            .iter()
-            .zip(&event_time.influence_functions)
-        {
-            h.int(i64::from(row.event_time));
-            h.summary(&row.summary);
-            h.fs(psi);
+        let event_time = run(fitted, fixed(AggteType::Dynamic));
+        for (j, point) in event_time.points.iter().enumerate() {
+            h.int(point.key);
+            h.summary(&point.estimate, point.n_cells, point.total_weight);
+            h.fs(event_time.influence().column(j));
         }
-        for row in aggregate_att_gt_by_cohort(estimates, influence, &panel, config).expect("cohort")
-        {
-            h.int(i64::from(row.group));
-            h.summary(&row.summary);
+        for kind in [AggteType::Group, AggteType::Calendar] {
+            for point in &run(clustered, fixed(kind)).points {
+                h.int(point.key);
+                h.summary(&point.estimate, point.n_cells, point.total_weight);
+            }
         }
-        for row in aggregate_att_gt_by_calendar_time(estimates, influence, &panel, config)
-            .expect("calendar")
-        {
-            h.int(i64::from(row.time));
-            h.summary(&row.summary);
-        }
-        h.summary(
-            &aggregate_att_gt_overall(estimates, influence, &panel, config).expect("overall"),
-        );
+        let overall = run(clustered, fixed(AggteType::Simple))
+            .overall
+            .expect("overall");
+        h.summary(&overall.estimate, overall.n_cells, overall.total_weight);
         out.push((name, h.finish()));
     }
 
     let mut h = Hash::new();
-    for psi in influence {
-        h.fs(&did_cluster_sums(psi, &clusters).expect("sums"));
+    let influence = fitted.influence().expect("influence");
+    for j in 0..influence.n_columns() {
+        h.fs(&did_cluster_sums(influence.column(j), &clusters).expect("sums"));
     }
-    for row in &dynamic.by_key {
-        h.fs(&did_cluster_sums(&row.influence, &clusters).expect("sums"));
+    for j in 0..dynamic.points.len() {
+        h.fs(&did_cluster_sums(dynamic.influence().column(j), &clusters).expect("sums"));
     }
     out.push(("cluster_sums", h.finish()));
     (dynamic, clusters)
@@ -636,6 +670,19 @@ fn honest(out: &mut Vec<(&'static str, u64)>, study: &HonestEventStudyInput) {
     out.push(("honest/smoothness", h.finish()));
 }
 
+fn drdid_config() -> DrDidConfig {
+    DrDidConfig {
+        confidence_level: CONFIDENCE,
+        propensity_clip: 1e-6,
+        ridge: 1e-8,
+        max_iter: 200,
+        tol: 1e-8,
+        bootstrap_reps: 1,
+        legacy_repeated_cross_section: true,
+        ..DrDidConfig::default()
+    }
+}
+
 /// The pairwise estimator's two-period panels: parents observed at the
 /// baseline event time -1 and at event time `e`, cases against the
 /// comparators matched to them.
@@ -759,33 +806,22 @@ fn pairwise(out: &mut Vec<(&'static str, u64)>, rows: &[Row]) {
 
 fn cases() -> Vec<(&'static str, u64)> {
     let rows = panel();
-    let observations = observations(&rows);
+    let data = columns(&rows);
     let mut out = Vec::new();
 
-    let fitted = estimate_att_gt_dr_panel_with_influence(
-        &observations,
-        att_gt_config(ComparisonGroup::MatchedNeverTreated, 0),
-    )
-    .expect("ATT(g,t)");
+    let fitted = study_att_gt(&data, ComparisonGroup::MatchedNeverTreated, 0, false);
     assert!(
-        fitted.sample.dropped_treated_at_start > 0,
+        fitted.sample().dropped_treated_at_start > 0,
         "no unit dropped at the start"
     );
     out.push(("att_gt/matched_never_treated", att_gt_digest(&fitted)));
-    let pooled = estimate_att_gt_dr_panel_with_influence(
-        &observations,
-        att_gt_config(ComparisonGroup::NeverTreated, 0),
-    )
-    .expect("ATT(g,t)");
+    let pooled = study_att_gt(&data, ComparisonGroup::NeverTreated, 0, false);
     out.push(("att_gt/never_treated", att_gt_digest(&pooled)));
-    let anticipation = estimate_att_gt_dr_panel_with_influence(
-        &observations,
-        att_gt_config(ComparisonGroup::MatchedNeverTreated, 2),
-    )
-    .expect("ATT(g,t)");
+    let anticipation = study_att_gt(&data, ComparisonGroup::MatchedNeverTreated, 2, false);
     out.push(("att_gt/anticipation_2", att_gt_digest(&anticipation)));
 
-    let (dynamic, clusters) = aggregations(&mut out, &rows, &fitted);
+    let clustered = study_att_gt(&data, ComparisonGroup::MatchedNeverTreated, 0, true);
+    let (dynamic, clusters) = aggregations(&mut out, &fitted, &clustered);
     honest(&mut out, &event_study(&dynamic, &clusters));
     pairwise(&mut out, &rows);
     out

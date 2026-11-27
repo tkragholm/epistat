@@ -3,7 +3,7 @@ mod regions;
 #[path = "event_study_workflow.rs"]
 mod workflow;
 
-use crate::types::{AttGtEstimate, InferenceConfig};
+use crate::types::InferenceConfig;
 use rayon::prelude::*;
 
 use super::relative_magnitude::conditional_confidence_set::{
@@ -27,7 +27,6 @@ use super::{
         compute_relative_magnitude_confidence_set_with_precomputed_sets,
     },
 };
-use crate::inference::normal_interval;
 use crate::util::usize_to_f64;
 
 pub use regions::{
@@ -44,144 +43,16 @@ pub use workflow::{
     assess_honest_event_study_workflow, assess_honest_event_study_workflow_with_config,
 };
 
-/// Simple sensitivity interval for one post-treatment estimate, from the
-/// estimates alone.
-///
-/// This is a closed-form approximation, not the conditional confidence set of
-/// the event-study functions. The identified set is built around the target
-/// estimate `tau`:
-///
-/// - `Smoothness(M)`: `[tau + b - M, tau + b + M]`, where `b` is the estimate of
-///   the last pre-period.
-/// - `RelativeMagnitude(Mbar)`: `[tau - d, tau + d]`, where
-///   `d = Mbar * max |pre-period estimate|`.
-///
-/// The robust interval runs from the lower end of the two-sided Wald interval
-/// around the lower end of the identified set to the upper end of the Wald
-/// interval around the upper end, using `target_estimate.se`.
-///
-/// # Arguments
-/// * `target_estimate` - The post-treatment estimate and its standard error.
-/// * `pre_period_estimates` - Estimates for the pre-treatment periods, the last
-///   one adjacent to treatment.
-/// * `vcov` - Matrix of side `pre_period_estimates.len() + 1`. Only its
-///   dimensions are checked.
-/// * `sensitivity` - The restriction and its parameter.
-/// * `inference` - The confidence level.
-///
-/// # Errors
-/// Returns an error if covariance dimensions are inconsistent or the
-/// sensitivity problem is numerically invalid for the supplied target and
-/// pre-period estimates.
-pub fn compute_honest_ci_scalar(
-    target_estimate: &AttGtEstimate,
-    pre_period_estimates: &[AttGtEstimate],
-    vcov: &[Vec<f64>],
-    sensitivity: HonestSensitivity,
-    inference: InferenceConfig,
-) -> Result<HonestResult, String> {
-    let k = pre_period_estimates.len();
-    if vcov.len() != k + 1 || vcov[0].len() != k + 1 {
-        return Err("VCOV matrix dimensions must match pre_periods + 1".to_string());
-    }
-
-    let (identified_lower, identified_upper) = match sensitivity {
-        HonestSensitivity::Smoothness(m) => {
-            let last_pre = pre_period_estimates
-                .last()
-                .ok_or("requires at least one pre-period")?;
-            let beta_pre = last_pre.att;
-            let delta_min = -beta_pre - m;
-            let delta_max = -beta_pre + m;
-            (
-                target_estimate.att - delta_max,
-                target_estimate.att - delta_min,
-            )
-        }
-        HonestSensitivity::RelativeMagnitude(m) => {
-            let max_pre_bias = pre_period_estimates
-                .iter()
-                .map(|estimate| estimate.att.abs())
-                .fold(0.0, f64::max);
-
-            let delta_bound = m * max_pre_bias;
-            (
-                target_estimate.att - delta_bound,
-                target_estimate.att + delta_bound,
-            )
-        }
-    };
-
-    let se = target_estimate.se;
-    let robust_lower = normal_interval(identified_lower, se, inference.confidence_level).0;
-    let robust_upper = normal_interval(identified_upper, se, inference.confidence_level).1;
-
-    Ok(HonestResult {
-        original_estimate: target_estimate.att,
-        original_se: target_estimate.se,
-        robust_ci: (robust_lower, robust_upper),
-        identified_set: (identified_lower, identified_upper),
-        m: match sensitivity {
-            HonestSensitivity::Smoothness(m) | HonestSensitivity::RelativeMagnitude(m) => m,
-        },
-    })
-}
-
-/// Compute a scalar `HonestDiD` result for each post-treatment event-study
-/// coefficient, each period on its own.
-///
-/// `betahat` holds the pre-period estimates followed by the post-period
-/// estimates, and `covariance` is its covariance matrix. The labels in
-/// `pre_periods` and `post_periods` give the split, and the post labels are
-/// returned in the results. The robust interval is the conditional confidence
-/// set with the default configuration for the restriction.
-///
-/// # Errors
-/// Returns an error if dimensions are inconsistent or covariance entries are
-/// invalid.
-pub fn compute_honest_event_study_scalar(
-    betahat: &[f64],
-    covariance: &[Vec<f64>],
-    pre_periods: &[i32],
-    post_periods: &[i32],
-    sensitivity: HonestSensitivity,
-    inference: InferenceConfig,
-) -> Result<Vec<HonestEventStudyPoint>, String> {
-    compute_honest_event_study_scalar_counted(
-        betahat,
-        covariance,
-        pre_periods,
-        post_periods,
-        sensitivity,
-        inference,
-        &crate::inference::sensitivity::SolverCounter::new(),
-    )
-}
-
-pub(in crate::inference::sensitivity) fn compute_honest_event_study_scalar_counted(
-    betahat: &[f64],
-    covariance: &[Vec<f64>],
-    pre_periods: &[i32],
-    post_periods: &[i32],
-    sensitivity: HonestSensitivity,
-    inference: InferenceConfig,
-    counter: &crate::inference::sensitivity::SolverCounter,
-) -> Result<Vec<HonestEventStudyPoint>, String> {
-    let input = HonestEventStudyInput {
-        betahat: betahat.to_vec(),
-        covariance: covariance.to_vec(),
-        pre_periods: pre_periods.to_vec(),
-        post_periods: post_periods.to_vec(),
-    };
-    compute_honest_event_study_scalar_for_input_counted(&input, sensitivity, inference, counter)
-}
-
 /// Compute a scalar `HonestDiD` result for each post-treatment coefficient of
-/// `input`, in the order of its post periods. See
-/// [`compute_honest_event_study_scalar`].
+/// `input`, each period on its own, in the order of its post periods.
+///
+/// The robust interval is the conditional confidence set with the default
+/// configuration for the restriction, and the post labels are returned in the
+/// results.
 ///
 /// # Errors
-/// Returns an error if `input` is inconsistent.
+/// Returns an error if `input` is inconsistent or its covariance entries are
+/// invalid.
 pub fn compute_honest_event_study_scalar_for_input(
     input: &HonestEventStudyInput,
     sensitivity: HonestSensitivity,

@@ -34,9 +34,10 @@
 //! 3. Cramér H. Mathematical Methods of Statistics. Princeton University Press,
 //!    1946.
 
-use super::input::{BalanceInputError, BalanceWeights};
+use super::input::BalanceWeights;
 use super::stats::{standard_deviation, standardised_difference};
-use crate::matching::{ColumnReader, CovariateRecord, NameScan, effective_sample_size};
+use crate::Error;
+use crate::matching::{ColumnReader, CovariateRecord, NameScan};
 use crate::types::{
     BalanceImprovement, BalanceReport, BalanceReportOptions, BalanceSummary,
     BalanceThresholdSummary, BalanceThresholds, CategoricalBalance, CategoricalLevelBalance,
@@ -60,9 +61,9 @@ use std::sync::Arc;
 /// The cases are the treated group and the controls the comparison group.
 /// "Pre" statistics use every record passed in with weight one. "Post"
 /// statistics weight each record by the unit weights the outcome gives for its
-/// realised estimand (see [`MatchOutcome::match_weights_for_realized_estimand`]),
+/// realised estimand (see [`MatchOutcome::match_weights`] with [`MatchWeightMethod::for_estimand`](crate::MatchWeightMethod::for_estimand)),
 /// so a record of weight zero does not enter them. This is
-/// [`balance_report_on_weights`] on [`BalanceWeights::from_outcome`].
+/// [`balance_summary`] on [`BalanceWeights::from_outcome`].
 ///
 /// Standardised differences follow the documentation of MatchIt's
 /// `summary.matchit()`. The difference in weighted means is divided by a
@@ -85,23 +86,14 @@ pub fn balance_report<R: CovariateRecord>(
     cases: &[R],
     controls: &[R],
     outcome: &MatchOutcome,
-) -> BalanceReport {
-    balance_report_with_options(cases, controls, outcome, &BalanceReportOptions::default())
-}
-
-/// Compute pre- and post-match covariate balance summaries with report options.
-#[must_use]
-pub fn balance_report_with_options<R: CovariateRecord>(
-    cases: &[R],
-    controls: &[R],
-    outcome: &MatchOutcome,
     options: &BalanceReportOptions,
 ) -> BalanceReport {
     let weights = BalanceWeights::from_outcome(outcome);
     compute_summary(cases, controls, &weights, options, false).report
 }
 
-/// Covariate balance before and after matching on weights given from outside.
+/// Covariate balance before and after matching on weights given from outside,
+/// with the sample size table and the pair distances.
 ///
 /// `weights` gives a matching weight to each unit, so the weights can come from
 /// subclassification, the exact method, full matching, matching with
@@ -112,34 +104,19 @@ pub fn balance_report_with_options<R: CovariateRecord>(
 /// the sampling weights. Otherwise the statistics are those of
 /// [`balance_report`].
 ///
-/// # Errors
-///
-/// [`BalanceInputError::InvalidWeight`] for a weight that is negative or not
-/// finite.
-pub fn balance_report_on_weights<R: CovariateRecord>(
-    cases: &[R],
-    controls: &[R],
-    weights: &BalanceWeights,
-    options: &BalanceReportOptions,
-) -> Result<BalanceReport, BalanceInputError> {
-    Ok(balance_summary(cases, controls, weights, options)?.report)
-}
-
-/// The balance report with the sample size table and the pair distances.
-///
 /// The pair distances are computed from `weights.pairs`. The sample size table
 /// counts a unit as discarded when `weights.discarded` has it.
 ///
 /// # Errors
 ///
-/// [`BalanceInputError::InvalidWeight`] for a weight that is negative or not
+/// [`Error::InvalidWeight`] for a weight that is negative or not
 /// finite.
 pub fn balance_summary<R: CovariateRecord>(
     cases: &[R],
     controls: &[R],
     weights: &BalanceWeights,
     options: &BalanceReportOptions,
-) -> Result<BalanceSummary, BalanceInputError> {
+) -> Result<BalanceSummary, Error> {
     weights.validate()?;
     Ok(compute_summary(cases, controls, weights, options, true))
 }
@@ -164,10 +141,10 @@ fn compute_summary<R: CovariateRecord>(
     let sample = BalanceSample {
         cases,
         controls,
-        case_weights: unit_weights(cases, &weights.matching.anchor, weights.sampling.as_ref()),
+        case_weights: unit_weights(cases, &weights.matching.case, weights.sampling.as_ref()),
         control_weights: unit_weights(
             controls,
-            &weights.matching.candidate,
+            &weights.matching.control,
             weights.sampling.as_ref(),
         ),
         sampled: weights.sampling.is_some(),
@@ -242,7 +219,9 @@ fn sample_sizes<R: CovariateRecord>(
         let ess = |values: Vec<f64>| {
             // The weights have been validated, so only a size that is
             // undefined, with no positive weight, is left as `None`.
-            effective_sample_size(values.iter().copied()).ok().flatten()
+            epistat_stats::weighted::effective_sample_size(&values)
+                .ok()
+                .flatten()
         };
         GroupSampleSizes {
             all: records.len(),
@@ -600,7 +579,7 @@ struct UnitWeights {
 
 fn unit_weights<R: CovariateRecord>(
     records: &[R],
-    matching: &rapidhash::RapidHashMap<String, f64>,
+    matching: &std::collections::BTreeMap<String, f64>,
     sampling: Option<&HashMap<String, f64>>,
 ) -> Vec<UnitWeights> {
     records
@@ -1547,6 +1526,7 @@ mod tests {
             &[case_a, case_b],
             &[control_a, control_b],
             &test_outcome(vec![MatchedPair::new("case_a", "control_b")], 1, 0),
+            &crate::BalanceReportOptions::default(),
         );
 
         assert_eq!(report.numeric.len(), 1);
@@ -1579,6 +1559,7 @@ mod tests {
             &[case_a, case_b],
             &[control_a, control_b],
             &test_outcome(vec![MatchedPair::new("case_a", "control_b")], 1, 0),
+            &crate::BalanceReportOptions::default(),
         );
 
         let numeric = &report.numeric[0];
@@ -1606,13 +1587,14 @@ mod tests {
             .covariates
             .insert("age".to_string(), CovariateValue::Numeric(3.0));
 
-        let report = balance_report_with_options(
+        let report = balance_report(
             &[case_a, case_b],
             &[control_a, control_b],
             &test_outcome(vec![MatchedPair::new("case_a", "control_b")], 1, 0),
-            &BalanceReportOptions::builder()
-                .numeric_transforms(NumericBalanceTransform::Squares)
-                .build(),
+            &BalanceReportOptions {
+                numeric_transforms: NumericBalanceTransform::Squares,
+                ..BalanceReportOptions::default()
+            },
         );
 
         let names = report
@@ -1655,13 +1637,14 @@ mod tests {
             .covariates
             .insert("income".to_string(), CovariateValue::Numeric(9.0));
 
-        let report = balance_report_with_options(
+        let report = balance_report(
             &[case_a, case_b],
             &[control_a, control_b],
             &test_outcome(vec![MatchedPair::new("case_a", "control_b")], 1, 0),
-            &BalanceReportOptions::builder()
-                .numeric_transforms(NumericBalanceTransform::SquaresAndPairwiseInteractions)
-                .build(),
+            &BalanceReportOptions {
+                numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
+                ..BalanceReportOptions::default()
+            },
         );
 
         let names = report
@@ -1751,7 +1734,7 @@ mod tests {
             ]),
         );
 
-        let report = balance_report_with_options(
+        let report = balance_report(
             &[case_a],
             &[control_a],
             &test_outcome(vec![MatchedPair::new("case_a", "control_a")], 1, 0),
@@ -1794,6 +1777,7 @@ mod tests {
             &[case_a, case_b],
             &[control_a, control_b],
             &test_outcome(vec![MatchedPair::new("case_a", "control_b")], 1, 0),
+            &crate::BalanceReportOptions::default(),
         );
         let numeric = &report.numeric[0];
         assert!((numeric.var_ratio_pre.unwrap() - 0.0).abs() < 1e-12);
@@ -1818,6 +1802,7 @@ mod tests {
             &[case_a],
             &[control_a],
             &test_outcome(vec![MatchedPair::new("case_a", "control_a")], 1, 0),
+            &crate::BalanceReportOptions::default(),
         );
         let numeric = &report.numeric[0];
         assert_eq!(numeric.mean_case_pre, Some(3.0));
@@ -1843,7 +1828,12 @@ mod tests {
             .covariates
             .insert("x".to_string(), CovariateValue::Numeric(2.0));
 
-        let report = balance_report(&[case_a], &[control_a], &test_outcome(Vec::new(), 0, 1));
+        let report = balance_report(
+            &[case_a],
+            &[control_a],
+            &test_outcome(Vec::new(), 0, 1),
+            &crate::BalanceReportOptions::default(),
+        );
         let numeric = &report.numeric[0];
         assert_eq!(numeric.mean_case_post, None);
         assert_eq!(numeric.mean_control_post, None);
@@ -1976,12 +1966,15 @@ mod tests {
             2,
             0,
         );
-        let options = BalanceReportOptions::builder()
-            .numeric_transforms(NumericBalanceTransform::SquaresAndPairwiseInteractions)
-            .build();
-        let pairs = balance_report_with_options(&cases, &controls, &outcome, &options);
+        let options = BalanceReportOptions {
+            numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
+            ..BalanceReportOptions::default()
+        };
+        let pairs = balance_report(&cases, &controls, &outcome, &options);
         let weights = BalanceWeights::from_outcome(&outcome);
-        let on_weights = balance_report_on_weights(&cases, &controls, &weights, &options).unwrap();
+        let on_weights = balance_summary(&cases, &controls, &weights, &options)
+            .map(|summary| summary.report)
+            .unwrap();
         assert_eq!(format!("{pairs:?}"), format!("{on_weights:?}"));
     }
 
@@ -2010,7 +2003,7 @@ mod tests {
     fn invalid_weights_are_an_error() {
         let (cases, controls) = small_groups();
         let mut weights = BalanceWeights::unmatched(&cases, &controls, Estimand::Att);
-        weights.matching.anchor.insert("t1".to_string(), -1.0);
+        weights.matching.case.insert("t1".to_string(), -1.0);
         let result = balance_summary(
             &cases,
             &controls,
@@ -2019,7 +2012,7 @@ mod tests {
         );
         assert_eq!(
             result.unwrap_err(),
-            BalanceInputError::InvalidWeight {
+            Error::InvalidWeight {
                 id: "t1".to_string(),
                 weight: -1.0
             }
@@ -2158,12 +2151,13 @@ mod tests {
             ("c2".to_string(), 1.0),
         ]);
         let weights = BalanceWeights::from_unit_weights(&cases, &controls, &given, Estimand::Att);
-        let report = balance_report_on_weights(
+        let report = balance_summary(
             &cases,
             &controls,
             &weights,
             &BalanceReportOptions::default(),
         )
+        .map(|summary| summary.report)
         .unwrap();
         // n = 5, north row 3 and south row 2: expected 1.2, 0.8 for the cases and
         // 1.8, 1.2 for the controls. chi-square = 0.04/1.2 + 0.04/0.8 + 0.04/1.8 + 0.04/1.2.
@@ -2176,10 +2170,11 @@ mod tests {
     fn interactions_include_the_dummies_of_a_factor_in_column_order() {
         let (cases, controls) = small_groups();
         let outcome = test_outcome(vec![MatchedPair::new("t1", "c1")], 1, 0);
-        let options = BalanceReportOptions::builder()
-            .numeric_transforms(NumericBalanceTransform::SquaresAndPairwiseInteractions)
-            .build();
-        let report = balance_report_with_options(&cases, &controls, &outcome, &options);
+        let options = BalanceReportOptions {
+            numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
+            ..BalanceReportOptions::default()
+        };
+        let report = balance_report(&cases, &controls, &outcome, &options);
         let names = report
             .numeric
             .iter()
@@ -2214,7 +2209,9 @@ mod tests {
             numeric_transforms: NumericBalanceTransform::Squares,
             ..BalanceReportOptions::default()
         };
-        let report = balance_report_on_weights(&cases, &controls, &weights, &options).unwrap();
+        let report = balance_summary(&cases, &controls, &weights, &options)
+            .map(|summary| summary.report)
+            .unwrap();
         assert!(report.numeric.iter().any(|row| row.name == "x^2"));
     }
 
@@ -2468,9 +2465,9 @@ mod tests {
             for record in cases.iter().chain(&controls) {
                 let weight = [0.0, 0.1, 0.3, 0.7, 1.1][rng.below(5)];
                 let target = if MatchingRecord::id(record).starts_with("case") {
-                    &mut weights.matching.anchor
+                    &mut weights.matching.case
                 } else {
-                    &mut weights.matching.candidate
+                    &mut weights.matching.control
                 };
                 target.insert(MatchingRecord::id(record).to_string(), weight);
             }
@@ -2505,12 +2502,12 @@ mod tests {
                 controls: &controls,
                 case_weights: unit_weights(
                     &cases,
-                    &weights.matching.anchor,
+                    &weights.matching.case,
                     weights.sampling.as_ref(),
                 ),
                 control_weights: unit_weights(
                     &controls,
-                    &weights.matching.candidate,
+                    &weights.matching.control,
                     weights.sampling.as_ref(),
                 ),
                 sampled,
@@ -2561,7 +2558,7 @@ mod tests {
         let cases = make("case", &mut rng);
         let controls = make("control", &mut rng);
         let mut weights = BalanceWeights::unmatched(&cases, &controls, Estimand::Att);
-        for (idx, weight) in weights.matching.candidate.values_mut().enumerate() {
+        for (idx, weight) in weights.matching.control.values_mut().enumerate() {
             *weight = 0.1 * f64::from(u8::try_from(idx % 7).unwrap());
         }
         weights.pairs = (0..20_000)

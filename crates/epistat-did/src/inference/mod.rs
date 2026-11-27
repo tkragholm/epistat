@@ -1,87 +1,19 @@
-//! Shared inference utilities: influence-function standard errors, clustered
-//! variances and intervals, a multiplier bootstrap interval, quantiles and
+//! Shared inference utilities: influence-function standard errors, the
+//! cluster sums of R's `did`, a multiplier bootstrap interval, quantiles and
 //! normal critical values.
 
-use epistat_inference::Clusters;
-use std::hash::Hash;
-
-use thiserror::Error;
-
 pub mod did_clusters;
-/// Long-form export of influence functions and covariances.
-pub mod export;
 // Gated: the HonestDiD sensitivity machinery is the only consumer of the
 // `clarabel` conic solver. Off by default so the register pipeline does not
 // link it. Enable with `--features honest`.
 #[cfg(feature = "honest")]
 pub mod sensitivity;
-/// Variance and covariance estimators from influence functions.
-pub mod vcov;
 
 use crate::types::{BootstrapConfig, InferenceConfig};
 
-/// The cluster labels of the rows, one label per row.
-#[derive(Debug, Clone)]
-pub enum ClusterSpec<L: Eq + Hash + Clone> {
-    /// One-way clustering (e.g., by person ID).
-    OneWay(Vec<L>),
-}
-
-impl<L: Eq + Hash + Clone> ClusterSpec<L> {
-    /// Builds a one-way clustering from one label per row.
-    #[must_use]
-    pub const fn one_way(labels: Vec<L>) -> Self {
-        Self::OneWay(labels)
-    }
-}
-
-/// Cluster membership of the rows as integer group numbers.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClusterIndex {
-    /// Cluster number of each row, one entry per row. Rows with the same number
-    /// are in the same cluster.
-    pub group_assignments: Vec<usize>,
-    /// Number of distinct clusters. The variance functions count the clusters
-    /// from `group_assignments` and do not read this field.
-    pub n_groups: usize,
-}
-
-impl ClusterIndex {
-    fn clusters(&self) -> Clusters {
-        Clusters::from_labels(&self.group_assignments)
-    }
-}
-
-/// Errors from clustered inference.
-#[derive(Debug, Clone, PartialEq, Error)]
-pub enum InferenceError {
-    /// The influence-function vector is empty.
-    #[error("clustered variance requires non-empty influence-function values")]
-    EmptyInfluenceFunction,
-    /// The influence-function vector and the cluster labels differ in length.
-    #[error(
-        "clustered variance requires aligned influence/cluster lengths ({influence_len} vs {cluster_len})"
-    )]
-    MisalignedClusterLengths {
-        /// Length of the influence-function vector.
-        influence_len: usize,
-        /// Number of cluster labels.
-        cluster_len: usize,
-    },
-    /// The clustered variance is not finite.
-    #[error("clustered variance is not finite")]
-    NonFiniteClusteredVariance,
-    /// There are fewer than two clusters.
-    #[error("clustered variance needs at least two clusters")]
-    TooFewClusters,
-    /// The confidence level is not strictly between 0 and 1.
-    #[error("invalid confidence level for clustered CI: {0}")]
-    InvalidConfidenceLevel(f64),
-}
-
 /// Whether the confidence level is finite and strictly between 0 and 1.
 #[must_use]
-pub fn validate_confidence_level(confidence_level: f64) -> bool {
+pub(crate) fn validate_confidence_level(confidence_level: f64) -> bool {
     confidence_level.is_finite() && confidence_level > 0.0 && confidence_level < 1.0
 }
 
@@ -100,8 +32,8 @@ pub(crate) fn normal_interval(estimate: f64, se: f64, confidence_level: f64) -> 
 
 /// Two-sided normal critical value for a confidence level in (0, 1).
 #[must_use]
-pub fn z_score_for_confidence(confidence_level: f64) -> f64 {
-    inverse_standard_normal_cdf(0.5 * confidence_level + 0.5)
+pub(crate) fn z_score_for_confidence(confidence_level: f64) -> f64 {
+    epistat_stats::dist::normal::quantile(0.5 * confidence_level + 0.5)
 }
 
 /// Standard error of an estimate from its influence function: the standard
@@ -112,145 +44,8 @@ pub fn z_score_for_confidence(confidence_level: f64) -> f64 {
     deprecated,
     reason = "Study I's standard errors stay on the 0.3 influence functions"
 )]
-pub fn standard_error_from_influence(influence_function: &[f64]) -> f64 {
+pub(crate) fn standard_error_from_influence(influence_function: &[f64]) -> f64 {
     epistat_inference::influence::standard_error(influence_function).unwrap_or(f64::NAN)
-}
-
-fn map_influence_error(error: &epistat_inference::Error) -> InferenceError {
-    use epistat_core::InputError;
-    use epistat_inference::Error as Shared;
-    match *error {
-        Shared::Input(InputError::Length {
-            expected, found, ..
-        }) => InferenceError::MisalignedClusterLengths {
-            influence_len: expected,
-            cluster_len: found,
-        },
-        Shared::Input(InputError::Empty { .. }) => InferenceError::EmptyInfluenceFunction,
-        _ => InferenceError::NonFiniteClusteredVariance,
-    }
-}
-
-/// Cluster-robust variance of an estimate from its influence function, with
-/// the clusters given by a pre-computed index. With `G` clusters and `n` rows
-/// it is `G / (G - 1) * sum_g (sum_{i in g} psi_i)^2 / n^2`, where `psi` is the
-/// influence function. The cluster sums are not centred.
-///
-/// # Errors
-/// Returns an error if:
-/// - Influence function is empty.
-/// - Influence function and cluster index have different lengths.
-/// - There are fewer than two clusters.
-/// - The resulting variance is not finite.
-#[expect(
-    deprecated,
-    reason = "Study I's standard errors stay on the 0.3 influence functions"
-)]
-pub fn clustered_variance_from_index(
-    influence_function: &[f64],
-    cluster_index: &ClusterIndex,
-) -> Result<f64, InferenceError> {
-    epistat_inference::influence::clustered_variance(influence_function, &cluster_index.clusters())
-        .map_err(|error| map_influence_error(&error))?
-        .ok_or(InferenceError::TooFewClusters)
-}
-
-/// Square root of [`clustered_variance_from_index`].
-///
-/// # Errors
-/// Returns an error under the conditions of [`clustered_variance_from_index`].
-pub fn clustered_standard_error_from_index(
-    influence_function: &[f64],
-    cluster_index: &ClusterIndex,
-) -> Result<f64, InferenceError> {
-    clustered_variance_from_index(influence_function, cluster_index).map(f64::sqrt)
-}
-
-/// Two-sided Wald interval of `estimate` with the clustered standard error from
-/// a pre-computed index, at `inference.confidence_level`. Returns
-/// `(se, lower, upper)`.
-///
-/// # Errors
-/// Returns an error if:
-/// - Confidence level is not strictly between 0 and 1.
-/// - Clustered standard error computation fails.
-pub fn clustered_ci_from_index(
-    estimate: f64,
-    influence_function: &[f64],
-    cluster_index: &ClusterIndex,
-    inference: InferenceConfig,
-) -> Result<(f64, f64, f64), InferenceError> {
-    if !validate_confidence_level(inference.confidence_level) {
-        return Err(InferenceError::InvalidConfidenceLevel(
-            inference.confidence_level,
-        ));
-    }
-    let se = clustered_standard_error_from_index(influence_function, cluster_index)?;
-    let (low, high) = normal_interval(estimate, se, inference.confidence_level);
-    Ok((se, low, high))
-}
-
-/// Cluster-robust variance of an estimate from its influence function, with
-/// one cluster label per row, as in [`clustered_variance_from_index`]. Clusters
-/// are numbered in order of first appearance, so the sum does not depend on
-/// hashing.
-///
-/// # Errors
-/// Returns an error if:
-/// - Influence function is empty.
-/// - Influence function and cluster labels have different lengths.
-/// - There are fewer than two clusters.
-/// - The resulting variance is not finite.
-#[expect(
-    deprecated,
-    reason = "Study I's standard errors stay on the 0.3 influence functions"
-)]
-pub fn clustered_variance_from_influence<L: Eq + Hash>(
-    influence_function: &[f64],
-    cluster_labels: &[L],
-) -> Result<f64, InferenceError> {
-    epistat_inference::influence::clustered_variance(
-        influence_function,
-        &Clusters::from_labels(cluster_labels),
-    )
-    .map_err(|error| map_influence_error(&error))?
-    .ok_or(InferenceError::TooFewClusters)
-}
-
-/// Square root of [`clustered_variance_from_influence`].
-///
-/// # Errors
-/// Returns an error under the conditions of
-/// [`clustered_variance_from_influence`].
-pub fn clustered_standard_error_from_influence<L: Eq + Hash>(
-    influence_function: &[f64],
-    cluster_labels: &[L],
-) -> Result<f64, InferenceError> {
-    clustered_variance_from_influence(influence_function, cluster_labels).map(f64::sqrt)
-}
-
-/// Two-sided Wald interval of `estimate` with the clustered standard error from
-/// cluster labels, at `inference.confidence_level`. Returns `(se, lower,
-/// upper)`.
-///
-/// # Errors
-/// Returns an error if:
-/// - Confidence level is not strictly between 0 and 1.
-/// - Clustered standard error computation fails.
-pub fn clustered_ci_from_influence<L: Eq + Hash>(
-    estimate: f64,
-    influence_function: &[f64],
-    cluster_labels: &[L],
-    inference: InferenceConfig,
-) -> Result<(f64, f64, f64), InferenceError> {
-    if !validate_confidence_level(inference.confidence_level) {
-        return Err(InferenceError::InvalidConfidenceLevel(
-            inference.confidence_level,
-        ));
-    }
-    let se = clustered_standard_error_from_influence(influence_function, cluster_labels)?;
-    let (low, high) = normal_interval(estimate, se, inference.confidence_level);
-    Ok((se, low, high))
 }
 
 /// Percentile interval of the Rademacher multiplier bootstrap of an estimate
@@ -260,7 +55,7 @@ pub fn clustered_ci_from_influence<L: Eq + Hash>(
 /// not depend on the number of threads. An empty influence function gives
 /// `(NaN, NaN)`.
 #[must_use]
-pub fn multiplier_bootstrap_ci(
+pub(crate) fn multiplier_bootstrap_ci(
     estimate: f64,
     influence_function: &[f64],
     inference: InferenceConfig,
@@ -280,25 +75,11 @@ pub fn multiplier_bootstrap_ci(
     (lower, upper)
 }
 
-/// Type 7 quantile of a sorted sample, with `q` clamped to `[0, 1]`. NaN for an
-/// empty sample.
-#[must_use]
-pub fn quantile_sorted(sorted: &[f64], q: f64) -> f64 {
-    epistat_stats::quantile::type7(sorted, q.clamp(0.0, 1.0)).unwrap_or(f64::NAN)
-}
-
 /// Type 7 quantile of an unsorted sample, which it partially reorders, with
 /// `q` clamped to `[0, 1]`. NaN for an empty sample.
 #[must_use]
-pub fn quantile_unsorted(values: &mut [f64], q: f64) -> f64 {
+pub(crate) fn quantile_unsorted(values: &mut [f64], q: f64) -> f64 {
     epistat_stats::quantile::type7_unsorted(values, q.clamp(0.0, 1.0)).unwrap_or(f64::NAN)
-}
-
-/// Inverse of the standard normal distribution function (Wichura's AS 241).
-#[inline]
-#[must_use]
-pub fn inverse_standard_normal_cdf(p: f64) -> f64 {
-    epistat_stats::dist::normal::quantile(p)
 }
 
 #[cfg(test)]
@@ -306,6 +87,10 @@ mod tests {
     use super::*;
     use crate::util::usize_to_f64;
     use epistat_rng::Stream;
+
+    fn quantile_sorted(sorted: &[f64], q: f64) -> f64 {
+        epistat_stats::quantile::type7(sorted, q.clamp(0.0, 1.0)).unwrap_or(f64::NAN)
+    }
 
     fn multiplier_bootstrap_ci_sorted_reference(
         estimate: f64,
@@ -463,48 +248,6 @@ mod tests {
         let influence = [2.0, -1.0, 0.0, 1.0];
         let se = standard_error_from_influence(&influence);
         assert!((se - 0.559_016_994_374_947_5).abs() < 1e-12);
-    }
-
-    #[test]
-    fn clustered_standard_error_uses_cluster_aggregation() {
-        let influence = [1.0, 2.0, -1.0, -2.0];
-        let labels = ["a", "a", "b", "b"];
-        let se = clustered_standard_error_from_influence(&influence, &labels).unwrap();
-        assert!((se - 1.5).abs() < 1e-12);
-    }
-
-    #[test]
-    fn clustered_ci_rejects_misaligned_inputs() {
-        let err = clustered_ci_from_influence(1.0, &[1.0, 2.0], &["a"], InferenceConfig::new(0.95))
-            .unwrap_err();
-        assert_eq!(
-            err,
-            InferenceError::MisalignedClusterLengths {
-                influence_len: 2,
-                cluster_len: 1,
-            }
-        );
-    }
-
-    #[test]
-    fn covariance_matrix_matches_scalar_variance_on_diagonal() {
-        let influence = vec![vec![2.0, -1.0, 0.0, 1.0], vec![1.0, 1.0, -1.0, -1.0]];
-        let covariance = vcov::covariance_matrix_from_influence_matrix(&influence).unwrap();
-        let se = standard_error_from_influence(&influence[0]);
-        assert!((covariance[0][0] - se * se).abs() < 1e-12);
-        assert_eq!(covariance.len(), 2);
-        assert_eq!(covariance[0].len(), 2);
-    }
-
-    #[test]
-    fn clustered_covariance_matrix_aggregates_by_cluster() {
-        let influence = vec![vec![1.0, 2.0, -1.0, -2.0], vec![0.5, 0.5, -0.5, -0.5]];
-        let labels = ["a", "a", "b", "b"];
-        let covariance =
-            vcov::clustered_covariance_matrix_from_influence_matrix(&influence, &labels).unwrap();
-        let se = clustered_standard_error_from_influence(&influence[0], &labels).unwrap();
-        assert!((covariance[0][0] - se * se).abs() < 1e-12);
-        assert!(covariance[0][1].is_finite());
     }
 
     #[test]

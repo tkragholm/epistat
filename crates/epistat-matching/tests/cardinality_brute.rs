@@ -6,9 +6,9 @@
 //! module documentation of `cardinality` must be the size the solver returns,
 //! and the solver must report it proven.
 
+use epistat_matching::Error;
 use epistat_matching::{
-    CardinalityError, CardinalityLimits, CardinalityRequest, Estimand, match_cardinality,
-    pair_units,
+    CardinalityLimits, CardinalityRequest, Estimand, match_cardinality, pair_units,
 };
 
 struct Rng(u64);
@@ -202,27 +202,15 @@ fn pair_units_with_inputs_of_the_wrong_length_is_an_error_not_a_panic() {
     let strata: Vec<&[usize]> = vec![&[0, 1, 2]];
     let short = vec![true, true];
     let result = pair_units(&treated, &short, &pair_on, 1, &strata, None, None);
-    assert!(
-        matches!(result, Err(CardinalityError::Shape(_))),
-        "{result:?}"
-    );
+    assert!(matches!(result, Err(Error::Shape(_))), "{result:?}");
     let full = vec![true, true, true];
     let result = pair_units(&treated, &full, &pair_on, 1, &strata, Some(&short), None);
-    assert!(
-        matches!(result, Err(CardinalityError::Shape(_))),
-        "{result:?}"
-    );
+    assert!(matches!(result, Err(Error::Shape(_))), "{result:?}");
     let result = pair_units(&treated, &full, &pair_on, 1, &strata, None, Some(&[1.0]));
-    assert!(
-        matches!(result, Err(CardinalityError::Shape(_))),
-        "{result:?}"
-    );
+    assert!(matches!(result, Err(Error::Shape(_))), "{result:?}");
     let outside: Vec<&[usize]> = vec![&[0, 1, 7]];
     let result = pair_units(&treated, &full, &pair_on, 1, &outside, None, None);
-    assert!(
-        matches!(result, Err(CardinalityError::Shape(_))),
-        "{result:?}"
-    );
+    assert!(matches!(result, Err(Error::Shape(_))), "{result:?}");
 }
 
 /// A pairing column is dropped only when it has no variance, whatever its
@@ -265,6 +253,6 @@ fn cardinality_matching_that_selects_nobody_is_not_a_success() {
             "Ok with weights {:?} and {} + {} selected",
             out.weights, out.strata[0].selected_treated, out.strata[0].selected_control
         ),
-        Err(e) => assert_eq!(e, CardinalityError::Infeasible { key: 0 }),
+        Err(e) => assert_eq!(e, Error::InfeasibleBalance { stratum: 0 }),
     }
 }

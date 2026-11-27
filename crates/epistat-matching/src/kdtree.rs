@@ -1,9 +1,9 @@
 //! Exact nearest-neighbour search on a k-d tree, with deletion.
 //!
-//! Nearest neighbour matching on a vector distance asks, for each anchor, for
-//! the `k` nearest candidates that are still available and that the
+//! Nearest neighbour matching on a vector distance asks, for each case, for
+//! the `k` nearest controls that are still available and that the
 //! constraints admit. A scan answers that by computing the distance to every
-//! candidate. This index answers it with the same result while computing the
+//! control. This index answers it with the same result while computing the
 //! distance to far fewer.
 //!
 //! # Algorithm

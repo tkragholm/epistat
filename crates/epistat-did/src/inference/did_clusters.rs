@@ -12,18 +12,17 @@
 //! The standard error is `sqrt(sum_g s_g^2)` and the covariance of two
 //! estimates `a` and `b` is `sum_g s_ga s_gb`. There is no finite-cluster
 //! factor `G / (G - 1)`, which is what `did::aggte` and `did::att_gt` do when
-//! `clustervars` is set and `bstrap = FALSE`. [`clustered_variance_from_index`](crate::clustered_variance_from_index)
-//! and the dataset workflow use the cluster-robust variance with that factor
-//! instead, so the same event study gets two standard errors depending on the
-//! route; the two are not interchangeable.
+//! `clustervars` is set and `bstrap = FALSE`. The cluster-robust variance
+//! with that factor is [`epistat_inference::Influence::variance`] under
+//! `ClusterRule::SmallSample`; the two are not interchangeable.
 //!
 //! R forms the same sums without centring. The two differ by
 //! `mean(psi)^2 / n` per unit, which is zero to rounding for an influence
 //! function evaluated at its own estimate.
 //!
-//! With every unit its own cluster, the standard error is that of
-//! [`standard_error_from_influence`](crate::inference::standard_error_from_influence), up
-//! to the order of the floating-point sums.
+//! With every unit its own cluster, the standard error is the unclustered
+//! one, `sqrt(mean((psi_i - mean(psi))^2) / n)`, up to the order of the
+//! floating-point sums.
 //!
 //! # Determinism
 //!
@@ -147,11 +146,11 @@ pub fn did_covariance(
 }
 
 /// [`did_covariance`] for checked input.
-pub(crate) fn covariance(influence: &[Vec<f64>], clusters: &Clusters) -> Vec<f64> {
+pub(crate) fn covariance<V: AsRef<[f64]>>(influence: &[V], clusters: &Clusters) -> Vec<f64> {
     let dim = influence.len();
     let sums: Vec<Vec<f64>> = influence
         .iter()
-        .map(|vector| cluster_sums(vector, clusters))
+        .map(|vector| cluster_sums(vector.as_ref(), clusters))
         .collect();
     let mut out = vec![0.0; dim * dim];
     for row in 0..dim {

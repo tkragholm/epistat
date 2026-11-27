@@ -10,7 +10,7 @@
 //!
 //! * **Binning.** A numeric variable is binned by one of
 //!   - a rule, [`CemRule`], that gives a number of bins from the values of
-//!     all anchors and candidates (Sturges, Freedman-Diaconis, Scott), which
+//!     all cases and controls (Sturges, Freedman-Diaconis, Scott), which
 //!     is the default (Sturges);
 //!   - a number of bins, which cuts the range from the smallest to the largest
 //!     value into bins of equal width;
@@ -32,35 +32,35 @@
 //!   are subclasses with the weights of the exact method, see
 //!   [`exact_match_subclasses`](super::exact_match_subclasses).
 //! * **k:k matching.** [`cem_k2k_pairs`] pairs the units of each stratum one to
-//!   one, by a distance, in the order of the anchors, [`MatchOrder::Data`], or
+//!   one, by a distance, in the order of the cases, [`MatchOrder::Data`], or
 //!   by the distance of the pair, [`MatchOrder::Closest`] and
 //!   [`MatchOrder::Farthest`], with the same ties and replacement rules as
 //!   [`NearestSelection`](super::NearestSelection): without replacement, ties
-//!   to the candidate that comes first. Without a distance, a stratum's
-//!   candidates are taken in an order drawn from the seed.
+//!   to the control that comes first. Without a distance, a stratum's
+//!   controls are taken in an order drawn from the seed.
 //! * **Missing values.** A missing or non-finite value is an error, as the
 //!   bins of such a unit are undefined.
 //!
 //! # Cost
 //!
 //! Binning sorts each numeric variable once. The k:k pairing computes the
-//! distance of every anchor to every candidate of its stratum, so a stratum
-//! of `a` anchors and `c` candidates costs `a * c` distances.
+//! distance of every case to every control of its stratum, so a stratum
+//! of `a` cases and `c` controls costs `a * c` distances.
 
 use super::codes::{combine_codes, first_appearance_codes, first_missing};
 use super::distance::DistanceConfig;
 use super::distance::DistanceMetric;
 use super::engine::{build_outcome, finalize_estimand_diagnostics};
-use super::exact::{ExactMatchError, ExactMatchOutcome, subclasses_of_strata, unit_at};
+use super::exact::{SubclassedUnits, subclasses_of_strata, unit_at};
 use super::nearest::MatchOrder;
 use super::records::MatchingRecord;
+use crate::Error;
 use crate::types::{Estimand, MatchDiagnostics, MatchOutcome, MatchedPair};
 use epistat_rng::Stream;
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::fmt;
 
 /// A rule that gives a number of bins from the values of a variable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -141,83 +141,21 @@ impl CemVariable {
     }
 }
 
-/// Why coarsened exact matching could not run.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CemError {
-    /// No variable was given.
-    NoVariables,
-    /// A unit has no value, or no finite value, for a variable.
-    MissingValue {
-        /// Id of the unit.
-        id: String,
-        /// Name of the variable.
-        variable: String,
-    },
-    /// The binning of a variable is out of range.
-    Binning {
-        /// Name of the variable.
-        variable: String,
-        /// What is wrong.
-        message: String,
-    },
-    /// No stratum holds units of both groups.
-    NoSharedStratum,
-    /// The order of the anchors needs a score, which a pair distance lacks.
-    Order,
-}
-
-impl fmt::Display for CemError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::NoVariables => write!(f, "no variable to coarsen and match on was given"),
-            Self::MissingValue { id, variable } => write!(
-                f,
-                "unit {id} has no finite value for the variable {variable}"
-            ),
-            Self::Binning { variable, message } => {
-                write!(f, "the binning of {variable} is invalid: {message}")
-            }
-            Self::NoSharedStratum => write!(
-                f,
-                "no stratum holds units of both groups; coarsen the variables further \
-                 or use fewer of them"
-            ),
-            Self::Order => write!(
-                f,
-                "the largest and smallest orders need a score; use data, random, \
-                 closest or farthest"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for CemError {}
-
-impl From<ExactMatchError> for CemError {
-    fn from(error: ExactMatchError) -> Self {
-        match error {
-            ExactMatchError::NoVariables => Self::NoVariables,
-            ExactMatchError::MissingValue { id, variable } => Self::MissingValue { id, variable },
-            ExactMatchError::NoSharedStratum => Self::NoSharedStratum,
-        }
-    }
-}
-
-/// The stratum of every anchor and candidate, or `None` where a unit is in a
+/// The stratum of every case and control, or `None` where a unit is in a
 /// stratum that lacks one of the groups.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CemStrata {
-    /// Stratum of each anchor, in the order of the anchors.
-    pub anchors: Vec<Option<usize>>,
-    /// Stratum of each candidate, in the order of the candidates.
-    pub candidates: Vec<Option<usize>>,
+    /// Stratum of each case, in the order of the cases.
+    pub cases: Vec<Option<usize>>,
+    /// Stratum of each control, in the order of the controls.
+    pub controls: Vec<Option<usize>>,
     /// Number of strata that hold both groups. They are numbered from 0 in
-    /// order of first appearance among the anchors.
+    /// order of first appearance among the cases.
     pub count: usize,
 }
 
-fn binning_error(variable: &str, message: impl Into<String>) -> CemError {
-    CemError::Binning {
+fn binning_error(variable: &str, message: impl Into<String>) -> Error {
+    Error::Binning {
         variable: variable.to_string(),
         message: message.into(),
     }
@@ -318,7 +256,7 @@ fn cutpoints(
     variable: &str,
     binning: &CemBinning,
     values: &[f64],
-) -> Result<Option<Vec<f64>>, CemError> {
+) -> Result<Option<Vec<f64>>, Error> {
     let equal_width = |bins: usize| -> Vec<f64> {
         let minimum = values.iter().copied().fold(f64::INFINITY, f64::min);
         let maximum = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -378,13 +316,13 @@ fn cutpoints(
 ///
 /// # Errors
 ///
-/// [`CemError`] when no variable is given, a unit has no value for a
+/// [`Error`] when no variable is given, a unit has no value for a
 /// variable, a binning is out of range, or no stratum holds both groups.
 pub fn cem_strata<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
     variables: &[CemVariable],
-) -> Result<CemStrata, CemError> {
+) -> Result<CemStrata, Error> {
     coarsen(anchors, candidates, variables).map(|(strata, _)| strata)
 }
 
@@ -392,7 +330,7 @@ pub fn cem_strata<R: MatchingRecord>(
 ///
 /// The strata are those of [`cem_strata`] and the weights those of
 /// [`exact_match_subclasses`](super::exact_match_subclasses). The numbers of
-/// the subclasses follow the first appearance among the anchors.
+/// the subclasses follow the first appearance among the cases.
 ///
 /// # Errors
 ///
@@ -401,7 +339,7 @@ pub fn cem_subclasses<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
     variables: &[CemVariable],
-) -> Result<ExactMatchOutcome, CemError> {
+) -> Result<SubclassedUnits, Error> {
     coarsen(anchors, candidates, variables).map(|(_, outcome)| outcome)
 }
 
@@ -409,9 +347,9 @@ fn coarsen<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
     variables: &[CemVariable],
-) -> Result<(CemStrata, ExactMatchOutcome), CemError> {
+) -> Result<(CemStrata, SubclassedUnits), Error> {
     if variables.is_empty() {
-        return Err(CemError::NoVariables);
+        return Err(Error::NoVariables);
     }
     // One code per unit and variable. Codes of one variable are equal exactly
     // when the coarsened values are, and they need no particular order: the
@@ -419,7 +357,7 @@ fn coarsen<R: MatchingRecord>(
     let mut columns: Vec<Vec<u32>> = Vec::with_capacity(variables.len());
     for variable in variables {
         let name = variable.name.as_str();
-        let missing = |position: usize| CemError::MissingValue {
+        let missing = |position: usize| Error::MissingValue {
             id: unit_at(anchors, candidates, position).id().to_string(),
             variable: variable.name.clone(),
         };
@@ -473,8 +411,8 @@ fn coarsen<R: MatchingRecord>(
     let outcome = subclasses_of_strata(anchors, candidates, &numbers, count)?;
     let (anchor_subclass, candidate_subclass) = outcome.subclass.split_at(anchors.len());
     let strata = CemStrata {
-        anchors: anchor_subclass.to_vec(),
-        candidates: candidate_subclass.to_vec(),
+        cases: anchor_subclass.to_vec(),
+        controls: candidate_subclass.to_vec(),
         count: outcome.subclasses.len(),
     };
     Ok((strata, outcome))
@@ -524,7 +462,7 @@ fn group_codes(
         .collect()
 }
 
-/// The nearest available candidate of an anchor: the smallest distance, and
+/// The nearest available control of an case: the smallest distance, and
 /// among equal distances the smallest tie rank.
 fn nearest_available<R: MatchingRecord>(
     anchor: &R,
@@ -563,22 +501,22 @@ fn nearest_available<R: MatchingRecord>(
 /// Pair the units of each stratum one to one, as `k2k = TRUE` does in
 /// `matchit(method = "cem")`.
 ///
-/// Each anchor takes the nearest candidate of its stratum by the distance, no
-/// candidate twice. The anchors are taken in the order `order`: the order of
+/// Each case takes the nearest control of its stratum by the distance, no
+/// control twice. The cases are taken in the order `order`: the order of
 /// the slice, an order drawn from `seed`, or by the distance of the pairs,
 /// nearest first for [`MatchOrder::Closest`] and farthest first for
-/// [`MatchOrder::Farthest`], where an anchor whose candidate has gone takes the
-/// next nearest and its place in the order by the new distance. Candidates at
+/// [`MatchOrder::Farthest`], where an case whose control has gone takes the
+/// next nearest and its place in the order by the new distance. Controls at
 /// the same distance rank by their place in the slice. With no `distance`
-/// every candidate of a stratum is equally near, and the candidates rank in an
-/// order drawn from `seed`. An anchor with no candidate left stays unmatched.
+/// every control of a stratum is equally near, and the controls rank in an
+/// order drawn from `seed`. An case with no control left stays unmatched.
 ///
 /// A pair distance with no value for a pair, as a forbidden entry of a
 /// distance matrix, rules the pair out.
 ///
 /// # Errors
 ///
-/// [`CemError::Order`] for the largest and smallest orders, which need a
+/// [`Error::CemOrder`] for the largest and smallest orders, which need a
 /// score.
 pub fn cem_k2k_pairs<R: MatchingRecord>(
     anchors: &[R],
@@ -588,20 +526,20 @@ pub fn cem_k2k_pairs<R: MatchingRecord>(
     order: MatchOrder,
     seed: u64,
     estimand: Estimand,
-) -> Result<MatchOutcome, CemError> {
+) -> Result<MatchOutcome, Error> {
     if matches!(order, MatchOrder::Largest | MatchOrder::Smallest) {
-        return Err(CemError::Order);
+        return Err(Error::CemOrder);
     }
     let metric = distance.map(DistanceConfig::metric);
 
     let mut anchors_of: Vec<Vec<usize>> = vec![Vec::new(); strata.count];
     let mut candidates_of: Vec<Vec<usize>> = vec![Vec::new(); strata.count];
-    for (index, stratum) in strata.anchors.iter().enumerate() {
+    for (index, stratum) in strata.cases.iter().enumerate() {
         if let Some(stratum) = stratum {
             anchors_of[*stratum].push(index);
         }
     }
-    for (index, stratum) in strata.candidates.iter().enumerate() {
+    for (index, stratum) in strata.controls.iter().enumerate() {
         if let Some(stratum) = stratum {
             candidates_of[*stratum].push(index);
         }
@@ -695,9 +633,9 @@ pub fn cem_k2k_pairs<R: MatchingRecord>(
         }
     }
     let mut diagnostics = MatchDiagnostics {
-        total_anchors_evaluated: anchors.len(),
-        anchors_with_no_candidates: anchors.len() - pairs.len(),
-        matched_anchors: pairs.len(),
+        total_cases_evaluated: anchors.len(),
+        cases_with_no_controls: anchors.len() - pairs.len(),
+        matched_cases: pairs.len(),
         pairs_selected: pairs.len(),
         ..MatchDiagnostics::default()
     };
@@ -746,14 +684,14 @@ mod tests {
             anchors: &[R],
             candidates: &[R],
             variables: &[CemVariable],
-        ) -> Result<(CemStrata, Maps), CemError> {
+        ) -> Result<(CemStrata, Maps), Error> {
             if variables.is_empty() {
-                return Err(CemError::NoVariables);
+                return Err(Error::NoVariables);
             }
             let units: Vec<&R> = anchors.iter().chain(candidates.iter()).collect();
             let mut cells: Vec<Vec<Cell>> = vec![Vec::with_capacity(variables.len()); units.len()];
             for variable in variables {
-                let missing = |unit: &R| CemError::MissingValue {
+                let missing = |unit: &R| Error::MissingValue {
                     id: unit.id().to_string(),
                     variable: variable.name.clone(),
                 };
@@ -816,8 +754,8 @@ mod tests {
             )?;
             let subclass = |unit: &R| outcome.assignments.get(unit.id()).copied();
             let strata = CemStrata {
-                anchors: anchors.iter().map(subclass).collect(),
-                candidates: candidates.iter().map(subclass).collect(),
+                cases: anchors.iter().map(subclass).collect(),
+                controls: candidates.iter().map(subclass).collect(),
                 count: outcome.subclasses.len(),
             };
             Ok((strata, outcome))
@@ -890,8 +828,8 @@ mod tests {
         let candidates = vec![unit("c1", 1.5, "p"), unit("c2", 0.5, "p")];
         let variables = [CemVariable::numeric("x", CemBinning::Cutpoints(vec![1.0]))];
         let strata = cem_strata(&anchors, &candidates, &variables).unwrap();
-        assert_eq!(strata.anchors, vec![Some(0), Some(1)]);
-        assert_eq!(strata.candidates, vec![Some(0), Some(1)]);
+        assert_eq!(strata.cases, vec![Some(0), Some(1)]);
+        assert_eq!(strata.controls, vec![Some(0), Some(1)]);
     }
 
     #[test]
@@ -905,8 +843,8 @@ mod tests {
         let variables = [CemVariable::categorical("g", groups)];
         let strata = cem_strata(&anchors, &candidates, &variables).unwrap();
         // q becomes p, which the second group turns into r.
-        assert_eq!(strata.anchors, vec![Some(0)]);
-        assert_eq!(strata.candidates, vec![Some(0), None]);
+        assert_eq!(strata.cases, vec![Some(0)]);
+        assert_eq!(strata.controls, vec![Some(0), None]);
     }
 
     #[test]
@@ -915,7 +853,7 @@ mod tests {
         let candidates = vec![unit("c1", 2.0, "p")];
         assert_eq!(
             cem_strata(&anchors, &candidates, &[]).unwrap_err(),
-            CemError::NoVariables
+            Error::NoVariables
         );
         assert_eq!(
             cem_strata(
@@ -924,7 +862,7 @@ mod tests {
                 &[CemVariable::numeric("w", CemBinning::default())]
             )
             .unwrap_err(),
-            CemError::MissingValue {
+            Error::MissingValue {
                 id: "a1".into(),
                 variable: "w".into()
             }
@@ -936,7 +874,7 @@ mod tests {
                 &[CemVariable::numeric("x", CemBinning::Bins(0))]
             )
             .unwrap_err(),
-            CemError::Binning { .. }
+            Error::Binning { .. }
         ));
         assert_eq!(
             cem_strata(
@@ -945,7 +883,7 @@ mod tests {
                 &[CemVariable::numeric("x", CemBinning::Exact)]
             )
             .unwrap_err(),
-            CemError::NoSharedStratum
+            Error::NoSharedStratum
         );
     }
 

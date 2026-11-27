@@ -93,7 +93,9 @@
 use epistat_optim::bfgs::Bfgs;
 use epistat_stats::dist::{gamma, normal};
 
-use crate::RegisterError;
+use crate::Error;
+use crate::error::csr;
+use epistat_core::InputError;
 
 /// The family of the inter-arrival distribution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -106,7 +108,7 @@ pub enum Family {
 
 /// Which waiting time [`waiting_times`] takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Direction {
+pub enum WaitingTime {
     /// From the start of the window to the first dispensing in it, the WTD
     /// of Hallas et al.
     Forward,
@@ -114,6 +116,11 @@ pub enum Direction {
     /// Pottegård and Hallas.
     Reverse,
 }
+
+/// The name of [`WaitingTime`] before it was distinguished from
+/// [`crate::residence::Direction`].
+#[deprecated(since = "0.2.0", note = "use `wtd::WaitingTime`")]
+pub type Direction = WaitingTime;
 
 /// A fitted parametric WTD.
 #[derive(Clone, Debug, PartialEq)]
@@ -226,25 +233,31 @@ fn objective(family: Family, times: &[f64], delta: f64, x: &[f64]) -> (f64, Vec<
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when there are fewer than three times, the
+/// [`Error::Input`] when there are fewer than three times, the
 /// window is not positive and finite, or a time is outside `(0, window_days]`,
-/// and [`RegisterError::Numerical`] when the optimiser cannot start.
-pub fn fit_wtd(times: &[f64], window_days: f64, family: Family) -> Result<WtdFit, RegisterError> {
+/// and [`Error::Numerical`] when the optimiser cannot start.
+pub fn fit_wtd(times: &[f64], window_days: f64, family: Family) -> Result<WtdFit, Error> {
     if !(window_days.is_finite() && window_days > 0.0) {
-        return Err(RegisterError::input(
-            "the window must be a positive, finite number of days",
-        ));
+        return Err(InputError::Domain {
+            what: "window_days",
+            value: window_days,
+            domain: "positive and finite",
+        }
+        .into());
     }
     if times.len() < 3 {
-        return Err(RegisterError::input(
-            "the waiting time distribution needs at least three times",
-        ));
+        return Err(Error::invalid(format!(
+            "the waiting time distribution needs at least three times, got {}",
+            times.len()
+        )));
     }
     if let Some(i) = times.iter().position(|&t| !(t > 0.0 && t <= window_days)) {
-        return Err(RegisterError::input(format!(
-            "time {i} is {}, outside (0, {window_days}]",
-            times[i]
-        )));
+        return Err(InputError::Domain {
+            what: "times",
+            value: times[i],
+            domain: "(0, window_days]",
+        }
+        .into());
     }
     #[expect(clippy::cast_precision_loss, reason = "a count of persons")]
     let n = times.len() as f64;
@@ -270,7 +283,7 @@ pub fn fit_wtd(times: &[f64], window_days: f64, family: Family) -> Result<WtdFit
     };
     let minimum = bfgs
         .minimize(&start, |x| objective(family, times, window_days, x), None)
-        .map_err(|e| RegisterError::numerical(format!("the WTD fit could not run: {e}")))?;
+        .map_err(|e| Error::numerical(format!("the WTD fit could not run: {e}")))?;
     let (x, gradient) = polish(family, times, window_days, &minimum.x, &minimum.gradient);
     let converged = minimum.converged || norm(&gradient) < bfgs.gradient_tolerance;
     let (prevalent, a, b) = natural(family, &x);
@@ -370,7 +383,7 @@ fn polish(
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when the offsets are not a layout over the days
+/// [`Error::Input`] when the offsets are not a layout over the days
 /// or the window is empty or inverted.
 #[expect(
     clippy::cast_precision_loss,
@@ -381,18 +394,11 @@ pub fn waiting_times(
     day: &[i64],
     window_start: i64,
     window_end: i64,
-    direction: Direction,
-) -> Result<Vec<f64>, RegisterError> {
-    if person_offsets.first() != Some(&0)
-        || person_offsets.last() != Some(&day.len())
-        || person_offsets.windows(2).any(|w| w[0] > w[1])
-    {
-        return Err(RegisterError::input(
-            "person_offsets must be a CSR layout over the days",
-        ));
-    }
+    direction: WaitingTime,
+) -> Result<Vec<f64>, Error> {
+    csr("person_offsets", person_offsets, day.len())?;
     if window_end <= window_start {
-        return Err(RegisterError::input("the window must end after it starts"));
+        return Err(Error::invalid("the window must end after it starts"));
     }
     let inside = |d: &&i64| (window_start..window_end).contains(*d);
     Ok(person_offsets
@@ -400,8 +406,8 @@ pub fn waiting_times(
         .filter_map(|w| {
             let days = day[w[0]..w[1]].iter().filter(inside);
             match direction {
-                Direction::Forward => days.min().map(|&d| (d - window_start) as f64 + 0.5),
-                Direction::Reverse => days.max().map(|&d| (window_end - d) as f64 - 0.5),
+                WaitingTime::Forward => days.min().map(|&d| (d - window_start) as f64 + 0.5),
+                WaitingTime::Reverse => days.max().map(|&d| (window_end - d) as f64 - 0.5),
             }
         })
         .collect())
@@ -478,12 +484,12 @@ mod tests {
     #[test]
     fn waiting_times_take_the_middle_of_the_day() {
         let day = [10, 3, 40, 100, 5];
-        let forward = waiting_times(&[0, 3, 4, 5], &day, 0, 50, Direction::Forward).unwrap();
+        let forward = waiting_times(&[0, 3, 4, 5], &day, 0, 50, WaitingTime::Forward).unwrap();
         assert_eq!(forward, [3.5, 5.5]);
-        let reverse = waiting_times(&[0, 3, 4, 5], &day, 0, 50, Direction::Reverse).unwrap();
+        let reverse = waiting_times(&[0, 3, 4, 5], &day, 0, 50, WaitingTime::Reverse).unwrap();
         assert_eq!(reverse, [9.5, 44.5]);
-        assert!(waiting_times(&[0, 2], &day, 0, 50, Direction::Forward).is_err());
-        assert!(waiting_times(&[0, 5], &day, 5, 5, Direction::Forward).is_err());
+        assert!(waiting_times(&[0, 2], &day, 0, 50, WaitingTime::Forward).is_err());
+        assert!(waiting_times(&[0, 5], &day, 5, 5, WaitingTime::Forward).is_err());
     }
 
     #[test]

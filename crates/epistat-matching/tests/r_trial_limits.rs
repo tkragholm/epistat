@@ -11,12 +11,11 @@
 //! which only a tie within that error could change; there is none here. The
 //! outcome model and the risks then agree to `1e-6` relative.
 
+#[path = "common/trial_panel.rs"]
+mod trial_panel;
 use chrono::{Days, NaiveDate};
 use epistat_linalg::Mat;
-use epistat_matching::{
-    BaseRecord, PanelColumns, TrialColumns, TrialOptions, TrialPeriod, TrialPerson,
-    expand_trial_columns,
-};
+use epistat_matching::{BaseRecord, TrialColumns, TrialOptions, expand_trial_columns};
 use epistat_survival::weighting::trials::{
     Msm, MsmInput, PersonPeriod, ProtocolPanel, TrialRows, TrialWeightFit, WeightLimits,
     WeightModel, WeightRows, censoring_weights, cumulative_incidence_rows, fit_msm, protocol_rows,
@@ -24,6 +23,7 @@ use epistat_survival::weighting::trials::{
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows, persons};
 
 #[derive(Deserialize)]
 struct PanelJson {
@@ -87,17 +87,17 @@ fn day(period: i64) -> NaiveDate {
 }
 
 /// The panel of the persons, in the order of their rows.
-fn panel(p: &PanelJson) -> Vec<TrialPerson<BaseRecord>> {
-    let mut panel: Vec<TrialPerson<BaseRecord>> = Vec::new();
+fn panel(p: &PanelJson) -> Vec<PanelPerson<BaseRecord>> {
+    let mut panel: Vec<PanelPerson<BaseRecord>> = Vec::new();
     for i in 0..p.id.len() {
         if i == 0 || p.id[i] != p.id[i - 1] {
-            panel.push(TrialPerson {
+            panel.push(PanelPerson {
                 record: BaseRecord::new(p.id[i].to_string(), day(0)),
                 periods: Vec::new(),
             });
         }
         let person = panel.last_mut().expect("a person");
-        person.periods.push(TrialPeriod {
+        person.periods.push(PanelPeriod {
             period: p.period[i],
             date: day(p.period[i]),
             eligible: p.eligible[i] == 1,
@@ -136,7 +136,12 @@ fn design_row(t: &TrialColumns, p: &PanelJson, assigned: bool, f: i64, r: usize,
 
 /// The weight of every row of the trials.
 #[expect(clippy::cast_precision_loss, reason = "periods are small integers")]
-fn weights(a: &Analysis, p: &PanelJson, cols: &PanelColumns, t: &TrialColumns) -> Vec<f64> {
+fn weights(
+    a: &Analysis,
+    p: &PanelJson,
+    cols: &PanelRows<BaseRecord>,
+    t: &TrialColumns,
+) -> Vec<f64> {
     if a.estimand == "ITT" {
         return vec![1.0; t.len()];
     }
@@ -221,7 +226,7 @@ fn weights(a: &Analysis, p: &PanelJson, cols: &PanelColumns, t: &TrialColumns) -
         &data,
         &row_weight,
         &TrialRows {
-            id: &t.person,
+            id: &persons(t),
             trial_period: &t.trial_period,
             follow_up: &t.follow_up_time,
         },
@@ -244,14 +249,14 @@ fn truncated_weights_agree_with_trial_emulation() {
     let r = load();
     let p = &r.panel;
     let people = panel(p);
-    let cols = PanelColumns::of(&people);
+    let cols = PanelRows::of(&people);
     let pp = r
         .analyses
         .iter()
         .find(|a| a.estimand == "PP" && !a.use_censor)
         .expect("the per-protocol analysis");
     let options = TrialOptions::default();
-    let t = expand_trial_columns(&people, &options).expect("valid panel");
+    let t = expand_trial_columns(&cols.panel(), &options).expect("valid panel");
     let weight = weights(pp, p, &cols, &t);
     let limits: Limits = load_json(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -275,7 +280,7 @@ fn truncated_weights_agree_with_trial_emulation() {
             design: design.as_ref(),
             outcome: &t.outcome,
             weight: &limited,
-            person: &t.person,
+            person: &persons(&t),
         })
         .expect("outcome model");
         let what = &a.analysis_weights;

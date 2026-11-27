@@ -25,12 +25,11 @@
 //! `1e-6`. Without weights (intention to treat) the outcome model agrees to
 //! `8 kappa eps = 2e-12`, which `1e-9` covers.
 
+#[path = "common/trial_panel.rs"]
+mod trial_panel;
 use chrono::{Days, NaiveDate};
 use epistat_linalg::Mat;
-use epistat_matching::{
-    BaseRecord, PanelColumns, TrialColumns, TrialOptions, TrialPeriod, TrialPerson,
-    expand_trial_columns,
-};
+use epistat_matching::{BaseRecord, TrialColumns, TrialOptions, expand_trial_columns};
 use epistat_survival::weighting::trials::{
     Msm, MsmInput, PersonPeriod, ProtocolPanel, TrialRows, TrialWeightFit, WeightModel, WeightRows,
     censoring_weights, cumulative_incidence_rows, fit_msm, protocol_rows, switch_weights,
@@ -38,6 +37,7 @@ use epistat_survival::weighting::trials::{
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows, expand_trials, persons};
 
 #[derive(Deserialize)]
 struct PanelJson {
@@ -94,17 +94,17 @@ fn day(period: i64) -> NaiveDate {
 }
 
 /// The panel of the persons, in the order of their rows.
-fn panel(p: &PanelJson) -> Vec<TrialPerson<BaseRecord>> {
-    let mut panel: Vec<TrialPerson<BaseRecord>> = Vec::new();
+fn panel(p: &PanelJson) -> Vec<PanelPerson<BaseRecord>> {
+    let mut panel: Vec<PanelPerson<BaseRecord>> = Vec::new();
     for i in 0..p.id.len() {
         if i == 0 || p.id[i] != p.id[i - 1] {
-            panel.push(TrialPerson {
+            panel.push(PanelPerson {
                 record: BaseRecord::new(p.id[i].to_string(), day(0)),
                 periods: Vec::new(),
             });
         }
         let person = panel.last_mut().expect("a person");
-        person.periods.push(TrialPeriod {
+        person.periods.push(PanelPeriod {
             period: p.period[i],
             date: day(p.period[i]),
             eligible: p.eligible[i] == 1,
@@ -143,7 +143,12 @@ fn design_row(t: &TrialColumns, p: &PanelJson, assigned: bool, f: i64, r: usize,
 
 /// The weight of every row of the trials.
 #[expect(clippy::cast_precision_loss, reason = "periods are small integers")]
-fn weights(a: &Analysis, p: &PanelJson, cols: &PanelColumns, t: &TrialColumns) -> Vec<f64> {
+fn weights(
+    a: &Analysis,
+    p: &PanelJson,
+    cols: &PanelRows<BaseRecord>,
+    t: &TrialColumns,
+) -> Vec<f64> {
     if a.estimand == "ITT" {
         return vec![1.0; t.len()];
     }
@@ -228,7 +233,7 @@ fn weights(a: &Analysis, p: &PanelJson, cols: &PanelColumns, t: &TrialColumns) -
         &data,
         &row_weight,
         &TrialRows {
-            id: &t.person,
+            id: &persons(t),
             trial_period: &t.trial_period,
             follow_up: &t.follow_up_time,
         },
@@ -251,14 +256,14 @@ fn the_chain_agrees_with_trial_emulation() {
     let r = load();
     let p = &r.panel;
     let people = panel(p);
-    let cols = PanelColumns::of(&people);
+    let cols = PanelRows::of(&people);
     assert_eq!(cols.len(), p.id.len());
     for a in &r.analyses {
         let options = TrialOptions {
             censor_at_deviation: a.estimand == "PP",
             ..TrialOptions::default()
         };
-        let t = expand_trial_columns(&people, &options).expect("valid panel");
+        let t = expand_trial_columns(&cols.panel(), &options).expect("valid panel");
         assert_eq!(t.len(), a.rows, "{} rows", a.estimand);
         let weight = weights(a, p, &cols, &t);
         let sum: f64 = weight.iter().sum();
@@ -274,7 +279,7 @@ fn the_chain_agrees_with_trial_emulation() {
             design: design.as_ref(),
             outcome: &t.outcome,
             weight: &weight,
-            person: &t.person,
+            person: &persons(&t),
         })
         .expect("outcome model");
         let tol = if a.estimand == "ITT" { 1e-9 } else { 1e-6 };
@@ -304,11 +309,11 @@ fn the_chain_agrees_with_trial_emulation() {
 fn the_columns_point_at_their_panel_rows() {
     let r = load();
     let people = panel(&r.panel);
-    let cols = PanelColumns::of(&people);
-    let t = expand_trial_columns(&people, &TrialOptions::default()).expect("valid");
+    let cols = PanelRows::of(&people);
+    let t = expand_trial_columns(&cols.panel(), &TrialOptions::default()).expect("valid");
     for i in 0..t.len() {
-        assert_eq!(cols.person[t.row[i]], t.person[i]);
-        assert_eq!(cols.person[t.start_row[i]], t.person[i]);
+        assert_eq!(cols.person[t.row[i]], u64::from(t.unit[i]));
+        assert_eq!(cols.person[t.start_row[i]], u64::from(t.unit[i]));
         assert_eq!(cols.period[t.start_row[i]], t.trial_period[i]);
         assert_eq!(
             cols.period[t.row[i]] - cols.period[t.start_row[i]],
@@ -318,7 +323,7 @@ fn the_columns_point_at_their_panel_rows() {
     let (start, end) = t.spans();
     let rows: Vec<usize> = start.iter().zip(&end).flat_map(|(&a, &b)| a..b).collect();
     assert_eq!(rows, t.row);
-    let rows = epistat_matching::expand_trials(&people, &TrialOptions::default()).expect("valid");
+    let rows = expand_trials(&people, &TrialOptions::default()).expect("valid");
     assert_eq!(rows.len(), t.len());
     for (row, i) in rows.iter().zip(0..) {
         assert_eq!(row.trial_period, t.trial_period[i]);

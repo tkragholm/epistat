@@ -1,266 +1,100 @@
+//! Simultaneous bands over the cells of an ATT(g,t) by the multiplier
+//! bootstrap, as `did:::mboot` forms them.
+//!
+//! # Algorithm
+//!
+//! Replicate `b` draws a Rademacher weight `w_gb` per cluster, or per unit
+//! without clusters, from `replicate_seed(seed, b)`, and forms
+//! `T_bj = sqrt(G) mean_g(w_gb S_gj)` for every cell `j`, with `S_gj` the sum
+//! of the cell's influence function in cluster `g`. The draws are not scaled
+//! by the analytic standard error:
+//!
+//! - the scale `sigma_j` of each cell is the interquartile range of its draws
+//!   divided by `qnorm(0.75) - qnorm(0.25)`, so a few extreme draws do not
+//!   move it, and its standard error is `sigma_j sqrt(G) / n`;
+//! - the critical value is the type 1 quantile at `1 - alpha`, the inverse
+//!   empirical CDF, of `max_j |T_bj| / sigma_j` over the cells.
+//!
+//! The bands are `att +- crit * se`. A cell whose draws are degenerate takes
+//! no part in the maximum, as in `did`, and has no standard error or band.
+//! Clusters are numbered in increasing code, as `did` numbers them, and the
+//! result does not depend on the number of threads.
+//!
+//! # References
+//!
+//! Callaway B, Sant'Anna PHC. Difference-in-differences with multiple time
+//! periods. J Econom 2021;225(2):200-30. R package `did` 2.5.1, `mboot`.
+
 use epistat_core::{Bootstrap, Level};
 use epistat_inference::Clusters;
 use epistat_inference::simultaneous::multiplier_bands;
-use epistat_rng::{Stream, replicate_seed};
 
-use crate::inference::{
-    quantile_unsorted, standard_error_from_influence, validate_confidence_level,
-};
-use crate::types::{AttGtBandConfig, AttGtBandError, AttGtBandEstimate, AttGtEstimate};
+use super::AttGt;
+use crate::error::Error;
 
-/// Compute simultaneous confidence bands for ATT(g,t) estimates from aligned
-/// influence functions via multiplier bootstrap.
-///
-/// `influence_functions[k]` must correspond to `estimates[k]`. All vectors must
-/// have identical length and represent contributions on the same sample index.
-///
-/// # Errors
-///
-/// Returns [`AttGtBandError`] when inputs/configuration are invalid or influence
-/// vectors are malformed/degenerate for bootstrap inference.
-#[deprecated(
-    note = "scales Rademacher draws by the analytic standard error and has no clustering; \
-            use `att_gt_mboot_bands` for the cells and `AggteConfig::bootstrap` for aggregates"
-)]
-pub fn att_gt_simultaneous_bands_with_influence(
-    estimates: &[AttGtEstimate],
-    influence_functions: &[Vec<f64>],
-    config: AttGtBandConfig,
-) -> Result<Vec<AttGtBandEstimate>, AttGtBandError> {
-    validate_band_inputs(estimates, config)?;
-    if influence_functions.len() != estimates.len() {
-        return Err(AttGtBandError::InfluenceCountMismatch);
-    }
-    if influence_functions.is_empty() {
-        return Err(AttGtBandError::EmptyInput);
-    }
-    let n = influence_functions[0].len();
-    if n == 0 {
-        return Err(AttGtBandError::EmptyInfluence);
-    }
-    for influence in influence_functions {
-        if influence.len() != n {
-            return Err(AttGtBandError::InconsistentInfluenceLength);
-        }
-        if influence.iter().any(|value| !value.is_finite()) {
-            return Err(AttGtBandError::InvalidInfluence);
-        }
-    }
-
-    let se_if = influence_functions
-        .iter()
-        .map(|influence| {
-            let se = standard_error_from_influence(influence);
-            if !se.is_finite() || se <= 0.0 {
-                return Err(AttGtBandError::DegenerateInfluence);
-            }
-            Ok(se)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-
-    let mut maxima = Vec::with_capacity(config.reps);
-    let mut signs = vec![1.0; n];
-    for replicate in 0..config.reps as u64 {
-        let mut stream = Stream::seeded(replicate_seed(config.seed, replicate));
-        stream.fill_signs(&mut signs);
-        let mut max_abs = 0.0_f64;
-        for influence in influence_functions {
-            let numerator = influence
-                .iter()
-                .zip(signs.iter())
-                .map(|(value, sign)| value * sign)
-                .sum::<f64>();
-            let denominator = influence
-                .iter()
-                .map(|value| value * value)
-                .sum::<f64>()
-                .sqrt();
-            if denominator <= 0.0 || !denominator.is_finite() {
-                return Err(AttGtBandError::DegenerateInfluence);
-            }
-            let t_stat = numerator / denominator;
-            max_abs = max_abs.max(t_stat.abs());
-        }
-        maxima.push(max_abs);
-    }
-
-    let alpha = (1.0 - config.confidence_level.confidence_level).clamp(0.0, 1.0);
-    let critical = quantile_unsorted(&mut maxima, 1.0 - alpha);
-
-    Ok(estimates
-        .iter()
-        .zip(se_if.iter())
-        .map(|(estimate, se_if)| {
-            let margin = critical * *se_if;
-            AttGtBandEstimate {
-                group: estimate.group,
-                time: estimate.time,
-                event_time: estimate.event_time,
-                att: estimate.att,
-                se: *se_if,
-                band_low: estimate.att - margin,
-                band_high: estimate.att + margin,
-            }
-        })
-        .collect())
+/// The simultaneous band of one cell.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AttGtBand {
+    /// The cell's cohort.
+    pub group: i64,
+    /// The cell's later period.
+    pub time: i64,
+    /// `time - group`.
+    pub event_time: i64,
+    /// The cell's estimate.
+    pub estimate: f64,
+    /// The bootstrap standard error, `None` where the cell's draws are
+    /// degenerate.
+    pub se: Option<f64>,
+    /// `estimate - critical_value * se`.
+    pub lower: Option<f64>,
+    /// `estimate + critical_value * se`.
+    pub upper: Option<f64>,
 }
 
-/// Compute simultaneous confidence bands for ATT(g,t) estimates.
-///
-/// This is a Gaussian-max approximation fallback when aligned influence
-/// functions are unavailable.
-///
-/// # Errors
-///
-/// Returns [`AttGtBandError`] when inputs/configuration are invalid.
-#[deprecated(
-    note = "takes the maximum of independent normals and ignores the correlation between cells; \
-            use `att_gt_mboot_bands` for the cells and `AggteConfig::bootstrap` for aggregates"
-)]
-pub fn att_gt_simultaneous_bands(
-    estimates: &[AttGtEstimate],
-    config: AttGtBandConfig,
-) -> Result<Vec<AttGtBandEstimate>, AttGtBandError> {
-    validate_band_inputs(estimates, config)?;
-
-    let mut rng = Stream::seeded(config.seed);
-    let mut maxima = Vec::with_capacity(config.reps);
-    let k = estimates.len();
-    for _ in 0..config.reps {
-        let mut max_abs = 0.0_f64;
-        for _ in 0..k {
-            max_abs = max_abs.max(rng.normal().abs());
-        }
-        maxima.push(max_abs);
-    }
-    let alpha = (1.0 - config.confidence_level.confidence_level).clamp(0.0, 1.0);
-    let critical = quantile_unsorted(&mut maxima, 1.0 - alpha);
-
-    Ok(estimates
-        .iter()
-        .map(|estimate| {
-            let margin = critical * estimate.se;
-            AttGtBandEstimate {
-                group: estimate.group,
-                time: estimate.time,
-                event_time: estimate.event_time,
-                att: estimate.att,
-                se: estimate.se,
-                band_low: estimate.att - margin,
-                band_high: estimate.att + margin,
-            }
-        })
-        .collect())
+/// Simultaneous bands over the estimated cells.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct AttGtBands {
+    /// The simultaneous critical value, a multiplier of the standard errors.
+    pub critical_value: f64,
+    /// The band of each estimated cell, in the order of the cells.
+    pub cells: Vec<AttGtBand>,
+    /// The joint confidence level.
+    pub level: Level,
 }
 
-fn validate_band_inputs(
-    estimates: &[AttGtEstimate],
-    config: AttGtBandConfig,
-) -> Result<(), AttGtBandError> {
-    if estimates.is_empty() {
-        return Err(AttGtBandError::EmptyInput);
-    }
-    if !validate_confidence_level(config.confidence_level.confidence_level) {
-        return Err(AttGtBandError::InvalidConfidenceLevel);
-    }
-    if config.reps == 0 {
-        return Err(AttGtBandError::InvalidReps);
-    }
-    for estimate in estimates {
-        if !estimate.att.is_finite() {
-            return Err(AttGtBandError::InvalidEstimate);
-        }
-        if !estimate.se.is_finite() || estimate.se < 0.0 {
-            return Err(AttGtBandError::InvalidSe);
-        }
-    }
-    Ok(())
-}
-
-/// Simultaneous bands by the multiplier bootstrap, as `did:::mboot` does it.
-///
-/// # How this differs from [`att_gt_simultaneous_bands_with_influence`]
-///
-/// That function draws Rademacher signs and scales by the analytic influence
-/// standard error. `did` does neither:
-///
-/// * The scale of each estimate is the interquartile range of its bootstrap
-///   draws divided by `qnorm(0.75) - qnorm(0.25)`, so a few extreme draws do not
-///   move it.
-/// * The critical value is the type 1 quantile, the inverse empirical CDF, of the
-///   maximum absolute t statistic over all cells.
-/// * One weight is drawn per cluster, or per unit without clustering, and applied
-///   to the cluster's summed influence. Clusters are numbered in increasing label
-///   order, as `did` numbers them.
-///
-/// The bands are `att +- crit * se`, with `se = sigma * sqrt(G) / n` for `G`
-/// clusters and `n` units. An estimate whose draws are degenerate takes no part
-/// in the maximum, as in `did`, and has `NaN` for its standard error and band.
-///
-/// # Errors
-///
-/// Returns [`AttGtBandError`] when inputs are malformed or every influence vector
-/// is degenerate.
-pub fn att_gt_mboot_bands(
-    estimates: &[AttGtEstimate],
-    influence_functions: &[Vec<f64>],
-    clusters: Option<&[i64]>,
-    config: AttGtBandConfig,
-) -> Result<Vec<AttGtBandEstimate>, AttGtBandError> {
-    validate_band_inputs(estimates, config)?;
-    if influence_functions.len() != estimates.len() {
-        return Err(AttGtBandError::InfluenceCountMismatch);
-    }
-    if influence_functions.is_empty() {
-        return Err(AttGtBandError::EmptyInput);
-    }
-    let n = influence_functions[0].len();
-    if n == 0 {
-        return Err(AttGtBandError::EmptyInfluence);
-    }
-    for influence in influence_functions {
-        if influence.len() != n {
-            return Err(AttGtBandError::InconsistentInfluenceLength);
-        }
-        if influence.iter().any(|value| !value.is_finite()) {
-            return Err(AttGtBandError::InvalidInfluence);
-        }
-    }
-    let cluster_numbers = match clusters {
-        None => None,
-        Some(labels) if labels.len() == n => Some(Clusters::from_sorted_labels(labels)),
-        Some(_) => return Err(AttGtBandError::InconsistentInfluenceLength),
-    };
-
-    // The weights are Rademacher, as in BMisc::multiplier_bootstrap, which is the
-    // kernel did calls, and not the Mammen weights its documentation names.
-    let alpha = (1.0 - config.confidence_level.confidence_level).clamp(0.0, 1.0);
-    let columns: Vec<&[f64]> = influence_functions.iter().map(Vec::as_slice).collect();
-    let level = Level::alpha(alpha).map_err(|_| AttGtBandError::DegenerateInfluence)?;
-    let bands = multiplier_bands(
-        &columns,
-        cluster_numbers.as_ref(),
-        level,
-        Bootstrap::new(config.reps, config.seed),
-    )
-    .map_err(|_| AttGtBandError::DegenerateInfluence)?;
-    debug_assert_eq!(bands.se.len(), estimates.len());
-
-    Ok(estimates
-        .iter()
+/// [`AttGt::bands`].
+pub(super) fn bands(fit: &AttGt, level: Level, bootstrap: Bootstrap) -> Result<AttGtBands, Error> {
+    let influence = fit.kept_influence()?;
+    let columns: Vec<&[f64]> = (0..influence.n_columns())
+        .map(|j| influence.column(j))
+        .collect();
+    let clusters = fit.clusters.as_deref().map(Clusters::from_codes);
+    // The bands take the level as an alpha, which is the number `did` gives
+    // them; a level given as a confidence passes its own `1 - c`.
+    let alpha = Level::alpha(level.alpha_value())?;
+    let bands = multiplier_bands(&columns, clusters.as_ref(), alpha, bootstrap)?;
+    let cells = fit
+        .estimated()
         .zip(&bands.se)
-        .map(|(estimate, se)| {
-            let se = se.unwrap_or(f64::NAN);
-            let margin = bands.critical * se;
-            AttGtBandEstimate {
-                group: estimate.group,
-                time: estimate.time,
-                event_time: estimate.event_time,
-                att: estimate.att,
+        .map(|((cell, estimate), &se)| {
+            let margin = se.map(|se| bands.critical * se);
+            AttGtBand {
+                group: cell.group,
+                time: cell.time,
+                event_time: cell.event_time,
+                estimate: estimate.estimate,
                 se,
-                band_low: estimate.att - margin,
-                band_high: estimate.att + margin,
+                lower: margin.map(|margin| estimate.estimate - margin),
+                upper: margin.map(|margin| estimate.estimate + margin),
             }
         })
-        .collect())
+        .collect();
+    Ok(AttGtBands {
+        critical_value: bands.critical,
+        cells,
+        level,
+    })
 }

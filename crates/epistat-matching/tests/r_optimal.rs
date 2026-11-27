@@ -28,7 +28,7 @@
 //!   data set) the pairs, and MatchIt's weights, equal the crate's. Distances
 //!   on a line tie often, so those runs are compared by total only.
 //! * Where R finds no feasible matching, the crate reports
-//!   [`OptimalError::Infeasible`].
+//!   [`Error::Infeasible`].
 //!
 //! The weights in the file carry 17 significant digits. The crate's weights are
 //! reciprocals of small integers rescaled by a mean, so they agree with R's to
@@ -38,8 +38,14 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
-use epistat_matching::{RapidHashMap, match_full, match_optimal};
+use epistat_matching::{
+    DistanceCaliper, DistanceConfig, FullMatchConfig, MatchWeightMethod, MatchingCriteria,
+    OptimalRequest, PairDistanceMatrix,
+};
+use epistat_matching::{match_full, match_optimal};
+use rapidhash::RapidHashMap;
 
 use r_reference::{Versions, reference as load_reference};
 use serde::Deserialize;
@@ -171,15 +177,16 @@ fn setup(name: &str, scenario: &Scenario, focal: u8, caliper: Option<f64>) -> Se
     }
 }
 
-fn run_ours(setup: &Setup, ratio: usize, exact: bool) -> Result<MatchOutcome, OptimalError> {
-    let criteria = MatchingCriteria::builder()
-        .match_ratio(ratio)
-        .required_strata(if exact {
+fn run_ours(setup: &Setup, ratio: usize, exact: bool) -> Result<MatchOutcome, Error> {
+    let criteria = MatchingCriteria {
+        match_ratio: ratio,
+        required_strata: if exact {
             vec!["g".to_string()]
         } else {
             Vec::new()
-        })
-        .build();
+        },
+        ..MatchingCriteria::default()
+    };
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&setup.distance);
     match_optimal(&setup.anchors, &setup.candidates, &request)
 }
@@ -254,15 +261,13 @@ fn check_total(label: &str, ours: f64, r_total: f64, pairs: usize, r_epsilon: f6
 
 fn check_weights(label: &str, outcome: &MatchOutcome, scenario: &Scenario, expected: &[f64]) {
     let weights = outcome
-        .match_weights(MatchWeightMethod::AnchorUnitCandidateFractional)
+        .match_weights(MatchWeightMethod::CaseUnitControlFractional)
         .normalized();
     for (index, want) in expected.iter().enumerate() {
         let id = (index + 1).to_string();
         let got = weights
-            .anchor
-            .get(&id)
-            .or_else(|| weights.candidate.get(&id))
-            .copied()
+            .case_weight(&id)
+            .or_else(|| weights.control_weight(&id))
             .unwrap_or(0.0);
         assert!(
             (got - want).abs() <= 1e-12 * want.abs().max(1.0),
@@ -296,10 +301,7 @@ fn pairs_totals_and_weights_match_matchit() {
         let got = run_ours(&built, ratio, run.exact);
         if run.error {
             assert!(
-                matches!(
-                    got,
-                    Err(OptimalError::Infeasible { .. } | OptimalError::NoMatches)
-                ),
+                matches!(got, Err(Error::Infeasible { .. } | Error::NoMatches)),
                 "{label}: R failed but the crate gave {got:?}"
             );
             errors += 1;
@@ -366,10 +368,7 @@ fn calipers_forbid_pairs_as_optmatch_does() {
         let got = run_ours(&built, ratio, false);
         if run.error {
             assert!(
-                matches!(
-                    got,
-                    Err(OptimalError::Infeasible { .. } | OptimalError::NoMatches)
-                ),
+                matches!(got, Err(Error::Infeasible { .. } | Error::NoMatches)),
                 "{label}: optmatch failed but the crate gave {got:?}"
             );
             errors += 1;
@@ -412,11 +411,14 @@ fn replacement_and_unique_keys_are_refused() {
     let reference = reference();
     let scenario = &reference.scenarios["wide"];
     let built = setup("wide", scenario, 1, None);
-    let criteria = MatchingCriteria::builder().allow_replacement(true).build();
+    let criteria = MatchingCriteria {
+        allow_replacement: true,
+        ..MatchingCriteria::default()
+    };
     let request = OptimalRequest::new(&criteria, &()).with_distance_config(&built.distance);
     assert!(matches!(
         match_optimal(&built.anchors, &built.candidates, &request),
-        Err(OptimalError::Option {
+        Err(Error::Option {
             option: "replace",
             ..
         })
@@ -436,12 +438,12 @@ fn a_distance_matrix_gives_the_pairs_and_subclasses_of_its_distance() {
             continue;
         }
         let on_vectors = setup(name, scenario, 1, None);
-        let anchor_ids: Vec<String> = on_vectors
+        let case_ids: Vec<String> = on_vectors
             .anchors
             .iter()
             .map(|r| r.id().to_string())
             .collect();
-        let candidate_ids: Vec<String> = on_vectors
+        let control_ids: Vec<String> = on_vectors
             .candidates
             .iter()
             .map(|r| r.id().to_string())
@@ -450,10 +452,10 @@ fn a_distance_matrix_gives_the_pairs_and_subclasses_of_its_distance() {
             let row = row(id) - 1;
             (scenario.x[row], scenario.x2[row])
         };
-        let mut values = Vec::with_capacity(anchor_ids.len() * candidate_ids.len());
-        for anchor in &anchor_ids {
+        let mut values = Vec::with_capacity(case_ids.len() * control_ids.len());
+        for anchor in &case_ids {
             let (ax, ay) = point(anchor);
-            for candidate in &candidate_ids {
+            for candidate in &control_ids {
                 let (cx, cy) = point(candidate);
                 let (dx, dy) = (ax - cx, ay - cy);
                 let mut sum = 0.0_f64;
@@ -462,8 +464,7 @@ fn a_distance_matrix_gives_the_pairs_and_subclasses_of_its_distance() {
                 values.push(sum.sqrt());
             }
         }
-        let matrix =
-            PairDistanceMatrix::new(anchor_ids, candidate_ids, values).expect("a full table");
+        let matrix = PairDistanceMatrix::new(case_ids, control_ids, values).expect("a full table");
         let on_matrix = Setup {
             anchors: on_vectors.anchors.clone(),
             candidates: on_vectors.candidates.clone(),
@@ -480,7 +481,10 @@ fn a_distance_matrix_gives_the_pairs_and_subclasses_of_its_distance() {
                 (left, right) => panic!("{name} ratio {ratio}: {left:?} against {right:?}"),
             }
         }
-        let criteria = MatchingCriteria::builder().match_ratio(1).build();
+        let criteria = MatchingCriteria {
+            match_ratio: 1,
+            ..MatchingCriteria::default()
+        };
         let full = |setup: &Setup| {
             let request = OptimalRequest::new(&criteria, &()).with_distance_config(&setup.distance);
             match_full(

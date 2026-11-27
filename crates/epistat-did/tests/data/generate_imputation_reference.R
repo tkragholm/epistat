@@ -1,6 +1,6 @@
 # Reference values for the imputation estimator of Borusyak, Jaravel and
 # Spiess and the two-stage estimator of Gardner
-# (`epistat_did::estimate_did_imputation`, `epistat_did::estimate_did2s`),
+# (`epistat_did::imputation::estimate`, `epistat_did::two_stage::estimate`),
 # read by tests/parity_imputation.rs.
 #
 # Run from the crate root:  Rscript tests/data/generate_imputation_reference.R

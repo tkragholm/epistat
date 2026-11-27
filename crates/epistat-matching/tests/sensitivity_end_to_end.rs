@@ -4,13 +4,13 @@
 //! output reaches the bounds with the right treated and control outcomes.
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::UnitRole;
 use epistat_matching::effects::UnitData;
 use epistat_matching::output::{LongMatches, Units, get_matches};
 use epistat_matching::prelude::*;
 use epistat_matching::sensitivity::{
-    SetsError, WilcoxonDistribution, hodges_lehmann_bounds, matched_sets, pair_differences,
-    wilcoxon_bounds,
+    WilcoxonDistribution, hodges_lehmann_bounds, matched_sets, pair_differences, wilcoxon_bounds,
 };
 
 #[test]
@@ -20,19 +20,21 @@ fn pairs_from_the_engine_give_the_bounds_of_their_differences() {
     let (mut ids, mut treated, mut outcome) = (Vec::new(), Vec::new(), Vec::new());
     for i in 0..120_u32 {
         let id = format!("u{i:03}");
-        let is_anchor = i < 40;
+        let is_case = i < 40;
         let record = BaseRecord::new(id.clone(), birth);
-        if is_anchor {
+        if is_case {
             anchors.push(record);
         } else {
             candidates.push(record);
         }
         ids.push(id);
-        treated.push(is_anchor);
+        treated.push(is_case);
         // Treated units gain about 1 over the controls, with a spread.
-        outcome.push(f64::from((i * 37) % 11) / 5.0 + f64::from(u8::from(is_anchor)));
+        outcome.push(f64::from((i * 37) % 11) / 5.0 + f64::from(u8::from(is_case)));
     }
-    let matched = MatchJob::new_standard(&anchors, &candidates, 5).run();
+    let matched = MatchJob::new_standard(&anchors, &candidates, 5)
+        .run()
+        .expect("a valid job");
     assert_eq!(matched.matched_cases, 40);
     let units = Units::new(ids.clone(), treated.clone()).expect("unique ids");
     let long = get_matches(&matched, &units, false).expect("fixed roles");
@@ -66,10 +68,10 @@ fn a_control_in_two_sets_is_refused() {
     let long = LongMatches {
         id: ["t1", "c1", "t2", "c1"].map(String::from).to_vec(),
         role: vec![
-            UnitRole::Anchor,
-            UnitRole::Candidate,
-            UnitRole::Anchor,
-            UnitRole::Candidate,
+            UnitRole::Case,
+            UnitRole::Control,
+            UnitRole::Case,
+            UnitRole::Control,
         ],
         pair_id: vec![Some(1), Some(1), Some(2), Some(2)],
         weight: vec![1.0; 4],
@@ -82,6 +84,6 @@ fn a_control_in_two_sets_is_refused() {
     .expect("valid units");
     assert_eq!(
         matched_sets(&long, &data),
-        Err(SetsError::Reused { id: "c1".into() })
+        Err(Error::ReusedUnit { id: "c1".into() })
     );
 }

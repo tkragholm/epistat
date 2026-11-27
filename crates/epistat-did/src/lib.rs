@@ -6,22 +6,15 @@
 //! # The estimators
 //!
 //! - ATT(g,t), the average effect at time `t` on the cohort first treated at
-//!   `g` \[1\]: [`estimate_att_gt`] without covariates;
-//!   [`estimate_att_gt_dr_panel_with_influence`],
-//!   [`estimate_att_gt_ipw_panel_with_influence`] and
-//!   [`estimate_att_gt_or_panel_with_influence`] by the doubly robust
-//!   estimator, inverse probability weighting and outcome regression on a
-//!   panel; [`estimate_att_gt_dr_efficient_with_influence`],
-//!   [`estimate_att_gt_ipw_with_influence`] and
-//!   [`estimate_att_gt_or_with_influence`] on repeated cross-sections, with
-//!   [`estimate_att_gt_dr_with_influence`] for the traditional doubly robust
-//!   one. These apply `did::att_gt`'s pre-processing first ([`AttGtSample`]).
-//! - Their aggregations as `aggte` of R's `did`: [`aggregate_att_gt`] by
-//!   event time, cohort, calendar time or overall, with the influence of the
-//!   estimated cohort shares, with the multiplier bootstrap and uniform bands
-//!   of `aggte(bstrap, cband)` through [`AggteBootstrap`], and
-//!   [`att_gt_mboot_bands`] for simultaneous bands over the cells.
-//!   [`pretrend_wald_test`] is the Wald pre-test of `att_gt`.
+//!   `g` \[1\], in [`att_gt`]: [`att_gt::estimate`] on a [`StaggeredPanel`]
+//!   by the doubly robust estimator, inverse probability weighting or outcome
+//!   regression, on a panel or repeated cross-sections, after
+//!   `did::att_gt`'s pre-processing, and the efficient estimator over all
+//!   baseline periods \[3\]. The result aggregates by event time, cohort,
+//!   calendar time or overall as `did::aggte` does, with the multiplier
+//!   bootstrap and uniform bands ([`att_gt::AttGt::aggregate`]), and gives
+//!   simultaneous bands over the cells, the Wald pre-test of `att_gt` and the
+//!   event study HonestDiD takes.
 //! - The two-period estimators of `DRDID` \[2\]: [`estimate_drdid_panel`],
 //!   [`estimate_drdid_repeated_cross_section`], [`estimate_ipw_did_panel`],
 //!   [`estimate_or_did_panel`], [`estimate_ipw_did_repeated_cross_section`],
@@ -29,8 +22,6 @@
 //!   [`estimate_drdid_improved_panel`] and
 //!   [`estimate_drdid_improved_repeated_cross_section`], and the locally
 //!   efficient [`estimate_drdid_repeated_efficient`].
-//! - The efficient ATT(g,t) over all baseline periods \[3\]:
-//!   [`estimate_att_gt_efficient`] and [`estimate_att_gt_efficient_dr`].
 //! - Compositional changes in repeated cross-sections \[4\]:
 //!   [`estimate_did_cc_robust`], [`estimate_did_cc_stationary`] and
 //!   [`test_did_cc_stationarity`].
@@ -38,33 +29,43 @@
 //! - The average causal response to a continuous treatment \[6\]:
 //!   [`estimate_acrt_sieve`].
 //! - Two-way fixed-effects regressions, static and event study with binned
-//!   end points, as `fixest::feols` fits them: [`estimate_twfe`], and the
+//!   end points, as `fixest::feols` fits them: [`twfe::fit`], and the
 //!   Goodman-Bacon decomposition \[11\] of the static estimate into its 2x2
-//!   comparisons as `bacondecomp::bacon`: [`bacon_decomposition`].
+//!   comparisons as `bacondecomp::bacon`: [`bacon::decompose`].
 //! - Event-study effects for treatments that switch on and off or take
 //!   several values, as `DIDmultiplegtDYN` of de Chaisemartin and
-//!   D'Haultfoeuille \[8\]: [`estimate_dcdh`].
+//!   D'Haultfoeuille \[8\]: [`dcdh::estimate`] on a [`SwitchingPanel`],
+//!   whose treatment need not be absorbing and whose outcomes and
+//!   treatments may be missing.
 //! - Synthetic difference-in-differences \[9\], synthetic control and the
 //!   plain difference-in-differences beside them, as R's `synthdid` computes
-//!   them: [`estimate_synthdid`] with [`SynthDidConfig`], standard errors by
-//!   placebo, bootstrap or jackknife in [`synthdid_variance`], and staggered
-//!   adoption cohort by cohort in [`estimate_synthdid_staggered`]. The
-//!   module [`synthdid`] gives the algorithm.
+//!   them: [`synthdid::estimate`] with [`SynthDidOptions`], standard errors
+//!   by placebo, bootstrap or jackknife through [`SynthDidOptions::variance`],
+//!   and staggered adoption cohort by cohort in
+//!   [`synthdid::estimate_staggered`]. The module [`synthdid`] gives the
+//!   algorithm.
 //! - The power of the pre-trends test and the distortion after passing it,
 //!   after Roth \[10\], in [`pretrends`].
 //! - The imputation estimator of Borusyak, Jaravel and Spiess \[12\]:
-//!   [`estimate_did_imputation`], with the algorithm in [`imputation`]; and
-//!   the two-stage estimator of Gardner \[13\]: [`estimate_did2s`], in
-//!   [`two_stage`]. Both absorb the unit and period effects of the untreated
-//!   rows with `epistat_glm::absorb`, so their cost is linear in the rows.
+//!   [`imputation::estimate`]; and the two-stage estimator of Gardner \[13\]:
+//!   [`two_stage::estimate`]. Both absorb the unit and period effects of the
+//!   untreated rows with `epistat_glm::absorb`, so their cost is linear in
+//!   the rows.
 //! - The interaction-weighted event study of Sun and Abraham \[14\], as
-//!   `fixest::sunab` and `fixest::aggregate` compute it: [`estimate_sunab`],
-//!   with the cohort and relative period coefficients and their summaries by
+//!   `fixest::sunab` and `fixest::aggregate` compute it: [`sunab::fit`], with
+//!   the cohort and relative period coefficients and their aggregates by
 //!   relative period, by cohort and overall.
 //! - Wooldridge's extended two-way fixed-effects regression \[15\] and its
 //!   average effects, as `etwfe::etwfe` and `etwfe::emfx` compute them:
-//!   [`estimate_etwfe`] for linear models and [`estimate_etwfe_glm`] for the
-//!   Poisson and logit models.
+//!   [`etwfe::fit`], for linear models and, by [`EtwfeOptions::family`], for
+//!   the Poisson and logit models.
+//!
+//! The fixed-effects family takes a validated [`StaggeredPanel`], with the
+//! clusters of its covariances in the panel, and returns its estimates as
+//! [`epistat_core::Estimate`]s with intervals at the options' `level`, its
+//! covariances as [`epistat_core::Covariance`] and its influence functions as
+//! [`epistat_inference::Influence`], each under the cluster rule of its R
+//! reference.
 //! - The two-period ATT when the pre-treatment outcome is missing at random,
 //!   after Testa, Kennedy and Reimherr \[16\]: [`att_missing_pre`] with
 //!   parametric nuisance models, with or without cross-fitting, and
@@ -73,56 +74,20 @@
 //! - With the `honest` feature, the sensitivity analysis of Rambachan and
 //!   Roth \[7\] in [`inference::sensitivity`].
 //!
-//! # The estimate
-//!
-//! For the cohort `g`, a comparison group `C` (never treated, or not yet
-//! treated by `t`) and the base period `b` (the last period before
-//! `g - anticipation` for a universal base, and before treatment the period
-//! before `t` for a varying one), the doubly robust ATT(g,t) is
-//!
-//! ```text
-//! ATT(g,t) = E[ (w_g - w_C(X)) (Y_t - Y_b - m_C(X)) ],
-//! w_g      = G_g / E[G_g],
-//! w_C(X)   = (p(X) C / (1 - p(X))) / E[p(X) C / (1 - p(X))],
-//! ```
-//!
-//! with `p(X)` the logistic propensity of belonging to `g` among the units of
-//! `g` and `C`, fitted by maximum likelihood as R's `glm`, and `m_C(X)` the
-//! weighted least-squares regression of `Y_t - Y_b` on `X` among the units of
-//! `C` \[2\]. Outcome regression drops the weights `w_C` and inverse
-//! probability weighting drops `m_C`. On a repeated cross-section the
-//! outcome is not differenced within a unit, and the regressions are fitted
-//! by group and period.
-//!
-//! An aggregation is a weighted mean of the cells. By event time `e`,
-//!
-//! ```text
-//! theta(e) = sum over g of P(G = g | G + e <= T) ATT(g, g + e),
-//! ```
-//!
-//! and the cohort, calendar and overall summaries are formed as in `aggte`
-//! \[1\]. The cohort shares are estimated, so their influence function enters
-//! the variance of the aggregate, as `did:::wif` adds it.
-//!
 //! # Inference
 //!
 //! Each estimator returns the influence function `psi_i` of every unit, and
 //! the standard error is `sqrt(mean((psi_i - mean(psi))^2) / n)`. The intervals
 //! are `att +- z se`, or percentile intervals of a Rademacher multiplier
 //! bootstrap when [`DrDidConfig::bootstrap_reps`] is positive; those of the
-//! improved two-period estimators are `att +- 1.96 se`. In [`aggregate_att_gt`],
-//! [`att_gt_clustered_standard_errors`] and the bands, clusters replace the
-//! units by the sums of the centred `psi_i` within each cluster, divided by
-//! `n`, without the factor `G / (G - 1)`, as in `did`; [`did_standard_error`] and
-//! [`did_covariance`] are that variance. The deprecated `EventStudyResult` and
-//! the validated dataset use [`clustered_variance_from_index`] and its
-//! siblings, which are the cluster-robust variance with that factor. The
+//! improved two-period estimators are `att +- 1.96 se`. With clusters, the
+//! units are replaced by the sums of the centred `psi_i` within each cluster,
+//! divided by `n`, without the factor `G / (G - 1)`, as in `did`;
+//! [`did_standard_error`] and [`did_covariance`] are that variance. The
 //! multiplier bootstrap draws a Rademacher weight per unit or cluster and
-//! replicate, each replicate seeded from the caller's seed and its index, and
-//! a simultaneous band uses the `1 - alpha` quantile of the largest
-//! studentised deviation, with the bootstrap standard error from the
-//! interquartile range as `did::mboot` does. Sums run in a fixed order, so the
-//! results do not depend on the number of threads.
+//! replicate, each replicate seeded from the caller's seed and its index.
+//! Sums run in a fixed order, so the results do not depend on the number of
+//! threads.
 //!
 //! # References
 //!
@@ -169,11 +134,6 @@
 //!     [stat.ME]; 2025.
 #![warn(missing_docs)]
 
-#[expect(
-    deprecated,
-    reason = "the deprecated workflow is built from its own deprecated types"
-)]
-pub(crate) mod dataset;
 pub(crate) mod error;
 pub(crate) mod estimators;
 pub mod inference;
@@ -184,30 +144,18 @@ mod tests;
 pub(crate) mod types;
 pub(crate) mod util;
 
-pub use dataset::{Diagnostic, PanelRecord, Severity, ValidationReport};
-#[expect(
-    deprecated,
-    reason = "re-exports deprecated types until they are removed"
-)]
-pub use dataset::{InferenceDataset, ValidatedInferenceDataset};
-pub use error::{DatasetError, InternalDidError};
+pub use error::Error;
 pub use estimators::common::basis::{BSplineBasis, Basis, PolynomialBasis};
 pub use inference::did_clusters::{
     DidClusterError, did_cluster_sums, did_covariance, did_standard_error,
-};
-pub use inference::export::{
-    InferenceCovarianceRow, InferenceInfluenceRow, build_clustered_inference_covariance_rows,
-    build_inference_covariance_rows, build_inference_influence_rows,
 };
 #[cfg(feature = "honest")]
 pub use inference::sensitivity::{
     HonestAssessment, HonestBiasDirection, HonestConditionalConfidenceSet,
     HonestDirectionalFunctionalPoint, HonestDirectionalRegion, HonestDirectionalRegionDiagnostics,
-    HonestDirectionalReport, HonestDirectionalReportRow, HonestEventStudyInput,
-    HonestEventStudyPoint, HonestFunctionalAssessmentPoint, HonestIdentifiedSet,
-    HonestJointPathConfig, HonestJointPathMethod, HonestJointPathPoint, HonestJointPathRegion,
-    HonestJointPathReport, HonestJointPathReportRow, HonestMonotonicityDirection,
-    HonestMultiFlciReport, HonestMultiFlciReportRow, HonestOptimizationSurfaceAdaptiveConfig,
+    HonestEventStudyInput, HonestEventStudyPoint, HonestFunctionalAssessmentPoint,
+    HonestIdentifiedSet, HonestJointPathConfig, HonestJointPathMethod, HonestJointPathPoint,
+    HonestJointPathRegion, HonestMonotonicityDirection, HonestOptimizationSurfaceAdaptiveConfig,
     HonestOptimizationSurfaceAdaptiveRunConfig, HonestOptimizationSurfaceConfig,
     HonestOriginalConfidenceSet, HonestPostFunctional, HonestRelativeMagnitudeBound, HonestResult,
     HonestSensitivity, HonestStudyWorkflowResult, HonestWorkflowConfig,
@@ -229,11 +177,8 @@ pub use inference::sensitivity::{
     assess_honest_event_study_post_functional_multi_flci,
     assess_honest_event_study_post_functional_multi_flci_with_config,
     assess_honest_event_study_post_functional_with_config, assess_honest_event_study_workflow,
-    assess_honest_event_study_workflow_with_config, build_honest_directional_report_rows,
-    build_honest_joint_path_report_rows, build_honest_multi_flci_report_rows,
-    build_relative_magnitude_flci_problem, build_relative_magnitude_multi_flci_problem,
-    compute_honest_ci_scalar, compute_honest_event_study_scalar,
-    compute_honest_event_study_scalar_for_input,
+    assess_honest_event_study_workflow_with_config, build_relative_magnitude_flci_problem,
+    build_relative_magnitude_multi_flci_problem, compute_honest_event_study_scalar_for_input,
     compute_monotone_smoothness_confidence_set_with_simulation, compute_original_confidence_set,
     compute_relative_magnitude_confidence_set,
     compute_relative_magnitude_confidence_set_with_config, compute_relative_magnitude_flci,
@@ -241,87 +186,48 @@ pub use inference::sensitivity::{
     compute_relative_magnitude_multi_flci, compute_relative_magnitude_multi_flci_with_config,
     compute_signed_smoothness_confidence_set_with_simulation,
     compute_smoothness_confidence_set_with_simulation,
-    estimate_smoothness_upper_bound_from_pretrends, render_honest_directional_report_csv,
-    render_honest_directional_report_json, render_honest_joint_path_report_csv,
-    render_honest_joint_path_report_json, render_honest_multi_flci_report_csv,
-    render_honest_multi_flci_report_json, summarize_post_period_sensitivity,
-    summarize_post_period_sensitivity_with_simulation, summarize_relative_magnitude_sensitivity,
+    estimate_smoothness_upper_bound_from_pretrends, summarize_relative_magnitude_sensitivity,
     summarize_relative_magnitude_sensitivity_many,
     summarize_relative_magnitude_sensitivity_many_with_simulation,
     summarize_relative_magnitude_sensitivity_with_simulation, summarize_smoothness_sensitivity,
     summarize_smoothness_sensitivity_with_simulation,
 };
-pub use inference::{
-    ClusterIndex, ClusterSpec, InferenceError, clustered_ci_from_index,
-    clustered_standard_error_from_index, clustered_variance_from_index,
-};
-#[cfg(feature = "honest")]
-pub use methods::att_gt::WindowAssessment;
-pub use methods::att_gt::{
-    AggteBootstrap, AggteConfig, AggteError, AggteEstimate, AggteResult, AggteType, PretestError,
-    PretrendWald, UnitPanel, aggregate_att_gt, aggregate_att_gt_by_calendar_time,
-    aggregate_att_gt_by_cohort, aggregate_att_gt_event_time_with_influence,
-    aggregate_att_gt_overall, att_gt_clustered_standard_errors, att_gt_mboot_bands,
-    estimate_att_gt, estimate_att_gt_dr, estimate_att_gt_dr_efficient_with_influence,
-    estimate_att_gt_dr_panel, estimate_att_gt_dr_panel_with_influence,
-    estimate_att_gt_dr_with_influence, estimate_att_gt_ipw,
-    estimate_att_gt_ipw_panel_with_influence, estimate_att_gt_ipw_with_influence,
-    estimate_att_gt_or, estimate_att_gt_or_panel_with_influence, estimate_att_gt_or_with_influence,
-    pretrend_wald_test, row_panel, unit_panel,
-};
-#[expect(
-    deprecated,
-    reason = "re-exports deprecated items until they are removed"
-)]
-pub use methods::att_gt::{
-    EventStudyResult, EventTimeResult, aggregate_att_gt_event_time, att_gt_simultaneous_bands,
-    att_gt_simultaneous_bands_with_influence,
-};
-pub use methods::bacon::{
-    BaconComparison, BaconDecomposition, BaconError, BaconKind, BaconWithin, bacon_decomposition,
-};
+pub use methods::att_gt;
+pub use methods::bacon;
+pub use methods::bacon::{BaconComparison, BaconDecomposition, BaconKind, BaconWithin};
 pub use methods::continuous::sieve::estimate_acrt_sieve;
+pub use methods::dcdh;
 pub use methods::dcdh::{
-    DcdhAvgTimePeriods, DcdhBootstrap, DcdhBootstrapEstimate, DcdhConfig, DcdhDesign,
-    DcdhEffectsEqual, DcdhError, DcdhEstimate, DcdhHeterogeneity, DcdhObservation, DcdhPath,
-    DcdhPathResult, DcdhResult, DcdhSubgroup, DcdhSwitchDate, DcdhSwitchDates, DcdhSwitchers,
-    dcdh_design, dcdh_first_switch_dates, estimate_dcdh, estimate_dcdh_bootstrap, estimate_dcdh_by,
-    estimate_dcdh_by_path, estimate_dcdh_heterogeneity,
+    Dcdh, DcdhAvgTimePeriods, DcdhBootstrap, DcdhBootstrapTerm, DcdhDesign, DcdhEffectsEqual,
+    DcdhHeterogeneity, DcdhOptions, DcdhPath, DcdhPathResult, DcdhSubgroup, DcdhSwitchDate,
+    DcdhSwitchDates, DcdhSwitchers, DcdhTerm, SwitchingPanel, SwitchingPanelBuilder,
 };
 pub use methods::did_cc::{
-    DidCcObservationView, estimate_did_cc_robust, estimate_did_cc_robust_from_views,
-    estimate_did_cc_stationary, estimate_did_cc_stationary_from_views, test_did_cc_stationarity,
-    test_did_cc_stationarity_from_views,
+    estimate_did_cc_robust, estimate_did_cc_stationary, test_did_cc_stationarity,
 };
 pub use methods::drdid::improved::{
     estimate_drdid_improved_panel, estimate_drdid_improved_repeated_cross_section,
 };
 pub use methods::drdid::ipw_or::{
-    estimate_ipw_did_panel, estimate_ipw_did_panel_flat, estimate_ipw_did_repeated_cross_section,
-    estimate_or_did_panel, estimate_or_did_panel_flat, estimate_or_did_repeated_cross_section,
+    estimate_ipw_did_panel, estimate_ipw_did_repeated_cross_section, estimate_or_did_panel,
+    estimate_or_did_repeated_cross_section,
 };
 pub use methods::drdid::panel::{
     PanelFlatInput, PanelNuisanceFit, PanelPropensityCoefficients, estimate_drdid_panel,
-    estimate_drdid_panel_flat, fit_drdid_panel_nuisance, fit_drdid_panel_propensity_coefficients,
+    fit_drdid_panel_nuisance, fit_drdid_panel_propensity_coefficients,
 };
 pub use methods::drdid::repeated::estimate_drdid_repeated_cross_section;
 pub use methods::drdid::repeated_efficient::estimate_drdid_repeated_efficient;
 pub use methods::drdid::{DesignPruning, independent_design_columns};
-pub use methods::efficient::{
-    aggregate_efficient_att_gt_by_calendar_time, aggregate_efficient_att_gt_by_cohort,
-    aggregate_efficient_att_gt_event_time, aggregate_efficient_att_gt_event_time_with_influence,
-    aggregate_efficient_att_gt_overall, estimate_att_gt_efficient, estimate_att_gt_efficient_dr,
-};
 pub use methods::etwfe;
 pub use methods::etwfe::{
-    EtwfeCoefficient, EtwfeConfig, EtwfeControl, EtwfeEffect, EtwfeEffects, EtwfeError,
-    EtwfeFamily, EtwfeGlmCoefficient, EtwfeGlmConfig, EtwfeGlmResult, EtwfeGlmTerm, EtwfeResult,
-    EtwfeTerm, EtwfeType, estimate_etwfe, estimate_etwfe_glm,
+    EtwfeCoefficient, EtwfeControl, EtwfeEffect, EtwfeEffects, EtwfeFamily, EtwfeFit, EtwfeOptions,
+    EtwfeTerm, EtwfeType, EtwfeVcov,
 };
 pub use methods::imputation;
 pub use methods::imputation::{
-    ImputationConfig, ImputationError, ImputationEstimate, ImputationResult, ImputationTarget,
-    ImputationTerm, PretrendResult, PretrendTerm, Pretrends, estimate_did_imputation,
+    Imputation, ImputationEffect, ImputationOptions, ImputationPretrends, ImputationTarget,
+    ImputationTerm, PretrendTerm, Pretrends,
 };
 pub use methods::missing;
 pub use methods::missing::{
@@ -329,30 +235,21 @@ pub use methods::missing::{
     MissingModels, MissingNuisance, MissingPreData, MissingPredictions, NestedOutcome,
     att_missing_pre, att_missing_pre_from_predictions, missing_cross_fit_folds,
 };
-pub use methods::staggered::StaggeredPanel;
-#[expect(
-    deprecated,
-    reason = "re-exports a deprecated function until it is removed"
-)]
-pub use methods::standard::aggregate_event_time;
-pub use methods::standard::{
-    estimate_att_from_summary, estimate_att_two_by_two, summarize_two_by_two,
-};
+pub use methods::staggered::{StaggeredPanel, StaggeredPanelBuilder};
+pub use methods::standard::estimate_att_two_by_two;
+pub use methods::sunab;
 pub use methods::sunab::{
-    SUNAB_DEFAULT_REFERENCES, SunabBins, SunabCell, SunabConfig, SunabControl, SunabError,
-    SunabEstimate, SunabReference, SunabResult, SunabTerm, estimate_sunab,
+    SunabAggregate, SunabBins, SunabCell, SunabControl, SunabFit, SunabOptions, SunabReference,
+    SunabTerm,
 };
 pub use methods::synthdid;
 pub use methods::synthdid::{
-    StaggeredSynthEstimate, StaggeredSynthPanel, SynthCohort, SynthDidConfig, SynthDidError,
-    SynthDidEstimate, SynthDidVariance, SynthDraws, SynthObservation, SynthPanel, SynthTrace,
-    SynthUndefined, SynthVariance, SynthWeights, estimate_synthdid, estimate_synthdid_staggered,
-    synthdid_staggered_variance, synthdid_variance,
+    StaggeredSynthDid, SynthCohort, SynthDid, SynthDidOptions, SynthDraws, SynthFit,
+    SynthReplicates, SynthTrace, SynthUndefined, SynthVariance, SynthWeights,
 };
 pub use methods::triple_did::aggregator::estimate_dr_ddd;
-pub use methods::twfe::{TwfeConfig, TwfeError, TwfeResult, TwfeSpec, TwfeTerm, estimate_twfe};
+pub use methods::twfe;
+pub use methods::twfe::{TwfeFit, TwfeOptions, TwfeSpec, TwfeTerm};
 pub use methods::two_stage;
-pub use methods::two_stage::{
-    TwoStageConfig, TwoStageResult, TwoStageSpec, TwoStageTerm, estimate_did2s,
-};
+pub use methods::two_stage::{TwoStage, TwoStageOptions, TwoStageSpec, TwoStageTerm};
 pub use types::*;

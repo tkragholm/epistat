@@ -31,10 +31,10 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+use epistat_matching::Estimand;
 use epistat_matching::abadie_imbens::{
     AbadieImbensData, AbadieImbensSpec, DistanceWeight, abadie_imbens,
 };
-use epistat_matching::effects::Target;
 
 use r_reference::{Versions, reference as load_reference};
 use serde::Deserialize;
@@ -136,9 +136,9 @@ fn estimate_and_standard_errors_agree_with_match() {
     let mut count = 0;
     for case in &r.results {
         let target = match case.estimand.as_str() {
-            "ATT" => Target::Att,
-            "ATE" => Target::Ate,
-            _ => Target::Atc,
+            "ATT" => Estimand::Att,
+            "ATE" => Estimand::Ate,
+            _ => Estimand::Atc,
         };
         let spec = AbadieImbensSpec {
             target,

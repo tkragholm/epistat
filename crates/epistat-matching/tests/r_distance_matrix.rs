@@ -23,8 +23,10 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::Error;
 use epistat_matching::prelude::*;
-use epistat_matching::{MatchOrder, PairDistanceMatrix, PairDistanceMatrixError};
+use epistat_matching::{DistanceCaliper, DistanceConfig, Estimand, InvalidCriteriaReason};
+use epistat_matching::{MatchOrder, PairDistanceMatrix};
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
@@ -130,9 +132,9 @@ fn rows_of(outcome: &MatchOutcome, focal_rows: &[usize]) -> Vec<Vec<usize>> {
     let mut by_anchor: HashMap<usize, Vec<usize>> = HashMap::new();
     for pair in &outcome.pairs {
         by_anchor
-            .entry(pair.anchor_id().parse().expect("row number"))
+            .entry(pair.case_id.as_str().parse().expect("row number"))
             .or_default()
-            .push(pair.comparator_id().parse().expect("row number"));
+            .push(pair.control_id.as_str().parse().expect("row number"));
     }
     focal_rows
         .iter()
@@ -189,7 +191,7 @@ fn nearest_pairs_match_matchit() {
         if let Some(order) = &run.order {
             job = job.with_m_order(order_of(order));
         }
-        let outcome = job.run();
+        let outcome = job.run().expect("a valid job");
         let expected: Vec<Vec<usize>> = run.matchit.iter().map(Rows::to_vec).collect();
         assert_eq!(rows_of(&outcome, &focal_rows), expected, "{}", run.name);
         with_caliper += usize::from(run.caliper.is_some());
@@ -218,6 +220,7 @@ fn a_pair_at_the_caliper_is_kept() {
             .with_nearest()
             .with_distance_config(config)
             .run()
+            .expect("a valid job")
             .matched_cases
     };
     assert_eq!(count(reference.caliper_exact), 5);
@@ -240,12 +243,13 @@ fn matrix_is_a_caliper_for_the_other_strategies() {
     let outcome = MatchJob::new_standard(&anchors, &candidates, 7)
         .with_distance_config(config)
         .with_birth_window(BirthDateWindowDays::new(10).expect("window"))
-        .run();
+        .run()
+        .expect("a valid job");
     assert!(!outcome.pairs.is_empty(), "no output, test is vacuous");
     for pair in &outcome.pairs {
         let distance = matrix
-            .anchor_position(pair.anchor_id())
-            .zip(matrix.candidate_position(pair.comparator_id()))
+            .case_position(pair.case_id.as_str())
+            .zip(matrix.control_position(pair.control_id.as_str()))
             .and_then(|(i, j)| matrix.at(i, j))
             .expect("a finite entry");
         assert!(distance <= width, "{distance} against {width}");
@@ -272,10 +276,11 @@ fn units_outside_the_matrix_are_not_matched() {
     let outcome = MatchJob::new_standard(&anchors, &candidates, 0)
         .with_nearest()
         .with_distance_config(DistanceConfig::matrix(matrix.clone(), None))
-        .run();
+        .run()
+        .expect("a valid job");
     assert_eq!(outcome.pairs.len(), 1);
-    assert_eq!(outcome.pairs[0].anchor_id(), "a");
-    assert_eq!(outcome.pairs[0].comparator_id(), "x");
+    assert_eq!(outcome.pairs[0].case_id.as_str(), "a");
+    assert_eq!(outcome.pairs[0].control_id.as_str(), "x");
     let (rows, columns) = matrix.positions_of(&anchors, &candidates);
     assert_eq!(rows, vec![Some(0), None]);
     assert_eq!(columns, vec![Some(0), None]);
@@ -312,11 +317,10 @@ fn an_order_by_score_is_refused() {
         .with_m_order(MatchOrder::Largest)
         .with_distance_config(DistanceConfig::matrix(matrix_for(&reference, run), None))
         .run();
-    assert!(
-        outcome.pairs.is_empty(),
-        "an order by score matches nothing"
+    assert_eq!(
+        outcome.unwrap_err(),
+        Error::InvalidCriteria(InvalidCriteriaReason::NearestOptions)
     );
-    assert_eq!(outcome.diagnostics.exclusion_counts.len(), 1);
 }
 
 #[test]
@@ -324,18 +328,21 @@ fn invalid_matrices_are_refused() {
     let ids = |names: &[&str]| names.iter().map(ToString::to_string).collect::<Vec<_>>();
     assert_eq!(
         PairDistanceMatrix::new(vec![], ids(&["x"]), vec![]).unwrap_err(),
-        PairDistanceMatrixError::Empty
+        Error::Input(epistat_core::InputError::Empty {
+            what: "distance matrix ids"
+        })
     );
     assert_eq!(
         PairDistanceMatrix::new(ids(&["a"]), ids(&["x", "y"]), vec![1.0]).unwrap_err(),
-        PairDistanceMatrixError::Shape {
+        Error::Input(epistat_core::InputError::Length {
+            what: "distance matrix values",
             expected: 2,
             found: 1
-        }
+        })
     );
     assert_eq!(
         PairDistanceMatrix::new(ids(&["a", "a"]), ids(&["x"]), vec![1.0, 2.0]).unwrap_err(),
-        PairDistanceMatrixError::DuplicateId("a".into())
+        Error::DuplicateId { id: "a".into() }
     );
     assert_eq!(
         PairDistanceMatrix::new(
@@ -344,9 +351,9 @@ fn invalid_matrices_are_refused() {
             vec![1.0, 2.0, f64::NAN, 4.0]
         )
         .unwrap_err(),
-        PairDistanceMatrixError::NotANumber {
-            anchor: 1,
-            candidate: 0
+        Error::DistanceNotANumber {
+            case: 1,
+            control: 0
         }
     );
     // A negative distance is refused, with its cell named.
@@ -357,9 +364,9 @@ fn invalid_matrices_are_refused() {
             vec![-5.0, 0.0, 0.0, 1.0]
         )
         .unwrap_err(),
-        PairDistanceMatrixError::Negative {
-            anchor: 0,
-            candidate: 0
+        Error::NegativeDistance {
+            case: 0,
+            control: 0
         }
     );
     assert_eq!(
@@ -369,9 +376,9 @@ fn invalid_matrices_are_refused() {
             vec![1.0, 2.0, 3.0, f64::NEG_INFINITY]
         )
         .unwrap_err(),
-        PairDistanceMatrixError::Negative {
-            anchor: 1,
-            candidate: 1
+        Error::NegativeDistance {
+            case: 1,
+            control: 1
         }
     );
 }

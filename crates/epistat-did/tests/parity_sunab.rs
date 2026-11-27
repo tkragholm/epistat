@@ -7,14 +7,13 @@
 #[expect(dead_code, reason = "the iid covariance is not used here")]
 mod feols_bound;
 
+use epistat_core::InputError;
+use epistat_did::att_gt;
 use epistat_did::{
-    AggteConfig, AggteType, AttGtConfig, AttGtDrConfig, AttGtDrObservation, BasePeriod,
-    ComparisonGroup, DrDidConfig, InferenceConfig, StaggeredPanel, SunabBins, SunabConfig,
-    SunabControl, SunabReference, SunabTerm, UnbalancedPanel, aggregate_att_gt, did_covariance,
-    estimate_att_gt_dr_panel_with_influence, estimate_sunab, unit_panel,
+    StaggeredPanel, SunabBins, SunabControl, SunabOptions, SunabReference, SunabTerm, sunab,
 };
 use epistat_glm::{Absorb, Ssc};
-use epistat_inference::Clusters;
+use epistat_inference::{ClusterRule, Clusters};
 use epistat_linalg::Mat;
 use epistat_testkit::{assert_same_on_threads, load_json};
 use feols_bound::{EPS, Meat, feols_bound};
@@ -29,15 +28,15 @@ struct Reference {
 #[derive(Deserialize)]
 struct Bins {
     kind: String,
-    lo: Option<i32>,
-    hi: Option<i32>,
-    width: Option<i32>,
+    lo: Option<i64>,
+    hi: Option<i64>,
+    width: Option<i64>,
 }
 
 #[derive(Deserialize)]
 struct Spec {
     control: String,
-    cohorts: Option<Vec<i32>>,
+    cohorts: Option<Vec<i64>>,
     references: Vec<Value>,
     bins: Option<Bins>,
 }
@@ -60,8 +59,8 @@ struct Case {
     name: String,
     spec: Spec,
     unit: Vec<u32>,
-    time: Vec<i32>,
-    first_treated: Vec<Option<i32>>,
+    time: Vec<i64>,
+    first_treated: Vec<Option<i64>>,
     outcome: Vec<f64>,
     weights: Option<Vec<f64>>,
     covariate: Option<Vec<f64>>,
@@ -96,7 +95,7 @@ const TIGHT: Absorb = Absorb {
 struct Setting {
     references: Vec<SunabReference>,
     bins: SunabBins,
-    cohorts: Vec<i32>,
+    cohorts: Vec<i64>,
 }
 
 fn setting(case: &Case) -> Setting {
@@ -105,7 +104,7 @@ fn setting(case: &Case) -> Setting {
         .references
         .iter()
         .map(|v| match v {
-            Value::Number(n) => SunabReference::Period(i32::try_from(n.as_i64().unwrap()).unwrap()),
+            Value::Number(n) => SunabReference::Period(n.as_i64().unwrap()),
             Value::String(s) if s == "first" => SunabReference::First,
             Value::String(s) if s == "last" => SunabReference::Last,
             Value::String(s) => SunabReference::Period(s.parse().unwrap()),
@@ -127,18 +126,18 @@ fn setting(case: &Case) -> Setting {
     }
 }
 
-fn config<'a>(case: &'a Case, s: &'a Setting) -> SunabConfig<'a> {
-    SunabConfig {
+fn config(case: &Case, s: &Setting) -> SunabOptions {
+    SunabOptions {
         control: match case.spec.control.as_str() {
             "never" => SunabControl::NeverTreated,
             "last" => SunabControl::LastTreated,
-            _ => SunabControl::Cohorts(&s.cohorts),
+            _ => SunabControl::Cohorts(s.cohorts.clone()),
         },
-        references: &s.references,
+        references: s.references.clone(),
         bins: s.bins,
-        clusters: case.clusters.as_deref(),
         absorb: TIGHT,
         ssc: Ssc::new(),
+        ..SunabOptions::default()
     }
 }
 
@@ -149,14 +148,18 @@ fn covariate(case: &Case) -> Option<Mat<f64>> {
 }
 
 fn panel<'a>(case: &'a Case, x: Option<&'a Mat<f64>>) -> StaggeredPanel<'a> {
-    StaggeredPanel {
-        unit: &case.unit,
-        time: &case.time,
-        first_treated: &case.first_treated,
-        outcome: &case.outcome,
-        weights: case.weights.as_deref(),
-        covariates: x.map(Mat::as_ref),
+    let mut panel =
+        StaggeredPanel::builder(&case.unit, &case.time, &case.first_treated, &case.outcome);
+    if let Some(w) = &case.weights {
+        panel = panel.weights(w);
     }
+    if let Some(x) = x {
+        panel = panel.covariates(x.as_ref());
+    }
+    if let Some(c) = &case.clusters {
+        panel = panel.clusters(c);
+    }
+    panel.build().expect("a valid panel")
 }
 
 /// The position in `table` of each name, which must all be there.
@@ -173,7 +176,7 @@ fn sunab_matches_fixest() {
     for case in &reference().cases {
         let s = setting(case);
         let x = covariate(case);
-        let result = estimate_sunab(&panel(case, x.as_ref()), &config(case, &s)).unwrap();
+        let result = sunab::fit(&panel(case, x.as_ref()), &config(case, &s)).unwrap();
         assert_eq!(result.n_rows, case.nobs, "{}", case.name);
         assert_eq!(result.df_k, case.df_k, "{}", case.name);
         assert!(case.collinear.is_empty(), "{}", case.name);
@@ -214,6 +217,7 @@ fn sunab_matches_fixest() {
                 SunabBins::None => e,
                 SunabBins::Clamp { lo, hi } => e.clamp(lo, hi),
                 SunabBins::Width(w) => e.div_euclid(w) * w,
+                _ => unreachable!("the bins of the reference cases"),
             };
             f64::from(u8::from(label == cell.relative_period))
         });
@@ -230,7 +234,7 @@ fn sunab_matches_fixest() {
         let time: Vec<u32> = case
             .time
             .iter()
-            .map(|&t| (t - t_min).cast_unsigned())
+            .map(|&t| u32::try_from(t - t_min).unwrap())
             .collect();
         let clusters = case.clusters.as_deref().unwrap_or(&case.unit);
         let g_count = result.n_clusters as f64;
@@ -249,10 +253,14 @@ fn sunab_matches_fixest() {
         );
         // The estimator is the plain fit.
         for (j, c) in bound.coefficients.iter().enumerate() {
-            let mine = result.cells.get(j).map_or_else(
-                || result.covariate_coefficients[j - k_cells],
-                |c| c.estimate,
-            );
+            let mine = result
+                .cells
+                .get(j)
+                .map_or_else(
+                    || result.covariate_coefficients[j - k_cells],
+                    |c| c.estimate,
+                )
+                .map(|e| e.estimate);
             assert_eq!(c.map(f64::to_bits), mine.map(f64::to_bits), "{}", case.name);
         }
         assert_eq!(bound.kept.len(), p, "{}", case.name);
@@ -266,7 +274,7 @@ fn sunab_matches_fixest() {
                 case.coef[j]
             );
             for k in 0..p {
-                let got = result.covariance[j * p + k].unwrap();
+                let got = result.covariance.get(j, k).unwrap();
                 let want = case.vcov[j * p + k];
                 assert!(
                     (got - want).abs() <= bound.covariance[j * p + k],
@@ -291,8 +299,9 @@ fn sunab_matches_fixest() {
 
         // The influence functions give fixest's covariance without its
         // small-sample factors.
-        let unit_cluster: Vec<u32> = result
-            .units
+        let influence = result.influence.as_ref().unwrap();
+        let unit_cluster: Vec<u32> = influence
+            .units()
             .iter()
             .map(|&u| {
                 let row = case.unit.iter().position(|&v| v == u).unwrap();
@@ -300,15 +309,15 @@ fn sunab_matches_fixest() {
             })
             .collect();
         let of = Clusters::from_labels(&unit_cluster);
-        let psi: Vec<Vec<f64>> = (0..p)
-            .map(|j| result.influence[j].clone().unwrap())
-            .collect();
-        let raw = did_covariance(&psi, &of).unwrap();
+        assert_eq!(influence.n_columns(), p);
+        let raw = influence
+            .variance_with(Some(&of), ClusterRule::NoSmallSample)
+            .unwrap();
         for j in 0..p {
             for k in 0..p {
                 let want = case.vcov_unadjusted[j * p + k];
                 assert!(
-                    (raw[j * p + k] - want).abs() <= bound.covariance[j * p + k] / factor,
+                    (raw.get(j, k).unwrap() - want).abs() <= bound.covariance[j * p + k] / factor,
                     "{} influence {} {}",
                     case.name,
                     labels[j],
@@ -322,11 +331,11 @@ fn sunab_matches_fixest() {
         // off by at most s' |dV| s.
         let check = |term: SunabTerm, table: &Table, row: usize| {
             let a = result
-                .estimates
+                .aggregates
                 .iter()
                 .position(|e| e.term == term)
                 .unwrap();
-            let est = &result.estimates[a];
+            let est = &result.aggregates[a].estimate;
             assert!(
                 (est.estimate - table.estimate[row]).abs()
                     <= bound.beta + 16.0 * EPS * est.estimate.abs(),
@@ -343,6 +352,7 @@ fn sunab_matches_fixest() {
                     SunabTerm::Period(e) => c.relative_period == e,
                     SunabTerm::Cohort(g) => c.cohort == g && c.relative_period >= 0,
                     SunabTerm::Att => c.relative_period >= 0,
+                    _ => unreachable!("the terms of the module"),
                 })
                 .map(|(j, c)| (j, c.weight))
                 .collect();
@@ -353,7 +363,7 @@ fn sunab_matches_fixest() {
                     tol += wi / total * wj / total * bound.covariance[i * p + j];
                 }
             }
-            let se = est.std_error.unwrap();
+            let se = est.se.unwrap();
             let want = table.se[row];
             assert!(
                 (se * se - want * want).abs() <= tol + 16.0 * EPS * want * want,
@@ -363,8 +373,15 @@ fn sunab_matches_fixest() {
             // The influence function of the summary gives its variance
             // without the small-sample factors, up to the rounding of sums
             // over the units in another order.
-            let v = did_covariance(&[result.estimate_influence[a].clone()], &of).unwrap()[0];
-            let units = result.units.len() as f64;
+            let v = result
+                .aggregate_influence
+                .as_ref()
+                .unwrap()
+                .variance_with(Some(&of), ClusterRule::NoSmallSample)
+                .unwrap()
+                .get(a, a)
+                .unwrap();
+            let units = result.n_units as f64;
             assert!(
                 (v * factor - se * se).abs() <= 64.0 * units * EPS * se * se,
                 "{} {term:?} influence {} {}",
@@ -373,8 +390,8 @@ fn sunab_matches_fixest() {
                 se * se
             );
         };
-        let periods: Vec<i32> = result
-            .estimates
+        let periods: Vec<i64> = result
+            .aggregates
             .iter()
             .filter_map(|e| match e.term {
                 SunabTerm::Period(r) => Some(r),
@@ -388,8 +405,8 @@ fn sunab_matches_fixest() {
         {
             check(SunabTerm::Period(r), &case.period, *row);
         }
-        let cohorts: Vec<i32> = result
-            .estimates
+        let cohorts: Vec<i64> = result
+            .aggregates
             .iter()
             .filter_map(|e| match e.term {
                 SunabTerm::Cohort(g) => Some(g),
@@ -406,11 +423,13 @@ fn sunab_matches_fixest() {
         check(SunabTerm::Att, &case.att, 0);
         // The covariance of the summaries has their variances on its
         // diagonal.
-        let m = result.estimates.len();
+        let m = result.aggregates.len();
         for a in 0..m {
-            let se = result.estimates[a].std_error.unwrap();
+            let se = result.aggregates[a].estimate.se.unwrap();
             assert_eq!(
-                result.estimate_covariance[a * m + a]
+                result
+                    .aggregate_covariance
+                    .get(a, a)
                     .unwrap()
                     .sqrt()
                     .to_bits(),
@@ -422,7 +441,7 @@ fn sunab_matches_fixest() {
 
 /// `.F` of `sunab`: the smallest relative period over the rows fitted, with
 /// -1 for the never treated.
-fn result_first(case: &Case, cutoff: Option<i32>) -> i32 {
+fn result_first(case: &Case, cutoff: Option<i64>) -> i64 {
     (0..case.unit.len())
         .filter(|&i| cutoff.is_none_or(|c| case.time[i] < c))
         .map(|i| case.first_treated[i].map_or(-1, |g| case.time[i] - g))
@@ -449,57 +468,38 @@ fn sunab_is_att_gt_aggregated_by_treated_counts() {
         .filter(|&i| count[case.unit[i] as usize] == periods)
         .collect();
     let unit: Vec<u32> = rows.iter().map(|&i| case.unit[i]).collect();
-    let time: Vec<i32> = rows.iter().map(|&i| case.time[i]).collect();
-    let first: Vec<Option<i32>> = rows.iter().map(|&i| case.first_treated[i]).collect();
+    let time: Vec<i64> = rows.iter().map(|&i| case.time[i]).collect();
+    let first: Vec<Option<i64>> = rows.iter().map(|&i| case.first_treated[i]).collect();
     let outcome: Vec<f64> = rows.iter().map(|&i| case.outcome[i]).collect();
-    let panel = StaggeredPanel {
-        unit: &unit,
-        time: &time,
-        first_treated: &first,
-        outcome: &outcome,
-        weights: None,
-        covariates: None,
-    };
-    let result = estimate_sunab(
+    let panel = StaggeredPanel::builder(&unit, &time, &first, &outcome)
+        .build()
+        .unwrap();
+    let result = sunab::fit(
         &panel,
-        &SunabConfig {
+        &SunabOptions {
             absorb: TIGHT,
-            ..SunabConfig::new()
+            ..SunabOptions::default()
         },
     )
     .unwrap();
 
-    let observations: Vec<AttGtDrObservation> = (0..unit.len())
-        .map(|i| AttGtDrObservation {
-            unit_id: Some(i64::from(unit[i])),
-            first_treated_time: first[i],
-            time: time[i],
-            outcome: outcome[i],
-            weight: 1.0,
-            covariates: Vec::new(),
-            comparison_cohort: None,
-        })
-        .collect();
-    let config = AttGtDrConfig {
-        att_gt: AttGtConfig {
-            confidence_level: InferenceConfig::default(),
-            comparison_group: ComparisonGroup::NeverTreated,
-            base_period: BasePeriod::Universal,
-            anticipation_periods: 0,
-            skip_incomplete_pairs: false,
-            unbalanced_panel: UnbalancedPanel::Balance,
-            refuse_small_never_treated: false,
-            refuse_poor_overlap: false,
-        },
-        drdid: DrDidConfig::default(),
+    let options = att_gt::AttGtOptions {
+        base_period: att_gt::BasePeriod::Universal,
+        skip_failed_cells: false,
+        refuse_small_never_treated: false,
+        refuse_poor_overlap: false,
+        ..att_gt::AttGtOptions::default()
     };
-    let fitted = estimate_att_gt_dr_panel_with_influence(&observations, config).unwrap();
+    let fitted = att_gt::estimate(&panel, &options).unwrap();
     // The tolerance: the regression's bound from its criterion (the
     // smallest positive eigenvalue of D'D for a balanced panel of N units and
     // T < N periods is T), and the rounding of the four means of ATT(g,t),
     // each at most n eps max |y|.
     let n = unit.len();
-    let t_codes: Vec<u32> = time.iter().map(|&t| (t - 1).cast_unsigned()).collect();
+    let t_codes: Vec<u32> = time
+        .iter()
+        .map(|&t| u32::try_from(t - 1).unwrap())
+        .collect();
     let design = Mat::from_fn(n, result.cells.len(), |i, j| {
         let c = &result.cells[j];
         let hit = first[i] == Some(c.cohort) && time[i] - c.cohort == c.relative_period;
@@ -520,47 +520,40 @@ fn sunab_is_att_gt_aggregated_by_treated_counts() {
     let scale = bound.beta + 8.0 * n as f64 * EPS * y_max;
     for cell in &result.cells {
         let att = fitted
-            .estimates
+            .cells()
             .iter()
             .find(|e| e.group == cell.cohort && e.time == cell.cohort + cell.relative_period)
+            .and_then(|e| e.estimate)
             .unwrap()
-            .att;
+            .estimate;
         assert!(
-            (cell.estimate.unwrap() - att).abs() <= scale,
+            (cell.estimate.unwrap().estimate - att).abs() <= scale,
             "cell {} {}: {} {att}",
             cell.cohort,
             cell.relative_period,
-            cell.estimate.unwrap()
+            cell.estimate.unwrap().estimate
         );
     }
-    let unit_panel = unit_panel(&observations).unwrap();
     for (aggregation, term) in [
-        (AggteType::Dynamic, None),
-        (AggteType::Simple, Some(SunabTerm::Att)),
+        (att_gt::AggteType::Dynamic, None),
+        (att_gt::AggteType::Simple, Some(SunabTerm::Att)),
     ] {
-        let agg = aggregate_att_gt(
-            &fitted.estimates,
-            &fitted.influence_functions,
-            &unit_panel,
-            AggteConfig {
+        let agg = fitted
+            .aggregate(&att_gt::AggteOptions {
                 aggregation,
-                balance_e: None,
-                min_e: None,
-                max_e: None,
-                confidence_level: InferenceConfig::default(),
-                bootstrap: None,
-            },
-        )
-        .unwrap();
+                ..att_gt::AggteOptions::default()
+            })
+            .unwrap();
         match term {
             Some(t) => {
-                let mine = result.estimates.iter().find(|e| e.term == t).unwrap();
-                assert!((mine.estimate - agg.overall_att).abs() <= scale);
+                let mine = result.aggregates.iter().find(|e| e.term == t).unwrap();
+                let overall = agg.overall.unwrap().estimate.estimate;
+                assert!((mine.estimate.estimate - overall).abs() <= scale);
             }
             None => {
-                for point in &agg.by_key {
+                for point in &agg.points {
                     let mine = result
-                        .estimates
+                        .aggregates
                         .iter()
                         .find(|e| e.term == SunabTerm::Period(point.key));
                     if point.key == -1 {
@@ -568,12 +561,12 @@ fn sunab_is_att_gt_aggregated_by_treated_counts() {
                         continue;
                     }
                     let mine = mine.unwrap();
+                    let att = point.estimate.estimate;
                     assert!(
-                        (mine.estimate - point.att).abs() <= scale,
-                        "event {}: {} {}",
+                        (mine.estimate.estimate - att).abs() <= scale,
+                        "event {}: {} {att}",
                         point.key,
-                        mine.estimate,
-                        point.att
+                        mine.estimate.estimate
                     );
                 }
             }
@@ -587,11 +580,14 @@ fn unusable_bins_are_an_error() {
     let case = &reference.cases[0];
     let s = setting(case);
     for bins in [SunabBins::Clamp { lo: 2, hi: 1 }, SunabBins::Width(0)] {
-        let config = SunabConfig {
+        let config = SunabOptions {
             bins,
             ..config(case, &s)
         };
-        assert!(estimate_sunab(&panel(case, None), &config).is_err());
+        assert!(matches!(
+            sunab::fit(&panel(case, None), &config),
+            Err(epistat_did::Error::Bins)
+        ));
     }
 }
 
@@ -602,45 +598,45 @@ fn always_treated_rows_are_removed() {
     let reference = reference();
     let case = &reference.cases[0];
     let s = setting(case);
-    let base = estimate_sunab(&panel(case, None), &config(case, &s)).unwrap();
+    let base = sunab::fit(&panel(case, None), &config(case, &s)).unwrap();
     // Units 0 to 4 become always treated: first treated in period 1.
-    let first: Vec<Option<i32>> = case
+    let first: Vec<Option<i64>> = case
         .unit
         .iter()
         .zip(&case.first_treated)
         .map(|(&u, &g)| if u < 5 { Some(1) } else { g })
         .collect();
-    let changed = StaggeredPanel {
-        first_treated: &first,
-        ..panel(case, None)
-    };
-    let result = estimate_sunab(&changed, &config(case, &s)).unwrap();
+    let mut changed = StaggeredPanel::builder(&case.unit, &case.time, &first, &case.outcome);
+    if let Some(w) = &case.weights {
+        changed = changed.weights(w);
+    }
+    let changed = changed.build().unwrap();
+    let result = sunab::fit(&changed, &config(case, &s)).unwrap();
     let removed = case.unit.iter().filter(|&&u| u < 5).count();
     assert_eq!(result.excluded_rows, removed);
     assert!(result.cells.iter().all(|c| c.cohort != 1));
     assert!(result.n_rows < base.n_rows);
-    // Reversing the rows leaves the cells and their estimates.
+    // The rows come in the panel's order, so reversed rows are refused
+    // rather than classified again.
     let order: Vec<usize> = (0..case.unit.len()).rev().collect();
-    let pick = |v: &[f64]| order.iter().map(|&i| v[i]).collect::<Vec<f64>>();
     let unit: Vec<u32> = order.iter().map(|&i| case.unit[i]).collect();
-    let time: Vec<i32> = order.iter().map(|&i| case.time[i]).collect();
-    let first_rev: Vec<Option<i32>> = order.iter().map(|&i| first[i]).collect();
-    let outcome = pick(&case.outcome);
-    let weights = pick(case.weights.as_ref().unwrap());
-    let reversed = StaggeredPanel {
-        unit: &unit,
-        time: &time,
-        first_treated: &first_rev,
-        outcome: &outcome,
-        weights: Some(&weights),
-        covariates: None,
-    };
-    let again = estimate_sunab(&reversed, &config(case, &s)).unwrap();
-    assert_eq!(again.cells.len(), result.cells.len());
-    for (a, b) in again.cells.iter().zip(&result.cells) {
-        assert_eq!((a.cohort, a.relative_period), (b.cohort, b.relative_period));
-        assert!((a.estimate.unwrap() - b.estimate.unwrap()).abs() <= 1e-9);
-    }
+    let time: Vec<i64> = order.iter().map(|&i| case.time[i]).collect();
+    let first_rev: Vec<Option<i64>> = order.iter().map(|&i| first[i]).collect();
+    let outcome: Vec<f64> = order.iter().map(|&i| case.outcome[i]).collect();
+    let reversed = StaggeredPanel::builder(&unit, &time, &first_rev, &outcome).build();
+    assert!(matches!(
+        reversed,
+        Err(epistat_did::Error::Input(InputError::Unsorted { .. }))
+    ));
+}
+
+/// The values of an influence function, column after column.
+fn influence_values(
+    influence: Option<&epistat_inference::Influence>,
+) -> impl Iterator<Item = f64> + '_ {
+    influence
+        .into_iter()
+        .flat_map(|f| (0..f.n_columns()).flat_map(move |j| f.column(j).iter().copied()))
 }
 
 fn sunab_bits() -> Vec<f64> {
@@ -651,13 +647,18 @@ fn sunab_bits() -> Vec<f64> {
         let x = covariate(case);
         let mut c = config(case, &s);
         c.absorb = Absorb::new();
-        let result = estimate_sunab(&panel(case, x.as_ref()), &c).unwrap();
-        out.extend(result.cells.iter().filter_map(|t| t.estimate));
-        out.extend(result.estimates.iter().map(|e| e.estimate));
-        out.extend(result.estimates.iter().filter_map(|e| e.std_error));
-        out.extend(result.covariance.iter().flatten());
-        out.extend(result.estimate_influence.iter().flatten().take(40));
-        out.extend(result.influence.iter().flatten().flatten().take(40));
+        let result = sunab::fit(&panel(case, x.as_ref()), &c).unwrap();
+        out.extend(
+            result
+                .cells
+                .iter()
+                .filter_map(|t| t.estimate.map(|e| e.estimate)),
+        );
+        out.extend(result.aggregates.iter().map(|e| e.estimate.estimate));
+        out.extend(result.aggregates.iter().filter_map(|e| e.estimate.se));
+        out.extend(result.covariance.as_slice().iter().flatten());
+        out.extend(influence_values(result.aggregate_influence.as_ref()).take(40));
+        out.extend(influence_values(result.influence.as_ref()).take(40));
     }
     out
 }
@@ -674,4 +675,47 @@ fn sunab_has_its_recorded_bits() {
         .f64s(&sunab_bits())
         .finish();
     assert_eq!(hash, 12_002_447_259_631_101_414, "recorded hash");
+}
+
+#[test]
+fn the_event_study_holds_the_aggregates_by_relative_period() {
+    let reference = reference();
+    for case in &reference.cases {
+        let s = setting(case);
+        let x = covariate(case);
+        let fit = sunab::fit(&panel(case, x.as_ref()), &config(case, &s)).unwrap();
+        let Some(&before) = fit.references.iter().rev().find(|&&r| r < 0) else {
+            assert!(fit.event_study().is_err(), "{}", case.name);
+            continue;
+        };
+        let study = fit.event_study().unwrap();
+        assert_eq!(study.reference(), before, "{}", case.name);
+        let periods: Vec<(usize, i64)> = fit
+            .aggregates
+            .iter()
+            .enumerate()
+            .filter_map(|(a, g)| match g.term {
+                SunabTerm::Period(e) => Some((a, e)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            study.relative_periods(),
+            periods.iter().map(|p| p.1).collect::<Vec<_>>().as_slice(),
+            "{}",
+            case.name
+        );
+        for (k, &(a, _)) in periods.iter().enumerate() {
+            assert_eq!(
+                study.coefficients()[k].to_bits(),
+                fit.aggregates[a].estimate.estimate.to_bits()
+            );
+            for (l, &(b, _)) in periods.iter().enumerate() {
+                assert_eq!(
+                    study.covariance().get(k, l),
+                    fit.aggregate_covariance.get(a, b)
+                );
+            }
+        }
+    }
 }

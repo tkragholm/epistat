@@ -71,7 +71,8 @@
 //! - Days are `i64`, and `end + 1` in a conversion from closed ends that would
 //!   overflow is refused.
 
-use crate::RegisterError;
+use crate::Error;
+use crate::error::{csr, length, row_count};
 use crate::spans::MergedSpans;
 
 /// Per-key lists of disjoint half-open intervals `[start, end)` of days.
@@ -96,14 +97,10 @@ impl SpanSet {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when the columns differ in length, the offsets
+    /// [`Error::Input`] when the columns differ in length, the offsets
     /// are not a non-decreasing sequence from 0 to the number of intervals, or
     /// an interval is empty, inverted or overlaps the one before it.
-    pub fn new(
-        start: Vec<i64>,
-        end: Vec<i64>,
-        key_offsets: Vec<usize>,
-    ) -> Result<Self, RegisterError> {
+    pub fn new(start: Vec<i64>, end: Vec<i64>, key_offsets: Vec<usize>) -> Result<Self, Error> {
         let set = Self {
             start,
             end,
@@ -124,12 +121,12 @@ impl SpanSet {
         start: Vec<i64>,
         last_day: &[i64],
         key_offsets: Vec<usize>,
-    ) -> Result<Self, RegisterError> {
+    ) -> Result<Self, Error> {
         let end = last_day
             .iter()
             .map(|&day| closed_to_half_open(day))
             .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| RegisterError::input("a closed end of i64::MAX has no half-open end"))?;
+            .ok_or_else(|| Error::invalid("a closed end of i64::MAX has no half-open end"))?;
         Self::new(start, end, key_offsets)
     }
 
@@ -150,7 +147,7 @@ impl SpanSet {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when the columns differ in length, the offsets
+    /// [`Error::Input`] when the columns differ in length, the offsets
     /// are not a non-decreasing sequence from 0 to the number of intervals, the
     /// window columns do not have one entry per key, a window ends before it
     /// starts, an interval has a last day before its start, or the intervals of
@@ -161,12 +158,8 @@ impl SpanSet {
         key_offsets: &[usize],
         window_start: &[i64],
         window_end: &[i64],
-    ) -> Result<Self, RegisterError> {
-        if start.len() != last_day.len() {
-            return Err(RegisterError::input(
-                "start and last_day must have one entry per interval",
-            ));
-        }
+    ) -> Result<Self, Error> {
+        length("last_day", start.len(), last_day.len())?;
         check_offsets(key_offsets, start.len(), "closed intervals")?;
         let keys = key_offsets.len() - 1;
         check_window(window_start, window_end, keys)?;
@@ -177,7 +170,7 @@ impl SpanSet {
                 if let (Some(s), Some(d)) = (start[i], last_day[i])
                     && d < s
                 {
-                    return Err(RegisterError::input(format!(
+                    return Err(Error::invalid(format!(
                         "key {key} has a closed interval [{s}, {d}] that ends before it starts"
                     )));
                 }
@@ -202,7 +195,7 @@ impl SpanSet {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when the columns differ in length, the first
+    /// [`Error::Input`] when the columns differ in length, the first
     /// row does not begin a key, a span names a row out of range, or a last
     /// day is `i64::MAX`.
     pub fn from_merged_spans(
@@ -210,20 +203,13 @@ impl SpanSet {
         new_key: &[bool],
         start: &[i64],
         last_day: &[i64],
-    ) -> Result<Self, RegisterError> {
+    ) -> Result<Self, Error> {
         let n = new_key.len();
-        if start.len() != n || last_day.len() != n {
-            return Err(RegisterError::input(
-                "new_key, start and last_day must have one entry per row",
-            ));
-        }
-        if merged.first_row.len() != merged.last_row.len() {
-            return Err(RegisterError::input(
-                "the merged spans have first and last rows of different lengths",
-            ));
-        }
+        length("start", n, start.len())?;
+        length("last_day", n, last_day.len())?;
+        length("last_row", merged.first_row.len(), merged.last_row.len())?;
         if n > 0 && !new_key[0] {
-            return Err(RegisterError::input("the first row must begin a key"));
+            return Err(Error::invalid("the first row must begin a key"));
         }
         let mut key_of_row = Vec::with_capacity(n);
         let mut keys = 0_usize;
@@ -238,13 +224,13 @@ impl SpanSet {
         for (&first, &last) in merged.first_row.iter().zip(&merged.last_row) {
             let (first, last) = (first as usize, last as usize);
             if first >= n || last >= n {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "a merged span names row {} of {n}",
                     first.max(last)
                 )));
             }
             if key_of_row[first] < key || key_of_row[last] != key_of_row[first] {
-                return Err(RegisterError::input(
+                return Err(Error::invalid(
                     "the merged spans are not in key order, or a span crosses keys",
                 ));
             }
@@ -252,9 +238,8 @@ impl SpanSet {
                 out.close_key();
                 key += 1;
             }
-            let end = closed_to_half_open(last_day[last]).ok_or_else(|| {
-                RegisterError::input("a closed end of i64::MAX has no half-open end")
-            })?;
+            let end = closed_to_half_open(last_day[last])
+                .ok_or_else(|| Error::invalid("a closed end of i64::MAX has no half-open end"))?;
             out.out.start.push(start[first]);
             out.out.end.push(end);
         }
@@ -307,40 +292,20 @@ impl SpanSet {
         self.key_offsets[key]..self.key_offsets[key + 1]
     }
 
-    fn check(&self, what: &str) -> Result<(), RegisterError> {
-        if self.start.len() != self.end.len() {
-            return Err(RegisterError::input(format!(
-                "{what}: start and end differ in length"
-            )));
-        }
-        if self.key_offsets.first() != Some(&0)
-            || self.key_offsets.last() != Some(&self.start.len())
-        {
-            return Err(RegisterError::input(format!(
-                "{what}: key offsets must run from 0 to the number of intervals"
-            )));
-        }
-        if self.key_offsets.windows(2).any(|w| w[0] > w[1]) {
-            return Err(RegisterError::input(format!(
-                "{what}: key offsets must not decrease"
-            )));
-        }
-        if u32::try_from(self.n_keys()).is_err() {
-            return Err(RegisterError::input(format!(
-                "{what}: more keys than a u32 holds"
-            )));
-        }
+    fn check(&self, what: &'static str) -> Result<(), Error> {
+        length("end", self.start.len(), self.end.len())?;
+        check_offsets(&self.key_offsets, self.start.len(), what)?;
         for key in 0..self.n_keys() {
             let mut previous_end = i64::MIN;
             for row in self.range(key) {
                 let (s, e) = (self.start[row], self.end[row]);
                 if s >= e {
-                    return Err(RegisterError::input(format!(
+                    return Err(Error::invalid(format!(
                         "{what}: key {key} has an empty or inverted interval [{s}, {e})"
                     )));
                 }
                 if s < previous_end {
-                    return Err(RegisterError::input(format!(
+                    return Err(Error::invalid(format!(
                         "{what}: key {key} has intervals that are unsorted or overlap, at day {s}"
                     )));
                 }
@@ -384,16 +349,12 @@ pub struct IntervalCounts {
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when the columns differ in length.
+/// [`Error::Input`] when the columns differ in length.
 pub fn validate_intervals(
     start: &[Option<i64>],
     end: &[Option<i64>],
-) -> Result<IntervalCounts, RegisterError> {
-    if start.len() != end.len() {
-        return Err(RegisterError::input(
-            "start and end must have one entry per row",
-        ));
-    }
+) -> Result<IntervalCounts, Error> {
+    length("end", start.len(), end.len())?;
     let mut counts = IntervalCounts::default();
     for (s, e) in start.iter().zip(end) {
         match (s, e) {
@@ -435,26 +396,19 @@ impl Builder {
     }
 }
 
-fn same_keys(a: &SpanSet, b: &SpanSet) -> Result<(), RegisterError> {
+fn same_keys(a: &SpanSet, b: &SpanSet) -> Result<(), Error> {
     a.check("first span set")?;
     b.check("second span set")?;
-    if a.n_keys() != b.n_keys() {
-        return Err(RegisterError::input(format!(
-            "the span sets have {} and {} keys",
-            a.n_keys(),
-            b.n_keys()
-        )));
-    }
-    Ok(())
+    length("second span set keys", a.n_keys(), b.n_keys())
 }
 
 /// The days that are in both sets, key by key.
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when either set is malformed or the key counts
+/// [`Error::Input`] when either set is malformed or the key counts
 /// differ.
-pub fn intersect(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, RegisterError> {
+pub fn intersect(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, Error> {
     same_keys(a, b)?;
     let mut out = Builder::new(a.n_keys());
     for key in 0..a.n_keys() {
@@ -480,9 +434,9 @@ pub fn intersect(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, RegisterError> {
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when either set is malformed or the key counts
+/// [`Error::Input`] when either set is malformed or the key counts
 /// differ.
-pub fn subtract(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, RegisterError> {
+pub fn subtract(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, Error> {
     same_keys(a, b)?;
     let mut out = Builder::new(a.n_keys());
     for key in 0..a.n_keys() {
@@ -516,13 +470,13 @@ pub fn subtract(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, RegisterError> {
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when `a` is malformed, the window columns do not
+/// [`Error::Input`] when `a` is malformed, the window columns do not
 /// have one entry per key of `a`, or a window ends before it starts.
 pub fn complement_within(
     a: &SpanSet,
     window_start: &[i64],
     window_end: &[i64],
-) -> Result<SpanSet, RegisterError> {
+) -> Result<SpanSet, Error> {
     let window = window_set(window_start, window_end, a.n_keys())?;
     subtract(&window, a)
 }
@@ -531,47 +485,31 @@ pub fn complement_within(
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when `a` is malformed, `lo` and `hi` do not have
+/// [`Error::Input`] when `a` is malformed, `lo` and `hi` do not have
 /// one entry per key of `a`, or `hi < lo`.
-pub fn clip(a: &SpanSet, lo: &[i64], hi: &[i64]) -> Result<SpanSet, RegisterError> {
+pub fn clip(a: &SpanSet, lo: &[i64], hi: &[i64]) -> Result<SpanSet, Error> {
     let window = window_set(lo, hi, a.n_keys())?;
     intersect(a, &window)
 }
 
-fn check_window(lo: &[i64], hi: &[i64], keys: usize) -> Result<(), RegisterError> {
-    if lo.len() != keys || hi.len() != keys {
-        return Err(RegisterError::input(format!(
-            "the window needs one entry per key, {keys}; got {} and {}",
-            lo.len(),
-            hi.len()
-        )));
-    }
+fn check_window(lo: &[i64], hi: &[i64], keys: usize) -> Result<(), Error> {
+    length("window start", keys, lo.len())?;
+    length("window end", keys, hi.len())?;
     if let Some(key) = (0..keys).find(|&k| hi[k] < lo[k]) {
-        return Err(RegisterError::input(format!(
+        return Err(Error::invalid(format!(
             "key {key} has a window that ends before it starts"
         )));
     }
     Ok(())
 }
 
-fn check_offsets(offsets: &[usize], rows: usize, what: &str) -> Result<(), RegisterError> {
-    if offsets.first() != Some(&0)
-        || offsets.last() != Some(&rows)
-        || offsets.windows(2).any(|w| w[0] > w[1])
-    {
-        return Err(RegisterError::input(format!(
-            "{what}: key offsets must run from 0 to the number of intervals and not decrease"
-        )));
-    }
-    if u32::try_from(offsets.len() - 1).is_err() {
-        return Err(RegisterError::input(format!(
-            "{what}: more keys than a u32 holds"
-        )));
-    }
+fn check_offsets(offsets: &[usize], rows: usize, what: &'static str) -> Result<(), Error> {
+    csr(what, offsets, rows)?;
+    row_count(what, offsets.len() - 1)?;
     Ok(())
 }
 
-fn window_set(lo: &[i64], hi: &[i64], keys: usize) -> Result<SpanSet, RegisterError> {
+fn window_set(lo: &[i64], hi: &[i64], keys: usize) -> Result<SpanSet, Error> {
     check_window(lo, hi, keys)?;
     let mut out = Builder::new(keys);
     for (&s, &e) in lo.iter().zip(hi) {
@@ -625,22 +563,16 @@ impl SpanSet {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when the set is malformed or `origin` does not
+    /// [`Error::Input`] when the set is malformed or `origin` does not
     /// have one entry per key.
     #[expect(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
         reason = "day differences of register data are far below 2^53, and keys are checked against u32"
     )]
-    pub fn switches(&self, origin: &[i64]) -> Result<Switches, RegisterError> {
+    pub fn switches(&self, origin: &[i64]) -> Result<Switches, Error> {
         self.check("span set")?;
-        if origin.len() != self.n_keys() {
-            return Err(RegisterError::input(format!(
-                "origin needs one entry per key, {}; got {}",
-                self.n_keys(),
-                origin.len()
-            )));
-        }
+        length("origin", self.n_keys(), origin.len())?;
         let mut out = Switches::default();
         for (key, &o) in origin.iter().enumerate() {
             let range = self.range(key);
@@ -676,7 +608,7 @@ impl SpanSet {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when the set is malformed, a window or origin
+    /// [`Error::Input`] when the set is malformed, a window or origin
     /// column does not have one entry per key, or a window ends before it
     /// starts.
     #[expect(
@@ -689,15 +621,9 @@ impl SpanSet {
         window_start: &[i64],
         window_end: &[i64],
         origin: &[i64],
-    ) -> Result<FollowUpRows, RegisterError> {
+    ) -> Result<FollowUpRows, Error> {
         let inside = clip(self, window_start, window_end)?;
-        if origin.len() != self.n_keys() {
-            return Err(RegisterError::input(format!(
-                "origin needs one entry per key, {}; got {}",
-                self.n_keys(),
-                origin.len()
-            )));
-        }
+        length("origin", self.n_keys(), origin.len())?;
         let mut out = FollowUpRows::default();
         let time = |day: i64, o: i64| (i128::from(day) - i128::from(o)) as f64;
         for key in 0..self.n_keys() {

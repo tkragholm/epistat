@@ -1,5 +1,3 @@
-use itertools::izip;
-
 use crate::types::DidCell;
 use crate::util::usize_to_f64;
 
@@ -114,13 +112,17 @@ fn build_cell_moment_vectors(inputs: RepeatedMomentInputs<'_>) -> CellMomentVect
     let mut control_post_contributions = Vec::with_capacity(observation_count);
     let mut control_pre_contributions = Vec::with_capacity(observation_count);
 
-    for (treated_indicator, post_indicator, propensity_score, signal_value, normalized_weight) in izip!(
-        inputs.treated.iter(),
-        inputs.post_period.iter(),
-        inputs.propensity.iter(),
-        inputs.signal.iter(),
-        inputs.normalized_weights.iter()
-    ) {
+    for (
+        (((treated_indicator, post_indicator), propensity_score), signal_value),
+        normalized_weight,
+    ) in inputs
+        .treated
+        .iter()
+        .zip(inputs.post_period)
+        .zip(inputs.propensity)
+        .zip(inputs.signal)
+        .zip(inputs.normalized_weights)
+    {
         let control_indicator = 1.0 - treated_indicator;
         let pre_indicator = 1.0 - post_indicator;
         let control_weight_divisor = (1.0 - propensity_score).max(1e-12);

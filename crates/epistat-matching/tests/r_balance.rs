@@ -8,7 +8,7 @@
 //! report is computed on exactly those pairs, so the comparison does not depend
 //! on how pairs are selected.
 //!
-//! The pairs are given to `balance_report_with_options` as a `MatchOutcome`
+//! The pairs are given to `balance_report` as a `MatchOutcome`
 //! whose realised estimand is the one R used. The report derives the unit
 //! weights from it, and the weights are checked against R's. Fits with pairs
 //! are nearest-neighbour with replacement for the ATT and ATC, 1:2 without
@@ -36,7 +36,12 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::MatchWeightMethod;
 use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, BalanceReport, BalanceReportOptions, CovariateValue, Estimand, MatchDiagnostics,
+    NumericBalance, NumericBalanceTransform, SupplementalBalanceCovariates, balance_report,
+};
 use epistat_testkit::{Tolerance, load_json, na_f64, na_f64_vec};
 use r_reference::{Versions, assert_r_version};
 use serde::Deserialize;
@@ -181,10 +186,11 @@ fn outcome(pairs: &[(String, String)], estimand: Estimand) -> MatchOutcome {
         used_controls: 0,
         matched_cases: 0,
         avg_controls_per_case: None,
-        diagnostics: MatchDiagnostics {
-            requested_estimand: estimand,
-            realized_estimand: estimand,
-            ..MatchDiagnostics::default()
+        diagnostics: {
+            let mut diagnostics = MatchDiagnostics::default();
+            diagnostics.requested_estimand = estimand;
+            diagnostics.realized_estimand = estimand;
+            diagnostics
         },
     }
 }
@@ -397,7 +403,12 @@ fn balance_on_matchit_pairs_agrees_with_summary_matchit() {
         let sample = groups(&set.data, on, &[]);
         for fit in set.fits.iter().filter(|fit| !fit.pairs.is_empty()) {
             let outcome = outcome(&fit.pairs, estimand(&fit.estimand));
-            let report = balance_report(&sample.cases, &sample.controls, &outcome);
+            let report = balance_report(
+                &sample.cases,
+                &sample.controls,
+                &outcome,
+                &epistat_matching::BalanceReportOptions::default(),
+            );
             let label = format!("{set_name} {}", fit.name);
             compare_fit(
                 &label,
@@ -426,6 +437,7 @@ fn standardised_differences_before_matching_under_the_ate() {
             &sample.cases,
             &sample.controls,
             &outcome(&[], Estimand::Ate),
+            &epistat_matching::BalanceReportOptions::default(),
         );
         for row in &report.numeric {
             let r = &fit.standardised.all[&row.name];
@@ -489,13 +501,22 @@ fn unit_weights_and_sample_sizes_agree_with_matchit() {
                     };
                     (split(true), split(false))
                 } else {
-                    let weights = outcome(&fit.pairs, estimand(&fit.estimand))
-                        .match_weights_for_realized_estimand();
+                    let matched = outcome(&fit.pairs, estimand(&fit.estimand));
+                    let weights = matched.match_weights(MatchWeightMethod::for_estimand(
+                        matched.diagnostics.realized_estimand,
+                    ));
+                    let groups: [HashMap<String, f64>; 2] = [
+                        weights.cases().map(|(id, w)| (id.to_string(), w)).collect(),
+                        weights
+                            .controls()
+                            .map(|(id, w)| (id.to_string(), w))
+                            .collect(),
+                    ];
                     // MatchIt scales the weights of the matched controls (ATT) or
                     // treated units (ATC) so that they sum to the size of the other
                     // group. The scale is constant within a group and drops out of
                     // every statistic, so the weights are compared up to it.
-                    for group in [&weights.anchor, &weights.candidate] {
+                    for group in &groups {
                         let ours: f64 = group.values().sum();
                         let theirs: f64 = group.keys().map(|id| r_weight(id)).sum();
                         for (id, weight) in group {
@@ -507,15 +528,9 @@ fn unit_weights_and_sample_sizes_agree_with_matchit() {
                         }
                     }
                     let positive = fit.weights.iter().filter(|w| **w > 0.0).count();
-                    assert_eq!(
-                        weights.anchor.len() + weights.candidate.len(),
-                        positive,
-                        "{label}"
-                    );
-                    (
-                        weights.anchor.into_iter().collect(),
-                        weights.candidate.into_iter().collect(),
-                    )
+                    assert_eq!(groups[0].len() + groups[1].len(), positive, "{label}");
+                    let [cases, controls] = groups;
+                    (cases, controls)
                 };
             let n_treated = treat.iter().filter(|t| **t).count();
             let n_control = treat.len() - n_treated;
@@ -524,9 +539,11 @@ fn unit_weights_and_sample_sizes_agree_with_matchit() {
                 ("Control", &candidate, n_control),
             ] {
                 let expect = |row: &str| fit.standardised.nn.get(row).map(|cells| cells[group].0);
-                let ess = effective_sample_size(weights.values().copied())
-                    .unwrap()
-                    .unwrap();
+                let ess = epistat_stats::weighted::effective_sample_size(
+                    &weights.values().copied().collect::<Vec<_>>(),
+                )
+                .unwrap()
+                .unwrap();
                 let matched = weights.len();
                 assert!(
                     tolerance().accepts(matched as f64, expect("Matched").unwrap()),
@@ -570,10 +587,11 @@ fn squares_and_interactions_agree_with_matchit() {
             .iter()
             .find(|fit| fit.name == "att_replace")
             .unwrap();
-        let options = BalanceReportOptions::builder()
-            .numeric_transforms(NumericBalanceTransform::SquaresAndPairwiseInteractions)
-            .build();
-        let report = balance_report_with_options(
+        let options = BalanceReportOptions {
+            numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
+            ..BalanceReportOptions::default()
+        };
+        let report = balance_report(
             &sample.cases,
             &sample.controls,
             &outcome(&fit.pairs, estimand(&fit.estimand)),
@@ -653,10 +671,11 @@ fn supplemental_covariates_agree_with_addlvariables() {
     for (set_name, set, on, addl) in sets(&reference) {
         let sample = groups(&set.data, on, addl);
         for fit in set.fits.iter().filter(|fit| !fit.pairs.is_empty()) {
-            let options = BalanceReportOptions::builder()
-                .supplemental_covariates(sample.supplemental.clone())
-                .build();
-            let report = balance_report_with_options(
+            let options = BalanceReportOptions {
+                supplemental_covariates: sample.supplemental.clone(),
+                ..BalanceReportOptions::default()
+            };
+            let report = balance_report(
                 &sample.cases,
                 &sample.controls,
                 &outcome(&fit.pairs, estimand(&fit.estimand)),
@@ -698,6 +717,7 @@ fn covariates_without_variance_have_no_standardised_difference() {
         &sample.cases,
         &sample.controls,
         &outcome(&degenerate.pairs, Estimand::Att),
+        &epistat_matching::BalanceReportOptions::default(),
     );
     let row = |name: &str| report.numeric.iter().find(|row| row.name == name).unwrap();
     let r = |name: &str| &degenerate.standardised.all[name];

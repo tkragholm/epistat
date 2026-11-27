@@ -1,4 +1,4 @@
-//! Distances between an anchor and a candidate, and the tables they read.
+//! Distances between an case and a control, and the tables they read.
 //!
 //! A distance is a number for a pair, smaller for a closer match, or `None`
 //! for a pair that has none. [`DistanceMetric`] is the trait the matchers use.
@@ -33,7 +33,7 @@
 //! eigenvalue, since its form is not a distance.
 //!
 //! A [`PairDistanceMatrix`] holds distances that the caller computed, one for
-//! each anchor and candidate. An infinite entry forbids the pair.
+//! each case and control. An infinite entry forbids the pair.
 //!
 //! Every sum runs in a fixed order and without fused multiply-add, so a
 //! distance has the same bits on any CPU and any number of threads.
@@ -54,6 +54,7 @@
 //!    forward. Statistical Science 2010;25:1-21.
 
 use super::records::MatchingRecord;
+use crate::Error;
 use crate::types::DistanceCaliper;
 use epistat_linalg::{Attempt, Factor, Mat, Method};
 use ordered_float::OrderedFloat;
@@ -62,7 +63,7 @@ use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 
-/// Distance metric used to compare an anchor and a candidate.
+/// Distance metric used to compare an case and a control.
 ///
 /// Returning `None` indicates the pair is ineligible for this metric.
 pub trait DistanceMetric<R: MatchingRecord> {
@@ -72,7 +73,7 @@ pub trait DistanceMetric<R: MatchingRecord> {
     /// Compute pair distance. Smaller values indicate closer matches.
     fn distance(&self, anchor: &R, candidate: &R) -> Option<f64>;
 
-    /// Optional candidate pre-filtering by caliper using an internal index.
+    /// Optional control pre-filtering by caliper using an internal index.
     /// Returns `None` if this metric does not support indexed queries.
     #[must_use]
     fn candidate_indices(&self, _anchor: &R, _caliper: f64) -> Option<Vec<usize>> {
@@ -99,7 +100,7 @@ impl<R: MatchingRecord, D: DistanceMetric<R>> Clone for DistanceChannel<'_, R, D
 /// One score for each unit, held by the unit's position.
 ///
 /// The units are listed once, in the order the scores were made in: for a
-/// propensity score, the anchors and then the candidates. A matcher that is
+/// propensity score, the cases and then the controls. A matcher that is
 /// given the same units in the same order reads the scores by position and
 /// never looks an id up. A matcher given other units, or the same ones in
 /// another order, finds each id once. Ids and scores are shared between
@@ -260,19 +261,15 @@ impl VectorTable {
     ///
     /// # Errors
     ///
-    /// [`MahalanobisError::ZeroDimension`] when `dimension` is zero, and
-    /// [`MahalanobisError::InvalidVectorLength`] when `values` does not hold
+    /// [`Error::ZeroDimension`] when `dimension` is zero, and
+    /// [`Error::VectorLength`] when `values` does not hold
     /// `dimension` values for each id.
-    pub fn new(
-        ids: Arc<[String]>,
-        dimension: usize,
-        values: Arc<[f64]>,
-    ) -> Result<Self, MahalanobisError> {
+    pub fn new(ids: Arc<[String]>, dimension: usize, values: Arc<[f64]>) -> Result<Self, Error> {
         if dimension == 0 {
-            return Err(MahalanobisError::ZeroDimension);
+            return Err(Error::ZeroDimension);
         }
         if values.len() != ids.len().saturating_mul(dimension) {
-            return Err(MahalanobisError::InvalidVectorLength);
+            return Err(Error::VectorLength);
         }
         Ok(Self {
             ids,
@@ -421,7 +418,7 @@ pub enum DistanceConfig {
         /// The reason recorded when the caliper refuses a pair.
         reason: &'static str,
     },
-    /// Distances between every anchor and every candidate, given by the
+    /// Distances between every case and every control, given by the
     /// caller.
     Matrix {
         /// The distances.
@@ -470,7 +467,7 @@ impl DistanceConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`MahalanobisError`] when `dimension` is zero, the matrix shape
+    /// Returns [`Error`] when `dimension` is zero, the matrix shape
     /// is invalid or the matrix is not positive semi-definite.
     #[expect(clippy::needless_pass_by_value, reason = "the signature is public")]
     pub fn mahalanobis_map(
@@ -478,9 +475,9 @@ impl DistanceConfig {
         inverse_covariance: Vec<f64>,
         dimension: usize,
         caliper: Option<DistanceCaliper>,
-    ) -> Result<Self, MahalanobisError> {
+    ) -> Result<Self, Error> {
         if dimension == 0 {
-            return Err(MahalanobisError::ZeroDimension);
+            return Err(Error::ZeroDimension);
         }
         Self::mahalanobis_table(
             VectorTable::from_map(&vectors, dimension),
@@ -494,19 +491,19 @@ impl DistanceConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`MahalanobisError`] when the matrix is not `dimension` squared
+    /// Returns [`Error`] when the matrix is not `dimension` squared
     /// long for the dimension of the vectors or is not positive semi-definite.
     pub fn mahalanobis_table(
         vectors: VectorTable,
         inverse_covariance: Vec<f64>,
         caliper: Option<DistanceCaliper>,
-    ) -> Result<Self, MahalanobisError> {
+    ) -> Result<Self, Error> {
         let dimension = vectors.dimension();
         if dimension == 0 {
-            return Err(MahalanobisError::ZeroDimension);
+            return Err(Error::ZeroDimension);
         }
         if inverse_covariance.len() != dimension.saturating_mul(dimension) {
-            return Err(MahalanobisError::InvalidInverseCovarianceLength);
+            return Err(Error::InverseCovarianceLength);
         }
         check_positive_semi_definite(&inverse_covariance, dimension)?;
 
@@ -523,15 +520,15 @@ impl DistanceConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`MahalanobisError::ZeroDimension`] when `dimension` is zero.
+    /// Returns [`Error::ZeroDimension`] when `dimension` is zero.
     #[expect(clippy::needless_pass_by_value, reason = "the signature is public")]
     pub fn euclidean_map(
         vectors: RapidHashMap<String, Vec<f64>>,
         dimension: usize,
         caliper: Option<DistanceCaliper>,
-    ) -> Result<Self, MahalanobisError> {
+    ) -> Result<Self, Error> {
         if dimension == 0 {
-            return Err(MahalanobisError::ZeroDimension);
+            return Err(Error::ZeroDimension);
         }
         Self::euclidean_table(VectorTable::from_map(&vectors, dimension), caliper)
     }
@@ -541,14 +538,14 @@ impl DistanceConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`MahalanobisError::ZeroDimension`] when the vectors have no
+    /// Returns [`Error::ZeroDimension`] when the vectors have no
     /// values.
     pub fn euclidean_table(
         vectors: VectorTable,
         caliper: Option<DistanceCaliper>,
-    ) -> Result<Self, MahalanobisError> {
+    ) -> Result<Self, Error> {
         if vectors.dimension() == 0 {
-            return Err(MahalanobisError::ZeroDimension);
+            return Err(Error::ZeroDimension);
         }
         Ok(Self::EuclideanMap {
             vectors,
@@ -557,7 +554,7 @@ impl DistanceConfig {
         })
     }
 
-    /// A distance given as a table of anchor-by-candidate values, as a matrix
+    /// A distance given as a table of case-by-control values, as a matrix
     /// given as `distance` to `matchit()`.
     #[must_use]
     pub const fn matrix(matrix: PairDistanceMatrix, caliper: Option<DistanceCaliper>) -> Self {
@@ -593,7 +590,7 @@ impl DistanceConfig {
         }
     }
 
-    /// The distance of the anchor in row `anchor` and the candidate in column
+    /// The distance of the case in row `anchor` and the control in column
     /// `candidate` of a matrix configuration, in the order of the matrix.
     ///
     /// `None` when this is not a matrix configuration, when a position is out
@@ -787,166 +784,110 @@ impl<R: MatchingRecord> DistanceMetric<R> for ConfiguredMetric<'_> {
     }
 }
 
-/// Why a table of pair distances is refused.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PairDistanceMatrixError {
-    /// There are no anchors or no candidates.
-    Empty,
-    /// The number of values is not the number of anchors times candidates.
-    Shape {
-        /// Anchors times candidates.
-        expected: usize,
-        /// Values given.
-        found: usize,
-    },
-    /// An id appears twice among the anchors or among the candidates.
-    DuplicateId(String),
-    /// A value is not a number. An infinite value is allowed and forbids the
-    /// pair.
-    NotANumber {
-        /// Row of the value.
-        anchor: usize,
-        /// Column of the value.
-        candidate: usize,
-    },
-    /// A value is negative. Optimal and fine-balance matching need distances of
-    /// at least 0.
-    Negative {
-        /// Row of the value.
-        anchor: usize,
-        /// Column of the value.
-        candidate: usize,
-    },
-}
-
-impl std::fmt::Display for PairDistanceMatrixError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Empty => f.write_str("the distance matrix has no anchors or no candidates"),
-            Self::Shape { expected, found } => write!(
-                f,
-                "the distance matrix needs {expected} values, one for each anchor and \
-                 candidate, and has {found}"
-            ),
-            Self::DuplicateId(id) => write!(f, "the id {id} appears twice in the distance matrix"),
-            Self::NotANumber { anchor, candidate } => write!(
-                f,
-                "the distance matrix has no number at row {anchor}, column {candidate}; \
-                 use an infinite value to forbid a pair"
-            ),
-            Self::Negative { anchor, candidate } => write!(
-                f,
-                "the distance matrix has a negative distance at row {anchor}, column {candidate}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for PairDistanceMatrixError {}
-
-/// Distances between every anchor and every candidate, as the matrix a caller
+/// Distances between every case and every control, as the matrix a caller
 /// gives as `distance` to `matchit()`.
 ///
-/// Rows are anchors and columns are candidates, named by their ids. An
-/// infinite value forbids the pair, as in `matchit()`. A pair whose anchor or
-/// candidate is not in the table has no distance and is never matched.
+/// Rows are cases and columns are controls, named by their ids. An
+/// infinite value forbids the pair, as in `matchit()`. A pair whose case or
+/// control is not in the table has no distance and is never matched.
 #[derive(Debug, Clone)]
 pub struct PairDistanceMatrix {
-    anchor_ids: Vec<String>,
-    candidate_ids: Vec<String>,
+    case_ids: Vec<String>,
+    control_ids: Vec<String>,
     values: Vec<f64>,
-    anchor_position: RapidHashMap<String, usize>,
-    candidate_position: RapidHashMap<String, usize>,
+    case_position: RapidHashMap<String, usize>,
+    control_position: RapidHashMap<String, usize>,
 }
 
 impl PairDistanceMatrix {
-    /// Build the table from row-major values, one row per anchor.
+    /// Build the table from row-major values, one row per case.
     ///
     /// # Errors
     ///
-    /// [`PairDistanceMatrixError`] when a group is empty, the values do not
+    /// [`Error`] when a group is empty, the values do not
     /// fill the table, an id repeats, a value is not a number, or a value is negative.
     pub fn new(
-        anchor_ids: Vec<String>,
-        candidate_ids: Vec<String>,
+        case_ids: Vec<String>,
+        control_ids: Vec<String>,
         values: Vec<f64>,
-    ) -> Result<Self, PairDistanceMatrixError> {
-        if anchor_ids.is_empty() || candidate_ids.is_empty() {
-            return Err(PairDistanceMatrixError::Empty);
+    ) -> Result<Self, Error> {
+        if case_ids.is_empty() || control_ids.is_empty() {
+            return Err(Error::empty("distance matrix ids"));
         }
-        let expected = anchor_ids.len().saturating_mul(candidate_ids.len());
+        let expected = case_ids.len().saturating_mul(control_ids.len());
         if values.len() != expected {
-            return Err(PairDistanceMatrixError::Shape {
+            return Err(Error::length(
+                "distance matrix values",
                 expected,
-                found: values.len(),
-            });
+                values.len(),
+            ));
         }
         if let Some(at) = values.iter().position(|value| value.is_nan()) {
-            return Err(PairDistanceMatrixError::NotANumber {
-                anchor: at / candidate_ids.len(),
-                candidate: at % candidate_ids.len(),
+            return Err(Error::DistanceNotANumber {
+                case: at / control_ids.len(),
+                control: at % control_ids.len(),
             });
         }
         if let Some(at) = values.iter().position(|value| *value < 0.0) {
-            return Err(PairDistanceMatrixError::Negative {
-                anchor: at / candidate_ids.len(),
-                candidate: at % candidate_ids.len(),
+            return Err(Error::NegativeDistance {
+                case: at / control_ids.len(),
+                control: at % control_ids.len(),
             });
         }
         let positions = |ids: &[String]| -> Result<RapidHashMap<String, usize>, _> {
             let mut map = RapidHashMap::default();
             for (position, id) in ids.iter().enumerate() {
                 if map.insert(id.clone(), position).is_some() {
-                    return Err(PairDistanceMatrixError::DuplicateId(id.clone()));
+                    return Err(Error::DuplicateId { id: id.clone() });
                 }
             }
             Ok(map)
         };
         Ok(Self {
-            anchor_position: positions(&anchor_ids)?,
-            candidate_position: positions(&candidate_ids)?,
-            anchor_ids,
-            candidate_ids,
+            case_position: positions(&case_ids)?,
+            control_position: positions(&control_ids)?,
+            case_ids,
+            control_ids,
             values,
         })
     }
 
     /// Ids of the rows.
     #[must_use]
-    pub fn anchor_ids(&self) -> &[String] {
-        &self.anchor_ids
+    pub fn case_ids(&self) -> &[String] {
+        &self.case_ids
     }
 
     /// Ids of the columns.
     #[must_use]
-    pub fn candidate_ids(&self) -> &[String] {
-        &self.candidate_ids
+    pub fn control_ids(&self) -> &[String] {
+        &self.control_ids
     }
 
-    /// Row of an anchor.
+    /// Row of an case.
     #[must_use]
-    pub fn anchor_position(&self, id: &str) -> Option<usize> {
-        self.anchor_position.get(id).copied()
+    pub fn case_position(&self, id: &str) -> Option<usize> {
+        self.case_position.get(id).copied()
     }
 
-    /// Column of a candidate.
+    /// Column of a control.
     #[must_use]
-    pub fn candidate_position(&self, id: &str) -> Option<usize> {
-        self.candidate_position.get(id).copied()
+    pub fn control_position(&self, id: &str) -> Option<usize> {
+        self.control_position.get(id).copied()
     }
 
     /// The value at a row and column, or `None` outside the table or where the
     /// pair is forbidden by an infinite value.
     #[must_use]
     pub fn at(&self, anchor: usize, candidate: usize) -> Option<f64> {
-        if anchor >= self.anchor_ids.len() || candidate >= self.candidate_ids.len() {
+        if anchor >= self.case_ids.len() || candidate >= self.control_ids.len() {
             return None;
         }
-        let value = self.values[anchor * self.candidate_ids.len() + candidate];
+        let value = self.values[anchor * self.control_ids.len() + candidate];
         value.is_finite().then_some(value)
     }
 
-    /// The row of each anchor and the column of each candidate of a job, by
+    /// The row of each case and the column of each control of a job, by
     /// id. A unit not in the table has no position.
     #[must_use]
     pub fn positions_of<R: MatchingRecord>(
@@ -957,11 +898,11 @@ impl PairDistanceMatrix {
         (
             anchors
                 .iter()
-                .map(|record| self.anchor_position(record.id()))
+                .map(|record| self.case_position(record.id()))
                 .collect(),
             candidates
                 .iter()
-                .map(|record| self.candidate_position(record.id()))
+                .map(|record| self.control_position(record.id()))
                 .collect(),
         )
     }
@@ -989,8 +930,8 @@ impl<R: MatchingRecord> DistanceMetric<R> for MatrixDistance<'_> {
 
     fn distance(&self, anchor: &R, candidate: &R) -> Option<f64> {
         self.matrix.at(
-            self.matrix.anchor_position(anchor.id())?,
-            self.matrix.candidate_position(candidate.id())?,
+            self.matrix.case_position(anchor.id())?,
+            self.matrix.control_position(candidate.id())?,
         )
     }
 }
@@ -1202,9 +1143,9 @@ impl QuadraticForm {
 /// eigenvalue below minus `dimension * eps` times the largest in absolute value,
 /// the size of the error of the eigenvalue computation, and every value is
 /// finite.
-fn check_positive_semi_definite(matrix: &[f64], dimension: usize) -> Result<(), MahalanobisError> {
+fn check_positive_semi_definite(matrix: &[f64], dimension: usize) -> Result<(), Error> {
     if matrix.iter().any(|value| !value.is_finite()) {
-        return Err(MahalanobisError::NotPositiveSemiDefinite);
+        return Err(Error::NotPositiveSemiDefinite);
     }
     let symmetric: Vec<f64> = (0..dimension * dimension)
         .map(|index| {
@@ -1218,7 +1159,7 @@ fn check_positive_semi_definite(matrix: &[f64], dimension: usize) -> Result<(), 
         .fold(0.0_f64, |acc, value| acc.max(value.abs()));
     let floor = -(dimension as f64) * f64::EPSILON * largest;
     if values.iter().any(|value| *value < floor) {
-        return Err(MahalanobisError::NotPositiveSemiDefinite);
+        return Err(Error::NotPositiveSemiDefinite);
     }
     Ok(())
 }
@@ -1458,22 +1399,6 @@ where
     }
 }
 
-/// Errors constructing [`MahalanobisDistance`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MahalanobisError {
-    /// The vectors have no dimension.
-    ZeroDimension,
-    /// The inverse covariance matrix does not have one value per pair of dimensions.
-    InvalidInverseCovarianceLength,
-    /// The values of a vector table are not a whole number of vectors.
-    InvalidVectorLength,
-    /// The inverse covariance matrix has a negative eigenvalue or a value that
-    /// is not finite, so its quadratic form is not a distance. A generalised
-    /// inverse of a singular covariance matrix is positive semi-definite and
-    /// is accepted.
-    NotPositiveSemiDefinite,
-}
-
 /// Mahalanobis distance using a precomputed inverse covariance matrix.
 ///
 /// The inverse covariance matrix is supplied in row-major format.
@@ -1488,24 +1413,20 @@ impl<F> MahalanobisDistance<F> {
     ///
     /// # Errors
     ///
-    /// Returns [`MahalanobisError`] when `dimension` is zero, the matrix length
+    /// Returns [`Error`] when `dimension` is zero, the matrix length
     /// does not equal `dimension * dimension` or the matrix is not positive
     /// semi-definite.
     #[expect(clippy::needless_pass_by_value, reason = "the signature is public")]
-    pub fn new(
-        accessor: F,
-        inverse_covariance: Vec<f64>,
-        dimension: usize,
-    ) -> Result<Self, MahalanobisError> {
+    pub fn new(accessor: F, inverse_covariance: Vec<f64>, dimension: usize) -> Result<Self, Error> {
         if dimension == 0 {
-            return Err(MahalanobisError::ZeroDimension);
+            return Err(Error::ZeroDimension);
         }
         if inverse_covariance.len() != dimension.saturating_mul(dimension) {
-            return Err(MahalanobisError::InvalidInverseCovarianceLength);
+            return Err(Error::InverseCovarianceLength);
         }
         check_positive_semi_definite(&inverse_covariance, dimension)?;
         let form = QuadraticForm::new(&inverse_covariance, dimension)
-            .ok_or(MahalanobisError::InvalidInverseCovarianceLength)?;
+            .ok_or(Error::InverseCovarianceLength)?;
 
         Ok(Self { accessor, form })
     }
@@ -1633,10 +1554,7 @@ mod tests {
     fn mahalanobis_distance_rejects_invalid_matrix_length() {
         let result =
             MahalanobisDistance::new(|_row: &DemoRecord| None::<Vec<f64>>, vec![1.0, 0.0, 0.0], 2);
-        assert!(matches!(
-            result,
-            Err(MahalanobisError::InvalidInverseCovarianceLength)
-        ));
+        assert!(matches!(result, Err(Error::InverseCovarianceLength)));
     }
 
     #[test]
@@ -1663,10 +1581,7 @@ mod tests {
             invalid_inverse,
             2,
         );
-        assert!(matches!(
-            result,
-            Err(MahalanobisError::NotPositiveSemiDefinite)
-        ));
+        assert!(matches!(result, Err(Error::NotPositiveSemiDefinite)));
     }
 
     /// The per-pair form: two faer matrix products per distance.
@@ -1753,7 +1668,7 @@ mod tests {
         }
     }
 
-    /// The nearest candidate of every anchor is the same under the matrix
+    /// The nearest control of every case is the same under the matrix
     /// form and the whitened form of the distance, on data with many exact ties
     /// (integer covariates, repeated rows). Exact duplicates have identical transformed vectors, so their
     /// distances are equal in both forms and a first-index tie-break agrees.
@@ -1812,11 +1727,11 @@ mod tests {
         let inverse = vec![1.0, 2.0, 2.0, 1.0];
         assert!(matches!(
             MahalanobisDistance::new(|_row: &BaseRecord| None::<Vec<f64>>, inverse.clone(), 2),
-            Err(MahalanobisError::NotPositiveSemiDefinite)
+            Err(Error::NotPositiveSemiDefinite)
         ));
         assert!(matches!(
             DistanceConfig::mahalanobis_map(RapidHashMap::default(), inverse, 2, None),
-            Err(MahalanobisError::NotPositiveSemiDefinite)
+            Err(Error::NotPositiveSemiDefinite)
         ));
         // A singular positive semi-definite matrix is a distance.
         assert!(
@@ -1904,11 +1819,11 @@ mod tests {
         assert_eq!(table.to_map(), expected);
         assert_eq!(
             VectorTable::new(table.ids().into(), 3, table.values().into()).unwrap_err(),
-            MahalanobisError::InvalidVectorLength
+            Error::VectorLength
         );
         assert_eq!(
             VectorTable::new(table.ids().into(), 0, Vec::new().into()).unwrap_err(),
-            MahalanobisError::ZeroDimension
+            Error::ZeroDimension
         );
         let euclidean = IdMapEuclideanDistance::new(&table);
         let a = BaseRecord::new("a", date(2010, 1, 1));

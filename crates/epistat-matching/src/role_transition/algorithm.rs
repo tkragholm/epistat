@@ -21,7 +21,7 @@
 //! cohort for each case. Both give the same matches.
 //!
 //! With common support set, a case whose score is strictly outside the range
-//! of the scores at risk on its date is not matched, and a candidate whose
+//! of the scores at risk on its date is not matched, and a control whose
 //! score is outside the range of the cases' scores is not used.
 //!
 //! The age of a person on a date is the civil age in whole years, from
@@ -61,7 +61,7 @@ use std::collections::{BTreeSet, HashSet};
 ///
 /// This allows downstream orchestrators to inject study-specific entry/exit logic
 /// (e.g. alive/resident checks) while keeping matching mechanics generic.
-/// Candidate lists are scanned on several threads, so a policy is `Sync`.
+/// Control lists are scanned on several threads, so a policy is `Sync`.
 pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
     /// Whether a record should be treated as an eligible case.
     ///
@@ -70,9 +70,9 @@ pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
         is_case_before_age_limit(row, age_limit_years)
     }
 
-    /// Whether a record is at risk (eligible as a candidate) at the case event date.
+    /// Whether a record is at risk (eligible as a control) at the case event date.
     ///
-    /// Default behavior allows candidates that have entered on or before the
+    /// Default behavior allows controls that have entered on or before the
     /// case event date (a record without an entry date has always been at risk)
     /// and that have no event date or an event date strictly after the case
     /// event date.
@@ -84,7 +84,7 @@ pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
     /// reads only the entry and event dates of the control. Common-support
     /// trimming then finds the scores at risk on each case date in one sweep,
     /// and so does the matching where the job allows it (see
-    /// [`match_transition`]).
+    /// risk-set matching).
     ///
     /// [`DefaultAtRiskRule`] can only be made inside this crate, so only
     /// [`DefaultRiskSetPolicy`] answers `Some` and a policy of your own cannot
@@ -104,7 +104,7 @@ pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
     /// `is_control_at_risk(case, control, date)` is
     /// `control_at_risk_span(control).contains(date)` for every case. Matching
     /// then keeps the risk sets by a sweep over the case dates, as it does
-    /// under the default rule (see [`match_transition`]), and gives the pairs
+    /// under the default rule (see risk-set matching), and gives the pairs
     /// and diagnostics of the scan. A policy that answers `None` for any
     /// record is scanned.
     fn control_at_risk_span(&self, _control: &R) -> Option<AtRiskSpan> {
@@ -182,7 +182,7 @@ impl<R: RoleIndexedRecord> RiskSetPolicy<R> for DefaultRiskSetPolicy {
 
 /// Unified request for role-transition matching.
 #[derive(Clone, Copy)]
-pub struct TransitionMatchRequest<'a, S, G: ?Sized, P> {
+pub(crate) struct TransitionMatchRequest<'a, S, G: ?Sized, P> {
     /// The criteria of the job.
     pub criteria: &'a MatchingCriteria,
     /// The options that define a transition.
@@ -197,53 +197,13 @@ pub struct TransitionMatchRequest<'a, S, G: ?Sized, P> {
     pub risk_set_policy: &'a P,
 }
 
-impl<'a, S, G: ?Sized> TransitionMatchRequest<'a, S, G, DefaultRiskSetPolicy> {
-    /// A request that uses the default risk-set policy and no distance configuration.
-    #[must_use]
-    pub const fn new(
-        criteria: &'a MatchingCriteria,
-        options: &'a RoleTransitionOptions,
-        strategy: S,
-        constraints: &'a G,
-    ) -> Self {
-        Self {
-            criteria,
-            options,
-            strategy,
-            constraints,
-            distance_config: None,
-            risk_set_policy: &DefaultRiskSetPolicy,
-        }
-    }
-}
-
-impl<'a, S, G: ?Sized, P> TransitionMatchRequest<'a, S, G, P> {
-    crate::impl_with_distance_config!();
-
-    /// The same request with another risk-set policy.
-    #[must_use]
-    pub fn with_risk_set_policy<P2>(
-        self,
-        risk_set_policy: &'a P2,
-    ) -> TransitionMatchRequest<'a, S, G, P2> {
-        TransitionMatchRequest {
-            criteria: self.criteria,
-            options: self.options,
-            strategy: self.strategy,
-            constraints: self.constraints,
-            distance_config: self.distance_config,
-            risk_set_policy,
-        }
-    }
-}
-
-/// Risk-set matching with role transitions using neutral terminology.
+/// Risk-set matching with role transitions.
 ///
 /// With `common_support` set in the criteria the scores of the distance
 /// configuration decide the trimming: a case whose score is strictly outside
 /// the range of the scores of the records at risk on its event date (by the
 /// risk-set rule and the alive and resident checks) is not matched, and a
-/// candidate whose score is outside the range of the cases' scores is not
+/// control whose score is outside the range of the cases' scores is not
 /// used. See [`CommonSupport`].
 ///
 /// Cases are matched in order of event date. The risk sets are kept by a
@@ -256,24 +216,12 @@ impl<'a, S, G: ?Sized, P> TransitionMatchRequest<'a, S, G, P> {
 /// ([`MatchJob::with_resident_spells`](crate::MatchJob::with_resident_spells))
 /// or a caliper on a numeric field. Without a caliper the sweep takes time
 /// close to linear in the cohort; a caliper is tested on the controls of each
-/// case's window. Any other job scans the candidates of each case's stratum
-/// and birth window, in time proportional to the cases times the candidates
+/// case's window. Any other job scans the controls of each case's stratum
+/// and birth window, in time proportional to the cases times the controls
 /// per case. Both give the same pairs and diagnostics.
-#[must_use]
-pub fn match_transition<
-    R: RoleIndexedRecord,
-    S: SelectionStrategy<R> + Clone + Send + Sync,
-    G: ConstraintGroup<R> + ?Sized,
-    P: RiskSetPolicy<R>,
->(
-    cohort: &[R],
-    request: TransitionMatchRequest<'_, S, G, P>,
-) -> MatchOutcome {
-    match_transition_ordered(cohort, request, None)
-}
-
-/// [`match_transition`] with the order of the cohort's ids, when the caller
-/// has it. An order of another length is not used.
+///
+/// With `order`, the order of the cohort's ids when the caller has it, the
+/// ids are not sorted again. An order of another length is not used.
 pub(crate) fn match_transition_ordered<
     R: RoleIndexedRecord,
     S: SelectionStrategy<R> + Clone + Send + Sync,
@@ -511,7 +459,7 @@ fn at_risk_score_ranges<
 
 /// Common-support trimming of a risk-set match.
 ///
-/// A candidate is trimmed under `Control` or `Both` when its score is outside
+/// A control is trimmed under `Control` or `Both` when its score is outside
 /// the range of the scores of all cases. A case is trimmed under `Treated` or
 /// `Both` when its score is strictly outside the range of the scores of the
 /// records at risk on its event date. At risk means the risk-set rule and, as
@@ -519,7 +467,7 @@ fn at_risk_score_ranges<
 /// Strata, the birth window and every other matching constraint are not read.
 /// A score equal to an end of the range is kept. A case with nobody at risk is
 /// not trimmed, since it has no range to be outside of, and is counted among
-/// the cases without candidates. A record without a finite score lies outside
+/// the cases without controls. A record without a finite score lies outside
 /// every range.
 fn transition_common_support_filters<
     R: RoleIndexedRecord,
@@ -622,19 +570,19 @@ fn transition_initial_diagnostics<R: RoleIndexedRecord>(
     filters: &TransitionCommonSupportFilters,
 ) -> MatchDiagnostics {
     MatchDiagnostics {
-        total_anchors_evaluated: case_count,
+        total_cases_evaluated: case_count,
         requested_estimand: criteria.estimand,
         realized_estimand: criteria.estimand,
-        common_support_trimmed_anchors: filters.trimmed_case_indices.len(),
-        common_support_trimmed_candidates: filters.trimmed_candidate_indices.len(),
+        common_support_trimmed_cases: filters.trimmed_case_indices.len(),
+        common_support_trimmed_controls: filters.trimmed_candidate_indices.len(),
         common_support_trimmed_ids: crate::TrimmedUnits {
-            anchors: trimmed_row_ids(cohort, &filters.trimmed_case_indices),
-            candidates: trimmed_row_ids(cohort, &filters.trimmed_candidate_indices),
+            cases: trimmed_row_ids(cohort, &filters.trimmed_case_indices),
+            controls: trimmed_row_ids(cohort, &filters.trimmed_candidate_indices),
         },
         common_support_overlap: filters.overlap,
         common_support_policy: filters.policy.or(criteria.common_support),
-        common_support_anchor_score_bounds: filters.case_score_bounds,
-        common_support_candidate_score_bounds: filters.candidate_score_bounds,
+        common_support_case_score_bounds: filters.case_score_bounds,
+        common_support_control_score_bounds: filters.candidate_score_bounds,
         ..MatchDiagnostics::default()
     }
 }
@@ -653,7 +601,7 @@ fn match_with_role_indexing_with_channel_internal<
     let validated = match config.criteria.validate() {
         Ok(validated) => validated,
         Err(err) => {
-            return refused_outcome(cohort.len(), InvalidCriteriaReason::from(err));
+            return refused_outcome(cohort.len(), InvalidCriteriaReason::of(&err));
         }
     };
 
@@ -725,7 +673,7 @@ fn match_with_role_indexing_with_channel_internal<
         &mut run_state,
     );
 
-    run_state.diagnostics.matched_anchors = run_state.matched_cases;
+    run_state.diagnostics.matched_cases = run_state.matched_cases;
     run_state.diagnostics.pairs_selected = run_state.pairs.len();
     finalize_estimand_diagnostics(
         &mut run_state.diagnostics,
@@ -842,19 +790,19 @@ fn run_transition_case_loop<
         );
 
         if candidates.is_empty() {
-            state.diagnostics.anchors_with_no_candidates += 1;
+            state.diagnostics.cases_with_no_controls += 1;
             continue;
         }
 
         let Some(target_ratio) = loop_config.ratio_policy.target_ratio(candidates.len()) else {
-            state.diagnostics.anchors_below_required_ratio += 1;
+            state.diagnostics.cases_below_required_ratio += 1;
             continue;
         };
         if loop_config.ratio_policy.is_shortfall(candidates.len()) {
-            state.diagnostics.anchors_below_required_ratio += 1;
+            state.diagnostics.cases_below_required_ratio += 1;
         }
         if loop_config.ratio_policy.is_lower_tier(candidates.len()) {
-            state.diagnostics.anchors_on_lower_tier += 1;
+            state.diagnostics.cases_on_lower_tier += 1;
         }
 
         let mut local_matches = 0usize;
@@ -889,7 +837,7 @@ fn run_transition_case_loop<
 }
 
 /// The sweep of [`super::sweep`], when it gives what the scan of every
-/// candidate gives: an at-risk rule given as a span of each control (the
+/// control gives: an at-risk rule given as a span of each control (the
 /// default rule, or a policy's [`RiskSetPolicy::control_at_risk_span`]), the
 /// birth-date index with the date distance (whose caliper is the birth window,
 /// so it refuses nobody the index returns), no unique key, no common-support
@@ -1020,7 +968,7 @@ fn run_swept_case_loop<
         sweep.advance(case_event_date);
 
         let Some((stratum, window)) = place else {
-            state.diagnostics.anchors_with_no_candidates += 1;
+            state.diagnostics.cases_with_no_controls += 1;
             continue;
         };
         let (counts, mut pool) = sweep.pool(stratum, window, *case_idx);
@@ -1040,19 +988,19 @@ fn run_swept_case_loop<
 
         let eligible = counts.eligible;
         if eligible == 0 {
-            state.diagnostics.anchors_with_no_candidates += 1;
+            state.diagnostics.cases_with_no_controls += 1;
             continue;
         }
 
         let Some(target_ratio) = loop_config.ratio_policy.target_ratio(eligible) else {
-            state.diagnostics.anchors_below_required_ratio += 1;
+            state.diagnostics.cases_below_required_ratio += 1;
             continue;
         };
         if loop_config.ratio_policy.is_shortfall(eligible) {
-            state.diagnostics.anchors_below_required_ratio += 1;
+            state.diagnostics.cases_below_required_ratio += 1;
         }
         if loop_config.ratio_policy.is_lower_tier(eligible) {
-            state.diagnostics.anchors_on_lower_tier += 1;
+            state.diagnostics.cases_on_lower_tier += 1;
         }
 
         let mut local_matches = 0usize;
@@ -1327,7 +1275,7 @@ mod tests {
         G: ConstraintGroup<R> + ?Sized,
         P: RiskSetPolicy<R>,
     {
-        match_transition(
+        match_transition_ordered(
             cohort,
             TransitionMatchRequest {
                 criteria,
@@ -1337,6 +1285,7 @@ mod tests {
                 distance_config,
                 risk_set_policy,
             },
+            None,
         )
     }
 
@@ -1484,12 +1433,15 @@ mod tests {
         );
         assert_eq!(outcome.matched_cases, 1);
         assert_eq!(outcome.pairs.len(), 1);
-        assert_eq!(outcome.pairs[0].comparator_id(), "candidate_resident");
+        assert_eq!(outcome.pairs[0].control_id.as_str(), "candidate_resident");
     }
 
     #[test]
     fn transition_policy_filters_non_resident_cases() {
-        let criteria = MatchingCriteria::builder().allow_replacement(true).build();
+        let criteria = MatchingCriteria {
+            allow_replacement: true,
+            ..MatchingCriteria::default()
+        };
         let options = RoleTransitionOptions {
             transition_age_limit_years: age_limit(6),
             ratio_fallback: vec![ratio(1)],
@@ -1524,14 +1476,15 @@ mod tests {
         );
         assert_eq!(outcome.matched_cases, 1);
         assert_eq!(outcome.pairs.len(), 1);
-        assert_eq!(outcome.pairs[0].anchor_id(), "eligible_case");
+        assert_eq!(outcome.pairs[0].case_id.as_str(), "eligible_case");
     }
 
     #[test]
     fn transition_supports_reusable_distance_channels() {
-        let criteria = MatchingCriteria::builder()
-            .birth_date_window_days(0)
-            .build();
+        let criteria = MatchingCriteria {
+            birth_date_window_days: 0,
+            ..MatchingCriteria::default()
+        };
         let options = RoleTransitionOptions {
             transition_age_limit_years: age_limit(6),
             ratio_fallback: vec![ratio(1)],
@@ -1570,10 +1523,11 @@ mod tests {
 
     #[test]
     fn transition_default_ratio_behavior_allows_partial_matching() {
-        let criteria = MatchingCriteria::builder()
-            .birth_date_window_days(10)
-            .match_ratio(2)
-            .build();
+        let criteria = MatchingCriteria {
+            birth_date_window_days: 10,
+            match_ratio: 2,
+            ..MatchingCriteria::default()
+        };
         let options = RoleTransitionOptions {
             transition_age_limit_years: age_limit(6),
             ratio_fallback: Vec::new(),
@@ -1598,15 +1552,16 @@ mod tests {
         );
         assert_eq!(outcome.matched_cases, 1);
         assert_eq!(outcome.pairs.len(), 1);
-        assert_eq!(outcome.diagnostics.anchors_below_required_ratio, 1);
+        assert_eq!(outcome.diagnostics.cases_below_required_ratio, 1);
     }
 
     #[test]
     fn transition_explicit_ratio_fallback_is_strict() {
-        let criteria = MatchingCriteria::builder()
-            .birth_date_window_days(10)
-            .match_ratio(2)
-            .build();
+        let criteria = MatchingCriteria {
+            birth_date_window_days: 10,
+            match_ratio: 2,
+            ..MatchingCriteria::default()
+        };
         let options = RoleTransitionOptions {
             transition_age_limit_years: age_limit(6),
             ratio_fallback: vec![ratio(2)],
@@ -1631,14 +1586,15 @@ mod tests {
         );
         assert_eq!(outcome.matched_cases, 0);
         assert!(outcome.pairs.is_empty(), "{:?}", outcome.pairs);
-        assert_eq!(outcome.diagnostics.anchors_below_required_ratio, 1);
+        assert_eq!(outcome.diagnostics.cases_below_required_ratio, 1);
     }
 
     #[test]
     fn transition_common_support_requires_propensity_score_map() {
-        let criteria = MatchingCriteria::builder()
-            .common_support(CommonSupport::Both)
-            .build();
+        let criteria = MatchingCriteria {
+            common_support: Some(CommonSupport::Both),
+            ..MatchingCriteria::default()
+        };
         let options = RoleTransitionOptions {
             transition_age_limit_years: age_limit(6),
             ratio_fallback: vec![ratio(1)],
@@ -1675,10 +1631,11 @@ mod tests {
 
     #[test]
     fn transition_propensity_common_support_updates_estimand_diagnostics() {
-        let criteria = MatchingCriteria::builder()
-            .birth_date_window_days(0)
-            .common_support(CommonSupport::Control)
-            .build();
+        let criteria = MatchingCriteria {
+            birth_date_window_days: 0,
+            common_support: Some(CommonSupport::Control),
+            ..MatchingCriteria::default()
+        };
         let options = RoleTransitionOptions {
             transition_age_limit_years: age_limit(6),
             ratio_fallback: vec![ratio(1)],
@@ -1719,17 +1676,17 @@ mod tests {
             &DefaultRiskSetPolicy,
         );
         assert_eq!(outcome.matched_cases, 1);
-        assert_eq!(outcome.diagnostics.common_support_trimmed_candidates, 1);
+        assert_eq!(outcome.diagnostics.common_support_trimmed_controls, 1);
         assert_eq!(
             outcome.diagnostics.common_support_policy,
             Some(CommonSupport::Control)
         );
         assert_eq!(
-            outcome.diagnostics.common_support_anchor_score_bounds,
+            outcome.diagnostics.common_support_case_score_bounds,
             Some((0.35, 0.35))
         );
         assert_eq!(
-            outcome.diagnostics.common_support_candidate_score_bounds,
+            outcome.diagnostics.common_support_control_score_bounds,
             Some((0.35, 0.90))
         );
         assert_eq!(outcome.diagnostics.requested_estimand, Estimand::Att);

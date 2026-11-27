@@ -84,19 +84,23 @@ use std::collections::{BTreeMap, BTreeSet};
 use epistat_glm::{Absorb, Error as AbsorbError, Feols, FixedEffects, Singletons};
 use epistat_linalg::{Mat, MatRef};
 
+use crate::error::Error;
 use crate::methods::staggered::StaggeredPanel;
 
 /// The rows of the decomposition, with the treatment of each row.
 #[derive(Clone, Copy, Debug)]
 struct Rows<'a> {
     unit: &'a [u32],
-    time: &'a [i32],
+    time: &'a [i64],
+    /// The periods as fixed-effect codes, `time - min(time)`.
+    time_code: &'a [u32],
     treated: &'a [bool],
     outcome: &'a [f64],
     controls: Option<MatRef<'a, f64>>,
 }
 
 /// The kind of a 2x2 comparison, with the labels of `bacondecomp`.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BaconKind {
     /// Against the never treated.
@@ -112,12 +116,13 @@ pub enum BaconKind {
 }
 
 /// One 2x2 comparison.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct BaconComparison {
     /// The first treated period of the treated group.
-    pub treated: i32,
+    pub treated: i64,
     /// The first treated period of the comparison group, `None` for never.
-    pub untreated: Option<i32>,
+    pub untreated: Option<i64>,
     /// The kind.
     pub kind: BaconKind,
     /// The 2x2 estimate, `None` when the treatment is collinear in the window.
@@ -127,6 +132,7 @@ pub struct BaconComparison {
 }
 
 /// The within-group component of the decomposition with covariates.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BaconWithin {
     /// The weight `Omega` of the within-group estimate.
@@ -136,6 +142,7 @@ pub struct BaconWithin {
 }
 
 /// The decomposition.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct BaconDecomposition {
     /// The comparisons, by treated group and then comparison group, the
@@ -143,43 +150,6 @@ pub struct BaconDecomposition {
     pub comparisons: Vec<BaconComparison>,
     /// With covariates, the within-group component.
     pub within: Option<BaconWithin>,
-}
-
-/// Why the decomposition could not be computed.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum BaconError {
-    /// An input has the wrong length.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// Some unit lacks a period, or has one twice.
-    #[error("the panel is not balanced")]
-    Unbalanced,
-    /// A unit has rows with different first treated periods.
-    #[error("unit {unit} has rows with different first treated periods")]
-    Cohort {
-        /// The unit.
-        unit: u32,
-    },
-    /// Prior weights were given; the decomposition is unweighted, as in
-    /// `bacondecomp`.
-    #[error("the decomposition takes no weights")]
-    Weights,
-    /// A value is not finite.
-    #[error("a value of {0} is not finite")]
-    NotFinite(&'static str),
-    /// Fewer than two timing groups.
-    #[error("the decomposition needs at least two timing groups")]
-    Groups,
-    /// A regression failed.
-    #[error(transparent)]
-    Fit(#[from] AbsorbError),
 }
 
 /// The tolerance of the demeaning: on a balanced panel the two-way
@@ -263,43 +233,28 @@ fn group_means<K: Ord + Copy>(v: &[f64], key: impl Fn(usize) -> K) -> Vec<f64> {
 ///
 /// # Errors
 ///
-/// [`BaconError`] for inputs of the wrong length or not finite, weights, a
-/// panel that is not balanced, a first treated period that varies within a
-/// unit, fewer than two timing groups, and the errors of the regressions.
-pub fn bacon_decomposition(panel: &StaggeredPanel<'_>) -> Result<BaconDecomposition, BaconError> {
-    let n = panel.unit.len();
-    for (what, found) in [
-        ("time", panel.time.len()),
-        ("first_treated", panel.first_treated.len()),
-        ("outcome", panel.outcome.len()),
-        ("covariates", panel.covariates.map_or(n, |x| x.nrows())),
-    ] {
-        if found != n {
-            return Err(BaconError::Length {
-                what,
-                expected: n,
-                found,
-            });
-        }
+/// [`Error::Unsupported`] for weights, [`Error::Unbalanced`] for a panel that
+/// is not balanced, [`Error::Periods`] for periods that span more than 2^32
+/// values, [`Error::Groups`] for fewer than two timing groups, and
+/// [`Error::Glm`] for the errors of the regressions.
+pub fn decompose(panel: &StaggeredPanel<'_>) -> Result<BaconDecomposition, Error> {
+    let n = panel.len();
+    if panel.weights().is_some() {
+        return Err(Error::Unsupported {
+            what: "prior weights in the Goodman-Bacon decomposition",
+        });
     }
-    if panel.weights.is_some() {
-        return Err(BaconError::Weights);
-    }
-    let mut first: BTreeMap<u32, Option<i32>> = BTreeMap::new();
-    for (&u, &g) in panel.unit.iter().zip(panel.first_treated) {
-        if *first.entry(u).or_insert(g) != g {
-            return Err(BaconError::Cohort { unit: u });
-        }
-    }
+    let time_code = panel.period_codes().ok_or(Error::Periods)?;
     let treated: Vec<bool> = (0..n)
-        .map(|i| panel.first_treated[i].is_some_and(|g| panel.time[i] >= g))
+        .map(|i| panel.first_treated()[i].is_some_and(|g| panel.period()[i] >= g))
         .collect();
-    decompose(&Rows {
-        unit: panel.unit,
-        time: panel.time,
+    decompose_rows(&Rows {
+        unit: panel.unit(),
+        time: panel.period(),
+        time_code: &time_code,
         treated: &treated,
-        outcome: panel.outcome,
-        controls: panel.covariates,
+        outcome: panel.outcome(),
+        controls: panel.covariates(),
     })
 }
 
@@ -308,42 +263,32 @@ pub fn bacon_decomposition(panel: &StaggeredPanel<'_>) -> Result<BaconDecomposit
     clippy::similar_names,
     reason = "n_k, n_l, d_k and d_l are the notation of bacondecomp"
 )]
-fn decompose(panel: &Rows<'_>) -> Result<BaconDecomposition, BaconError> {
+fn decompose_rows(panel: &Rows<'_>) -> Result<BaconDecomposition, Error> {
     let n = panel.unit.len();
-    if panel.outcome.iter().any(|v| !v.is_finite()) {
-        return Err(BaconError::NotFinite("the outcome"));
-    }
-    if let Some(x) = panel.controls
-        && (0..x.ncols()).any(|j| (0..n).any(|i| !x[(i, j)].is_finite()))
-    {
-        return Err(BaconError::NotFinite("the controls"));
-    }
-    let periods: BTreeSet<i32> = panel.time.iter().copied().collect();
+    let periods: BTreeSet<i64> = panel.time.iter().copied().collect();
     let units: BTreeSet<u32> = panel.unit.iter().copied().collect();
-    let mut seen: BTreeSet<(u32, i32)> = BTreeSet::new();
+    let mut seen: BTreeSet<(u32, i64)> = BTreeSet::new();
     for (&u, &t) in panel.unit.iter().zip(panel.time) {
         if !seen.insert((u, t)) {
-            return Err(BaconError::Unbalanced);
+            return Err(Error::Unbalanced);
         }
     }
     if seen.len() != units.len() * periods.len() {
-        return Err(BaconError::Unbalanced);
+        return Err(Error::Unbalanced);
     }
-    let t_min = *periods.first().ok_or(BaconError::Groups)?;
+    let t_min = *periods.first().ok_or(Error::Groups)?;
     // The first treated period of each unit, as bacondecomp finds it from
     // the treated rows.
-    let mut cohort_of: BTreeMap<u32, Option<i32>> = units.iter().map(|&u| (u, None)).collect();
+    let mut cohort_of: BTreeMap<u32, Option<i64>> = units.iter().map(|&u| (u, None)).collect();
     for i in 0..n {
         if panel.treated[i] {
-            let c = cohort_of
-                .get_mut(&panel.unit[i])
-                .ok_or(BaconError::Groups)?;
-            *c = Some(c.map_or(panel.time[i], |g: i32| g.min(panel.time[i])));
+            let c = cohort_of.get_mut(&panel.unit[i]).ok_or(Error::Groups)?;
+            *c = Some(c.map_or(panel.time[i], |g: i64| g.min(panel.time[i])));
         }
     }
-    let cohort: Vec<Option<i32>> = (0..n).map(|i| cohort_of[&panel.unit[i]]).collect();
+    let cohort: Vec<Option<i64>> = (0..n).map(|i| cohort_of[&panel.unit[i]]).collect();
     // The groups, the never treated last.
-    let mut groups: Vec<Option<i32>> = cohort_of
+    let mut groups: Vec<Option<i64>> = cohort_of
         .values()
         .copied()
         .collect::<BTreeSet<_>>()
@@ -351,14 +296,11 @@ fn decompose(panel: &Rows<'_>) -> Result<BaconDecomposition, BaconError> {
         .collect();
     groups.sort_by_key(|g| g.map_or((1, 0), |g| (0, g)));
     if groups.len() < 2 {
-        return Err(BaconError::Groups);
+        return Err(Error::Groups);
     }
     let window = |rows: &[usize]| Window {
         unit: rows.iter().map(|&i| panel.unit[i]).collect(),
-        time: rows
-            .iter()
-            .map(|&i| (panel.time[i] - t_min).unsigned_abs())
-            .collect(),
+        time: rows.iter().map(|&i| panel.time_code[i]).collect(),
     };
     let d: Vec<f64> = panel
         .treated
@@ -387,7 +329,7 @@ fn decompose(panel: &Rows<'_>) -> Result<BaconDecomposition, BaconError> {
                             None => true,
                         })
                         .collect();
-                    let share = |g: Option<i32>| {
+                    let share = |g: Option<i64>| {
                         let mine: Vec<usize> =
                             rows.iter().copied().filter(|&i| cohort[i] == g).collect();
                         let treated = mine.iter().filter(|&&i| panel.treated[i]).count();
@@ -466,12 +408,12 @@ fn scale(comparisons: &mut [BaconComparison]) {
 fn controlled(
     panel: &Rows<'_>,
     controls: MatRef<'_, f64>,
-    cohort: &[Option<i32>],
-    groups: &[Option<i32>],
+    cohort: &[Option<i64>],
+    groups: &[Option<i64>],
     d: &[f64],
-    t_min: i32,
+    t_min: i64,
     window: &dyn Fn(&[usize]) -> Window,
-) -> Result<BaconDecomposition, BaconError> {
+) -> Result<BaconDecomposition, Error> {
     let n = panel.unit.len();
     let q = controls.ncols();
     let all: Vec<usize> = (0..n).collect();
@@ -480,7 +422,7 @@ fn controlled(
     let fit = Feols { absorb: ABSORB }.fit(controls, d, &fe_all)?;
     let resid = fit.residuals.clone();
     let p: Vec<f64> = d.iter().zip(&resid).map(|(a, b)| a - b).collect();
-    let key_g = |i: usize| cohort[i].unwrap_or(i32::MAX);
+    let key_g = |i: usize| cohort[i].unwrap_or(i64::MAX);
     let d_i = group_means(&resid, |i| panel.unit[i]);
     let d_t = group_means(&resid, |i| panel.time[i]);
     let d_bar = mean(&resid);

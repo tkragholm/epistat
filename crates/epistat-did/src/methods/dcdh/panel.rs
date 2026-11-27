@@ -4,7 +4,9 @@
 
 use std::collections::HashMap;
 
-use super::{DcdhConfig, DcdhError, DcdhObservation};
+use crate::error::Error;
+
+use super::{DcdhOptions, SwitchingPanel};
 
 /// Not available, as R's `NA`. Every quantity that R stores with `NA` is NaN
 /// here, so that sums with `na.rm = TRUE` skip the same terms.
@@ -125,82 +127,41 @@ pub(super) fn ordered(x: f64) -> i64 {
     clippy::too_many_lines,
     reason = "the sample rules of did_multiplegt_main, in R's order"
 )]
-pub(super) fn prepare(
-    observations: &[DcdhObservation],
-    config: &DcdhConfig,
-) -> Result<Panel, DcdhError> {
-    if observations.is_empty() {
-        return Err(DcdhError::Empty);
-    }
-    let n_controls = observations[0].controls.len();
-    let clustered = observations.iter().any(|o| o.cluster.is_some());
-    for (i, o) in observations.iter().enumerate() {
-        if o.controls.len() != n_controls {
-            return Err(DcdhError::InvalidRow {
-                row: i,
-                reason: "every row needs the same number of controls",
-            });
-        }
-        if o.controls.iter().any(|x| !x.is_finite()) {
-            return Err(DcdhError::InvalidRow {
-                row: i,
-                reason: "a control is not finite",
-            });
-        }
-        if !(o.weight.is_finite() && o.weight >= 0.0) {
-            return Err(DcdhError::InvalidRow {
-                row: i,
-                reason: "the weight must be finite and not negative",
-            });
-        }
-        if o.outcome.is_some_and(|y| !y.is_finite()) || o.treatment.is_some_and(|d| !d.is_finite())
-        {
-            return Err(DcdhError::InvalidRow {
-                row: i,
-                reason: "an outcome or treatment is not finite; give a missing value as None",
-            });
-        }
-        if clustered && o.cluster.is_none() {
-            return Err(DcdhError::InvalidRow {
-                row: i,
-                reason: "with clusters, every row needs a cluster",
-            });
-        }
-    }
+pub(super) fn prepare(data: &SwitchingPanel<'_>, options: &DcdhOptions) -> Result<Panel, Error> {
+    let n = data.len();
+    let n_controls = data.controls().map_or(0, |x| x.ncols());
+    let clustered = data.clusters().is_some();
+    let group = |i: usize| i64::from(data.unit()[i]);
+    let time = |i: usize| data.period()[i];
 
-    // Group-level constants: the stratum and the cluster.
+    // Group-level constants: the stratum and the cluster, constant within a
+    // group by the panel's checks.
     let mut stratum_of: HashMap<i64, i64> = HashMap::new();
     let mut cluster_of: HashMap<i64, i64> = HashMap::new();
-    for o in observations {
-        if *stratum_of.entry(o.group).or_insert(o.stratum) != o.stratum {
-            return Err(DcdhError::VaryingStratum { group: o.group });
-        }
-        if let Some(c) = o.cluster
-            && *cluster_of.entry(o.group).or_insert(c) != c
-        {
-            return Err(DcdhError::ClusterNotNested { group: o.group });
+    for i in 0..n {
+        stratum_of
+            .entry(group(i))
+            .or_insert_with(|| data.strata().map_or(0, |s| i64::from(s[i])));
+        if let Some(c) = data.clusters() {
+            cluster_of.entry(group(i)).or_insert(i64::from(c[i]));
         }
     }
 
     // Groups whose treatment or outcome is never observed are dropped.
     let mut seen_d: HashMap<i64, bool> = HashMap::new();
     let mut seen_y: HashMap<i64, bool> = HashMap::new();
-    for o in observations {
-        *seen_d.entry(o.group).or_insert(false) |= o.treatment.is_some();
-        *seen_y.entry(o.group).or_insert(false) |= o.outcome.is_some();
+    for i in 0..n {
+        *seen_d.entry(group(i)).or_insert(false) |= data.treatment()[i].is_some();
+        *seen_y.entry(group(i)).or_insert(false) |= data.outcome()[i].is_some();
     }
-    let keep = |o: &DcdhObservation| seen_d[&o.group] && seen_y[&o.group];
+    let keep = |i: usize| seen_d[&group(i)] && seen_y[&group(i)];
 
     // Period ranks over the rows that remain.
-    let mut times: Vec<i64> = observations
-        .iter()
-        .filter(|o| keep(o))
-        .map(|o| o.time)
-        .collect();
+    let mut times: Vec<i64> = (0..n).filter(|&i| keep(i)).map(time).collect();
     times.sort_unstable();
     times.dedup();
     if times.is_empty() {
-        return Err(DcdhError::NoEffect);
+        return Err(Error::NoEffect);
     }
     let rank_of: HashMap<i64, i64> = times
         .iter()
@@ -208,38 +169,27 @@ pub(super) fn prepare(
         .map(|(i, &t)| (t, i64::try_from(i).expect("rank fits i64") + 1))
         .collect();
 
-    let mut ids: Vec<i64> = observations
-        .iter()
-        .filter(|o| keep(o))
-        .map(|o| o.group)
-        .collect();
+    let mut ids: Vec<i64> = (0..n).filter(|&i| keep(i)).map(group).collect();
     ids.sort_unstable();
     ids.dedup();
     let pos_of: HashMap<i64, usize> = ids.iter().enumerate().map(|(i, &g)| (g, i)).collect();
     let ng = ids.len();
 
-    let mut rows: Vec<Row> = observations
-        .iter()
-        .filter(|o| keep(o))
-        .map(|o| Row {
-            group: pos_of[&o.group],
-            rank: rank_of[&o.time],
-            y: o.outcome.unwrap_or(NA),
+    // The panel's rows are sorted by group and period, and so are these.
+    let mut rows: Vec<Row> = (0..n)
+        .filter(|&i| keep(i))
+        .map(|i| Row {
+            group: pos_of[&group(i)],
+            rank: rank_of[&time(i)],
+            y: data.outcome()[i].unwrap_or(NA),
             y_level: NA,
-            d: o.treatment.unwrap_or(NA),
-            weight: o.weight,
-            controls: o.controls.clone(),
+            d: data.treatment()[i].unwrap_or(NA),
+            weight: data.weight(i),
+            controls: data
+                .controls()
+                .map_or_else(Vec::new, |x| (0..n_controls).map(|k| x[(i, k)]).collect()),
         })
         .collect();
-    rows.sort_by_key(|r| (r.group, r.rank));
-    for pair in rows.windows(2) {
-        if pair[0].group == pair[1].group && pair[0].rank == pair[1].rank {
-            return Err(DcdhError::DuplicateCell {
-                group: ids[pair[0].group],
-                time: times[usize::try_from(pair[0].rank - 1).expect("rank is positive")],
-            });
-        }
-    }
 
     // Per group: first and last period with a treatment, first period with an
     // outcome, and the first period with a missing treatment after that.
@@ -273,7 +223,7 @@ pub(super) fn prepare(
 
     // A group whose treatment has been both above and below its baseline
     // loses its rows from the period when the second of the two first happens.
-    if !config.dont_drop_larger_lower {
+    if !options.dont_drop_larger_lower {
         let mut up = vec![false; ng];
         let mut down = vec![false; ng];
         rows.retain(|r| {
@@ -309,7 +259,7 @@ pub(super) fn prepare(
     let stratum: Vec<i64> = ids.iter().map(|g| stratum_of[g]).collect();
     // With `continuous` every group has the baseline 0 from here on, for the
     // comparisons; the switching direction keeps the original one.
-    let continuous = config.continuous.is_some();
+    let continuous = options.continuous.is_some();
     let base_of = |g: usize| if continuous { 0.0 } else { d_sq[g] };
     let base_key = |g: usize| (ordered(base_of(g)), stratum[g]);
     let mut cell_f: HashMap<(i64, i64), (i64, bool, usize)> = HashMap::new();
@@ -343,7 +293,7 @@ pub(super) fn prepare(
     }
     let n_groups = counted.iter().filter(|&&c| c).count();
     if n_groups == 0 {
-        return Err(DcdhError::NoEffect);
+        return Err(Error::NoEffect);
     }
     let counted_ids: Vec<i64> = (0..ng).filter(|&g| counted[g]).map(|g| ids[g]).collect();
 
@@ -371,23 +321,15 @@ pub(super) fn prepare(
     }
     rows = kept_rows;
     ever = kept_ever;
-    let mut t_min = rows
-        .iter()
-        .map(|r| r.rank)
-        .min()
-        .ok_or(DcdhError::NoEffect)?;
-    let t_max = rows
-        .iter()
-        .map(|r| r.rank)
-        .max()
-        .ok_or(DcdhError::NoEffect)?;
+    let mut t_min = rows.iter().map(|r| r.rank).min().ok_or(Error::NoEffect)?;
+    let t_max = rows.iter().map(|r| r.rank).max().ok_or(Error::NoEffect)?;
     {
         let mut present = vec![false; usize::try_from(t_max - t_min + 1).expect("periods")];
         for r in &rows {
             present[usize::try_from(r.rank - t_min).expect("rank")] = true;
         }
         if present.iter().any(|&p| !p) {
-            return Err(DcdhError::EmptyPeriod);
+            return Err(Error::EmptyPeriod);
         }
     }
     let never_f = t_max + 1;
@@ -398,7 +340,7 @@ pub(super) fn prepare(
     }
 
     // Missing treatments and outcomes.
-    if config.drop_if_d_miss_before_first_switch {
+    if options.drop_if_d_miss_before_first_switch {
         for r in &mut rows {
             if let Some(m) = min_d_miss_after_y[r.group]
                 && m < f_g[r.group]
@@ -464,7 +406,7 @@ pub(super) fn prepare(
     // and the controls become first differences, and the first period goes.
     // The differences are between consecutive periods; a period missing from
     // a group's rows leaves the next difference missing.
-    if config.trends_lin {
+    if options.trends_lin {
         let mut kept_rows = Vec::with_capacity(rows.len());
         let mut kept_ever = Vec::with_capacity(rows.len());
         for (r, e) in rows.into_iter().zip(ever) {
@@ -500,11 +442,7 @@ pub(super) fn prepare(
                 ever.push(e);
             }
         }
-        t_min = rows
-            .iter()
-            .map(|r| r.rank)
-            .min()
-            .ok_or(DcdhError::NoEffect)?;
+        t_min = rows.iter().map(|r| r.rank).min().ok_or(Error::NoEffect)?;
     }
 
     // The balanced grid of the groups that still have rows.
@@ -624,7 +562,7 @@ pub(super) fn prepare(
         (t_min, t_max),
         times,
         clustered,
-        config,
+        options,
     ))
 }
 
@@ -673,7 +611,7 @@ fn finish(
     (t_min, t_max): (i64, i64),
     times: Vec<i64>,
     clustered: bool,
-    config: &DcdhConfig,
+    options: &DcdhOptions,
 ) -> Panel {
     let &Subset {
         keep,
@@ -709,12 +647,12 @@ fn finish(
     // cohorts use the indicator of having switched times the direction (1
     // in, -1 out, missing for a group that never switches), and the
     // controls gain the period effects times the powers of the baseline.
-    let base_value: Vec<f64> = if config.continuous.is_some() {
+    let base_value: Vec<f64> = if options.continuous.is_some() {
         vec![0.0; gn]
     } else {
         d_sq.clone()
     };
-    let d_cohort: Vec<f64> = if config.continuous.is_some() {
+    let d_cohort: Vec<f64> = if options.continuous.is_some() {
         (0..gn * nt)
             .map(|c| {
                 let g = c / nt;
@@ -726,7 +664,7 @@ fn finish(
         d.clone()
     };
     let mut generated = Vec::new();
-    if let Some(degree) = config.continuous {
+    if let Some(degree) = options.continuous {
         let degree = i32::try_from(degree).expect("degree fits i32");
         for j in t_min + 1..=t_max {
             for k in 1..=degree {

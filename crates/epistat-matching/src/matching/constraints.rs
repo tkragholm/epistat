@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 /// Compact used-control tracking backed by a flat `Vec<bool>`.
 ///
 /// Indexed by raw control index, so `contains` is one array lookup.
-pub struct UsedControlsVec {
+pub(crate) struct UsedControlsVec {
     bits: Vec<bool>,
     count: usize,
 }
@@ -60,12 +60,6 @@ impl UsedControlsVec {
     pub const fn len(&self) -> usize {
         self.count
     }
-
-    /// Whether no control is marked as used.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.count == 0
-    }
 }
 
 /// A rule that a case and a control must satisfy to be matched.
@@ -89,6 +83,18 @@ pub trait Constraint<R: MatchingRecord>: Send + Sync {
     #[doc(hidden)]
     fn status_rule(&self) -> Option<StatusRule<'_, R>> {
         None
+    }
+
+    /// Whether the constraint's own settings can be used, such as a caliper
+    /// whose window is finite and not negative. A job checks its constraints
+    /// before it matches.
+    ///
+    /// # Errors
+    ///
+    /// The error that names the setting. A constraint without settings to
+    /// check returns `Ok`.
+    fn check(&self) -> Result<(), crate::Error> {
+        Ok(())
     }
 }
 
@@ -206,6 +212,16 @@ pub trait ConstraintGroup<R: MatchingRecord>: Send + Sync {
     fn status_rules<'s>(&'s self, _rules: &mut Vec<StatusRule<'s, R>>) -> bool {
         false
     }
+
+    /// [`Constraint::check`] of every constraint of the group, in the order
+    /// the group asks them.
+    ///
+    /// # Errors
+    ///
+    /// The first constraint's error.
+    fn check(&self) -> Result<(), crate::Error> {
+        Ok(())
+    }
 }
 
 impl<R: MatchingRecord> ConstraintGroup<R> for () {
@@ -240,6 +256,10 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> ConstraintGroup<R> for &
     fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
         (**self).status_rules(rules)
     }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        (**self).check()
+    }
 }
 
 impl<R: MatchingRecord> ConstraintGroup<R> for [&dyn Constraint<R>] {
@@ -249,6 +269,10 @@ impl<R: MatchingRecord> ConstraintGroup<R> for [&dyn Constraint<R>] {
 
     fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
         self.iter().all(|c| push_status_rule(*c, rules))
+    }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        self.iter().try_for_each(|c| c.check())
     }
 
     fn first_blocking_reason(
@@ -273,6 +297,10 @@ where
 
     fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
         self.iter().all(|c| push_status_rule(c, rules))
+    }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        self.iter().try_for_each(Constraint::check)
     }
 
     fn first_blocking_reason(
@@ -303,6 +331,10 @@ impl<R: MatchingRecord, C: Constraint<R> + ?Sized> Constraint<R> for Box<C> {
     fn status_rule(&self) -> Option<StatusRule<'_, R>> {
         (**self).status_rule()
     }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        (**self).check()
+    }
 }
 
 /// A homogeneous group whose length is decided at run time.
@@ -326,6 +358,10 @@ where
 
     fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
         self.iter().all(|c| push_status_rule(c, rules))
+    }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        self.iter().try_for_each(Constraint::check)
     }
 
     fn first_blocking_reason(
@@ -371,6 +407,11 @@ where
         self.first.status_rules(rules) && self.second.status_rules(rules)
     }
 
+    fn check(&self) -> Result<(), crate::Error> {
+        self.first.check()?;
+        self.second.check()
+    }
+
     fn first_blocking_reason(
         &self,
         case: &R,
@@ -394,6 +435,11 @@ where
 
     fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
         self.0.status_rules(rules) && push_status_rule(&self.1, rules)
+    }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        self.0.check()?;
+        self.1.check()
     }
 
     fn first_blocking_reason(
@@ -426,6 +472,12 @@ macro_rules! impl_constraint_group_tuple {
                 true $(&& push_status_rule($value, rules))+
             }
 
+            fn check(&self) -> Result<(), crate::Error> {
+                let ($($value,)+) = self;
+                $($value.check()?;)+
+                Ok(())
+            }
+
             fn first_blocking_reason(
                 &self,
                 case: &R,
@@ -452,22 +504,37 @@ impl_constraint_group_tuple!(C1: c1, C2: c2, C3: c3, C4: c4, C5: c5, C6: c6);
 impl_constraint_group_tuple!(C1: c1, C2: c2, C3: c3, C4: c4, C5: c5, C6: c6, C7: c7);
 impl_constraint_group_tuple!(C1: c1, C2: c2, C3: c3, C4: c4, C5: c5, C6: c6, C7: c7, C8: c8);
 
-/// The state of a match that a constraint may read: the criteria, the controls used so far and the strata values of the pair.
+/// The state of a match that a constraint may read: the criteria of the job
+/// and whether the control being tested was already taken by a case.
 pub struct ConstraintContext<'a> {
     /// The criteria of the job.
-    pub criteria: &'a MatchingCriteria,
+    pub(crate) criteria: &'a MatchingCriteria,
     /// The controls already taken by a case.
-    pub used_controls: &'a UsedControlsVec,
+    pub(crate) used_controls: &'a UsedControlsVec,
     /// The unique-key values already taken, as ids from `unique_interner`.
-    pub used_unique: &'a FxHashSet<UniqueValueId>,
+    pub(crate) used_unique: &'a FxHashSet<UniqueValueId>,
     /// The ids of the unique-key values.
-    pub unique_interner: &'a RapidHashMap<String, UniqueValueId>,
+    pub(crate) unique_interner: &'a RapidHashMap<String, UniqueValueId>,
     /// The position of the control being tested.
-    pub control_idx: ControlIdx,
+    pub(crate) control_idx: ControlIdx,
     /// The case's values of the required strata, in the order of the criteria, when they have been built.
-    pub case_strata_values: Option<&'a [Option<&'a str>]>,
+    pub(crate) case_strata_values: Option<&'a [Option<&'a str>]>,
     /// The control's values of the required strata, in the order of the criteria, when they have been built.
-    pub control_strata_values: Option<&'a [Option<&'a str>]>,
+    pub(crate) control_strata_values: Option<&'a [Option<&'a str>]>,
+}
+
+impl ConstraintContext<'_> {
+    /// The criteria of the job.
+    #[must_use]
+    pub const fn criteria(&self) -> &MatchingCriteria {
+        self.criteria
+    }
+
+    /// Whether the control being tested was already taken by a case.
+    #[must_use]
+    pub fn control_used(&self) -> bool {
+        self.used_controls.contains(self.control_idx)
+    }
 }
 
 pub struct ReplacementConstraint;
@@ -512,9 +579,6 @@ impl<R: MatchingRecord> Constraint<R> for ExactMatchConstraint {
         )
     }
 }
-
-/// The name `ExactMatchConstraint` goes by in code that speaks of strata.
-pub type StrataExactConstraint = ExactMatchConstraint;
 
 /// The birth-date window of the criteria, as a constraint, for a job whose
 /// distance is not the birth date. With no window it allows every pair.
@@ -691,7 +755,7 @@ mod tests {
 
     #[test]
     fn replacement_constraint_blocks_reuse_without_replacement() {
-        let criteria = MatchingCriteria::builder().build().validate().unwrap();
+        let criteria = MatchingCriteria::default().validate().unwrap();
         let case = record("a", date(2010, 1, 1));
         let control = record("b", date(2010, 1, 2));
         let mut used_controls = UsedControlsVec::with_capacity(3);
@@ -709,11 +773,12 @@ mod tests {
         );
         assert!(!ReplacementConstraint.allows(&case, &control, &ctx));
 
-        let criteria = MatchingCriteria::builder()
-            .allow_replacement(true)
-            .build()
-            .validate()
-            .unwrap();
+        let criteria = MatchingCriteria {
+            allow_replacement: true,
+            ..MatchingCriteria::default()
+        }
+        .validate()
+        .unwrap();
         let ctx = context(
             &criteria,
             &used_controls,
@@ -728,7 +793,7 @@ mod tests {
 
     #[test]
     fn no_self_match_constraint_blocks_self_pairs() {
-        let criteria = MatchingCriteria::builder().build().validate().unwrap();
+        let criteria = MatchingCriteria::default().validate().unwrap();
         let row = record("same", date(2010, 1, 1));
         let empty_controls = empty_used_controls();
         let empty_unique = FxHashSet::default();
@@ -747,11 +812,12 @@ mod tests {
 
     #[test]
     fn exact_match_constraint_uses_strata_paths() {
-        let criteria = MatchingCriteria::builder()
-            .required_strata(vec!["municipality".to_string()])
-            .build()
-            .validate()
-            .unwrap();
+        let criteria = MatchingCriteria {
+            required_strata: vec!["municipality".to_string()],
+            ..MatchingCriteria::default()
+        }
+        .validate()
+        .unwrap();
         let mut case = record("case", date(2010, 1, 1));
         case.strata
             .insert("municipality".to_string(), "0101".to_string());
@@ -789,11 +855,12 @@ mod tests {
 
     #[test]
     fn unique_key_constraint_blocks_reused_unique_values() {
-        let criteria = MatchingCriteria::builder()
-            .unique_by_key("family".to_string())
-            .build()
-            .validate()
-            .unwrap();
+        let criteria = MatchingCriteria {
+            unique_by_key: Some("family".to_string()),
+            ..MatchingCriteria::default()
+        }
+        .validate()
+        .unwrap();
         let mut control = record("control", date(2010, 1, 1));
         control
             .strata
@@ -815,7 +882,7 @@ mod tests {
         );
         assert!(!UniqueKeyConstraint.allows(&control, &control, &ctx));
 
-        let criteria = MatchingCriteria::builder().build().validate().unwrap();
+        let criteria = MatchingCriteria::default().validate().unwrap();
         let ctx = context(
             &criteria,
             &empty_controls,
@@ -830,11 +897,12 @@ mod tests {
 
     #[test]
     fn date_caliper_constraint_uses_birth_window() {
-        let criteria = MatchingCriteria::builder()
-            .birth_date_window_days(5)
-            .build()
-            .validate()
-            .unwrap();
+        let criteria = MatchingCriteria {
+            birth_date_window_days: 5,
+            ..MatchingCriteria::default()
+        }
+        .validate()
+        .unwrap();
         let case = record("case", date(2010, 1, 1));
         let control_close = record("control_close", date(2010, 1, 5));
         let control_far = record("control_far", date(2010, 1, 10));
@@ -862,7 +930,7 @@ mod tests {
 
     #[test]
     fn generic_caliper_constraint_works_with_custom_metric() {
-        let criteria = MatchingCriteria::builder().build().validate().unwrap();
+        let criteria = MatchingCriteria::default().validate().unwrap();
         let case = record("case", date(2010, 1, 1));
         let near = record("near", date(2010, 1, 2));
         let far = record("far", date(2010, 1, 10));

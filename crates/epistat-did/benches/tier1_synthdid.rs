@@ -15,6 +15,7 @@
 #![allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
     reason = "a benchmark program: sizes and counts are small whole numbers"
 )]
 
@@ -22,9 +23,8 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
-use epistat_did::{
-    SynthDidConfig, SynthDraws, SynthPanel, SynthVariance, estimate_synthdid, synthdid_variance,
-};
+use epistat_core::Bootstrap;
+use epistat_did::{StaggeredPanel, SynthDidOptions, SynthDraws, SynthVariance, synthdid};
 
 const SEED: u64 = 20_261_125;
 const FACTORS: usize = 3;
@@ -74,19 +74,44 @@ fn generate(kind: &str, n: usize) {
     }
 }
 
-fn read(kind: &str, n: usize) -> SynthPanel {
+/// The wide file as long columns: unit `i` is row `i`, observed in periods
+/// `0..T`, the treated first treated in period `4 T / 5`.
+struct Long {
+    unit: Vec<u32>,
+    period: Vec<i64>,
+    first_treated: Vec<Option<i64>>,
+    outcome: Vec<f64>,
+}
+
+impl Long {
+    fn panel(&self) -> StaggeredPanel<'_> {
+        StaggeredPanel::builder(&self.unit, &self.period, &self.first_treated, &self.outcome)
+            .build()
+            .expect("panel")
+    }
+}
+
+fn read(kind: &str, n: usize) -> Long {
     let periods = periods_of(kind);
     let t = Table::read_sized(&common::data_path(kind, n));
     let treated = t.flags("treated");
-    let controls = treated.iter().filter(|&&w| !w).count();
     let columns: Vec<&[f64]> = (0..periods).map(|p| t.col(&format!("y{p}"))).collect();
-    let mut y = Vec::with_capacity(n * periods);
+    let adoption = (periods * 4 / 5) as i64;
+    let mut long = Long {
+        unit: Vec::with_capacity(n * periods),
+        period: Vec::with_capacity(n * periods),
+        first_treated: Vec::with_capacity(n * periods),
+        outcome: Vec::with_capacity(n * periods),
+    };
     for unit in 0..t.len() {
-        for column in &columns {
-            y.push(column[unit]);
+        for (p, column) in columns.iter().enumerate() {
+            long.unit.push(unit as u32);
+            long.period.push(p as i64);
+            long.first_treated.push(treated[unit].then_some(adoption));
+            long.outcome.push(column[unit]);
         }
     }
-    SynthPanel::new(y, t.len(), periods, controls, periods * 4 / 5).expect("panel")
+    long
 }
 
 fn main() {
@@ -95,51 +120,42 @@ fn main() {
         generate(kind, n);
         return;
     }
-    let (kind, config) = match method.as_str() {
-        "synthdid_t20" | "synthdid_placebo_t20" => ("sdid20", SynthDidConfig::synthdid()),
-        "synthdid_t100" | "synthdid_jk_t100" => ("sdid100", SynthDidConfig::synthdid()),
-        "sc_t100" => ("sdid100", SynthDidConfig::synthetic_control()),
+    let (kind, options) = match method.as_str() {
+        "synthdid_t20" => ("sdid20", SynthDidOptions::default()),
+        "synthdid_placebo_t20" => (
+            "sdid20",
+            SynthDidOptions {
+                variance: SynthVariance::Placebo(SynthDraws::Seeded(Bootstrap::new(20, SEED))),
+                ..SynthDidOptions::default()
+            },
+        ),
+        "synthdid_t100" => ("sdid100", SynthDidOptions::default()),
+        "synthdid_jk_t100" => (
+            "sdid100",
+            SynthDidOptions {
+                variance: SynthVariance::Jackknife,
+                ..SynthDidOptions::default()
+            },
+        ),
+        "sc_t100" => ("sdid100", SynthDidOptions::synthetic_control()),
         _ => panic!("unknown method {method}"),
     };
-    let panel = read(kind, n);
-    let (times, (estimate, se)) = common::timed(common::reps(), || {
-        let estimate = estimate_synthdid(&panel, &config).expect("estimate");
-        let se = match method.as_str() {
-            "synthdid_jk_t100" => Some(
-                synthdid_variance(
-                    &panel,
-                    &estimate,
-                    SynthVariance::Jackknife { clusters: None },
-                )
-                .expect("jackknife")
-                .se,
-            ),
-            "synthdid_placebo_t20" => Some(
-                synthdid_variance(
-                    &panel,
-                    &estimate,
-                    SynthVariance::Placebo(SynthDraws::Seeded {
-                        replications: 20,
-                        seed: SEED,
-                    }),
-                )
-                .expect("placebo")
-                .se,
-            ),
-            _ => None,
-        };
-        (estimate, se)
+    let long = read(kind, n);
+    let panel = long.panel();
+    let (times, estimate) = common::timed(common::reps(), || {
+        synthdid::estimate(&panel, &options).expect("estimate")
     });
     let mut lines = Lines::default();
-    lines.push("estimate", estimate.estimate);
-    lines.push_all("lambda", &estimate.lambda);
-    lines.push_all("omega", &estimate.omega);
-    lines.push_all("curve", &estimate.effect_curve);
-    lines.push("info_lambda_steps", estimate.trace.lambda.len() as f64);
-    lines.push("info_omega_steps", estimate.trace.omega.len() as f64);
+    lines.push("estimate", estimate.estimate.estimate);
+    lines.push_all("lambda", &estimate.fit.lambda);
+    lines.push_all("omega", &estimate.fit.omega);
+    let curve: Vec<f64> = estimate.effect_curve.iter().map(|e| e.estimate).collect();
+    lines.push_all("curve", &curve);
+    lines.push("info_lambda_steps", estimate.fit.trace.lambda.len() as f64);
+    lines.push("info_omega_steps", estimate.fit.trace.omega.len() as f64);
     match method.as_str() {
-        "synthdid_jk_t100" => lines.push_opt("se", se.flatten()),
-        "synthdid_placebo_t20" => lines.push_opt("info_se", se.flatten()),
+        "synthdid_jk_t100" => lines.push_opt("se", estimate.estimate.se),
+        "synthdid_placebo_t20" => lines.push_opt("info_se", estimate.estimate.se),
         _ => {}
     }
     common::finish(&method, n, &times, &lines);

@@ -13,7 +13,7 @@
 //! with `q` the number of cells used. `did` forms `V` as
 //! `psi' psi / n^2` and, when `att_gt` was clustered and not bootstrapped, from
 //! the cluster sums of `psi`; here the covariance is
-//! [`did_covariance`](crate::inference::did_clusters::did_covariance), which
+//! [`did_covariance`](crate::did_covariance), which
 //! centres the influence functions. The two agree to rounding for influence
 //! functions that average to zero.
 //!
@@ -22,7 +22,7 @@
 //! universal base period, which has no estimate here. `did` returns no
 //! statistic when the matrix is singular, judged by its reciprocal condition
 //! number against machine epsilon; this function returns
-//! [`PretestError::SingularCovariance`] by the same rule, with the 1-norm
+//! [`Error::Singular`](crate::Error::Singular) by the same rule, with the 1-norm
 //! condition number. The p-value is the chi-square survival function, not
 //! rounded to five decimals as `did` rounds it.
 //!
@@ -34,11 +34,13 @@
 use epistat_inference::wald::wald;
 use epistat_linalg::{Attempt, Mat, Method, solve};
 
-use super::aggte::{AggteError, UnitPanel, checked_cluster_index};
+use super::AttGt;
+use crate::error::Error;
 use crate::inference::did_clusters::{covariance, standard_error};
-use crate::types::AttGtEstimate;
+use epistat_inference::Clusters;
 
-/// The result of [`pretrend_wald_test`].
+/// The result of [`AttGt::pretest`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct PretrendWald {
     /// The Wald statistic.
@@ -48,75 +50,52 @@ pub struct PretrendWald {
     /// Upper tail probability of the statistic under chi-square with `df`
     /// degrees of freedom.
     pub p_value: f64,
-    /// The `(group, time)` of the cells used, in input order.
-    pub cells: Vec<(i32, i32)>,
+    /// The cohort and period of each cell used, in the order of the cells.
+    pub cells: Vec<(i64, i64)>,
 }
 
-/// Errors from [`pretrend_wald_test`].
-#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
-pub enum PretestError {
-    /// The inputs do not fit together.
-    #[error(transparent)]
-    Input(#[from] AggteError),
-    /// No pre-treatment cell has a usable standard error.
-    #[error("no pre-treatment cell with a standard error to test")]
-    NoPreTreatmentCells,
-    /// The covariance matrix is singular to machine precision.
-    #[error("the covariance matrix of the pre-treatment cells is singular")]
-    SingularCovariance,
-    /// The statistic is not finite.
-    #[error("the Wald statistic is not finite")]
-    NotFinite,
-}
-
-/// Tests that the pre-treatment `ATT(g,t)` are jointly zero, as `att_gt` does.
-///
-/// `influence` and `panel` are as for [`aggregate_att_gt`](super::aggregate_att_gt);
-/// set the clusters on `panel` for a clustered covariance.
-///
-/// # Errors
-/// [`PretestError`].
-pub fn pretrend_wald_test(
-    estimates: &[AttGtEstimate],
-    influence: &[Vec<f64>],
-    panel: &UnitPanel,
-) -> Result<PretrendWald, PretestError> {
-    let clusters = checked_cluster_index(estimates, influence, panel)?;
+/// [`AttGt::pretest`].
+pub(super) fn pretest(fit: &AttGt) -> Result<PretrendWald, Error> {
+    let influence = fit.kept_influence()?;
+    let clusters = fit.clusters.as_deref().map_or_else(
+        || Clusters::singletons(influence.n_units()),
+        Clusters::from_codes,
+    );
+    let estimated: Vec<_> = fit.estimated().collect();
     let floor = 10.0 * f64::EPSILON.sqrt();
-    let used = (0..estimates.len())
-        .filter(|&i| estimates[i].time < estimates[i].group)
-        .filter(|&i| standard_error(&influence[i], &clusters) > floor)
+    let used = (0..estimated.len())
+        .filter(|&i| estimated[i].0.time < estimated[i].0.group)
+        .filter(|&i| standard_error(influence.column(i), &clusters) > floor)
         .collect::<Vec<_>>();
     if used.is_empty() {
-        return Err(PretestError::NoPreTreatmentCells);
+        return Err(Error::NoPreTreatmentCells);
     }
     let columns = used
         .iter()
-        .map(|&i| influence[i].clone())
+        .map(|&i| influence.column(i))
         .collect::<Vec<_>>();
-    if columns.iter().flatten().any(|value| !value.is_finite()) {
-        return Err(PretestError::NotFinite);
-    }
-    let atts = used.iter().map(|&i| estimates[i].att).collect::<Vec<_>>();
+    let atts = used
+        .iter()
+        .map(|&i| estimated[i].1.estimate)
+        .collect::<Vec<_>>();
     let k = atts.len();
     let cov = covariance(&columns, &clusters);
     let matrix = Mat::from_fn(k, k, |i, j| cov[i * k + j]);
     if reciprocal_condition(&matrix).is_none_or(|rcond| rcond <= f64::EPSILON) {
-        return Err(PretestError::SingularCovariance);
+        return Err(Error::Singular);
     }
-    let test = wald(&atts, matrix.as_ref()).map_err(|_| PretestError::NotFinite)?;
+    let test = wald(&atts, matrix.as_ref()).map_err(|_| Error::NotFinite)?;
     Ok(PretrendWald {
         statistic: test.statistic,
         df: test.df,
         p_value: test.p_value,
         cells: used
             .iter()
-            .map(|&i| (estimates[i].group, estimates[i].time))
+            .map(|&i| (estimated[i].0.group, estimated[i].0.time))
             .collect(),
     })
 }
 
-/// `1 / (|A|_1 |A^-1|_1)`, or `None` when `A` cannot be inverted.
 fn reciprocal_condition(matrix: &Mat<f64>) -> Option<f64> {
     let k = matrix.nrows();
     let identity = Mat::from_fn(k, k, |i, j| if i == j { 1.0 } else { 0.0 });

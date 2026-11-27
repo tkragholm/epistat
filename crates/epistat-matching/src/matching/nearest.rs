@@ -1,8 +1,8 @@
 //! Greedy nearest neighbour matching, ranked by a distance.
 //!
-//! Standard matching with the other strategies restricts candidates by a
+//! Standard matching with the other strategies restricts controls by a
 //! distance and then picks among those that remain. Here the distance ranks
-//! them: each anchor takes the candidate nearest to it that no constraint
+//! them: each case takes the control nearest to it that no constraint
 //! refuses, as `matchit(method = "nearest")` does.
 //!
 //! # Rules
@@ -10,25 +10,25 @@
 //! * **Ranking.** The distance is the configured one: the absolute difference
 //!   of two scores (a propensity score on either scale, or any numeric score),
 //!   the absolute difference of two birth dates, or the Mahalanobis distance.
-//! * **Ties.** Candidates at the same distance are ranked by their position in
-//!   the candidate slice, lowest first. `matchit()` documents the same rule
-//!   but does not follow it where candidates at the same distance lie on the
-//!   same side of the anchor's score; see `tests/r_nearest.rs`.
+//! * **Ties.** Controls at the same distance are ranked by their position in
+//!   the control slice, lowest first. `matchit()` documents the same rule
+//!   but does not follow it where controls at the same distance lie on the
+//!   same side of the case's score; see `tests/r_nearest.rs`.
 //! * **Calipers.** A caliper on the distance is inclusive. With
 //!   [`NearestSelection::with_std_caliper`] its width is in standard deviation
-//!   units of the distance variable, computed over all anchors and candidates
+//!   units of the distance variable, computed over all cases and controls
 //!   that common-support trimming leaves, with `n - 1` in the denominator.
 //!   Calipers on other fields are ordinary constraints.
 //! * **Mahalanobis within a caliper.** [`NearestSelection::with_mahvars`] ranks
 //!   by a second distance and keeps the configured one as a caliper and as the
-//!   scale of the anchor order, which is `mahvars` in `matchit()`.
-//! * **Order of anchors.** [`MatchOrder`]. The order of anchors with equal
-//!   distance is their order in the anchor slice.
+//!   scale of the case order, which is `mahvars` in `matchit()`.
+//! * **Order of cases.** [`MatchOrder`]. The order of cases with equal
+//!   distance is their order in the case slice.
 //! * **Assignment.** Without replacement and with a ratio above 1, every
-//!   anchor takes a first control before any takes a second, and so on, unless
+//!   case takes a first control before any takes a second, and so on, unless
 //!   [`Assignment::Sequential`] is asked for.
 //! * **Variable ratio.** [`VariableRatio`] sets the number of controls of each
-//!   anchor from its score before matching, as `min.controls` and
+//!   case from its score before matching, as `min.controls` and
 //!   `max.controls` do in `matchit()`. It needs a score distance.
 //! * **Calipers on a covariate distance.** `matchit()` accepts calipers only
 //!   on named covariates when the distance is Mahalanobis or Euclidean. A
@@ -37,36 +37,36 @@
 //!   distance's own units is accepted.
 //! * **Ratio fallbacks.** Fallback ratios choose a smaller ratio for a stratum
 //!   that cannot reach the full one. Ranking by distance in rounds gives every
-//!   anchor its controls one at a time and leaves an anchor with fewer when
-//!   the candidates run out, and a variable ratio sets each anchor's number
+//!   case its controls one at a time and leaves an case with fewer when
+//!   the controls run out, and a variable ratio sets each case's number
 //!   itself, so a tier has nothing left to decide. A job that sets fallback
 //!   ratios with the nearest mode returns an invalid outcome (`nearest_options`).
-//! * **Exact strata.** Anchors and candidates are split by the exact-match
+//! * **Exact strata.** Cases and controls are split by the exact-match
 //!   keys first, and the strata are matched in parallel. Within a stratum the
 //!   matching is sequential, since each assignment depends on the last. With
 //!   replacement and no unique key an assignment changes nothing another
-//!   anchor reads, so the anchors of a stratum of at least 4096 are searched
-//!   on the rayon pool and their controls given out in the anchors' order.
+//!   case reads, so the cases of a stratum of at least 4096 are searched
+//!   on the rayon pool and their controls given out in the cases' order.
 //!
 //! # Cost
 //!
-//! With a score distance, a stratum's candidates are sorted once, and an anchor
-//! finds its nearest by walking out from its own score. Candidates already used
+//! With a score distance, a stratum's controls are sorted once, and an case
+//! finds its nearest by walking out from its own score. Controls already used
 //! are skipped in near-constant time.
 //!
 //! The scores are read by position. A [`ScoreTable`](super::distance::ScoreTable)
 //! made for the units in the order they are given is borrowed as it is, after
 //! one comparison of each unit's id with the table's; a table for other units,
 //! or in another order, costs one lookup by id for each unit and no more. The
-//! sort is on an integer that orders as the score does, with the candidate's
+//! sort is on an integer that orders as the score does, with the control's
 //! position as the tie-break, so it is a total order and its result does not
 //! depend on the algorithm or the number of threads: `O(c log c)` for `c`
-//! candidates, on the rayon pool from 65536. The positions already used
+//! controls, on the rayon pool from 65536. The positions already used
 //! are skipped through two forests of positions (union-find with path halving,
 //! Tarjan and van Leeuwen 1984), so a walk costs the unused positions it
 //! passes plus an inverse-Ackermann factor for each used run. The walk stops at the caliper, so a
-//! caliper bounds the work per anchor. Without one, an anchor whose nearest
-//! candidates are all refused by a constraint walks as far as it must.
+//! caliper bounds the work per case. Without one, an case whose nearest
+//! controls are all refused by a constraint walks as far as it must.
 //!
 //! The Mahalanobis, Euclidean and scaled Euclidean distances are one search:
 //! the Mahalanobis distance is the Euclidean distance between vectors
@@ -74,14 +74,14 @@
 //! scaled Euclidean distance the Euclidean distance between vectors scaled
 //! once, so each is the Euclidean distance between stored vectors. A stratum
 //! that [`crate::kdtree::worth_a_tree`] accepts is searched on a k-d tree,
-//! built once and with used candidates removed from it: the anchor's `k`
-//! nearest candidates that the constraints admit, within the caliper, at an
+//! built once and with used controls removed from it: the case's `k`
+//! nearest controls that the constraints admit, within the caliper, at an
 //! expected `O(log c)` nodes per search in few dimensions for `c`
-//! candidates, and at worst all `c` when the constraints refuse most near
-//! candidates. Other strata, and a ranking within a caliper on a score
-//! (`mahvars`), which narrows the candidates by binary search, are scanned:
-//! each anchor computes the distance to every available candidate in range,
-//! `a * c` distances for `a` anchors without a caliper.
+//! controls, and at worst all `c` when the constraints refuse most near
+//! controls. Other strata, and a ranking within a caliper on a score
+//! (`mahvars`), which narrows the controls by binary search, are scanned:
+//! each case computes the distance to every available control in range,
+//! `a * c` distances for `a` cases without a caliper.
 
 use super::constraints::{
     Constraint, ConstraintContext, ConstraintGroup, NoSelfMatchConstraint, UniqueKeyConstraint,
@@ -98,6 +98,7 @@ use super::engine::{
 use super::index::StrataValues;
 use super::records::MatchingRecord;
 use super::selection::{Assignment, SelectionStrategy};
+use crate::Error;
 use crate::constraints::sample_sd;
 use crate::kdtree::{Euclidean, KdTree, worth_a_tree};
 use crate::types::{
@@ -113,24 +114,24 @@ use std::borrow::Cow;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
-/// The order in which anchors are matched.
+/// The order in which cases are matched.
 ///
 /// The names and meanings are those of `m.order` in `matchit()`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MatchOrder {
-    /// By decreasing distance score, so the anchors hardest to match come
+    /// By decreasing distance score, so the cases hardest to match come
     /// first. Needs a score distance.
     Largest,
     /// By increasing distance score. Needs a score distance.
     Smallest,
-    /// In the order of the anchor slice.
+    /// In the order of the case slice.
     Data,
     /// In an order drawn from the job's seed.
     Random,
-    /// By the distance to the nearest available candidate, smallest first.
+    /// By the distance to the nearest available control, smallest first.
     ///
-    /// Every anchor finds its nearest candidate, the pairs are taken in order
-    /// of their distance, and an anchor whose candidate has been used meanwhile
+    /// Every case finds its nearest control, the pairs are taken in order
+    /// of their distance, and an case whose control has been used meanwhile
     /// finds the next nearest and takes its place in the order by the new
     /// distance. Needs rounds, and has no effect with replacement.
     Closest,
@@ -142,10 +143,10 @@ pub enum MatchOrder {
 ///
 /// Make it with [`MatchJob::with_nearest`](crate::MatchJob::with_nearest).
 /// Standard matching hands the whole job to the distance-ranked matcher when
-/// the strategy is this one. The default order of anchors is as in `matchit()`:
+/// the strategy is this one. The default order of cases is as in `matchit()`:
 /// largest score first for a propensity score or any numeric score (smallest
-/// first when the controls are the anchors, estimand `Atc`), and the order of
-/// the anchor slice for the birth date and the Mahalanobis distance.
+/// first when the controls are the cases, estimand `Atc`), and the order of
+/// the case slice for the birth date and the Mahalanobis distance.
 #[derive(Debug, Clone)]
 pub struct NearestSelection {
     seed: u64,
@@ -156,53 +157,23 @@ pub struct NearestSelection {
     variable_ratio: Option<VariableRatio>,
 }
 
-/// Why a variable ratio is refused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VariableRatioError {
-    /// The average is not a finite number above 1.
-    AverageNotAboveOne,
-    /// The minimum is below 1.
-    MinimumBelowOne,
-    /// The minimum is not below the average.
-    MinimumNotBelowAverage,
-    /// The maximum is not above the average.
-    MaximumNotAboveAverage,
-}
-
-impl std::fmt::Display for VariableRatioError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::AverageNotAboveOne => "the average ratio must be a number above 1",
-            Self::MinimumBelowOne => "the minimum number of controls must be at least 1",
-            Self::MinimumNotBelowAverage => {
-                "the minimum number of controls must be below the average ratio"
-            }
-            Self::MaximumNotAboveAverage => {
-                "the maximum number of controls must be above the average ratio"
-            }
-        })
-    }
-}
-
-impl std::error::Error for VariableRatioError {}
-
 /// Extremal variable ratio matching (Ming and Rosenbaum, 2000), the
 /// `min.controls` and `max.controls` of `matchit()`.
 ///
-/// Anchors take between `min` and `max` controls, and in total
-/// `round(average * anchors)` controls are asked for (halves rounded to even,
+/// Cases take between `min` and `max` controls, and in total
+/// `round(average * cases)` controls are asked for (halves rounded to even,
 /// as in R), as many as fixed ratio matching at the average would ask for. The
 /// numbers are set before matching, from the scores alone and without regard to
-/// calipers or trimming: as many anchors as possible get `max`, one anchor
+/// calipers or trimming: as many cases as possible get `max`, one case
 /// gets the number in between that makes the total, never below `min`, and the
-/// others get `min`. `matchit()` gives that one anchor fewer than `min` for
+/// others get `min`. `matchit()` gives that one case fewer than `min` for
 /// some totals when `min` is above 1, which the minimum forbids; the numbers
-/// agree otherwise. The anchors are ranked by score. When the anchors' mean score is
-/// above the candidates', the anchors with the highest scores, those furthest
-/// from the candidates, get the fewest controls, and otherwise the anchors with
-/// the lowest. Equal scores rank by position in the anchor slice. The ranking
-/// covers every anchor of the slice, trimmed to common support or not, as the
-/// mean does with the candidates.
+/// agree otherwise. The cases are ranked by score. When the cases' mean score is
+/// above the controls', the cases with the highest scores, those furthest
+/// from the controls, get the fewest controls, and otherwise the cases with
+/// the lowest. Equal scores rank by position in the case slice. The ranking
+/// covers every case of the slice, trimmed to common support or not, as the
+/// mean does with the controls.
 ///
 /// Used with [`NearestSelection::with_variable_ratio`], it replaces the job's
 /// ratio. It needs a score distance, a propensity score or any numeric score,
@@ -216,30 +187,30 @@ pub struct VariableRatio {
 
 impl VariableRatio {
     /// A variable ratio with the average (`ratio`) and the least and most
-    /// controls per anchor (`min.controls`, `max.controls`).
+    /// controls per case (`min.controls`, `max.controls`).
     ///
     /// # Errors
     ///
-    /// Returns a [`VariableRatioError`] unless `1 <= min < average < max`.
-    pub fn new(average: f64, min: usize, max: usize) -> Result<Self, VariableRatioError> {
+    /// Returns a [`Error`] unless `1 <= min < average < max`.
+    pub fn new(average: f64, min: usize, max: usize) -> Result<Self, Error> {
         if !(average.is_finite() && average > 1.0) {
-            return Err(VariableRatioError::AverageNotAboveOne);
+            return Err(Error::AverageNotAboveOne);
         }
         if min < 1 {
-            return Err(VariableRatioError::MinimumBelowOne);
+            return Err(Error::MinimumBelowOne);
         }
         #[expect(clippy::cast_precision_loss, reason = "control counts are small")]
         let (low, high) = (min as f64, max as f64);
         if low >= average {
-            return Err(VariableRatioError::MinimumNotBelowAverage);
+            return Err(Error::MinimumNotBelowAverage);
         }
         if high <= average {
-            return Err(VariableRatioError::MaximumNotAboveAverage);
+            return Err(Error::MaximumNotAboveAverage);
         }
         Ok(Self { average, min, max })
     }
 
-    /// The numbers of controls of `anchors` anchors, in the order of the
+    /// The numbers of controls of `cases` cases, in the order of the
     /// ranking by score (fewest first), or `None` when no assignment of the
     /// total exists within the bounds.
     fn counts(&self, anchors: usize) -> Option<Vec<usize>> {
@@ -272,7 +243,7 @@ impl VariableRatio {
             .collect()
     }
 
-    /// The number of controls of every anchor, by position in the slice.
+    /// The number of controls of every case, by position in the slice.
     fn per_anchor(&self, keys: &ScalarKeys<'_>) -> Option<Vec<usize>> {
         let anchors = keys.anchors.len();
         let candidates = keys.candidates.len();
@@ -322,7 +293,7 @@ impl NearestSelection {
         }
     }
 
-    /// Set the order of anchors, replacing the default.
+    /// Set the order of cases, replacing the default.
     #[must_use]
     pub const fn with_order(mut self, order: MatchOrder) -> Self {
         self.order = Some(order);
@@ -344,7 +315,7 @@ impl NearestSelection {
         self
     }
 
-    /// Match a variable number of controls to each anchor instead of the
+    /// Match a variable number of controls to each case instead of the
     /// job's ratio. See [`VariableRatio`].
     #[must_use]
     pub const fn with_variable_ratio(mut self, ratio: VariableRatio) -> Self {
@@ -352,8 +323,8 @@ impl NearestSelection {
         self
     }
 
-    /// Rank candidates by this distance, usually Mahalanobis, and use the
-    /// job's own distance only as a caliper and for the order of anchors.
+    /// Rank controls by this distance, usually Mahalanobis, and use the
+    /// job's own distance only as a caliper and for the order of cases.
     #[must_use]
     pub fn with_mahvars(mut self, ranking: DistanceConfig) -> Self {
         self.mahvars = Some(ranking);
@@ -399,13 +370,13 @@ pub(crate) struct NearestRequest<'a, R: MatchingRecord, G: ?Sized> {
     pub trimmed: TrimmedIndexConfig<'a>,
 }
 
-/// How candidates are ranked for an anchor.
+/// How controls are ranked for an case.
 enum Rank<'a> {
     /// The distance is the absolute difference of one number per record, so
-    /// candidates are sorted on it.
+    /// controls are sorted on it.
     Scalar { caliper: Option<f64> },
     /// Distances are computed pair by pair. A caliper on one number per record
-    /// narrows the candidates first; its width is the gate.
+    /// narrows the controls first; its width is the gate.
     Pairs {
         gate: Option<f64>,
         metric: ConfiguredMetric<'a>,
@@ -413,7 +384,7 @@ enum Rank<'a> {
     },
 }
 
-/// One number for each anchor and each candidate, by position in its slice,
+/// One number for each case and each control, by position in its slice,
 /// `NaN` for a unit without one.
 struct ScalarKeys<'a> {
     anchors: Cow<'a, [f64]>,
@@ -421,12 +392,12 @@ struct ScalarKeys<'a> {
 }
 
 impl ScalarKeys<'_> {
-    /// The anchor's number, `None` when it has none or it is not finite.
+    /// The case's number, `None` when it has none or it is not finite.
     fn anchor(&self, idx: usize) -> Option<f64> {
         Some(self.anchors[idx]).filter(|value| value.is_finite())
     }
 
-    /// The candidate's number, `None` when it has none or it is not finite.
+    /// The control's number, `None` when it has none or it is not finite.
     fn candidate(&self, idx: usize) -> Option<f64> {
         Some(self.candidates[idx]).filter(|value| value.is_finite())
     }
@@ -439,10 +410,10 @@ struct Plan<'a> {
     /// birth date.
     order_keys: Option<ScalarKeys<'a>>,
     rank: Rank<'a>,
-    /// The number of controls of each anchor by position in the anchor slice,
+    /// The number of controls of each case by position in the case slice,
     /// where the ratio is variable.
     ratios: Option<Vec<usize>>,
-    /// The most controls any anchor takes.
+    /// The most controls any case takes.
     max_ratio: usize,
 }
 
@@ -629,7 +600,7 @@ impl Walkable for Availability {
     }
 }
 
-/// Every position available, as when candidates are used with replacement.
+/// Every position available, as when controls are used with replacement.
 struct AllAvailable;
 
 impl Walkable for AllAvailable {
@@ -848,27 +819,27 @@ impl UnionFindAvailability {
     }
 }
 
-/// The candidates of one stratum, in the order they are searched.
+/// The controls of one stratum, in the order they are searched.
 struct Pool {
-    /// Candidate index in the slice, by position.
+    /// Control index in the slice, by position.
     candidate: Vec<usize>,
-    /// The sort key by position: the score the candidates are sorted on, or
+    /// The sort key by position: the score the controls are sorted on, or
     /// empty when they are in slice order.
     keys: Vec<f64>,
     avail: Availability,
-    /// For a vector distance, the vectors of the candidates in position
-    /// order, `dimension` numbers each and NaN for a candidate with no
+    /// For a vector distance, the vectors of the controls in position
+    /// order, `dimension` numbers each and NaN for a control with no
     /// vector, stored one coordinate after the other. Filled on the first
     /// scan.
     whitened: Option<Vec<f64>>,
-    /// For a vector distance, the k-d tree over the candidates' vectors,
+    /// For a vector distance, the k-d tree over the controls' vectors,
     /// keyed by position. Built on the first search that uses it.
     tree: TreeState,
 }
 
-/// The candidates the constraints refused in the searches, counted by the reason
-/// the constraint gives. A search tests a candidate only when it reaches it, so
-/// the counts are of the candidates tested, and a candidate refused in several
+/// The controls the constraints refused in the searches, counted by the reason
+/// the constraint gives. A search tests a control only when it reaches it, so
+/// the counts are of the controls tested, and a control refused in several
 /// searches counts in each.
 #[derive(Default)]
 struct Refusals(Vec<(&'static str, usize)>);
@@ -888,7 +859,7 @@ impl Refusals {
     }
 }
 
-/// One anchor's view of the stratum: what it may not be matched to.
+/// One case's view of the stratum: what it may not be matched to.
 struct Probe<'p, R: MatchingRecord, G: ?Sized> {
     env: &'p Env<'p, R, G>,
     anchor: &'p R,
@@ -898,8 +869,8 @@ struct Probe<'p, R: MatchingRecord, G: ?Sized> {
 }
 
 impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Probe<'_, R, G> {
-    /// Whether the anchor may be matched to this candidate, apart from the
-    /// distance and the candidate being available. A refusal is counted in
+    /// Whether the case may be matched to this control, apart from the
+    /// distance and the control being available. A refusal is counted in
     /// `refused`.
     fn admits(&self, candidate_idx: usize, refused: &mut Refusals) -> bool {
         let control = &self.env.candidates[candidate_idx];
@@ -1029,11 +1000,11 @@ fn walk_by_key<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         .collect()
 }
 
-/// Strata of at least this many anchors search them on the rayon pool when the
+/// Strata of at least this many cases search them on the rayon pool when the
 /// searches are independent.
 const PAR_ANCHORS_FROM: usize = 1 << 12;
 
-/// Pools of at least this many candidates are sorted on the rayon pool.
+/// Pools of at least this many controls are sorted on the rayon pool.
 const PAR_SORT_FROM: usize = 1 << 16;
 
 /// The number as an integer that orders as the number does, with `-0.0` and
@@ -1093,7 +1064,7 @@ impl Pool {
         }
     }
 
-    /// Take the candidate at `position` out of the pool.
+    /// Take the control at `position` out of the pool.
     fn remove(&mut self, position: usize) {
         self.avail.remove(position);
         if let TreeState::Built(tree) = &mut self.tree {
@@ -1101,8 +1072,8 @@ impl Pool {
         }
     }
 
-    /// The k-d tree over the candidates that have a vector with finite
-    /// values, keyed by position. Positions must follow the candidates'
+    /// The k-d tree over the controls that have a vector with finite
+    /// values, keyed by position. Positions must follow the controls'
     /// order in the slice, so that ties by position are ties by slice
     /// position; a pool sorted on a score is left to the scan.
     fn build_tree<R: MatchingRecord>(&self, vectors: Vectors<'_>, candidates: &[R]) -> TreeState {
@@ -1130,7 +1101,7 @@ impl Pool {
         TreeState::Built(tree)
     }
 
-    /// The `k` available candidates nearest to `x` that the probe admits, with
+    /// The `k` available controls nearest to `x` that the probe admits, with
     /// their distances, nearest first and by slice position among equals.
     /// The distance is the absolute difference of the keys.
     fn nearest_by_key<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
@@ -1153,7 +1124,7 @@ impl Pool {
         )
     }
 
-    /// As [`Self::nearest_by_key`] where no candidate has been taken out of
+    /// As [`Self::nearest_by_key`] where no control has been taken out of
     /// the pool, which reads the pool and changes nothing.
     fn nearest_by_key_unused<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
         &self,
@@ -1205,18 +1176,18 @@ impl Pool {
     }
 
     /// The vector distance form of [`Self::nearest_by_pairs`]: the
-    /// Euclidean distance between the anchor's vector and the candidates'.
+    /// Euclidean distance between the case's vector and the controls'.
     ///
     /// Without a gate, a pool that [`worth_a_tree`] accepts is searched on a
     /// k-d tree ([`crate::kdtree`]), with the probe as its admission test and
     /// the caliper as its radius. A gate on a score leaves the pool sorted on
     /// that score and is narrow by design, so it is scanned. Otherwise the pool is scanned: the distance is
     /// computed first, on vectors stored one coordinate after the other, and
-    /// the constraints are tested only for a candidate that would enter the
+    /// the constraints are tested only for a control that would enter the
     /// `k` nearest. A long range is scanned in chunks on the rayon pool and
     /// the chunks' nearest sets merged under the same total order, so the
     /// result does not depend on the number of threads. Both give the result
-    /// of testing every candidate, nearest first and by slice position among
+    /// of testing every control, nearest first and by slice position among
     /// equals.
     #[expect(clippy::too_many_arguments)]
     fn nearest_by_vectors<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
@@ -1354,11 +1325,11 @@ const SCAN_CHUNK: usize = 8192;
 /// Positions whose distances are computed together.
 const SCAN_BLOCK: usize = 256;
 
-/// The nearest candidates a scan found as (distance, candidate index, position),
-/// and the candidates the constraints refused on the way.
+/// The nearest controls a scan found as (distance, control index, position),
+/// and the controls the constraints refused on the way.
 type ScanFound = (Vec<(f64, usize, usize)>, Refusals);
 
-/// The scan of one anchor over a range of pool positions.
+/// The scan of one case over a range of pool positions.
 struct WhitenedScan<'s, R: MatchingRecord, G: ?Sized> {
     /// Whitened coordinates by coordinate, then position.
     columns: &'s [f64],
@@ -1371,9 +1342,9 @@ struct WhitenedScan<'s, R: MatchingRecord, G: ?Sized> {
 }
 
 impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> WhitenedScan<'_, R, G> {
-    /// The up to `k` nearest admitted candidates among the positions
-    /// `from..to` as (distance, candidate index, position), ordered by
-    /// distance and then candidate index.
+    /// The up to `k` nearest admitted controls among the positions
+    /// `from..to` as (distance, control index, position), ordered by
+    /// distance and then control index.
     fn range(&self, from: usize, to: usize) -> ScanFound {
         let mut refused = Refusals::default();
         let n = self.candidate.len();
@@ -1441,12 +1412,12 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> WhitenedScan<'_, R, G> {
 /// What a stratum produced.
 #[derive(Default)]
 struct StratumResult {
-    /// Each matched anchor with its controls in order of assignment.
+    /// Each matched case with its controls in order of assignment.
     matched: Vec<(usize, Vec<usize>)>,
     unmatched: usize,
     below_ratio: usize,
     distinct_candidates: usize,
-    /// The candidates the constraints refused, by reason.
+    /// The controls the constraints refused, by reason.
     refused: Refusals,
 }
 
@@ -1457,25 +1428,25 @@ type QueueItem = (OrderedFloat<f64>, Reverse<usize>);
 struct Stratum<'e, 'a, R: MatchingRecord, G: ?Sized> {
     env: &'e Env<'a, R, G>,
     used: &'e mut UsedControlsVec,
-    /// The anchors that can be searched, in slice order.
+    /// The cases that can be searched, in slice order.
     usable: Vec<usize>,
     case_strata: Option<Vec<Option<&'a str>>>,
     pool: Pool,
     /// The unique-key values taken so far. With a unique key it is shared by
     /// every stratum of the match.
     state: &'e mut UseState,
-    /// The controls of each usable anchor, in order of assignment.
+    /// The controls of each usable case, in order of assignment.
     controls_of: Vec<Vec<usize>>,
-    /// Candidates marked used in `used`, to be cleared at the end.
+    /// Controls marked used in `used`, to be cleared at the end.
     assigned: Vec<usize>,
-    /// The pool positions given to some anchor.
+    /// The pool positions given to some case.
     touched: Marks,
-    /// The candidates the constraints refused in the searches.
+    /// The controls the constraints refused in the searches.
     refused: Refusals,
 }
 
 impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
-    /// The nearest `k` available candidates of the anchor in `slot`.
+    /// The nearest `k` available controls of the case in `slot`.
     fn search(&mut self, slot: usize, k: usize) -> Vec<(usize, f64)> {
         let env = self.env;
         let anchor = &env.anchors[self.usable[slot]];
@@ -1551,9 +1522,9 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
         }
     }
 
-    /// The nearest `k` candidates of the anchor in `slot` where the ranking
-    /// is by a score and no candidate has been taken out of the pool, which
-    /// reads the stratum and changes nothing, so anchors can be searched at
+    /// The nearest `k` controls of the case in `slot` where the ranking
+    /// is by a score and no control has been taken out of the pool, which
+    /// reads the stratum and changes nothing, so cases can be searched at
     /// the same time.
     fn search_unused(&self, slot: usize, k: usize) -> (Vec<(usize, f64)>, Refusals) {
         let env = self.env;
@@ -1583,7 +1554,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
         (found, refused)
     }
 
-    /// The number of controls the anchor in `slot` is to get.
+    /// The number of controls the case in `slot` is to get.
     fn ratio_of(&self, slot: usize) -> usize {
         self.env
             .plan
@@ -1594,7 +1565,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
             })
     }
 
-    /// Whether the unique value of the candidate at `position` has been taken.
+    /// Whether the unique value of the control at `position` has been taken.
     fn unique_value_taken(&self, position: usize) -> bool {
         let criteria = self.env.criteria;
         criteria.unique_by_key.is_some()
@@ -1610,7 +1581,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
             })
     }
 
-    /// Give the anchor in `slot` the candidate at `position`.
+    /// Give the case in `slot` the control at `position`.
     fn assign(&mut self, slot: usize, position: usize) {
         let criteria = self.env.criteria;
         let candidate_idx = self.pool.candidate[position];
@@ -1630,7 +1601,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
         }
     }
 
-    /// Every anchor, in turn, takes all its controls.
+    /// Every case, in turn, takes all its controls.
     fn take_all_in_turn(&mut self, order: &[usize]) {
         // With replacement and no unique key, taking a control changes nothing
         // another anchor's search reads, so the searches are independent and
@@ -1672,7 +1643,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> Stratum<'_, '_, R, G> {
         }
     }
 
-    /// Every anchor takes one control per round, in the same order each round.
+    /// Every case takes one control per round, in the same order each round.
     fn take_in_rounds(&mut self, order: &[usize]) {
         let mut active: Vec<usize> = order
             .iter()
@@ -1849,8 +1820,8 @@ fn run_stratum<'a, R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
     result
 }
 
-/// The number the anchor at `idx` is searched by: its score, or nothing
-/// where candidates are searched in full.
+/// The number the case at `idx` is searched by: its score, or nothing
+/// where controls are searched in full.
 fn anchor_key(plan: &Plan<'_>, idx: usize) -> Option<f64> {
     match &plan.rank {
         Rank::Scalar { .. } | Rank::Pairs { gate: Some(_), .. } => {
@@ -1887,7 +1858,7 @@ fn group_rows<'a, R: MatchingRecord>(
     (groups, index)
 }
 
-/// Match standard anchors to candidates by distance.
+/// Match standard cases to controls by distance.
 pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
     request: &NearestRequest<'_, R, G>,
     nearest: &NearestSelection,
@@ -1971,12 +1942,12 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
     };
 
     let mut pairs = Vec::new();
-    let mut matched_anchors = 0_usize;
+    let mut matched_cases = 0_usize;
     let mut distinct = 0_usize;
     for result in results {
         distinct += result.distinct_candidates;
-        diagnostics.anchors_with_no_candidates += result.unmatched;
-        diagnostics.anchors_below_required_ratio += result.below_ratio;
+        diagnostics.cases_with_no_controls += result.unmatched;
+        diagnostics.cases_below_required_ratio += result.below_ratio;
         for (reason, count) in result.refused.0 {
             diagnostics.add_exclusion(
                 ExclusionReason::Constraint(ConstraintReason::from_reason_str(reason)),
@@ -1984,7 +1955,7 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
             );
         }
         for (anchor_idx, controls) in result.matched {
-            matched_anchors += 1;
+            matched_cases += 1;
             let anchor_id = request.anchors[anchor_idx].id();
             for candidate_idx in controls {
                 pairs.push(MatchedPair::new(
@@ -1994,12 +1965,12 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
             }
         }
     }
-    diagnostics.matched_anchors = matched_anchors;
+    diagnostics.matched_cases = matched_cases;
     diagnostics.pairs_selected = pairs.len();
     finalize_estimand_diagnostics(&mut diagnostics, criteria.estimand, eligible_anchors, None);
     build_outcome(
         pairs,
-        matched_anchors,
+        matched_cases,
         eligible_anchors,
         distinct,
         diagnostics,
@@ -2009,6 +1980,11 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::{
+        CovarianceSpec, CovariatesSpec, DistanceSpec, MatchMethod, MissingSpec, NearestSpec,
+        OrderSpec, TransformSpec,
+    };
+    use crate::{BalanceRecord, CovariateValue, SpecOutput};
 
     #[test]
     fn the_bitmap_availability_agrees_with_the_union_find_forests() {
@@ -2082,7 +2058,7 @@ mod tests {
     /// scan for the Mahalanobis, the Euclidean and the scaled Euclidean
     /// distance: with exact ties in the distances, with and without
     /// replacement, at ratios 1 and 3, with exact strata, a caliper, a birth
-    /// window that refuses some near candidates, a unique key, the closest
+    /// window that refuses some near controls, a unique key, the closest
     /// order, and on one and on four threads. The pools are longer than one
     /// scan chunk, so the scan is split.
     #[test]
@@ -2171,8 +2147,8 @@ mod tests {
                             run_spec(
                                 &spec,
                                 SpecInput::Standard {
-                                    anchors,
-                                    candidates,
+                                    cases: anchors,
+                                    controls: candidates,
                                 },
                             )
                         });
@@ -2237,13 +2213,9 @@ mod tests {
             .with_std_caliper(true)
             .with_distance_config(config)
             .run();
-        assert_eq!(outcome.matched_cases, 0);
-        assert!(
-            outcome
-                .diagnostics
-                .exclusion_counts
-                .keys()
-                .any(|reason| reason.to_string() == "invalid_criteria:nearest_options")
+        assert_eq!(
+            outcome.unwrap_err(),
+            crate::Error::InvalidCriteria(crate::types::InvalidCriteriaReason::NearestOptions)
         );
     }
 
@@ -2268,7 +2240,8 @@ mod tests {
             .with_constraints(vec![crate::constraints::caliper_on_field::<BaseRecord>(
                 "x", 1.0,
             )])
-            .run();
+            .run()
+            .expect("a valid job");
         let count = |reason: ConstraintReason| {
             outcome
                 .diagnostics
@@ -2293,14 +2266,9 @@ mod tests {
             if variable {
                 job = job.with_variable_ratio(VariableRatio::new(2.0, 1, 3).expect("valid"));
             }
-            let outcome = job.run();
-            assert_eq!(outcome.matched_cases, 0);
-            assert!(
-                outcome
-                    .diagnostics
-                    .exclusion_counts
-                    .keys()
-                    .any(|reason| reason.to_string() == "invalid_criteria:nearest_options")
+            assert_eq!(
+                job.run().unwrap_err(),
+                crate::Error::InvalidCriteria(crate::types::InvalidCriteriaReason::NearestOptions)
             );
         }
     }

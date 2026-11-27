@@ -2,26 +2,27 @@
 //! references do not cover: results that do not depend on the number of
 //! threads, rows that cannot be imputed, and the rejection of invalid input.
 
+use epistat_core::InputError;
 use epistat_did::{
-    ImputationConfig, ImputationError, ImputationTarget, ImputationTerm, Pretrends, StaggeredPanel,
-    TwoStageConfig, TwoStageSpec, estimate_did_imputation, estimate_did2s,
+    Error, ImputationOptions, ImputationTarget, ImputationTerm, Pretrends, StaggeredPanel,
+    StaggeredPanelBuilder, TwoStageOptions, TwoStageSpec, imputation, two_stage,
 };
 use epistat_linalg::Mat;
-use epistat_testkit::{SplitMix64, assert_same_on_threads};
+use epistat_testkit::{BadInput, SplitMix64, assert_rejects_bad_input, assert_same_on_threads};
 
 /// A staggered panel: `units` units over periods 1..=periods, cohorts 3, 5,
 /// 7 and never, one covariate, row weights and a fifth of the rows dropped.
 struct Sim {
     unit: Vec<u32>,
-    time: Vec<i32>,
-    g: Vec<Option<i32>>,
+    time: Vec<i64>,
+    g: Vec<Option<i64>>,
     y: Vec<f64>,
     w: Vec<f64>,
     x: Mat<f64>,
     cl: Vec<u32>,
 }
 
-fn simulate(units: u32, periods: i32, seed: u64) -> Sim {
+fn simulate(units: u32, periods: i64, seed: u64) -> Sim {
     let mut rng = SplitMix64::new(seed);
     let (mut unit, mut time, mut g, mut y, mut w, mut x, mut cl) =
         (vec![], vec![], vec![], vec![], vec![], vec![], vec![]);
@@ -35,14 +36,14 @@ fn simulate(units: u32, periods: i32, seed: u64) -> Sim {
             let treated = cohort.is_some_and(|c| t >= c);
             let xv = rng.uniform(-1.0, 1.0);
             let tau = if treated {
-                1.0 + 0.1 * f64::from(t - cohort.unwrap_or(0))
+                1.0 + 0.1 * (t - cohort.unwrap_or(0)) as f64
             } else {
                 0.0
             };
             unit.push(3 * u + 1);
             time.push(t);
             g.push(cohort);
-            y.push(alpha + 0.2 * f64::from(t) + 0.5 * xv + tau + rng.uniform(-1.0, 1.0));
+            y.push(alpha + 0.2 * t as f64 + 0.5 * xv + tau + rng.uniform(-1.0, 1.0));
             w.push(rng.uniform(0.5, 2.0));
             x.push(xv);
             cl.push(u % 7);
@@ -61,45 +62,62 @@ fn simulate(units: u32, periods: i32, seed: u64) -> Sim {
 }
 
 impl Sim {
+    fn columns(&self) -> StaggeredPanelBuilder<'_> {
+        StaggeredPanel::builder(&self.unit, &self.time, &self.g, &self.y)
+            .weights(&self.w)
+            .covariates(self.x.as_ref())
+    }
+
     fn panel(&self) -> StaggeredPanel<'_> {
-        StaggeredPanel {
-            unit: &self.unit,
-            time: &self.time,
-            first_treated: &self.g,
-            outcome: &self.y,
-            weights: Some(&self.w),
-            covariates: Some(self.x.as_ref()),
-        }
+        self.columns().build().unwrap()
+    }
+}
+
+/// The event study of `did2s` with reference period -1.
+fn event_study() -> TwoStageOptions {
+    TwoStageOptions {
+        spec: TwoStageSpec::EventStudy {
+            references: vec![-1],
+        },
+        ..TwoStageOptions::default()
     }
 }
 
 #[test]
 fn results_do_not_depend_on_the_number_of_threads() {
     let sim = simulate(3000, 9, 7);
-    let panel = sim.panel();
+    let panel = sim.columns().clusters(&sim.cl).build().unwrap();
     assert_same_on_threads(|| {
-        let config = ImputationConfig {
+        let config = ImputationOptions {
+            target: ImputationTarget::Horizons(None),
             pretrends: Some(Pretrends::All),
-            clusters: Some(&sim.cl),
-            ..ImputationConfig::event_study()
+            ..ImputationOptions::default()
         };
-        let imp = estimate_did_imputation(&panel, &config).unwrap();
-        let two = estimate_did2s(&panel, &TwoStageConfig::event_study()).unwrap();
+        let imp = imputation::estimate(&panel, &config).unwrap();
+        let two = two_stage::estimate(&panel, &event_study()).unwrap();
         let mut out = Vec::new();
-        for e in &imp.estimates {
-            out.extend(e.estimate);
-            out.extend(e.std_error);
+        let estimates = imp
+            .effects
+            .iter()
+            .map(|e| e.estimate)
+            .chain(
+                imp.pretrends
+                    .iter()
+                    .flat_map(|p| p.terms.iter().map(|t| t.estimate)),
+            )
+            .chain(two.terms.iter().map(|t| t.estimate));
+        for e in estimates.flatten() {
+            out.extend([
+                e.estimate,
+                e.se.unwrap(),
+                e.lower().unwrap(),
+                e.upper().unwrap(),
+            ]);
         }
-        for inf in imp.influence.iter().chain(&two.influence).flatten() {
-            out.extend(inf);
-        }
-        for t in &imp.pretrends.unwrap().terms {
-            out.extend(t.estimate);
-            out.extend(t.std_error);
-        }
-        for t in &two.terms {
-            out.extend(t.estimate);
-            out.extend(t.std_error);
+        for inf in imp.influence.iter().chain(&two.influence) {
+            for j in 0..inf.n_columns() {
+                out.extend(inf.column(j));
+            }
         }
         out
     });
@@ -127,18 +145,14 @@ fn a_row_whose_effects_lie_in_different_components_is_dropped() {
         None,
     ];
     let y = [1.0, 2.0, 5.0, 1.5, 2.5, 3.0, 4.0, 9.0, 3.5, 4.5];
-    let panel = StaggeredPanel {
-        unit: &unit,
-        time: &time,
-        first_treated: &g,
-        outcome: &y,
-        weights: None,
-        covariates: None,
-    };
-    let out = estimate_did_imputation(&panel, &ImputationConfig::static_effect()).unwrap();
+    let panel = StaggeredPanel::builder(&unit, &time, &g, &y)
+        .build()
+        .unwrap();
+    let out = imputation::estimate(&panel, &ImputationOptions::default()).unwrap();
     assert_eq!(out.dropped_rows, vec![2, 7]);
-    assert_eq!(out.estimates[0].estimate, None);
-    assert_eq!(out.estimates[0].n_rows, 0);
+    assert_eq!(out.effects[0].estimate, None);
+    assert_eq!(out.effects[0].n_rows, 0);
+    assert!(out.influence.is_none());
 }
 
 #[test]
@@ -152,96 +166,126 @@ fn invalid_input_is_an_error() {
     let last_of_first = (0..n).rev().find(|&i| sim.unit[i] == sim.unit[0]).unwrap();
     assert_ne!(other, last_of_first);
     g[last_of_first] = if first == Some(3) { Some(5) } else { Some(3) };
-    let bad = StaggeredPanel {
-        first_treated: &g,
-        ..panel
-    };
     assert_eq!(
-        estimate_did_imputation(&bad, &ImputationConfig::static_effect()).unwrap_err(),
-        ImputationError::Cohort { unit: sim.unit[0] }
+        StaggeredPanel::builder(&sim.unit, &sim.time, &g, &sim.y)
+            .build()
+            .unwrap_err(),
+        Error::Input(InputError::NotConstant {
+            what: "first_treated",
+            unit: sim.unit[0]
+        })
     );
     let mut cl = sim.cl.clone();
     cl[last_of_first] += 1;
     assert_eq!(
-        estimate_did_imputation(
-            &panel,
-            &ImputationConfig {
-                clusters: Some(&cl),
-                ..ImputationConfig::static_effect()
-            }
-        )
-        .unwrap_err(),
-        ImputationError::Clusters { unit: sim.unit[0] }
+        sim.columns().clusters(&cl).build().unwrap_err(),
+        Error::Input(InputError::NotConstant {
+            what: "clusters",
+            unit: sim.unit[0]
+        })
     );
     assert_eq!(
-        estimate_did_imputation(
+        imputation::estimate(
             &panel,
-            &ImputationConfig {
-                target: ImputationTarget::Horizons(Some(&[0, -1])),
-                ..ImputationConfig::static_effect()
+            &ImputationOptions {
+                target: ImputationTarget::Horizons(Some(vec![0, -1])),
+                ..ImputationOptions::default()
             }
         )
         .unwrap_err(),
-        ImputationError::Horizon(-1)
+        Error::Horizon(-1)
     );
     assert_eq!(
-        estimate_did_imputation(
+        imputation::estimate(
             &panel,
-            &ImputationConfig {
-                pretrends: Some(Pretrends::Periods(&[-2, 0])),
-                ..ImputationConfig::static_effect()
+            &ImputationOptions {
+                pretrends: Some(Pretrends::Periods(vec![-2, 0])),
+                ..ImputationOptions::default()
             }
         )
         .unwrap_err(),
-        ImputationError::Pretrend(0)
+        Error::Pretrend(0)
     );
     let untreated = (0..n)
         .find(|&i| sim.g[i].is_none_or(|g| sim.time[i] < g))
         .unwrap();
     let mut custom = vec![0.0; n];
     custom[untreated] = 1.0;
-    let columns = [custom.as_slice()];
     assert_eq!(
-        estimate_did_imputation(
+        imputation::estimate(
             &panel,
-            &ImputationConfig {
-                target: ImputationTarget::Weights(&columns),
-                ..ImputationConfig::static_effect()
+            &ImputationOptions {
+                target: ImputationTarget::Weights(vec![custom.clone()]),
+                ..ImputationOptions::default()
             }
         )
         .unwrap_err(),
-        ImputationError::TargetOnUntreated {
+        Error::TargetOnUntreated {
             column: 0,
             row: untreated
         }
     );
     assert_eq!(
-        estimate_did2s(
+        imputation::estimate(
             &panel,
-            &TwoStageConfig {
-                spec: TwoStageSpec::EventStudy { references: &[0] },
-                ..TwoStageConfig::event_study()
+            &ImputationOptions {
+                target: ImputationTarget::Weights(vec![custom[1..].to_vec()]),
+                ..ImputationOptions::default()
             }
         )
         .unwrap_err(),
-        ImputationError::Reference(0)
+        Error::Input(InputError::Length {
+            what: "target weights",
+            expected: n,
+            found: n - 1
+        })
+    );
+    assert_eq!(
+        two_stage::estimate(
+            &panel,
+            &TwoStageOptions {
+                spec: TwoStageSpec::EventStudy {
+                    references: vec![0]
+                },
+                ..TwoStageOptions::default()
+            }
+        )
+        .unwrap_err(),
+        Error::Reference(0)
     );
     let mut y = sim.y.clone();
     y[4] = f64::NAN;
     assert_eq!(
-        estimate_did_imputation(
-            &StaggeredPanel {
-                outcome: &y,
-                ..panel
-            },
-            &ImputationConfig::static_effect()
-        )
-        .unwrap_err(),
-        ImputationError::NotFinite {
+        StaggeredPanel::builder(&sim.unit, &sim.time, &sim.g, &y)
+            .build()
+            .unwrap_err(),
+        Error::Input(InputError::NotFinite {
             what: "outcome",
             row: 4
-        }
+        })
     );
+}
+
+#[test]
+fn bad_target_weights_are_input_errors() {
+    let sim = simulate(50, 8, 5);
+    let panel = sim.panel();
+    let treated: Vec<f64> = (0..sim.y.len())
+        .map(|i| f64::from(u8::from(sim.g[i].is_some_and(|g| sim.time[i] >= g))))
+        .collect();
+    assert_rejects_bad_input("imputation::estimate target weights", |bad| {
+        // Reversed weights fall on untreated rows, which is its own error.
+        (bad != BadInput::Unsorted).then(|| {
+            imputation::estimate(
+                &panel,
+                &ImputationOptions {
+                    target: ImputationTarget::Weights(vec![bad.column(&treated)]),
+                    ..ImputationOptions::default()
+                },
+            )
+            .map(|out| out.effects.len())
+        })
+    });
 }
 
 #[test]
@@ -255,16 +299,16 @@ fn horizons_without_imputable_rows_have_no_estimate() {
             *g = Some(7);
         }
     }
-    let out = estimate_did_imputation(
+    let out = imputation::estimate(
         &sim.panel(),
-        &ImputationConfig {
-            target: ImputationTarget::Horizons(Some(&[0, 1, 5, 40])),
-            ..ImputationConfig::static_effect()
+        &ImputationOptions {
+            target: ImputationTarget::Horizons(Some(vec![0, 1, 5, 40])),
+            ..ImputationOptions::default()
         },
     )
     .unwrap();
-    let estimate = |h: i32| {
-        out.estimates
+    let estimate = |h: i64| {
+        out.effects
             .iter()
             .find(|e| e.term == ImputationTerm::Horizon(h))
             .unwrap()

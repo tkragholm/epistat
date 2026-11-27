@@ -4,17 +4,16 @@ use super::linear_algebra::{diag_sqrt, linear_grid, mat_vec_mul_into, sandwich_c
 use super::relative_magnitude::{
     RelativeMagnitudeFamily, compute_original_confidence_set,
     compute_relative_magnitude_family_conditional_cs_with_precomputed_sets,
-    compute_relative_magnitude_family_identified_set, geometry::basis_post_weights,
-    prepare_relative_magnitude_family_draws,
+    compute_relative_magnitude_family_identified_set, prepare_relative_magnitude_family_draws,
 };
 use super::smoothness::build_smoothness_constraint_matrix;
 use super::smoothness::least_favorable_intervals::SmoothnessFlciConfig;
 use super::solver_tally::SolverCounts;
 use super::{
     HonestBiasDirection, HonestConditionalConfidenceSet, HonestEventStudyInput,
-    HonestIdentifiedSet, HonestMonotonicityDirection, HonestOriginalConfidenceSet,
-    HonestRelativeMagnitudeBound, LeastFavorableSimulation, RelativeMagnitudeConfidenceSetConfig,
-    RelativeMagnitudeHybrid, SmoothnessConfidenceSetConfig, SmoothnessHybrid,
+    HonestIdentifiedSet, HonestMonotonicityDirection, HonestRelativeMagnitudeBound,
+    LeastFavorableSimulation, RelativeMagnitudeConfidenceSetConfig, RelativeMagnitudeHybrid,
+    SmoothnessConfidenceSetConfig, SmoothnessHybrid,
 };
 use rayon::prelude::*;
 
@@ -96,20 +95,6 @@ pub enum SensitivityRestrictionKind {
     /// Bound `Mbar` on post-period deviations as a multiple of the largest
     /// pre-period deviation.
     RelativeMagnitude,
-}
-
-/// Sensitivity summary for one post-treatment period.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PostPeriodSensitivitySummary {
-    /// Robust confidence sets over the grid of sensitivity values.
-    pub robust_ci: SensitivitySummary,
-    /// Wald confidence set of the post-period coefficient under exact parallel
-    /// trends.
-    pub orig_ci: HonestOriginalConfidenceSet,
-    /// Restriction family the sensitivity analysis used.
-    pub sensitivity_type: SensitivityRestrictionKind,
-    /// Label of the post-treatment period, as listed in the event-study input.
-    pub post_period: i32,
 }
 
 fn smoothness_variant_label(
@@ -788,133 +773,4 @@ pub(in crate::inference::sensitivity) fn summarize_relative_magnitude_sensitivit
             solver: solver_counts,
         })
         .collect())
-}
-
-/// Summarize sensitivity results for the post-treatment period with the given
-/// label, as the basis functional of that period.
-///
-/// `sensitivity_values` is the grid of `M` or `Mbar` values according to
-/// `sensitivity_type`, with the defaults of the summarize function for that
-/// type. `bound` is read only for a relative-magnitude restriction.
-///
-/// # Errors
-/// Returns an error if the requested post period is absent, the input is
-/// invalid, or the underlying summary routine fails.
-pub fn summarize_post_period_sensitivity(
-    input: &HonestEventStudyInput,
-    post_period: i32,
-    sensitivity_type: SensitivityRestrictionKind,
-    inference: InferenceConfig,
-    method: Option<SensitivitySummaryMethod>,
-    sensitivity_values: Option<&[f64]>,
-    bound: Option<HonestRelativeMagnitudeBound>,
-    bias_direction: Option<HonestBiasDirection>,
-    monotonicity_direction: Option<HonestMonotonicityDirection>,
-) -> Result<PostPeriodSensitivitySummary, String> {
-    summarize_post_period_sensitivity_counted(
-        input,
-        post_period,
-        sensitivity_type,
-        inference,
-        method,
-        sensitivity_values,
-        bound,
-        bias_direction,
-        monotonicity_direction,
-        LeastFavorableSimulation::default(),
-        &crate::inference::sensitivity::SolverCounter::new(),
-    )
-}
-
-/// Same as [`summarize_post_period_sensitivity`], with explicit least-favorable simulation settings.
-///
-/// # Errors
-/// Returns an error under the conditions of [`summarize_post_period_sensitivity`], or if `simulation` is
-/// invalid.
-pub fn summarize_post_period_sensitivity_with_simulation(
-    input: &HonestEventStudyInput,
-    post_period: i32,
-    sensitivity_type: SensitivityRestrictionKind,
-    inference: InferenceConfig,
-    method: Option<SensitivitySummaryMethod>,
-    sensitivity_values: Option<&[f64]>,
-    bound: Option<HonestRelativeMagnitudeBound>,
-    bias_direction: Option<HonestBiasDirection>,
-    monotonicity_direction: Option<HonestMonotonicityDirection>,
-    simulation: LeastFavorableSimulation,
-) -> Result<PostPeriodSensitivitySummary, String> {
-    simulation.validate()?;
-    summarize_post_period_sensitivity_counted(
-        input,
-        post_period,
-        sensitivity_type,
-        inference,
-        method,
-        sensitivity_values,
-        bound,
-        bias_direction,
-        monotonicity_direction,
-        simulation,
-        &crate::inference::sensitivity::SolverCounter::new(),
-    )
-}
-
-pub(in crate::inference::sensitivity) fn summarize_post_period_sensitivity_counted(
-    input: &HonestEventStudyInput,
-    post_period: i32,
-    sensitivity_type: SensitivityRestrictionKind,
-    inference: InferenceConfig,
-    method: Option<SensitivitySummaryMethod>,
-    sensitivity_values: Option<&[f64]>,
-    bound: Option<HonestRelativeMagnitudeBound>,
-    bias_direction: Option<HonestBiasDirection>,
-    monotonicity_direction: Option<HonestMonotonicityDirection>,
-    simulation: LeastFavorableSimulation,
-    counter: &crate::inference::sensitivity::SolverCounter,
-) -> Result<PostPeriodSensitivitySummary, String> {
-    input.validate()?;
-    let Some(post_idx) = input
-        .post_periods
-        .iter()
-        .position(|period| *period == post_period)
-    else {
-        return Err(format!(
-            "post period {post_period} not found in event-study input"
-        ));
-    };
-    let post_weights = basis_post_weights(input.num_post_periods(), post_idx);
-    let orig_ci = compute_original_confidence_set(input, &post_weights, inference)?;
-    let robust_ci = match sensitivity_type {
-        SensitivityRestrictionKind::Smoothness => summarize_smoothness_sensitivity_counted(
-            input,
-            inference,
-            &post_weights,
-            method,
-            sensitivity_values,
-            bias_direction,
-            monotonicity_direction,
-            simulation,
-            counter,
-        )?,
-        SensitivityRestrictionKind::RelativeMagnitude => {
-            summarize_relative_magnitude_sensitivity_counted(
-                input,
-                inference,
-                &post_weights,
-                method,
-                sensitivity_values,
-                bound,
-                bias_direction,
-                monotonicity_direction,
-                simulation,
-                counter,
-            )?
-        }
-    };
-    Ok(PostPeriodSensitivitySummary {
-        robust_ci,
-        orig_ci,
-        sensitivity_type,
-        post_period,
-    })
 }

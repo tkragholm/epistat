@@ -37,8 +37,13 @@
 //! The unit or cohort and period effects are absorbed by
 //! [`epistat_glm::absorb`] and the regression is fitted by
 //! [`epistat_glm::feols`], so the cost is linear in the rows at a fixed
-//! number of cells and covariates. The covariance is that of the caller's
-//! [`Vcov`]; `fixest`'s default, which `etwfe` keeps, is iid.
+//! number of cells and covariates. The covariance is the one
+//! [`EtwfeOptions::vcov`] names, clustered by the panel's clusters or by unit
+//! when it has none; `fixest`'s default, which `etwfe` keeps, is iid. The
+//! intervals and p-values of the coefficients use the t distribution, with
+//! `G - 1` degrees of freedom for a clustered covariance and `n - K`
+//! otherwise, as `fixest` does; those of the average effects use the normal,
+//! as `marginaleffects` does.
 //!
 //! # Average effects
 //!
@@ -67,14 +72,15 @@
 //! The influence function of a coefficient for unit `u` is
 //! `psi_u = N_u e_k' B sum_{rows of u} w_it e_it x~_it` (`N_u` the units of the
 //! fit, `x~` the demeaned regressors, `B = (X~' W X~)^-1`), and that of an
-//! average effect is `J psi_u`. Summed within unit clusters by
-//! [`did_cluster_sums`](crate::did_cluster_sums) they give the unit-clustered
-//! covariance without small-sample factors.
+//! average effect is `J psi_u`. [`Influence::variance`] over unit clusters
+//! gives the unit-clustered covariance without the factor `(n - 1)/(n - K)`,
+//! under the [`ClusterRule`](epistat_inference::ClusterRule) of the factor
+//! `G/(G - 1)` of [`EtwfeOptions::ssc`].
 //!
 //! # Nonlinear models
 //!
-//! [`estimate_etwfe_glm`] fits the Poisson (log link) and logit models of
-//! `etwfe(family = "poisson" / "logit")`. `etwfe` then calls `fixest::feglm`
+//! [`EtwfeFamily::Poisson`] and [`EtwfeFamily::Logit`] fit the Poisson (log
+//! link) and logit models of `etwfe(family = "poisson" / "logit")`. `etwfe` then calls `fixest::feglm`
 //! with `fe = "none"` and cohort effects: the absorbed effects become an
 //! intercept and the dummies of the cohorts other than the reference and of
 //! the periods after the first,
@@ -87,7 +93,7 @@
 //! with the cells, the indicator and the covariates of the linear model and
 //! `c_r = l_{t_1} = 0`. The columns are, in `etwfe`'s order, the intercept,
 //! the covariates and their cohort and period slopes, the cohort and period
-//! dummies, the cells and the cells' slopes ([`EtwfeGlmTerm`]). The rows of
+//! dummies, the cells and the cells' slopes ([`EtwfeTerm`]). The rows of
 //! weight zero are removed, as `fixest` removes them. The model is fitted by
 //! [`Glm::fit_rows`](epistat_glm::Glm::fit_rows), the iteration of R's
 //! `glm.fit` \[3\] on rows formed block by block, so the memory is that of the
@@ -120,8 +126,11 @@
 //! with steps `max(|beta_j| sqrt(eps), 1e-10)`, which err by about half the
 //! step times the second derivative; here `J` is exact. The influence
 //! function of a coefficient for unit `u` is `N_u B sum_{rows of u} s_i`, and
-//! that of an average `J psi_u`; summed within unit clusters they give the
-//! unit-clustered covariance without small-sample factors.
+//! that of an average `J psi_u`; [`Influence::variance`] over unit clusters
+//! gives the unit-clustered covariance without the factor `(n - 1)/(n - K)`.
+//! The intervals and p-values of the coefficients and of the averages use the
+//! normal distribution, as `fixest` does for these families and
+//! `marginaleffects` for every model.
 //!
 //! `emfx` replaces the rows by their cohort and period means from 500 000
 //! rows on (`compress = "auto"`), which for these models changes the
@@ -129,7 +138,7 @@
 //! forms the clustered and robust scores from the working residuals of the
 //! last iteration, at the coefficients before the last update; here they are
 //! taken at the estimates. The two differ at the size of the convergence
-//! criterion. One cluster variable is supported.
+//! criterion. The clusters are those of the panel, one variable.
 //!
 //! # Where this differs from `etwfe` 0.6.2
 //!
@@ -157,130 +166,135 @@ mod glm;
 
 use std::collections::BTreeSet;
 
-pub use glm::{
-    EtwfeFamily, EtwfeGlmCoefficient, EtwfeGlmConfig, EtwfeGlmResult, EtwfeGlmTerm,
-    estimate_etwfe_glm,
-};
-
-use epistat_glm::{Absorb, Error as AbsorbError, Feols, FixedEffects, Singletons, Ssc, Vcov};
+use epistat_core::{Covariance, Estimate, Level};
+use epistat_glm::{Absorb, Feols, FixedEffects, Singletons, Ssc, Vcov};
+use epistat_inference::Influence;
 use epistat_linalg::Mat;
 
-use crate::methods::imputation::check_constant_within_units;
+use crate::error::Error;
+use crate::methods::fe_output::{self, Reference};
 use crate::methods::staggered::StaggeredPanel;
-use crate::methods::sunab::period_codes;
+
+/// The family of the regression, each with its canonical link.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EtwfeFamily {
+    /// The linear model with absorbed fixed effects, `etwfe`'s default.
+    #[default]
+    Gaussian,
+    /// Poisson with the log link (`family = "poisson"`).
+    Poisson,
+    /// Binomial with the logit link (`family = "logit"`).
+    Logit,
+}
 
 /// The controls of the regression.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EtwfeControl {
-    /// The untreated rows of every cohort (`cgroup = "notyet"`).
+    /// The untreated rows of every cohort (`cgroup = "notyet"`), `etwfe`'s
+    /// default.
+    #[default]
     NotYetTreated,
     /// The never treated only (`cgroup = "never"`).
     NeverTreated,
 }
 
 /// The fixed effects besides the periods.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EtwfeEffects {
     /// One per cohort, `etwfe`'s default.
+    #[default]
     Cohort,
-    /// One per unit (`ivar`).
+    /// One per unit (`ivar`), for the linear model.
     Unit,
 }
 
-/// The controls of [`estimate_etwfe`].
-#[derive(Clone, Copy, Debug)]
-pub struct EtwfeConfig<'a> {
-    /// The controls.
-    pub control: EtwfeControl,
-    /// The fixed effects.
-    pub effects: EtwfeEffects,
-    /// The covariance of the coefficients, from which the standard errors of
-    /// the average effects follow.
-    pub vcov: Vcov<'a>,
-    /// The demeaning.
-    pub absorb: Absorb,
-    /// The small-sample correction of the covariance.
-    pub ssc: Ssc,
+/// The covariance of the coefficients.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EtwfeVcov {
+    /// Homoskedastic (`vcov = "iid"`), `fixest`'s default here.
+    #[default]
+    Iid,
+    /// Heteroskedasticity-robust (`"hetero"`).
+    Hetero,
+    /// Clustered by the panel's clusters, or by unit when it has none.
+    Clustered,
 }
 
-impl EtwfeConfig<'_> {
-    /// The defaults of `etwfe`: not-yet-treated controls, cohort effects and
-    /// `fixest`'s default iid covariance.
-    #[must_use]
-    pub const fn new() -> Self {
+/// The options of [`fit`], with the defaults of `etwfe` and of
+/// `fixest::feols` and `feglm`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EtwfeOptions {
+    /// The family; by default the linear model.
+    pub family: EtwfeFamily,
+    /// The controls; by default the not yet treated.
+    pub control: EtwfeControl,
+    /// The fixed effects; by default the cohorts. The Poisson and logit
+    /// models take cohort effects only.
+    pub effects: EtwfeEffects,
+    /// The covariance of the coefficients, from which the standard errors of
+    /// the average effects follow; by default iid.
+    pub vcov: EtwfeVcov,
+    /// The small-sample correction of the covariance, `ssc` of `fixest`; for
+    /// the Poisson and logit models only `k_adj` and `g_adj` apply, as they
+    /// have no fixed effects.
+    pub ssc: Ssc,
+    /// The demeaning of the linear model, `fixef.tol` and `fixef.iter`.
+    pub absorb: Absorb,
+    /// The convergence tolerance of the deviance of the Poisson and logit
+    /// models, `glm.tol` of `feglm`; by default `1e-8`.
+    pub tolerance: f64,
+    /// The largest number of iterations of the Poisson and logit models,
+    /// `glm.iter`; by default 25.
+    pub max_iterations: usize,
+    /// The level of the intervals.
+    pub level: Level,
+}
+
+impl Default for EtwfeOptions {
+    fn default() -> Self {
         Self {
+            family: EtwfeFamily::Gaussian,
             control: EtwfeControl::NotYetTreated,
             effects: EtwfeEffects::Cohort,
-            vcov: Vcov::Iid,
-            absorb: Absorb::new(),
+            vcov: EtwfeVcov::Iid,
             ssc: Ssc::new(),
+            absorb: Absorb::new(),
+            tolerance: 1e-8,
+            max_iterations: 25,
+            level: Level::default(),
         }
     }
 }
 
-impl Default for EtwfeConfig<'_> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Why an extended two-way fixed-effects fit failed.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum EtwfeError {
-    /// An input has the wrong length.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// A covariate is not finite.
-    #[error("covariate {column} is not finite on row {row}")]
-    NotFinite {
-        /// The covariate.
-        column: usize,
-        /// The row.
-        row: usize,
-    },
-    /// A unit has rows with different first treated periods.
-    #[error("unit {unit} has rows with different first treated periods")]
-    Cohort {
-        /// The unit.
-        unit: u32,
-    },
-    /// Never-treated controls were asked for and no cohort is never treated.
-    #[error("no unit is never treated in the panel")]
-    NoNeverTreated,
-    /// No row carries a cell indicator.
-    #[error("no row carries a cohort and period indicator")]
-    NoTreatment,
-    /// A period does not fit in 32 bits.
-    #[error("the periods span more than 2^31 values")]
-    Periods,
-    /// The fit failed.
-    #[error(transparent)]
-    Fit(#[from] AbsorbError),
-}
-
 /// A column of the regression.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EtwfeTerm {
+    /// The intercept of the Poisson and logit models.
+    Intercept,
+    /// The dummy of a cohort other than the reference, in the Poisson and
+    /// logit models.
+    Cohort(i64),
+    /// The dummy of a period after the first, in the Poisson and logit
+    /// models.
+    Period(i64),
     /// Covariate `k`.
     Covariate(usize),
     /// Covariate `k` on the rows of a cohort.
     CohortSlope {
         /// The cohort.
-        cohort: i32,
+        cohort: i64,
         /// The covariate.
         covariate: usize,
     },
     /// Covariate `k` on the rows of a period.
     PeriodSlope {
         /// The period.
-        period: i32,
+        period: i64,
         /// The covariate.
         covariate: usize,
     },
@@ -288,95 +302,152 @@ pub enum EtwfeTerm {
     /// mean covariates.
     Cell {
         /// The cohort.
-        cohort: i32,
+        cohort: i64,
         /// The period.
-        period: i32,
+        period: i64,
     },
     /// The cell indicator times the cohort-demeaned covariate `k`.
     CellSlope {
         /// The cohort.
-        cohort: i32,
+        cohort: i64,
         /// The period.
-        period: i32,
+        period: i64,
         /// The covariate.
         covariate: usize,
     },
 }
 
 /// One coefficient.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct EtwfeCoefficient {
     /// Its column.
     pub term: EtwfeTerm,
-    /// The coefficient, `None` when the column is collinear.
-    pub estimate: Option<f64>,
-    /// Its standard error.
-    pub std_error: Option<f64>,
+    /// The coefficient with its standard error, interval and p-value, `None`
+    /// when the column is collinear.
+    pub estimate: Option<Estimate>,
 }
 
 /// The averages of `emfx`.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EtwfeType {
     /// Over every row (`type = "simple"`).
     Simple,
     /// By cohort (`"group"`).
-    Group(i32),
+    Group(i64),
     /// By period (`"calendar"`).
-    Calendar(i32),
+    Calendar(i64),
     /// By event time `t - g` (`"event"`).
-    Event(i32),
+    Event(i64),
 }
 
 /// One average effect.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct EtwfeEffect {
     /// What it averages.
     pub term: EtwfeType,
-    /// The mean contrast.
-    pub estimate: f64,
-    /// `sqrt(J V J')`, `None` when `J` is zero or the covariance undefined.
-    pub std_error: Option<f64>,
+    /// The mean contrast, with the standard error `sqrt(J V J')` (`None` when
+    /// `J` is zero or the covariance undefined), its interval and p-value.
+    pub estimate: Estimate,
     /// The rows it averages.
     pub n_rows: usize,
 }
 
 /// An extended two-way fixed-effects fit and its average effects.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
-pub struct EtwfeResult {
-    /// The coefficients in `etwfe`'s order: the covariates, their cohort and
-    /// period slopes, the cells by cohort and period, and the cells' slopes
-    /// by covariate.
+pub struct EtwfeFit {
+    /// The coefficients in `etwfe`'s order: for the Poisson and logit models
+    /// the intercept first; the covariates and their cohort and period
+    /// slopes; for the Poisson and logit models the cohort and period
+    /// dummies; the cells by cohort and period; and the cells' slopes by
+    /// covariate.
     pub coefficients: Vec<EtwfeCoefficient>,
-    /// The covariance of the coefficients, row-major, `None` for dropped
-    /// columns.
-    pub covariance: Vec<Option<f64>>,
-    /// The average effects: overall, by cohort, by period and by event time,
-    /// each in increasing key.
+    /// The covariance of the coefficients, `None` for dropped columns and,
+    /// for the Poisson and logit models, everywhere when a factor of the
+    /// correction does not exist.
+    pub covariance: Covariance,
+    /// The average effects on the scale of the mean: overall, by cohort, by
+    /// period and by event time, each in increasing key.
     pub effects: Vec<EtwfeEffect>,
-    /// `J V J'` over the average effects, row-major.
-    pub effect_covariance: Vec<Option<f64>>,
-    /// The influence function of each average effect, one value per unit of
-    /// [`EtwfeResult::units`].
-    pub effect_influence: Vec<Vec<f64>>,
-    /// The influence function of each coefficient, one value per unit;
-    /// `None` for dropped columns.
-    pub influence: Vec<Option<Vec<f64>>>,
+    /// `J V J'` over the average effects.
+    pub effect_covariance: Covariance,
+    /// The influence function of each average effect, one column each in
+    /// their order with one value per unit in the fit in increasing code.
+    pub effect_influence: Option<Influence>,
+    /// The influence functions of the coefficients that were estimated, one
+    /// column each in their order, with one value per unit in the fit in
+    /// increasing code; `None` when no coefficient was estimated.
+    /// [`EtwfeFit::influence_of`] finds the column of a coefficient.
+    pub influence: Option<Influence>,
     /// The `K` of the small-sample correction.
     pub df_k: usize,
-    /// The units in the fit, in increasing code.
-    pub units: Vec<u32>,
+    /// The units in the fit.
+    pub n_units: usize,
     /// The rows in the fit.
     pub n_rows: usize,
-    /// The rows removed as singletons.
+    /// The rows removed as singletons by the linear model.
     pub removed_singletons: usize,
     /// The rows removed before the fit: those of always-treated cohorts and,
     /// without never-treated units under not-yet-treated controls, those
-    /// from the last cohort's first treated period on.
+    /// from the last cohort's first treated period on; for the Poisson and
+    /// logit models also those of weight zero.
     pub excluded_rows: usize,
+    /// The residual deviance of the Poisson and logit models.
+    pub deviance: Option<f64>,
+    /// The iterations of the Poisson and logit models.
+    pub iterations: Option<usize>,
+    /// Whether the deviance converged within the iterations; true for the
+    /// linear model.
+    pub converged: bool,
+}
+
+impl EtwfeFit {
+    /// The influence function of coefficient `j`; `None` for a dropped
+    /// coefficient or one out of range.
+    #[must_use]
+    pub fn influence_of(&self, j: usize) -> Option<&[f64]> {
+        let defined = self.coefficients.iter().map(|c| c.estimate.is_some());
+        fe_output::column_of(self.influence.as_ref(), defined, j)
+    }
+}
+
+/// Fits the extended two-way fixed-effects regression of `options` to
+/// `panel` and its average effects. See the module documentation.
+///
+/// # Errors
+///
+/// [`Error::NoNeverTreated`] for never-treated controls without
+/// never-treated units, [`Error::NoTreatment`] for no treated cell,
+/// [`Error::Periods`] for periods out of range, [`Error::Unsupported`] for
+/// unit effects in a Poisson or logit model, and [`Error::Glm`] for the
+/// errors of the fit, among them
+/// [`epistat_glm::Error::Response`] for a response outside the family's
+/// support (its row that of the input row).
+pub fn fit(panel: &StaggeredPanel<'_>, options: &EtwfeOptions) -> Result<EtwfeFit, Error> {
+    match glm::model(options.family) {
+        None => fit_linear(panel, options),
+        Some(_) if options.effects == EtwfeEffects::Unit => Err(Error::Unsupported {
+            what: "unit effects in a Poisson or logit model",
+        }),
+        Some((family, link)) => glm::fit(panel, options, family, link),
+    }
+}
+
+/// The covariance of the coefficients as `fixest` names it, with the
+/// cluster codes `clusters` for a clustered one.
+const fn vcov<'c>(vcov: EtwfeVcov, ways: &'c [&'c [u32]]) -> Vcov<'c> {
+    match vcov {
+        EtwfeVcov::Iid => Vcov::Iid,
+        EtwfeVcov::Hetero => Vcov::Hetero,
+        EtwfeVcov::Clustered => Vcov::Cluster(ways),
+    }
 }
 
 /// The cohort of a row as a key: `None` for never treated.
-type Key = Option<i32>;
+type Key = Option<i64>;
 
 /// The reference, the cells, the columns and the rows of the regression of
 /// one panel under one choice of controls, shared by the linear and the
@@ -389,9 +460,9 @@ struct Layout<'p> {
     /// The period codes of the fixed effects, from 0.
     time: Vec<u32>,
     /// Every cohort, never treated left out.
-    cohorts: BTreeSet<i32>,
+    cohorts: BTreeSet<i64>,
     /// The cohorts with cell indicators.
-    treated: Vec<i32>,
+    treated: Vec<i64>,
     excluded: Vec<bool>,
     excluded_rows: usize,
     /// The index of each row's cohort: 0 for never treated, then the
@@ -400,10 +471,10 @@ struct Layout<'p> {
     /// The cohort means of the covariates, `row_key` by covariate.
     means: Vec<f64>,
     /// The cohorts other than the reference with rows in the fit.
-    slope_cohorts: Vec<i32>,
+    slope_cohorts: Vec<i64>,
     /// The periods after the first with rows in the fit.
-    slope_periods: Vec<i32>,
-    cells: Vec<(i32, i32)>,
+    slope_periods: Vec<i64>,
+    cells: Vec<(i64, i64)>,
     /// The cell of each row whose indicator is one.
     row_cell: Vec<Option<usize>>,
     /// The columns of the linear regression.
@@ -413,62 +484,38 @@ struct Layout<'p> {
 }
 
 impl<'p> Layout<'p> {
-    fn new(panel: &'p StaggeredPanel<'p>, control: EtwfeControl) -> Result<Self, EtwfeError> {
-        let n = panel.unit.len();
-        for (what, found) in [
-            ("time", panel.time.len()),
-            ("first_treated", panel.first_treated.len()),
-            ("outcome", panel.outcome.len()),
-            ("weights", panel.weights.map_or(n, <[f64]>::len)),
-            ("covariates", panel.covariates.map_or(n, |x| x.nrows())),
-        ] {
-            if found != n {
-                return Err(EtwfeError::Length {
-                    what,
-                    expected: n,
-                    found,
-                });
-            }
-        }
-        check_constant_within_units(panel.unit, panel.first_treated)
-            .map_err(|unit| EtwfeError::Cohort { unit })?;
-        let time = period_codes(panel.time).ok_or(EtwfeError::Periods)?;
-        let p = panel.covariates.map_or(0, |x| x.ncols());
-        if let Some(x) = panel.covariates {
-            for column in 0..p {
-                if let Some(row) = (0..n).find(|&i| !x[(i, column)].is_finite()) {
-                    return Err(EtwfeError::NotFinite { column, row });
-                }
-            }
-        }
-        let Some(t_first) = panel.time.iter().copied().min() else {
-            return Err(EtwfeError::NoTreatment);
+    fn new(panel: &'p StaggeredPanel<'p>, control: EtwfeControl) -> Result<Self, Error> {
+        let n = panel.len();
+        let time = panel.period_codes().ok_or(Error::Periods)?;
+        let p = panel.covariates().map_or(0, |x| x.ncols());
+        let Some(t_first) = panel.period().iter().copied().min() else {
+            return Err(Error::NoTreatment);
         };
-        let t_last = panel.time.iter().copied().max().unwrap_or(t_first);
+        let t_last = panel.period().iter().copied().max().unwrap_or(t_first);
 
         // The reference, the treated cohorts and the rows removed.
-        let cohorts: BTreeSet<i32> = panel.first_treated.iter().flatten().copied().collect();
-        let has_never = panel.first_treated.iter().any(Option::is_none);
-        let after: Vec<i32> = cohorts.iter().copied().filter(|&g| g > t_last).collect();
-        let mut treated: Vec<i32> = cohorts
+        let cohorts: BTreeSet<i64> = panel.first_treated().iter().flatten().copied().collect();
+        let has_never = panel.first_treated().iter().any(Option::is_none);
+        let after: Vec<i64> = cohorts.iter().copied().filter(|&g| g > t_last).collect();
+        let mut treated: Vec<i64> = cohorts
             .iter()
             .copied()
             .filter(|&g| g > t_first && g <= t_last)
             .collect();
-        let (reference, cutoff): (Key, Option<i32>) = if has_never {
+        let (reference, cutoff): (Key, Option<i64>) = if has_never {
             (None, None)
         } else if let Some(&g) = after.first() {
             (Some(g), None)
         } else if control == EtwfeControl::NeverTreated {
-            return Err(EtwfeError::NoNeverTreated);
+            return Err(Error::NoNeverTreated);
         } else {
-            let last = treated.pop().ok_or(EtwfeError::NoTreatment)?;
+            let last = treated.pop().ok_or(Error::NoTreatment)?;
             (Some(last), Some(last))
         };
         let excluded: Vec<bool> = (0..n)
             .map(|i| {
-                panel.first_treated[i].is_some_and(|g| g <= t_first)
-                    || cutoff.is_some_and(|c| panel.time[i] >= c)
+                panel.first_treated()[i].is_some_and(|g| g <= t_first)
+                    || cutoff.is_some_and(|c| panel.period()[i] >= c)
             })
             .collect();
         let excluded_rows = excluded.iter().filter(|&&b| b).count();
@@ -480,10 +527,14 @@ impl<'p> Layout<'p> {
         let groups = 1 + cohorts.len();
         let mut means = vec![0.0; groups * p];
         let mut counts = vec![0usize; groups];
-        let row_key: Vec<usize> = panel.first_treated.iter().map(|&g| key_index(g)).collect();
+        let row_key: Vec<usize> = panel
+            .first_treated()
+            .iter()
+            .map(|&g| key_index(g))
+            .collect();
         for (i, &k) in row_key.iter().enumerate() {
             counts[k] += 1;
-            if let Some(x) = panel.covariates {
+            if let Some(x) = panel.covariates() {
                 for j in 0..p {
                     means[k * p + j] += x[(i, j)];
                 }
@@ -524,23 +575,23 @@ impl<'p> Layout<'p> {
             .copied()
             .filter(|&g| {
                 Some(g) != reference
-                    && (0..n).any(|i| kept_rows(i) && panel.first_treated[i] == Some(g))
+                    && (0..n).any(|i| kept_rows(i) && panel.first_treated()[i] == Some(g))
             })
             .collect();
         layout.slope_periods = (0..n)
-            .filter(|&i| kept_rows(i) && panel.time[i] != t_first)
-            .map(|i| panel.time[i])
-            .collect::<BTreeSet<i32>>()
+            .filter(|&i| kept_rows(i) && panel.period()[i] != t_first)
+            .map(|i| panel.period()[i])
+            .collect::<BTreeSet<i64>>()
             .into_iter()
             .collect();
         layout.cells = (0..n)
             .filter(|&i| layout.indicator(i))
-            .map(|i| (panel.first_treated[i].unwrap_or(0), panel.time[i]))
-            .collect::<BTreeSet<(i32, i32)>>()
+            .map(|i| (panel.first_treated()[i].unwrap_or(0), panel.period()[i]))
+            .collect::<BTreeSet<(i64, i64)>>()
             .into_iter()
             .collect();
         if layout.cells.is_empty() {
-            return Err(EtwfeError::NoTreatment);
+            return Err(Error::NoTreatment);
         }
         let mut terms: Vec<EtwfeTerm> = (0..p).map(EtwfeTerm::Covariate).collect();
         for k in 0..p {
@@ -598,7 +649,7 @@ impl<'p> Layout<'p> {
     }
 
     fn n(&self) -> usize {
-        self.panel.unit.len()
+        self.panel.len()
     }
 
     fn is_treated(&self, g: Key) -> bool {
@@ -608,40 +659,40 @@ impl<'p> Layout<'p> {
     /// Whether the cell indicator `D_it 1[g_i = g, t = s]` of row `i` is one
     /// for its own cohort and period.
     fn indicator(&self, i: usize) -> bool {
-        let g = self.panel.first_treated[i];
+        let g = self.panel.first_treated()[i];
         if self.excluded[i] || !self.is_treated(g) {
             return false;
         }
         let g = g.unwrap_or(0);
         match self.control {
-            EtwfeControl::NotYetTreated => self.panel.time[i] >= g,
-            EtwfeControl::NeverTreated => self.panel.time[i] != g - 1,
+            EtwfeControl::NotYetTreated => self.panel.period()[i] >= g,
+            EtwfeControl::NeverTreated => self.panel.period()[i] != g - 1,
         }
     }
 
     /// Covariate `j` of row `i` less its cohort mean.
     fn demeaned(&self, i: usize, j: usize) -> f64 {
-        self.panel.covariates.map_or(0.0, |x| {
+        self.panel.covariates().map_or(0.0, |x| {
             x[(i, j)] - self.means[self.row_key[i] * self.p + j]
         })
     }
 
     /// The cell of row `i`'s cohort and period, whatever its indicator.
     fn cell_of(&self, i: usize) -> Option<usize> {
-        let g = self.panel.first_treated[i]?;
-        self.cells.binary_search(&(g, self.panel.time[i])).ok()
+        let g = self.panel.first_treated()[i]?;
+        self.cells.binary_search(&(g, self.panel.period()[i])).ok()
     }
 
     /// The prior weights of the fit: zero for the rows removed, `None` when
     /// every row has weight one.
     fn fit_weights(&self) -> Option<Vec<f64>> {
-        (self.panel.weights.is_some() || self.excluded_rows > 0).then(|| {
+        (self.panel.weights().is_some() || self.excluded_rows > 0).then(|| {
             (0..self.n())
                 .map(|i| {
                     if self.excluded[i] {
                         0.0
                     } else {
-                        self.panel.weights.map_or(1.0, |w| w[i])
+                        self.panel.weights().map_or(1.0, |w| w[i])
                     }
                 })
                 .collect()
@@ -653,7 +704,8 @@ impl<'p> Layout<'p> {
         match self.control {
             EtwfeControl::NotYetTreated => self.indicator(i),
             EtwfeControl::NeverTreated => {
-                self.indicator(i) && self.panel.time[i] >= self.panel.first_treated[i].unwrap_or(0)
+                self.indicator(i)
+                    && self.panel.period()[i] >= self.panel.first_treated()[i].unwrap_or(0)
             }
         }
     }
@@ -663,7 +715,7 @@ impl<'p> Layout<'p> {
         match self.control {
             EtwfeControl::NotYetTreated => self.indicator(i),
             EtwfeControl::NeverTreated => {
-                !self.excluded[i] && self.is_treated(self.panel.first_treated[i])
+                !self.excluded[i] && self.is_treated(self.panel.first_treated()[i])
             }
         }
     }
@@ -671,21 +723,21 @@ impl<'p> Layout<'p> {
     /// The averages of `emfx`.
     fn averages(&self) -> Averages {
         let panel = self.panel;
-        let set = |f: &dyn Fn(usize) -> Option<i32>| -> Vec<i32> {
+        let set = |f: &dyn Fn(usize) -> Option<i64>| -> Vec<i64> {
             (0..self.n())
                 .filter_map(f)
-                .collect::<BTreeSet<i32>>()
+                .collect::<BTreeSet<i64>>()
                 .into_iter()
                 .collect()
         };
         let group = set(&|i| {
             self.effect_row(i)
-                .then(|| panel.first_treated[i].unwrap_or(0))
+                .then(|| panel.first_treated()[i].unwrap_or(0))
         });
-        let calendar = set(&|i| self.effect_row(i).then_some(panel.time[i]));
+        let calendar = set(&|i| self.effect_row(i).then_some(panel.period()[i]));
         let event = set(&|i| {
             self.event_row(i)
-                .then(|| panel.time[i] - panel.first_treated[i].unwrap_or(0))
+                .then(|| panel.period()[i] - panel.first_treated()[i].unwrap_or(0))
         });
         let mut keys: Vec<EtwfeType> = vec![EtwfeType::Simple];
         keys.extend(group.iter().map(|&g| EtwfeType::Group(g)));
@@ -704,9 +756,9 @@ impl<'p> Layout<'p> {
 /// each in increasing key.
 struct Averages {
     keys: Vec<EtwfeType>,
-    group: Vec<i32>,
-    calendar: Vec<i32>,
-    event: Vec<i32>,
+    group: Vec<i64>,
+    calendar: Vec<i64>,
+    event: Vec<i64>,
 }
 
 impl Averages {
@@ -720,7 +772,7 @@ impl Averages {
             return None;
         }
         let panel = layout.panel;
-        let g = panel.first_treated[i].unwrap_or(0);
+        let g = panel.first_treated()[i].unwrap_or(0);
         let g_offset = 1;
         let c_offset = g_offset + self.group.len();
         let e_offset = c_offset + self.calendar.len();
@@ -728,10 +780,14 @@ impl Averages {
         if in_effect {
             targets[0] = 0;
             targets[1] = g_offset + self.group.binary_search(&g).unwrap_or(0);
-            targets[2] = c_offset + self.calendar.binary_search(&panel.time[i]).unwrap_or(0);
+            targets[2] = c_offset + self.calendar.binary_search(&panel.period()[i]).unwrap_or(0);
         }
         if in_event {
-            targets[3] = e_offset + self.event.binary_search(&(panel.time[i] - g)).unwrap_or(0);
+            targets[3] = e_offset
+                + self
+                    .event
+                    .binary_search(&(panel.period()[i] - g))
+                    .unwrap_or(0);
         }
         Some(targets)
     }
@@ -751,23 +807,13 @@ fn unit_codes(unit: &[u32], rows: &[usize]) -> (Vec<u32>, Vec<u32>) {
     (units, codes)
 }
 
-/// Fits the extended two-way fixed-effects regression of `config` to `panel`
-/// and its average effects. See the module documentation.
-///
-/// # Errors
-///
-/// [`EtwfeError`] for inputs of the wrong length or not finite, cohorts that
-/// vary within a unit, never-treated controls without never-treated units,
-/// no treated cell, periods out of range, and the errors of the fit.
+/// The linear model of [`fit`].
 #[expect(
     clippy::too_many_lines,
     reason = "one pass from the layout to the design, the fit and the averages"
 )]
-pub fn estimate_etwfe(
-    panel: &StaggeredPanel<'_>,
-    config: &EtwfeConfig<'_>,
-) -> Result<EtwfeResult, EtwfeError> {
-    let layout = Layout::new(panel, config.control)?;
+fn fit_linear(panel: &StaggeredPanel<'_>, options: &EtwfeOptions) -> Result<EtwfeFit, Error> {
+    let layout = Layout::new(panel, options.control)?;
     let n = layout.n();
     let p = layout.p;
     let terms = &layout.terms;
@@ -780,13 +826,13 @@ pub fn estimate_etwfe(
 
     let q = terms.len();
     let mut x = Mat::<f64>::zeros(n, q);
-    if let Some(cov) = panel.covariates {
+    if let Some(cov) = panel.covariates() {
         let gc = slope_cohorts.len();
         let tc = slope_periods.len();
         for i in 0..n {
             let cohort_slot =
-                panel.first_treated[i].and_then(|g| slope_cohorts.binary_search(&g).ok());
-            let period_slot = slope_periods.binary_search(&panel.time[i]).ok();
+                panel.first_treated()[i].and_then(|g| slope_cohorts.binary_search(&g).ok());
+            let period_slot = slope_periods.binary_search(&panel.period()[i]).ok();
             for k in 0..p {
                 let v = cov[(i, k)];
                 x[(i, k)] = v;
@@ -809,8 +855,8 @@ pub fn estimate_etwfe(
     }
     let fit_weights = layout.fit_weights();
     let cohort_code: Vec<u32>;
-    let first_factor: &[u32] = match config.effects {
-        EtwfeEffects::Unit => panel.unit,
+    let first_factor: &[u32] = match options.effects {
+        EtwfeEffects::Unit => panel.unit(),
         EtwfeEffects::Cohort => {
             cohort_code = layout
                 .row_key
@@ -826,22 +872,26 @@ pub fn estimate_etwfe(
         Singletons::Remove,
     )?;
     let fit = Feols {
-        absorb: config.absorb,
+        absorb: options.absorb,
     }
-    .fit_owned(x, panel.outcome, &fe)?;
-    let cov = fit.vcov(&fe, config.vcov, config.ssc)?;
+    .fit_owned(x, panel.outcome(), &fe)?;
+    let ways = [panel.clusters().unwrap_or(panel.unit())];
+    let cov = fit.vcov(&fe, vcov(options.vcov, &ways), options.ssc)?;
+    let reference = Reference::fixest_linear(&cov, fe.n_rows());
     let coefficients: Vec<EtwfeCoefficient> = terms
         .iter()
         .enumerate()
         .map(|(j, &term)| EtwfeCoefficient {
             term,
-            estimate: fit.coefficients[j],
-            std_error: cov.matrix.as_slice()[j * q + j].map(|v| v.max(0.0).sqrt()),
+            estimate: fit.coefficients[j].map(|b| {
+                let se = cov.matrix.as_slice()[j * q + j].map(|v| v.max(0.0).sqrt());
+                fe_output::estimate(b, se, options.level, reference)
+            }),
         })
         .collect();
 
     // Influence by unit: the units are the panel's units in either case.
-    let (units, unit_codes) = unit_codes(panel.unit, fe.rows());
+    let (units, unit_codes) = unit_codes(panel.unit(), fe.rows());
     let n_units = units.len();
     let sums = fit.influence_sums(&fe, &unit_codes, n_units)?;
     let mut influence = vec![None; q];
@@ -919,23 +969,52 @@ pub fn estimate_etwfe(
         .enumerate()
         .map(|(a, &term)| {
             let zero = jacobian[a].iter().all(|&v| v == 0.0);
+            let estimate = jacobian[a]
+                .iter()
+                .zip(&fit.coefficients)
+                .map(|(j, b)| j * b.unwrap_or(0.0))
+                .sum();
+            let se = if zero {
+                None
+            } else {
+                effect_covariance[a * m + a].map(|v| v.max(0.0).sqrt())
+            };
             EtwfeEffect {
                 term,
-                estimate: jacobian[a]
-                    .iter()
-                    .zip(&fit.coefficients)
-                    .map(|(j, b)| j * b.unwrap_or(0.0))
-                    .sum(),
-                std_error: if zero {
-                    None
-                } else {
-                    effect_covariance[a * m + a].map(|v| v.max(0.0).sqrt())
-                },
+                estimate: fe_output::estimate(estimate, se, options.level, Reference::Normal),
                 n_rows: rows_in[a],
             }
         })
         .collect();
-    let effect_influence: Vec<Vec<f64>> = jacobian
+    let effect_influence = effect_influence(&jacobian, &influence, n_units);
+    let rule = fe_output::fixest_rule(options.ssc.g_adj);
+
+    Ok(EtwfeFit {
+        coefficients,
+        covariance: cov.matrix,
+        effects,
+        effect_covariance: Covariance::new(m, effect_covariance)?,
+        effect_influence: fe_output::influence(effect_influence, units.clone(), rule)?,
+        influence: fe_output::influence(influence, units, rule)?,
+        df_k: cov.df_k,
+        n_units,
+        n_rows: fe.n_rows(),
+        removed_singletons: fe.removed_singletons(),
+        excluded_rows,
+        deviance: None,
+        iterations: None,
+        converged: true,
+    })
+}
+
+/// The influence function `J psi_u` of each average effect, the rows of
+/// `jacobian`, from those of the coefficients.
+fn effect_influence(
+    jacobian: &[Vec<f64>],
+    influence: &[Option<Vec<f64>>],
+    n_units: usize,
+) -> Vec<Option<Vec<f64>>> {
+    jacobian
         .iter()
         .map(|row| {
             let mut out = vec![0.0; n_units];
@@ -948,21 +1027,7 @@ pub fn estimate_etwfe(
                     }
                 }
             }
-            out
+            Some(out)
         })
-        .collect();
-
-    Ok(EtwfeResult {
-        coefficients,
-        covariance: cov.matrix.into_values(),
-        effects,
-        effect_covariance,
-        effect_influence,
-        influence,
-        df_k: cov.df_k,
-        units,
-        n_rows: fe.n_rows(),
-        removed_singletons: fe.removed_singletons(),
-        excluded_rows,
-    })
+        .collect()
 }

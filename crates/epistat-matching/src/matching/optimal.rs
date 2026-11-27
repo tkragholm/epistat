@@ -2,15 +2,15 @@
 //!
 //! These are `matchit(method = "optimal")` and `matchit(method = "full")`.
 //! Both minimise the sum of the distances of the matched pairs. They differ in
-//! what a matched set may look like. In pair matching every anchor gets
-//! `ratio` candidates (or fewer where the candidates run out), and no candidate
-//! is used twice. In full matching every unit is in a subclass of one anchor
-//! with several candidates or one candidate with several anchors, within
-//! limits on the number of candidates per anchor.
+//! what a matched set may look like. In pair matching every case gets
+//! `ratio` controls (or fewer where the controls run out), and no control
+//! is used twice. In full matching every unit is in a subclass of one case
+//! with several controls or one control with several cases, within
+//! limits on the number of controls per case.
 //!
 //! # Network
 //!
-//! A stratum of anchors (rows) and candidates (columns) with the admissible
+//! A stratum of cases (rows) and controls (columns) with the admissible
 //! pairs as arcs is solved as a minimum-cost flow on the network of
 //! Rosenbaum \[1\] and Hansen and Klopfer \[2\]. Each row node supplies `mxc`
 //! units, and each column node can pass flow on to a sink. An arc from a row to
@@ -55,15 +55,15 @@
 //! in the order of row and then column. See
 //! [`epistat_optim::min_cost_flow`]. The result does not depend on the number
 //! of threads, since each exact stratum is solved on its own and the strata are
-//! put together in order of their first anchor.
+//! put together in order of their first case.
 //!
 //! # Cost of solving
 //!
 //! The network has one node per unit and one arc per admissible pair, and the
-//! solver is the network simplex method. A stratum of 2,000 anchors and 8,000
-//! candidates within a caliper that leaves a few hundred candidates per anchor
+//! solver is the network simplex method. A stratum of 2,000 cases and 8,000
+//! controls within a caliper that leaves a few hundred controls per case
 //! has a few hundred thousand arcs. A stratum without a caliper has one arc for
-//! every pair of an anchor and a candidate, which takes memory in proportion to
+//! every pair of an case and a control, which takes memory in proportion to
 //! their product (about 100 bytes per pair).
 //!
 //! # References
@@ -85,9 +85,9 @@ use super::exact::{SubclassedUnits, unit_ids};
 use super::index::StrataValues;
 use super::records::MatchingRecord;
 use super::subclassification::build_subclass_summaries;
+use crate::Error;
 use crate::types::{
-    ControlIdx, CriteriaValidationError, Estimand, MatchDiagnostics, MatchOutcome, MatchedPair,
-    MatchingCriteria,
+    ControlIdx, Estimand, MatchDiagnostics, MatchOutcome, MatchedPair, MatchingCriteria,
 };
 use epistat_optim::Error as OptimError;
 use epistat_optim::min_cost_flow::MinCostFlow;
@@ -95,100 +95,36 @@ use rapidhash::RapidHashMap;
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
-/// Why optimal matching could not run.
-#[derive(Debug, Clone, PartialEq)]
-pub enum OptimalError {
-    /// The criteria are invalid.
-    Criteria(CriteriaValidationError),
-    /// One option is out of range or does not fit the others.
-    Option {
-        /// The name of the option.
-        option: &'static str,
-        /// What is wrong.
-        message: String,
-    },
-    /// The limits on the sizes of the matched sets cannot be met in an exact
-    /// stratum, or the pairs the constraints admit are too few for them.
-    Infeasible {
-        /// The stratum, numbered from 0 in order of the first anchor in it.
-        stratum: usize,
-        /// What cannot be met.
-        message: String,
-    },
-    /// No stratum has an admissible pair of an anchor and a candidate.
-    NoMatches,
-    /// A stratum is too large for the integer arithmetic of the solver.
-    TooLarge {
-        /// The stratum, numbered as in [`OptimalError::Infeasible`].
-        stratum: usize,
-    },
-}
-
-impl fmt::Display for OptimalError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Criteria(error) => write!(f, "{error}"),
-            Self::Option { option, message } => write!(f, "option `{option}`: {message}"),
-            Self::Infeasible { stratum, message } => {
-                write!(
-                    f,
-                    "no matching satisfies the limits in stratum {stratum}: {message}"
-                )
-            }
-            Self::NoMatches => f.write_str("no anchor and candidate form an admissible pair"),
-            Self::TooLarge { stratum } => {
-                write!(f, "stratum {stratum} is too large to solve")
-            }
-        }
-    }
-}
-
-impl std::error::Error for OptimalError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Criteria(error) => Some(error),
-            _ => None,
-        }
-    }
-}
-
-impl From<CriteriaValidationError> for OptimalError {
-    fn from(error: CriteriaValidationError) -> Self {
-        Self::Criteria(error)
-    }
-}
-
-/// How many of the candidates a full match uses.
+/// How many of the controls a full match uses.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub enum Retain {
-    /// Every candidate that has an admissible anchor.
+    /// Every control that has an admissible case.
     #[default]
     All,
-    /// Leave out up to this fraction of the candidates, a number in `[0, 1]`.
-    /// A number in `[-1, 0)` leaves out that fraction of the anchors.
+    /// Leave out up to this fraction of the controls, a number in `[0, 1]`.
+    /// A number in `[-1, 0)` leaves out that fraction of the cases.
     OmitFraction(f64),
-    /// Use this many candidates per anchor on average (`mean.controls`), or
-    /// all the candidates that have an admissible anchor when there are fewer.
+    /// Use this many controls per case on average (`mean.controls`), or
+    /// all the controls that have an admissible case when there are fewer.
     MeanControls(f64),
 }
 
 /// The limits of a full match, those of `optmatch::fullmatch`.
 ///
-/// The defaults are `fullmatch`'s: any number of candidates per anchor and any
-/// number of anchors per candidate, and every candidate used.
+/// The defaults are `fullmatch`'s: any number of controls per case and any
+/// number of cases per control, and every control used.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FullMatchConfig {
-    /// Fewest candidates per anchor in a subclass (`min.controls`). A number
-    /// below 1 allows subclasses of several anchors with one candidate, down to
-    /// one candidate per `1 / min_controls` anchors. 0 allows any number.
+    /// Fewest controls per case in a subclass (`min.controls`). A number
+    /// below 1 allows subclasses of several cases with one control, down to
+    /// one control per `1 / min_controls` cases. 0 allows any number.
     pub min_controls: f64,
-    /// Most candidates per anchor in a subclass (`max.controls`). Infinity
-    /// allows any number. A number below 1 limits the anchors per candidate to
+    /// Most controls per case in a subclass (`max.controls`). Infinity
+    /// allows any number. A number below 1 limits the cases per control to
     /// the reciprocal.
     pub max_controls: f64,
-    /// How many candidates are used.
+    /// How many controls are used.
     pub retain: Retain,
 }
 
@@ -265,7 +201,7 @@ fn round_half_even(value: f64) -> i64 {
     to_i64(value.round_ties_even())
 }
 
-/// The limits and the number of candidates to use, before orientation.
+/// The limits and the number of controls to use, before orientation.
 #[derive(Clone, Copy)]
 struct Restrictions {
     min_controls: f64,
@@ -354,7 +290,7 @@ impl Restrictions {
     }
 }
 
-/// The number of candidates to match, before the stratum's admissible units
+/// The number of controls to match, before the stratum's admissible units
 /// are known.
 #[derive(Clone, Copy)]
 enum Target {
@@ -608,13 +544,13 @@ fn connected_groups(matched: &[(usize, usize)], rows: usize, cols: usize) -> Vec
     groups
 }
 
-/// Pair matching of one stratum with `ratio` candidates per anchor, as
+/// Pair matching of one stratum with `ratio` controls per case, as
 /// MatchIt arranges `optmatch::fullmatch` for `method = "optimal"`.
 ///
-/// With fewer candidates than anchors the problem is solved with the groups
-/// exchanged, so each candidate gets one anchor. With more than 1 and fewer
-/// than `ratio` candidates per anchor, every candidate is used and an anchor
-/// gets between the whole number of candidates per anchor, rounded down, and
+/// With fewer controls than cases the problem is solved with the groups
+/// exchanged, so each control gets one case. With more than 1 and fewer
+/// than `ratio` controls per case, every control is used and an case
+/// gets between the whole number of controls per case, rounded down, and
 /// `ratio`.
 fn pair_match_stratum(
     rows: usize,
@@ -669,9 +605,9 @@ fn pair_match_stratum(
 
 /// The groups of the stratum with their units in the order of the slices.
 pub(super) struct Stratum {
-    /// Positions in the anchor slice, in slice order.
+    /// Positions in the case slice, in slice order.
     pub(super) anchors: Vec<usize>,
-    /// Positions in the candidate slice, in slice order.
+    /// Positions in the control slice, in slice order.
     pub(super) candidates: Vec<usize>,
 }
 
@@ -688,8 +624,8 @@ struct PairBuilder<'a, R: MatchingRecord, G: ?Sized> {
 }
 
 impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> PairBuilder<'_, R, G> {
-    /// The distance of an anchor and a candidate, by their positions in the
-    /// anchor and candidate slices, or `None` when the pair has none. Every
+    /// The distance of an case and a control, by their positions in the
+    /// case and control slices, or `None` when the pair has none. Every
     /// cost of the network is read here.
     fn pair_distance(
         &self,
@@ -802,7 +738,7 @@ impl<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized> PairBuilder<'_, R, G> {
     }
 }
 
-/// Group the units into exact strata, numbered in order of the first anchor.
+/// Group the units into exact strata, numbered in order of the first case.
 /// Strata without both groups are left out.
 fn exact_strata<R: MatchingRecord>(
     anchors: &[R],
@@ -833,11 +769,11 @@ fn exact_strata<R: MatchingRecord>(
     strata
 }
 
-/// Solves one stratum from its numbers of anchors and candidates and its pairs.
+/// Solves one stratum from its numbers of cases and controls and its pairs.
 type StratumSolver<'a> =
     dyn Fn(usize, usize, &[Edge]) -> Result<Vec<Group>, StratumError> + Sync + 'a;
 
-/// A solved stratum: its matched sets by position in the anchor and candidate
+/// A solved stratum: its matched sets by position in the case and control
 /// slices.
 pub(super) type Solved = Vec<Vec<(usize, usize)>>;
 
@@ -852,7 +788,7 @@ pub(super) fn strata_edges<R, G>(
     anchors: &[R],
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
-) -> Result<StrataEdges, OptimalError>
+) -> Result<StrataEdges, Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
@@ -878,8 +814,8 @@ pub(super) fn with_strata_pairs<R, G, T>(
     anchors: &[R],
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
-    f: impl FnOnce(Vec<Stratum>, &StratumPairs<'_>) -> Result<T, OptimalError>,
-) -> Result<T, OptimalError>
+    f: impl FnOnce(Vec<Stratum>, &StratumPairs<'_>) -> Result<T, Error>,
+) -> Result<T, Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
@@ -888,13 +824,13 @@ where
     let validated = criteria.validate()?;
     let criteria = validated.as_ref();
     if criteria.allow_replacement {
-        return Err(OptimalError::Option {
+        return Err(Error::Option {
             option: "replace",
             message: "optimal matching uses each candidate once; drop replacement".into(),
         });
     }
     if criteria.unique_by_key.is_some() {
-        return Err(OptimalError::Option {
+        return Err(Error::Option {
             option: "unique_by_key",
             message: "optimal matching does not take a unique key; drop it".into(),
         });
@@ -925,7 +861,7 @@ fn solve_strata<R, G>(
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
     solve: &StratumSolver<'_>,
-) -> Result<Solved, OptimalError>
+) -> Result<Solved, Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
@@ -952,19 +888,19 @@ where
                 }
             }
             Err(StratumError::Option(option, message)) => {
-                return Err(OptimalError::Option { option, message });
+                return Err(Error::Option { option, message });
             }
             Err(StratumError::Infeasible(message)) => {
-                return Err(OptimalError::Infeasible {
+                return Err(Error::Infeasible {
                     stratum: number,
                     message,
                 });
             }
-            Err(StratumError::TooLarge) => return Err(OptimalError::TooLarge { stratum: number }),
+            Err(StratumError::TooLarge) => return Err(Error::TooLarge { stratum: number }),
         }
     }
     if solved.is_empty() {
-        return Err(OptimalError::NoMatches);
+        return Err(Error::NoMatches);
     }
     // Sets in the order of their first anchor, and then of their first
     // candidate, which does not depend on how the strata were scheduled.
@@ -972,34 +908,34 @@ where
     Ok(solved)
 }
 
-/// Optimal pair matching: the assignment of `ratio` candidates to each anchor
+/// Optimal pair matching: the assignment of `ratio` controls to each case
 /// that minimises the sum of the distances of the pairs, as
 /// `matchit(method = "optimal")`.
 ///
-/// The anchors are the focal group, as in the nearest neighbour method, so a
-/// match for the effect in the controls is made with the controls as anchors.
-/// The pairs are in the order of the anchors, and an anchor's candidates in the
-/// order of the candidate slice. An anchor gets `ratio` candidates unless there
-/// are fewer than `ratio` candidates per anchor in its exact stratum, and then
-/// the candidates are shared out as evenly as the limits allow. With fewer
-/// candidates than anchors in a stratum, each candidate gets one anchor
-/// instead, so some anchors have none.
+/// The cases are the focal group, as in the nearest neighbour method, so a
+/// match for the effect in the controls is made with the controls as cases.
+/// The pairs are in the order of the cases, and an case's controls in the
+/// order of the control slice. An case gets `ratio` controls unless there
+/// are fewer than `ratio` controls per case in its exact stratum, and then
+/// the controls are shared out as evenly as the limits allow. With fewer
+/// controls than cases in a stratum, each control gets one case
+/// instead, so some cases have none.
 ///
 /// Pairs outside the caliper or blocked by a constraint are forbidden. Where
-/// they leave a stratum with no assignment that gives every anchor with an
-/// admissible candidate its candidates, the result is
-/// [`OptimalError::Infeasible`]. `matchit(method = "optimal")` itself ignores
+/// they leave a stratum with no assignment that gives every case with an
+/// admissible control its controls, the result is
+/// [`Error::Infeasible`]. `matchit(method = "optimal")` itself ignores
 /// calipers.
 ///
 /// # Errors
 ///
-/// [`OptimalError`] for invalid criteria, replacement, a unique key, a stratum
+/// [`Error`] for invalid criteria, replacement, a unique key, a stratum
 /// without a feasible assignment, or when no stratum has an admissible pair.
 pub fn match_optimal<R, G>(
     anchors: &[R],
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
-) -> Result<MatchOutcome, OptimalError>
+) -> Result<MatchOutcome, Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
@@ -1028,7 +964,7 @@ pub(super) fn pair_outcome<R: MatchingRecord>(
 ) -> MatchOutcome {
     let mut positions: Vec<(usize, usize)> = sets.into_iter().flatten().collect();
     positions.sort_unstable();
-    let mut matched_anchors = 0_usize;
+    let mut matched_cases = 0_usize;
     let mut below_ratio = 0_usize;
     let mut previous: Option<usize> = None;
     let mut run = 0_usize;
@@ -1044,7 +980,7 @@ pub(super) fn pair_outcome<R: MatchingRecord>(
             if previous.is_some() && run < ratio {
                 below_ratio += 1;
             }
-            matched_anchors += 1;
+            matched_cases += 1;
             previous = Some(*anchor);
             run = 1;
         }
@@ -1053,37 +989,30 @@ pub(super) fn pair_outcome<R: MatchingRecord>(
         below_ratio += 1;
     }
     let mut diagnostics = MatchDiagnostics {
-        total_anchors_evaluated: anchors.len(),
+        total_cases_evaluated: anchors.len(),
         requested_estimand: estimand,
         realized_estimand: estimand,
-        matched_anchors,
+        matched_cases,
         pairs_selected: pairs.len(),
-        anchors_with_no_candidates: anchors.len() - matched_anchors,
-        anchors_below_required_ratio: below_ratio,
+        cases_with_no_controls: anchors.len() - matched_cases,
+        cases_below_required_ratio: below_ratio,
         ..MatchDiagnostics::default()
     };
     finalize_estimand_diagnostics(&mut diagnostics, estimand, anchors.len(), None);
     let used = pairs.len();
-    build_outcome(pairs, matched_anchors, anchors.len(), used, diagnostics)
+    build_outcome(pairs, matched_cases, anchors.len(), used, diagnostics)
 }
 
-/// Subclasses of an optimal full match, by unit position, with the weights of
-/// each estimand derived from the subclasses, see [`SubclassedUnits`].
-///
-/// Subclasses are numbered from 0 in the order of their first anchor in the
-/// anchor slice.
-pub type FullMatchOutcome = SubclassedUnits;
-
-/// Optimal full matching: subclasses of one anchor with several candidates or
-/// one candidate with several anchors that minimise the sum of the distances
+/// Optimal full matching: subclasses of one case with several controls or
+/// one control with several cases that minimise the sum of the distances
 /// of the matched pairs, within the limits of `config`, as
 /// `matchit(method = "full")`.
 ///
-/// The anchors are the focal group. The limits count candidates per anchor, so
-/// a match for the effect in the controls is made with the controls as anchors.
+/// The cases are the focal group. The limits count controls per case, so
+/// a match for the effect in the controls is made with the controls as cases.
 /// A unit with no admissible pair is in no subclass. The weights are the
-/// subclass weights of [`FullMatchOutcome`], before MatchIt's rescaling, which
-/// [`FullMatchOutcome::match_data`] applies on request.
+/// subclass weights of [`SubclassedUnits`], before MatchIt's rescaling, which
+/// [`SubclassedUnits::match_data`] applies on request.
 ///
 /// A caliper, an exact stratum or a constraint removes pairs from the problem.
 /// `matchit(method = "full")` also takes calipers, but only when `min.controls`
@@ -1091,7 +1020,7 @@ pub type FullMatchOutcome = SubclassedUnits;
 ///
 /// # Errors
 ///
-/// [`OptimalError`] for invalid criteria, replacement, a unique key, limits
+/// [`Error`] for invalid criteria, replacement, a unique key, limits
 /// that are out of range, a stratum where the limits cannot be met, or when no
 /// stratum has an admissible pair.
 pub fn match_full<R, G>(
@@ -1099,7 +1028,7 @@ pub fn match_full<R, G>(
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
     config: &FullMatchConfig,
-) -> Result<FullMatchOutcome, OptimalError>
+) -> Result<SubclassedUnits, Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,
@@ -1117,7 +1046,7 @@ where
 }
 
 /// The subclasses of a full match as columns by unit position: the sets are
-/// the pairs of (anchor position, candidate position) of each subclass.
+/// the pairs of (case position, control position) of each subclass.
 fn subclassed_by_sets<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
@@ -1144,7 +1073,7 @@ fn subclassed_by_sets<R: MatchingRecord>(
     }
     SubclassedUnits {
         ids: unit_ids(anchors, candidates),
-        anchor_count: anchors.len(),
+        case_count: anchors.len(),
         subclass,
         subclasses: build_subclass_summaries(&anchor_counts, &candidate_counts),
         trimmed: crate::TrimmedUnits::default(),
@@ -1379,7 +1308,7 @@ mod tests {
             let mut assignments: HashMap<String, usize> = HashMap::new();
             let mut anchor_counts = Vec::with_capacity(sets.len());
             let mut candidate_counts = Vec::with_capacity(sets.len());
-            let mut anchor_flags: Vec<(String, bool, usize)> = Vec::new();
+            let mut case_flags: Vec<(String, bool, usize)> = Vec::new();
             for (subclass, set) in sets.iter().enumerate() {
                 let mut anchor_positions: Vec<usize> = set.iter().map(|pair| pair.0).collect();
                 anchor_positions.sort_unstable();
@@ -1390,31 +1319,31 @@ mod tests {
                 anchor_counts.push(anchor_positions.len());
                 candidate_counts.push(candidate_positions.len());
                 for position in anchor_positions {
-                    anchor_flags.push((anchors[position].id().to_string(), true, subclass));
+                    case_flags.push((anchors[position].id().to_string(), true, subclass));
                 }
                 for position in candidate_positions {
-                    anchor_flags.push((candidates[position].id().to_string(), false, subclass));
+                    case_flags.push((candidates[position].id().to_string(), false, subclass));
                 }
             }
             let subclasses = build_subclass_summaries(&anchor_counts, &candidate_counts);
             let mut anchor_effect = HashMap::new();
             let mut candidate_effect = HashMap::new();
             let mut population_effect = HashMap::new();
-            for (id, is_anchor, subclass) in anchor_flags {
+            for (id, is_case, subclass) in case_flags {
                 let Some(share) = subclasses[subclass].subclass_propensity else {
                     continue;
                 };
                 anchor_effect.insert(
                     id.clone(),
-                    subclass_weight_for_estimand(Estimand::Att, share, is_anchor),
+                    subclass_weight_for_estimand(Estimand::Att, share, is_case),
                 );
                 candidate_effect.insert(
                     id.clone(),
-                    subclass_weight_for_estimand(Estimand::Atc, share, is_anchor),
+                    subclass_weight_for_estimand(Estimand::Atc, share, is_case),
                 );
                 population_effect.insert(
                     id.clone(),
-                    subclass_weight_for_estimand(Estimand::Ate, share, is_anchor),
+                    subclass_weight_for_estimand(Estimand::Ate, share, is_case),
                 );
                 assignments.insert(id, subclass);
             }
@@ -1443,14 +1372,14 @@ mod tests {
             drop_unmatched: bool,
         ) -> MatchData {
             let mut set = UnitWeightSet::default();
-            for (id, is_anchor) in units.ids().iter().zip(units.anchor_flags()) {
+            for (id, is_case) in units.ids().iter().zip(units.case_flags()) {
                 let Some(weight) = weights.get(id) else {
                     continue;
                 };
-                if *is_anchor {
-                    set.anchor.insert(id.clone(), *weight);
+                if *is_case {
+                    set.case.insert(id.clone(), *weight);
                 } else {
-                    set.candidate.insert(id.clone(), *weight);
+                    set.control.insert(id.clone(), *weight);
                 }
             }
             let set = if normalize { set.normalized() } else { set };
@@ -1460,21 +1389,17 @@ mod tests {
                 weight: Vec::new(),
                 subclass: Vec::new(),
             };
-            for (id, is_anchor) in units.ids().iter().zip(units.anchor_flags()) {
-                let group = if *is_anchor {
-                    &set.anchor
-                } else {
-                    &set.candidate
-                };
+            for (id, is_case) in units.ids().iter().zip(units.case_flags()) {
+                let group = if *is_case { &set.case } else { &set.control };
                 let weight = group.get(id).copied();
                 if weight.is_none() && drop_unmatched {
                     continue;
                 }
                 out.id.push(id.clone());
-                out.role.push(if *is_anchor {
-                    UnitRole::Anchor
+                out.role.push(if *is_case {
+                    UnitRole::Case
                 } else {
-                    UnitRole::Candidate
+                    UnitRole::Control
                 });
                 out.weight.push(weight.unwrap_or(0.0));
                 out.subclass.push(
@@ -1553,7 +1478,7 @@ mod tests {
                 }
                 let units = Units::new(
                     order.iter().map(|p| new.id(*p).to_string()).collect(),
-                    order.iter().map(|p| new.is_anchor(*p)).collect(),
+                    order.iter().map(|p| new.is_case(*p)).collect(),
                 )
                 .unwrap();
                 for (normalize, drop_unmatched) in [(true, true), (false, false), (true, false)] {

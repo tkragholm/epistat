@@ -3,35 +3,38 @@
 
 use std::collections::HashMap;
 
+use epistat_core::{Estimate, InputError, Interval};
 use epistat_linalg::{Attempt, Mat, Method, inverse};
 use epistat_stats::dist::f::sf as f_sf;
-use epistat_stats::dist::t::quantile as t_quantile;
+use epistat_stats::dist::t::{quantile as t_quantile, sf as t_sf};
+
+use crate::error::Error;
 
 use super::panel::{index_of, ordered, prepare};
-use super::{DcdhConfig, DcdhError, DcdhObservation, counts, validate};
+use super::{DcdhOptions, SwitchingPanel, counts, domain, validate};
 
-/// One coefficient of [`estimate_dcdh_heterogeneity`].
+/// One coefficient of [`heterogeneity`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DcdhHeterogeneity {
     /// `l` for effect `l`, `-l` for placebo `l`.
     pub relative_period: i64,
-    /// Index of the covariate.
+    /// The column of the covariate in the panel's heterogeneity covariates.
     pub covariate: usize,
-    /// The coefficient.
-    pub estimate: f64,
-    /// Its HC2 standard error.
-    pub se: f64,
-    /// `estimate / se`.
-    pub t: f64,
-    /// The t interval at the configured level, on the residual degrees of
+    /// The coefficient with its HC2 standard error, the t interval at the
+    /// options' level on the residual degrees of freedom and the t p-value;
+    /// the interval and the p-value `None` without residual degrees of
     /// freedom.
-    pub ci: (f64, f64),
+    pub estimate: Estimate,
+    /// `estimate / se`, `None` without a positive standard error.
+    pub t: Option<f64>,
     /// The switchers in the regression.
     pub n: usize,
     /// The residual degrees of freedom.
     pub df: usize,
-    /// The F test that all covariates' coefficients are zero.
-    pub p_joint: f64,
+    /// The F test that all covariates' coefficients are zero, `None` when
+    /// the covariance does not invert.
+    pub p_joint: Option<f64>,
 }
 
 /// The regressions of `predict_het`: for effect `l`, the switchers'
@@ -45,75 +48,68 @@ pub struct DcdhHeterogeneity {
 /// `Y_{g,F_g-1-l} - Y_{g,F_g-1}` in the same sample. A dimension of the
 /// cells enters only when it takes two values among those switchers.
 ///
-/// `covariates[i]` are the covariates of row `i` of `observations`, the same
-/// number in every row and constant within a group. `effects` selects the
-/// effects (and placebos) from 1; `None` takes all that are estimated.
+/// The covariates are the panel's
+/// [`het_covariates`](super::SwitchingPanelBuilder::het_covariates),
+/// constant within a unit. `effects` selects the effects (and placebos)
+/// from 1; `None` takes all that are estimated.
 ///
 /// # Errors
-/// [`DcdhError`] as [`super::estimate_dcdh`]; invalid input or options, as
-/// `normalized` or controls, which the package refuses too; covariates that
-/// are collinear with the cells.
+///
+/// The errors of [`estimate`](super::estimate); [`Error::Unsupported`] for
+/// a panel without heterogeneity covariates or with controls, and with
+/// `normalized`, which the package refuses too; [`Error::Input`] for an
+/// empty set of covariates or a selected effect that is not estimated; and
+/// [`Error::Collinear`] for covariates that are collinear with the cells.
 ///
 /// # Panics
+///
 /// Only when a number of effects does not fit in `i64`.
 #[expect(
     clippy::too_many_lines,
     reason = "the predict_het block of did_multiplegt_main, in its order"
 )]
-pub fn estimate_dcdh_heterogeneity(
-    observations: &[DcdhObservation],
-    config: &DcdhConfig,
-    covariates: &[Vec<f64>],
+pub fn heterogeneity(
+    data: &SwitchingPanel<'_>,
+    options: &DcdhOptions,
     effects: Option<&[usize]>,
-) -> Result<Vec<DcdhHeterogeneity>, DcdhError> {
-    validate(config)?;
-    if config.normalized {
-        return Err(DcdhError::InvalidConfig(
-            "predict_het cannot be combined with normalized",
-        ));
+) -> Result<Vec<DcdhHeterogeneity>, Error> {
+    validate(options)?;
+    if options.normalized {
+        return Err(Error::Unsupported {
+            what: "predict_het with normalized",
+        });
     }
-    if observations.first().is_some_and(|o| !o.controls.is_empty()) {
-        return Err(DcdhError::InvalidConfig(
-            "predict_het cannot be combined with controls",
-        ));
+    if data.controls().is_some_and(|x| x.ncols() > 0) {
+        return Err(Error::Unsupported {
+            what: "predict_het with controls",
+        });
     }
-    if covariates.len() != observations.len() {
-        return Err(DcdhError::InvalidConfig(
-            "covariates needs one row per observation",
-        ));
-    }
-    let k = covariates.first().map_or(0, Vec::len);
+    let Some(covariates) = data.het_covariates() else {
+        return Err(Error::Unsupported {
+            what: "predict_het on a panel without heterogeneity covariates",
+        });
+    };
+    let k = covariates.ncols();
     if k == 0 {
-        return Err(DcdhError::InvalidConfig("predict_het needs a covariate"));
+        return Err(InputError::Empty {
+            what: "het_covariates",
+        }
+        .into());
     }
-    let mut of_group: HashMap<i64, &[f64]> = HashMap::new();
-    for (i, (o, x)) in observations.iter().zip(covariates).enumerate() {
-        if x.len() != k {
-            return Err(DcdhError::InvalidRow {
-                row: i,
-                reason: "every row needs the same number of covariates",
-            });
-        }
-        if x.iter().any(|v| !v.is_finite()) {
-            return Err(DcdhError::InvalidRow {
-                row: i,
-                reason: "a covariate is not finite",
-            });
-        }
-        let first = *of_group.entry(o.group).or_insert(x);
-        if first.iter().zip(x).any(|(a, b)| a.to_bits() != b.to_bits()) {
-            return Err(DcdhError::VaryingCovariate { group: o.group });
-        }
+    let mut of_group: HashMap<i64, Vec<f64>> = HashMap::new();
+    for i in 0..data.len() {
+        of_group
+            .entry(i64::from(data.unit()[i]))
+            .or_insert_with(|| (0..k).map(|j| covariates[(i, j)]).collect());
     }
-    let panel = prepare(observations, config)?;
-    let c = counts(&panel, config)?;
+    let panel = prepare(data, options)?;
+    let c = counts(&panel, options)?;
+    let not_estimated = |i: usize| domain("effects", i as f64, "the effects estimated");
     let selected: Vec<usize> = match effects {
         None => (1..=c.l).collect(),
         Some(e) => {
-            if e.iter().any(|&i| i == 0 || i > c.l) {
-                return Err(DcdhError::InvalidConfig(
-                    "predict_het selects an effect that is not estimated",
-                ));
+            if let Some(&i) = e.iter().find(|&&i| i == 0 || i > c.l) {
+                return Err(not_estimated(i));
             }
             e.to_vec()
         }
@@ -122,15 +118,17 @@ pub fn estimate_dcdh_heterogeneity(
         Vec::new()
     } else if effects.is_none() {
         (1..=c.l_pl).collect()
-    } else if selected.iter().any(|&i| i > c.l_pl) {
-        return Err(DcdhError::InvalidConfig(
-            "predict_het selects a placebo that is not estimated",
-        ));
+    } else if let Some(&i) = selected.iter().find(|&&i| i > c.l_pl) {
+        return Err(domain("effects", i as f64, "the placebos estimated"));
     } else {
         selected.clone()
     };
 
-    let x: Vec<&[f64]> = panel.group_ids.iter().map(|id| of_group[id]).collect();
+    let x: Vec<&[f64]> = panel
+        .group_ids
+        .iter()
+        .map(|id| of_group[id].as_slice())
+        .collect();
     let nt = panel.nt;
     let level_at = |g: usize, t: i64| -> f64 {
         usize::try_from(t - panel.t_min)
@@ -150,7 +148,7 @@ pub fn estimate_dcdh_heterogeneity(
             .collect();
         let feasible = |g: usize| {
             !level_at(g, panel.f_g[g] - 1).is_nan()
-                && (!config.trends_lin || !level_at(g, panel.f_g[g] - 2).is_nan())
+                && (!options.trends_lin || !level_at(g, panel.f_g[g] - 2).is_nan())
         };
         // The dimensions of the cells that vary among the feasible switchers.
         let dims: [Box<dyn Fn(usize) -> i64>; 4] = [
@@ -184,7 +182,7 @@ pub fn estimate_dcdh_heterogeneity(
                     level_at(g, panel.f_g[g] - 1 + ii)
                 };
                 let mut change = target - base;
-                if config.trends_lin {
+                if options.trends_lin {
                     change -= ii as f64 * (base - level_at(g, panel.f_g[g] - 2));
                 }
                 let direction = if panel.s_g[g] == 0.0 {
@@ -212,27 +210,32 @@ pub fn estimate_dcdh_heterogeneity(
                 .map(|&(g, _, _)| cell_key(g))
                 .collect::<Vec<_>>(),
         );
-        let fit = within_hc2(&rows, &cell, n_cells, &x, k).ok_or(DcdhError::InvalidConfig(
-            "the predict_het covariates are collinear with the cells",
-        ))?;
+        let fit = within_hc2(&rows, &cell, n_cells, &x, k).ok_or(Error::Collinear {
+            what: "the predict_het covariates with the cells",
+        })?;
         let df = rows.len().saturating_sub(k + n_cells);
-        let t_crit = if df > 0 {
-            t_quantile(f64::midpoint(1.0, config.confidence_level), df as f64)
-        } else {
-            f64::NAN
-        };
-        let p_joint = joint_f(&fit.beta, &fit.v, k, df);
+        let level = options.level;
+        let t_crit = (df > 0)
+            .then(|| t_quantile(f64::midpoint(1.0, level.confidence_value()), df as f64))
+            .filter(|q| q.is_finite());
+        let p_joint = Some(joint_f(&fit.beta, &fit.v, k, df)).filter(|p| !p.is_nan());
         let period = if placebo { -ii } else { ii };
         for j in 0..k {
-            let se = fit.v[j * k + j].sqrt();
+            let se = Some(fit.v[j * k + j].sqrt()).filter(|s| s.is_finite());
             let b = fit.beta[j];
+            let t = se.filter(|&s| s > 0.0).map(|s| b / s);
+            let interval = se
+                .zip(t_crit)
+                .map(|(s, q)| Interval::new(Some(b - q * s), Some(b + q * s), level));
+            let p_value = t.filter(|_| df > 0).map(|t| 2.0 * t_sf(t.abs(), df as f64));
             out.push(DcdhHeterogeneity {
                 relative_period: period,
                 covariate: j,
-                estimate: b,
-                se,
-                t: b / se,
-                ci: (b - t_crit * se, b + t_crit * se),
+                estimate: Estimate::point(b)
+                    .with_se(se)
+                    .with_interval(interval)
+                    .with_p_value(p_value),
+                t,
                 n: rows.len(),
                 df,
                 p_joint,

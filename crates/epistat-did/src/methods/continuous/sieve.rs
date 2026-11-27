@@ -60,7 +60,7 @@ use epistat_linalg::{Col, Mat};
 /// dose are treated. Units with a negative dose enter neither group, and are
 /// only given a zero influence value. See the module documentation for the
 /// estimator and its influence function; the standard error is
-/// [`standard_error_from_influence`] of it.
+/// `sqrt(mean((psi_i - mean(psi))^2) / n)` of it.
 ///
 /// # Errors
 /// Returns `ContinuousDidError::EmptyInput` if observations are empty,

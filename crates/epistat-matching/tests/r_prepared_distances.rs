@@ -28,6 +28,9 @@ use chrono::NaiveDate;
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::prelude::*;
 use epistat_matching::{
+    BalanceRecord, CovariateValue, DistanceCaliper, DistanceConfig, Estimand, InvalidCriteriaReason,
+};
+use epistat_matching::{
     EuclideanPreparationConfig, EuclideanScale, MahalanobisCovarianceStrategy,
     MahalanobisPreparationConfig, MahalanobisTransform, MatchOrder,
     prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
@@ -156,10 +159,11 @@ fn prepared(
             .distance_config
         }
         "robust_mahalanobis" => {
-            let config = MahalanobisPreparationConfig::builder()
-                .covariance_strategy(MahalanobisCovarianceStrategy::FullSample)
-                .transform(MahalanobisTransform::RankTieAdjusted)
-                .build();
+            let config = MahalanobisPreparationConfig {
+                covariance_strategy: MahalanobisCovarianceStrategy::FullSample,
+                transform: MahalanobisTransform::RankTieAdjusted,
+                ..MahalanobisPreparationConfig::default()
+            };
             prepare_mahalanobis_distance_config(anchors, candidates, caliper, &config)
                 .expect("preparation")
                 .distance_config
@@ -170,7 +174,10 @@ fn prepared(
             } else {
                 EuclideanScale::PooledWithinGroupSd
             };
-            let config = EuclideanPreparationConfig::builder().scale(scale).build();
+            let config = EuclideanPreparationConfig {
+                scale,
+                ..EuclideanPreparationConfig::default()
+            };
             prepare_euclidean_distance_config(anchors, candidates, caliper, &config)
                 .expect("preparation")
                 .distance_config
@@ -218,13 +225,14 @@ fn prepared_distances_give_matchits_pairs() {
             .with_exact_matches(if spec.exact { vec!["s"] } else { Vec::new() })
             .with_distance_config(config)
             .with_constraints(calipers)
-            .run();
+            .run()
+            .expect("a valid job");
         let mut by_anchor: HashMap<usize, Vec<usize>> = HashMap::new();
         for pair in &outcome.pairs {
             by_anchor
-                .entry(pair.anchor_id().parse().expect("row"))
+                .entry(pair.case_id.as_str().parse().expect("row"))
                 .or_default()
-                .push(pair.comparator_id().parse().expect("row"));
+                .push(pair.control_id.as_str().parse().expect("row"));
         }
         let ours: Vec<Vec<usize>> = run
             .focal_rows
@@ -278,13 +286,9 @@ fn a_caliper_in_standard_deviations_of_a_covariate_distance_is_refused() {
             .with_std_caliper(true)
             .with_distance_config(config)
             .run();
-        assert!(refused.pairs.is_empty(), "{distance}");
-        assert!(
-            refused
-                .diagnostics
-                .exclusion_counts
-                .keys()
-                .any(|reason| reason.to_string() == "invalid_criteria:nearest_options"),
+        assert_eq!(
+            refused.unwrap_err(),
+            Error::InvalidCriteria(InvalidCriteriaReason::NearestOptions),
             "{distance}"
         );
     }

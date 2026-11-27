@@ -1,4 +1,4 @@
-# Reference values for epistat_did::estimate_sunab: the interaction-weighted
+# Reference values for epistat_did::sunab::fit: the interaction-weighted
 # event study of Sun and Abraham as fixest 0.14.2 fits it,
 # feols(y ~ sunab(g, t) | id + t), with the aggregations of
 # aggregate(m, "period"), aggregate(m, "att") and aggregate(m, "cohort").

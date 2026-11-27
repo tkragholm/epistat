@@ -1,9 +1,10 @@
 //! The genetic search for weights.
 
+use crate::Error;
 use epistat_rng::{Stream, replicate_seed};
 use rayon::prelude::*;
 
-use super::{GeneticError, GeneticFit, GeneticLoss, GeneticMatches, GeneticProblem};
+use super::{GeneticFit, GeneticLoss, GeneticMatches, GeneticProblem};
 
 /// The settings of the search, with `GenMatch`'s defaults.
 #[derive(Debug, Clone, PartialEq)]
@@ -236,10 +237,10 @@ impl GeneticProblem {
         &self,
         fit: &GeneticFit,
         search: &GeneticSearch,
-    ) -> Result<GeneticOutcome, GeneticError> {
+    ) -> Result<GeneticOutcome, Error> {
         let p = self.variables;
         if (1..=OPERATORS.len()).contains(&search.population) {
-            return Err(GeneticError::Invalid(
+            return Err(Error::Invalid(
                 "a population of 1 to 8 is too small for every operator to make a child; \
                  use 0 or at least 9"
                     .into(),
@@ -250,7 +251,7 @@ impl GeneticProblem {
             && search.min_weight >= 0.0
             && search.min_weight < search.max_weight)
         {
-            return Err(GeneticError::Invalid(
+            return Err(Error::Invalid(
                 "the weights need 0 <= min_weight < max_weight, both finite".into(),
             ));
         }
@@ -260,14 +261,14 @@ impl GeneticProblem {
                 .iter()
                 .any(|v| *v < search.min_weight || *v > search.max_weight)
             {
-                return Err(GeneticError::Invalid(
+                return Err(Error::Invalid(
                     "the starting values must lie in [min_weight, max_weight]".into(),
                 ));
             }
             values.clone()
         } else {
             if !(search.min_weight..=search.max_weight).contains(&1.0) {
-                return Err(GeneticError::Invalid(
+                return Err(Error::Invalid(
                     "the default starting weights are 1, which lies outside \
                          [min_weight, max_weight]; give starting values"
                         .into(),

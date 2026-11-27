@@ -41,13 +41,10 @@ epistat-linalg = { path = "../epistat-linalg", version = "0.4.0" }
 epistat-optim = { path = "../epistat-optim", version = "0.2.0" }
 epistat-rng = { path = "../epistat-rng", version = "0.2.0" }
 epistat-stats = { path = "../epistat-stats", version = "0.3.0" }
-itertools = "0.14"
 rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["float_roundtrip"] }
 thiserror = "2.0.18"
-tracing = "0.1.41"
-once_map = "0.4.23"
 
 [dev-dependencies]
 # The unit tests draw their data through rand on an epistat-rng stream.
@@ -63,10 +60,6 @@ proptest = "1.6.0"
 name = "core_workflows"
 harness = false
 required-features = ["honest"]
-
-[[test]]
-name = "dataset_validation"
-path = "tests/dataset_validation.rs"
 
 [[test]]
 name = "solver_counts"
@@ -167,6 +160,10 @@ path = "tests/parity_etwfe.rs"
 [[test]]
 name = "parity_etwfe_glm"
 path = "tests/parity_etwfe_glm.rs"
+
+[[test]]
+name = "parity_fe_intervals"
+path = "tests/parity_fe_intervals.rs"
 
 [[test]]
 name = "imputation_properties"

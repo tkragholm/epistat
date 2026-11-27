@@ -1,5 +1,4 @@
 use epistat_linalg::Mat;
-use itertools::izip;
 
 use super::design::{DEPENDENCE_TOLERANCE, prune_design};
 use crate::estimators::outcome::linear::LinearOutcome;
@@ -285,23 +284,23 @@ fn fit_repeated_nuisance_models(
         config.ridge,
     )?;
 
-    let residualized_outcome = izip!(
-        prepared.post_indicator.iter(),
-        prepared.outcome.iter(),
-        control_outcome_pre.iter(),
-        control_outcome_post.iter()
-    )
-    .map(
-        |(post_indicator, outcome, control_pre_prediction, control_post_prediction)| {
-            let control_prediction = if *post_indicator > 0.5 {
-                *control_post_prediction
-            } else {
-                *control_pre_prediction
-            };
-            outcome - control_prediction
-        },
-    )
-    .collect::<Vec<_>>();
+    let residualized_outcome = prepared
+        .post_indicator
+        .iter()
+        .zip(&prepared.outcome)
+        .zip(&control_outcome_pre)
+        .zip(&control_outcome_post)
+        .map(
+            |(((post_indicator, outcome), control_pre_prediction), control_post_prediction)| {
+                let control_prediction = if *post_indicator > 0.5 {
+                    *control_post_prediction
+                } else {
+                    *control_pre_prediction
+                };
+                outcome - control_prediction
+            },
+        )
+        .collect::<Vec<_>>();
 
     Ok(RepeatedNuisanceFits {
         normalized_weights,

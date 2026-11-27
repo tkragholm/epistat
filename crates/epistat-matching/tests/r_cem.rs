@@ -46,6 +46,10 @@ mod r_reference;
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
 use epistat_matching::{
+    BalanceRecord, CovariateEncodingConfig, CovariateValue, Estimand,
+    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+};
+use epistat_matching::{
     CemBinning, CemRule, CemVariable, EuclideanPreparationConfig, EuclideanScale,
     MahalanobisPreparationConfig, MatchOrder, cem_k2k_pairs, cem_strata, cem_subclasses,
 };
@@ -328,8 +332,8 @@ fn strata_do_not_depend_on_which_group_is_the_anchors() {
     let kept = |strata: &epistat_matching::CemStrata, a: &[BalanceRecord], c: &[BalanceRecord]| {
         let mut ids: Vec<String> = a
             .iter()
-            .zip(&strata.anchors)
-            .chain(c.iter().zip(&strata.candidates))
+            .zip(&strata.cases)
+            .chain(c.iter().zip(&strata.controls))
             .filter(|(_, stratum)| stratum.is_some())
             .map(|(record, _)| record.core.id.clone())
             .collect();
@@ -354,19 +358,21 @@ fn k2k_pairs_match_matchit() {
         let (anchors, candidates, _) = records(&reference, run, group);
         let strata = cem_strata(&anchors, &candidates, &variables(run)).expect("strata");
         let names: Vec<String> = run.vars.iter().map(|var| var.name.clone()).collect();
-        let encoding = CovariateEncodingConfig::builder()
-            .covariate_keys(names)
-            .include_intercept(false)
-            .build();
+        let encoding = CovariateEncodingConfig {
+            covariate_keys: names,
+            include_intercept: false,
+            ..CovariateEncodingConfig::default()
+        };
         let config = match k2k.method.as_str() {
             "mahalanobis" => {
                 prepare_mahalanobis_distance_config(
                     &anchors,
                     &candidates,
                     None,
-                    &MahalanobisPreparationConfig::builder()
-                        .encoding(encoding)
-                        .build(),
+                    &MahalanobisPreparationConfig {
+                        encoding,
+                        ..MahalanobisPreparationConfig::default()
+                    },
                 )
                 .expect("mahalanobis")
                 .distance_config
@@ -376,14 +382,14 @@ fn k2k_pairs_match_matchit() {
                     &anchors,
                     &candidates,
                     None,
-                    &EuclideanPreparationConfig::builder()
-                        .encoding(encoding)
-                        .scale(if k2k.method == "euclidean" {
+                    &EuclideanPreparationConfig {
+                        encoding,
+                        scale: if k2k.method == "euclidean" {
                             EuclideanScale::None
                         } else {
                             EuclideanScale::PooledWithinGroupSd
-                        })
-                        .build(),
+                        },
+                    },
                 )
                 .expect("euclidean")
                 .distance_config
@@ -411,8 +417,8 @@ fn k2k_pairs_match_matchit() {
             .iter()
             .map(|pair| {
                 (
-                    pair.anchor_id().to_string(),
-                    pair.comparator_id().to_string(),
+                    pair.case_id.as_str().to_string(),
+                    pair.control_id.as_str().to_string(),
                 )
             })
             .collect();
@@ -466,26 +472,22 @@ fn k2k_without_a_distance_pairs_within_strata() {
     assert_ne!(first.pairs, draw(4).pairs);
     let mut used = std::collections::HashSet::new();
     for pair in &first.pairs {
-        assert!(used.insert(pair.comparator_id().to_string()));
+        assert!(used.insert(pair.control_id.as_str().to_string()));
         let a = anchors
             .iter()
-            .position(|r| r.core.id == pair.anchor_id())
+            .position(|r| r.core.id == pair.case_id.as_str())
             .expect("anchor");
         let c = candidates
             .iter()
-            .position(|r| r.core.id == pair.comparator_id())
+            .position(|r| r.core.id == pair.control_id.as_str())
             .expect("candidate");
-        assert_eq!(strata.anchors[a], strata.candidates[c]);
+        assert_eq!(strata.cases[a], strata.controls[c]);
     }
     let mut expected = 0;
     for stratum in 0..strata.count {
-        let a = strata
-            .anchors
-            .iter()
-            .filter(|s| **s == Some(stratum))
-            .count();
+        let a = strata.cases.iter().filter(|s| **s == Some(stratum)).count();
         let c = strata
-            .candidates
+            .controls
             .iter()
             .filter(|s| **s == Some(stratum))
             .count();
@@ -549,12 +551,7 @@ fn quantile_groups_of_two_cut_at_the_median() {
     // MatchIt's strata, with the numbering by the anchors, differ from ours.
     let r_strata = renumbered(&treat, &reference.q2_defect.subclass_of_q2, 1.0);
     let r_kept = r_strata.iter().filter(|s| s.is_some()).count();
-    let our_kept = ours
-        .anchors
-        .iter()
-        .chain(&ours.candidates)
-        .flatten()
-        .count();
+    let our_kept = ours.cases.iter().chain(&ours.controls).flatten().count();
     assert_ne!(r_kept, our_kept, "R keeps {r_kept}, ours {our_kept}");
 }
 
@@ -582,6 +579,6 @@ fn a_value_on_a_cut_point_follows_the_floating_point_cut() {
         &[CemVariable::numeric("x", CemBinning::Bins(10))],
     )
     .expect("strata");
-    assert_eq!(strata.anchors, vec![None, Some(0), None, None]);
-    assert_eq!(strata.candidates, vec![Some(0), None, None]);
+    assert_eq!(strata.cases, vec![None, Some(0), None, None]);
+    assert_eq!(strata.controls, vec![Some(0), None, None]);
 }

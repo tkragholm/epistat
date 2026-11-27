@@ -5,8 +5,8 @@
 use epistat_did::{
     DrDidConfig, DrDidObservation, MissingAssumption, MissingConfig, MissingError, MissingFolds,
     MissingModels, MissingPreData, MissingPredictions, PanelFlatInput, att_missing_pre,
-    att_missing_pre_from_predictions, estimate_drdid_panel, estimate_drdid_panel_flat,
-    fit_drdid_panel_nuisance, missing_cross_fit_folds,
+    att_missing_pre_from_predictions, estimate_drdid_panel, fit_drdid_panel_nuisance,
+    missing_cross_fit_folds,
 };
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;
@@ -354,7 +354,15 @@ fn complete_data_is_the_panel_dr_estimate_with_unnormalised_control_weights() {
     };
     let config = DrDidConfig::default();
     let fit = fit_drdid_panel_nuisance(input, config).unwrap();
-    let dr = estimate_drdid_panel_flat(input, config).unwrap();
+    let rows: Vec<DrDidObservation> = (0..n)
+        .map(|i| DrDidObservation {
+            treated: sim.treated[i],
+            delta_outcome: delta[i],
+            weight: 1.0,
+            covariates: design[5 * i..5 * (i + 1)].to_vec(),
+        })
+        .collect();
+    let dr = estimate_drdid_panel(&rows, config).unwrap();
     assert!(
         fit.propensity_scores.iter().all(|&p| p < 0.995),
         "no trimming"

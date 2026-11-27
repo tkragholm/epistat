@@ -1,205 +1,147 @@
-//! Long data to the panel matrices, as `synthdid`'s `panel.matrices`.
+//! The panel matrices of `synthdid` from a [`StaggeredPanel`], as
+//! `panel.matrices` forms them from long data.
 
-use std::collections::BTreeMap;
+use epistat_inference::Clusters;
 
-use super::{StaggeredSynthPanel, SynthDidError, SynthPanel};
+use crate::error::Error;
+use crate::methods::staggered::StaggeredPanel;
 
-/// One row of a long panel: a unit in a period.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SynthObservation {
-    /// The unit.
-    pub unit: i64,
-    /// The period.
-    pub time: i32,
-    /// The outcome.
-    pub outcome: f64,
-    /// Whether the unit is treated in this period.
-    pub treated: bool,
-    /// Time-varying covariates, the same number on every row.
-    pub covariates: Vec<f64>,
-}
+use super::fit::Data;
 
-/// The grid of a balanced panel, units and times in increasing order.
-struct Grid {
-    units: Vec<i64>,
-    times: Vec<i32>,
+/// A balanced panel as the fits read it: the outcomes by unit, in increasing
+/// unit code, over the periods in increasing order, the covariates as blocks
+/// of the same layout, the adoption column of each unit and the clusters of
+/// the units.
+pub(crate) struct Grid {
     outcome: Vec<f64>,
     covariates: Vec<f64>,
     count: usize,
-    treated: Vec<bool>,
+    pub units: Vec<u32>,
+    pub periods: Vec<i64>,
+    pub adoption: Vec<Option<usize>>,
+    pub clusters: Option<Clusters>,
 }
 
-fn grid(observations: &[SynthObservation]) -> Result<Grid, SynthDidError> {
-    let first = observations
-        .first()
-        .ok_or_else(|| SynthDidError::Panel("no observations".into()))?;
-    let count = first.covariates.len();
-    let units: Vec<i64> = {
-        let mut u: Vec<i64> = observations.iter().map(|o| o.unit).collect();
-        u.sort_unstable();
-        u.dedup();
-        u
-    };
-    let times: Vec<i32> = {
-        let mut t: Vec<i32> = observations.iter().map(|o| o.time).collect();
-        t.sort_unstable();
-        t.dedup();
-        t
-    };
-    let unit_index: BTreeMap<i64, usize> = units.iter().enumerate().map(|(i, &u)| (u, i)).collect();
-    let time_index: BTreeMap<i32, usize> = times.iter().enumerate().map(|(i, &t)| (t, i)).collect();
-    let (n, periods) = (units.len(), times.len());
-    if observations.len() != n * periods {
-        return Err(SynthDidError::Panel(
-            "the panel must be balanced: one observation per unit and period".into(),
-        ));
-    }
-    let mut seen = vec![false; n * periods];
-    let mut outcome = vec![0.0; n * periods];
-    let mut covariates = vec![0.0; count * n * periods];
-    let mut treated = vec![false; n * periods];
-    for o in observations {
-        if o.covariates.len() != count {
-            return Err(SynthDidError::Dimension(
-                "every row needs the same covariates",
-            ));
-        }
-        let cell = unit_index[&o.unit] * periods + time_index[&o.time];
-        if std::mem::replace(&mut seen[cell], true) {
-            return Err(SynthDidError::Panel(format!(
-                "unit {} has two observations in period {}",
-                o.unit, o.time
-            )));
-        }
-        if !o.outcome.is_finite() || o.covariates.iter().any(|v| !v.is_finite()) {
-            return Err(SynthDidError::NotFinite);
-        }
-        outcome[cell] = o.outcome;
-        treated[cell] = o.treated;
-        for (k, &v) in o.covariates.iter().enumerate() {
-            covariates[k * n * periods + cell] = v;
-        }
-    }
-    Ok(Grid {
-        units,
-        times,
-        outcome,
-        covariates,
-        count,
-        treated,
-    })
-}
-
-/// The rows of `grid` in the order `order`, for the outcome and each
-/// covariate block.
-fn reorder(grid: &Grid, order: &[usize]) -> (Vec<f64>, Vec<f64>) {
-    let periods = grid.times.len();
-    let n = grid.units.len();
-    let mut outcome = Vec::with_capacity(grid.outcome.len());
-    for &i in order {
-        outcome.extend_from_slice(&grid.outcome[i * periods..(i + 1) * periods]);
-    }
-    let mut covariates = Vec::with_capacity(grid.covariates.len());
-    for k in 0..grid.count {
-        for &i in order {
-            let start = (k * n + i) * periods;
-            covariates.extend_from_slice(&grid.covariates[start..start + periods]);
-        }
-    }
-    (outcome, covariates)
-}
-
-impl SynthPanel {
-    /// The panel of a long data set with one adoption date, as
-    /// `panel.matrices`: balanced, treatment absent in every unit before the
-    /// first treated period and present in every treated unit after it. The
-    /// controls come first, then the treated units, each by increasing
-    /// unit identifier; [`SynthPanel::unit_ids`] gives the order.
+impl Grid {
+    /// The grid of `panel`.
     ///
     /// # Errors
     ///
-    /// [`SynthDidError::Panel`] when the panel is not balanced, has no
-    /// variation in treatment, or adoption is not simultaneous, and the errors
-    /// of [`SynthPanel::new`].
-    pub fn from_observations(observations: &[SynthObservation]) -> Result<Self, SynthDidError> {
-        let grid = grid(observations)?;
-        let (n, periods) = (grid.units.len(), grid.times.len());
-        let row = |i: usize| &grid.treated[i * periods..(i + 1) * periods];
-        let ever: Vec<bool> = (0..n).map(|i| row(i).iter().any(|&w| w)).collect();
-        let first = (0..periods)
-            .find(|&t| (0..n).any(|i| row(i)[t]))
-            .ok_or_else(|| SynthDidError::Panel("there is no variation in treatment".into()))?;
-        if ever.iter().all(|&e| e) {
-            return Err(SynthDidError::Panel(
-                "there is no variation in treatment".into(),
-            ));
+    /// [`Error::Unsupported`] for prior weights or comparison cohorts,
+    /// [`Error::Unbalanced`] unless every unit is observed in the same
+    /// periods, [`Error::Adoption`] for a unit first treated in the first
+    /// period or in a period outside the panel, [`Error::NoNeverTreated`]
+    /// without a never-treated unit and [`Error::NoTreatment`] without a
+    /// treated one.
+    pub fn new(panel: &StaggeredPanel<'_>) -> Result<Self, Error> {
+        if panel.weights().is_some() {
+            return Err(Error::Unsupported {
+                what: "prior weights in synthdid",
+            });
         }
-        let simultaneous = (0..n).all(|i| {
-            row(i)
-                .iter()
-                .enumerate()
-                .all(|(t, &w)| w == (ever[i] && t >= first))
-        });
-        if !simultaneous {
-            return Err(SynthDidError::Panel(
-                "treatment adoption is not simultaneous".into(),
-            ));
+        if panel.comparison_cohort().is_some() {
+            return Err(Error::Unsupported {
+                what: "comparison cohorts in synthdid",
+            });
         }
-        let mut order: Vec<usize> = (0..n).collect();
-        order.sort_by_key(|&i| (ever[i], grid.units[i]));
-        let (outcome, covariates) = reorder(&grid, &order);
-        let controls = ever.iter().filter(|&&e| !e).count();
-        let mut panel = Self::new(outcome, n, periods, controls, first)?;
-        if grid.count > 0 {
-            panel = panel.with_covariates(covariates, grid.count)?;
+        let key = panel.key();
+        let Some((_, first)) = key.units().next() else {
+            return Err(Error::NoTreatment);
+        };
+        let periods: Vec<i64> = panel.period()[first].to_vec();
+        let t = periods.len();
+        let mut units = Vec::new();
+        let mut adoption = Vec::new();
+        let mut starts = Vec::new();
+        for (unit, rows) in key.units() {
+            if panel.period()[rows.clone()] != periods[..] {
+                return Err(Error::Unbalanced);
+            }
+            let column = match panel.first_treated()[rows.start] {
+                None => None,
+                Some(g) => match periods.binary_search(&g) {
+                    Ok(a) if a > 0 => Some(a),
+                    _ => return Err(Error::Adoption { unit }),
+                },
+            };
+            units.push(unit);
+            adoption.push(column);
+            starts.push(rows.start);
         }
-        panel.unit_ids = order.iter().map(|&i| grid.units[i]).collect();
-        panel.times = grid.times;
-        Ok(panel)
-    }
-}
-
-impl StaggeredSynthPanel {
-    /// The panel of a long data set with absorbing treatment: each unit is
-    /// untreated up to its adoption period and treated from then on, or never
-    /// treated. Units keep the order of increasing identifier.
-    ///
-    /// # Errors
-    ///
-    /// [`SynthDidError::Panel`] when the panel is not balanced, a unit's
-    /// treatment switches off, or a unit is treated in the first period, and
-    /// the errors of [`StaggeredSynthPanel::new`].
-    pub fn from_observations(observations: &[SynthObservation]) -> Result<Self, SynthDidError> {
-        let grid = grid(observations)?;
-        let (n, periods) = (grid.units.len(), grid.times.len());
-        let mut adoption = Vec::with_capacity(n);
-        for i in 0..n {
-            let row = &grid.treated[i * periods..(i + 1) * periods];
-            let first = row.iter().position(|&w| w);
-            if let Some(a) = first {
-                if row[a..].iter().any(|&w| !w) {
-                    return Err(SynthDidError::Panel(format!(
-                        "the treatment of unit {} is not absorbing",
-                        grid.units[i]
-                    )));
-                }
-                if a == 0 {
-                    return Err(SynthDidError::Panel(format!(
-                        "unit {} is treated in the first period",
-                        grid.units[i]
-                    )));
+        let never = adoption.iter().filter(|a| a.is_none()).count();
+        if never == 0 {
+            return Err(Error::NoNeverTreated);
+        }
+        if never == units.len() {
+            return Err(Error::NoTreatment);
+        }
+        let n = units.len();
+        let outcome: Vec<f64> = starts
+            .iter()
+            .flat_map(|&s| panel.outcome()[s..s + t].iter().copied())
+            .collect();
+        let (covariates, count) = panel.covariates().map_or((Vec::new(), 0), |x| {
+            let count = x.ncols();
+            let mut blocks = Vec::with_capacity(count * n * t);
+            for k in 0..count {
+                for &s in &starts {
+                    blocks.extend((s..s + t).map(|i| x[(i, k)]));
                 }
             }
-            adoption.push(first);
+            (blocks, count)
+        });
+        let clusters = panel.clusters().map(|c| {
+            let codes: Vec<u32> = starts.iter().map(|&s| c[s]).collect();
+            Clusters::from_codes(&codes)
+        });
+        Ok(Self {
+            outcome,
+            covariates,
+            count,
+            units,
+            periods,
+            adoption,
+            clusters,
+        })
+    }
+
+    /// The layout the fits read.
+    pub fn data(&self) -> Data<'_> {
+        Data {
+            outcome: &self.outcome,
+            covariates: &self.covariates,
+            count: self.count,
+            units: self.units.len(),
+            periods: self.periods.len(),
         }
-        let order: Vec<usize> = (0..n).collect();
-        let (outcome, covariates) = reorder(&grid, &order);
-        let mut panel = Self::new(outcome, n, periods, adoption)?;
-        if grid.count > 0 {
-            panel = panel.with_covariates(covariates, grid.count)?;
-        }
-        panel.unit_ids = grid.units;
-        panel.times = grid.times;
-        Ok(panel)
+    }
+
+    /// The positions of the never-treated units.
+    pub fn controls(&self) -> Vec<usize> {
+        (0..self.units.len())
+            .filter(|&u| self.adoption[u].is_none())
+            .collect()
+    }
+
+    /// The adoption columns with the positions of their units, in increasing
+    /// order.
+    pub fn cohorts(&self) -> Vec<(usize, Vec<usize>)> {
+        let mut columns: Vec<usize> = self.adoption.iter().flatten().copied().collect();
+        columns.sort_unstable();
+        columns.dedup();
+        columns
+            .into_iter()
+            .map(|a| {
+                let units = (0..self.units.len())
+                    .filter(|&u| self.adoption[u] == Some(a))
+                    .collect();
+                (a, units)
+            })
+            .collect()
+    }
+
+    /// The unit codes at `positions`.
+    pub fn codes(&self, positions: &[usize]) -> Vec<u32> {
+        positions.iter().map(|&u| self.units[u]).collect()
     }
 }

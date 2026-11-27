@@ -1,4 +1,4 @@
-//! `estimate_dcdh` checked against `DIDmultiplegtDYN::did_multiplegt_dyn` on
+//! `dcdh::estimate` checked against `DIDmultiplegtDYN::did_multiplegt_dyn` on
 //! simulated panels: an absorbing binary treatment, a binary treatment that
 //! goes on and off (both directions, each alone, never-switchers as the only
 //! controls, normalised with the equality test), a treatment with three
@@ -11,7 +11,7 @@
 //! The reference runs `DIDmultiplegtDYN` 2.2.0, the last release that runs
 //! without the R package polars. Where 2.4.0, which this crate follows,
 //! computes something else on these data, the case says so; the
-//! differences are listed in the module documentation of `estimate_dcdh`.
+//! differences are listed in the module documentation of `dcdh`.
 //!
 //! # The tolerances
 //!
@@ -28,12 +28,14 @@
 //! factor. A p-value `P(chi2 > s)` moves by at most `|ds| / 2` for two or
 //! more degrees of freedom, plus the `eps` of R's `1 - pchisq`.
 
-use epistat_did::{
-    DcdhConfig, DcdhEffectsEqual, DcdhEstimate, DcdhObservation, DcdhSwitchers, estimate_dcdh,
-};
+#[path = "common/switching.rs"]
+mod switching;
+
+use epistat_did::{DcdhEffectsEqual, DcdhOptions, DcdhSwitchers, DcdhTerm, dcdh};
 use epistat_linalg::{Attempt, Mat, Method, solve};
 use epistat_testkit::load_json;
 use serde::Deserialize;
+use switching::{Columns, Row};
 
 const EPS: f64 = f64::EPSILON;
 
@@ -119,11 +121,11 @@ fn load() -> Reference {
     r
 }
 
-fn observations(case: &Case) -> Vec<DcdhObservation> {
+fn observations(case: &Case) -> Vec<Row> {
     let d = &case.data;
     let with_controls = case.args.controls.is_some();
     (0..d.g.len())
-        .map(|i| DcdhObservation {
+        .map(|i| Row {
             group: d.g[i],
             time: d.t[i],
             outcome: d.y[i],
@@ -152,8 +154,8 @@ fn observations(case: &Case) -> Vec<DcdhObservation> {
         .collect()
 }
 
-fn config(args: &Args) -> DcdhConfig {
-    DcdhConfig {
+fn config(args: &Args) -> DcdhOptions {
+    DcdhOptions {
         effects: args.effects,
         placebo: args.placebo,
         normalized: args.normalized,
@@ -170,8 +172,7 @@ fn config(args: &Args) -> DcdhConfig {
         } else {
             DcdhEffectsEqual::No
         },
-        confidence_level: 0.95,
-        ..DcdhConfig::default()
+        ..DcdhOptions::default()
     }
 }
 
@@ -192,21 +193,31 @@ fn close(what: &str, got: f64, want: f64, scale: f64, tol: f64) {
 
 /// The row of R's results matrix: Estimate, SE, LB CI, UB CI, N,
 /// Switchers, N.w, Switchers.w.
-fn check_row(what: &str, e: &DcdhEstimate, row: &[Option<f64>], tol: f64, se_too: bool) {
+fn check_row(what: &str, e: &DcdhTerm, row: &[Option<f64>], tol: f64, se_too: bool) {
     let scale = row[0].map_or(1.0, f64::abs).max(row[1].unwrap_or(0.0));
     match row[0] {
         None => assert!(e.estimate.is_none(), "{what}: R has no estimate"),
         Some(want) => close(
             &format!("{what} estimate"),
-            e.estimate.expect("estimate"),
+            e.estimate.expect("estimate").estimate,
             want,
             scale,
             tol,
         ),
     }
     if se_too && let Some(want) = row[1] {
-        close(&format!("{what} se"), e.se.expect("se"), want, scale, tol);
-        let (lo, hi) = e.ci.expect("ci");
+        let estimate = e.estimate.expect("estimate");
+        close(
+            &format!("{what} se"),
+            estimate.se.expect("se"),
+            want,
+            scale,
+            tol,
+        );
+        let (lo, hi) = (
+            estimate.lower().expect("lower"),
+            estimate.upper().expect("upper"),
+        );
         close(
             &format!("{what} lower"),
             lo,
@@ -245,7 +256,7 @@ fn check_row(what: &str, e: &DcdhEstimate, row: &[Option<f64>], tol: f64, se_too
 /// cluster when clustered. R's terms are not normalised.
 fn check_terms(
     what: &str,
-    e: &DcdhEstimate,
+    psi: Option<&[f64]>,
     want: &[Option<f64>],
     ids: &[i64],
     groups: &[i64],
@@ -253,7 +264,7 @@ fn check_terms(
     delta: f64,
     tol: f64,
 ) {
-    let Some(psi) = &e.influence else {
+    let Some(psi) = psi else {
         assert!(want.iter().all(|v| v.is_none_or(|v| v == 0.0)), "{what}");
         return;
     };
@@ -398,6 +409,7 @@ fn dcdh_matches_did_multiplegt_dyn() {
     let reference = load();
     for case in &reference.cases {
         let obs = observations(case);
+        let columns = Columns::new(&obs);
         let n = obs.len() as f64;
         let mut tol = 16.0 * n * EPS;
         if let Some(k) = case.kappa_x {
@@ -407,7 +419,8 @@ fn dcdh_matches_did_multiplegt_dyn() {
         // differ between 2.2.0 and 2.4.0 (`rsum`); see the R script.
         let se_too = case.name != "controls_two_baselines";
         let cfg = config(&case.args);
-        let r = estimate_dcdh(&obs, &cfg).unwrap_or_else(|e| panic!("{}: {e}", case.name));
+        let r =
+            dcdh::estimate(&columns.panel(), &cfg).unwrap_or_else(|e| panic!("{}: {e}", case.name));
         let name = &case.name;
         assert_eq!(r.effects.len(), case.effects.len(), "{name}: effects");
         for (i, (e, row)) in r.effects.iter().zip(&case.effects).enumerate() {
@@ -440,18 +453,22 @@ fn dcdh_matches_did_multiplegt_dyn() {
         let k = r.effects.len() + r.placebos.len();
         let cov = |rows: std::ops::Range<usize>| -> Vec<Vec<f64>> {
             rows.clone()
-                .map(|a| rows.clone().map(|b| r.covariance[a * k + b]).collect())
+                .map(|a| {
+                    rows.clone()
+                        .map(|b| r.covariance.get(a, b).expect("covariance"))
+                        .collect()
+                })
                 .collect()
         };
         let b_eff: Vec<f64> = r
             .effects
             .iter()
-            .map(|e| e.estimate.unwrap_or(0.0))
+            .map(|e| e.estimate.map_or(0.0, |e| e.estimate))
             .collect();
         let b_pl: Vec<f64> = r
             .placebos
             .iter()
-            .map(|e| e.estimate.unwrap_or(0.0))
+            .map(|e| e.estimate.map_or(0.0, |e| e.estimate))
             .collect();
         let v_eff = cov(0..r.effects.len());
         let v_pl = cov(r.effects.len()..k);
@@ -482,21 +499,24 @@ fn dcdh_matches_did_multiplegt_dyn() {
         }
 
         let vt = &case.var_terms;
-        let cl = r.clusters.as_ref();
-        for (i, e) in r.effects.iter().enumerate() {
+        let groups = columns.labels(&r.units);
+        let clusters = r.clusters.as_ref().map(|c| columns.cluster_labels(c));
+        let cl = clusters.as_ref();
+        let l = r.effects.len();
+        for i in 0..l {
             let delta = r.normalization.get(i).copied().flatten().unwrap_or(1.0);
             check_terms(
                 &format!("{name} effect {}", i + 1),
-                e,
+                r.influence_of(i),
                 &vt.effects[i],
                 &vt.ids,
-                &r.groups,
+                &groups,
                 cl,
                 delta,
                 tol,
             );
         }
-        for (i, e) in r.placebos.iter().enumerate() {
+        for i in 0..r.placebos.len() {
             let delta = r
                 .placebo_normalization
                 .get(i)
@@ -505,10 +525,10 @@ fn dcdh_matches_did_multiplegt_dyn() {
                 .unwrap_or(1.0);
             check_terms(
                 &format!("{name} placebo {}", i + 1),
-                e,
+                r.influence_of(l + i),
                 &vt.placebos[i],
                 &vt.ids,
-                &r.groups,
+                &groups,
                 cl,
                 delta,
                 tol,
@@ -516,10 +536,10 @@ fn dcdh_matches_did_multiplegt_dyn() {
         }
         check_terms(
             &format!("{name} average"),
-            &r.average_total_effect,
+            r.influence_of(l + r.placebos.len()),
             &vt.average,
             &vt.ids,
-            &r.groups,
+            &groups,
             cl,
             1.0,
             tol,

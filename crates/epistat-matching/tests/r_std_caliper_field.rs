@@ -15,6 +15,11 @@
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
+use epistat_matching::spec::{
+    AssignmentSpec, CovariatesSpec, DiscardSpec, DistanceSpec, EstimatorSpec, LinkSpec,
+    MatchMethod, MissingSpec, NearestSpec, OrderSpec, ScaleSpec, StdCaliperEach, StdCaliperSpec,
+};
+use epistat_matching::{BalanceRecord, CovariateValue, SpecOutput};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -107,8 +112,8 @@ fn pairs_from_spec(
     let output = run_spec(
         &spec,
         SpecInput::Standard {
-            anchors: &anchors,
-            candidates: &candidates,
+            cases: &anchors,
+            controls: &candidates,
         },
     )
     .expect("the spec runs");
@@ -119,7 +124,7 @@ fn pairs_from_spec(
     outcome
         .pairs
         .iter()
-        .map(|pair| (row(pair.anchor_id()), row(pair.comparator_id())))
+        .map(|pair| (row(pair.case_id.as_str()), row(pair.control_id.as_str())))
         .collect()
 }
 

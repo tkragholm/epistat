@@ -72,10 +72,10 @@
 //!    glmnet, for the folds, the alignment of the folds' paths and the
 //!    stopping rule of a path.
 
-use super::EstimationError;
 use super::config::{ElasticNetCvConfig, LambdaRule};
 use super::encoding::CovariateMatrix;
 use super::logistic::{LogisticFit, NetProblem, NetSettings, penalty_factors};
+use crate::Error;
 use epistat_rng::Stream;
 use rayon::prelude::*;
 
@@ -98,7 +98,7 @@ const DEVIANCE_CLIP: f64 = 1e-5;
 #[derive(Debug, Clone)]
 pub struct CrossValidation {
     /// The fold of each row, from 0, in the order of the design matrix: the
-    /// anchors, then the candidates.
+    /// cases, then the controls.
     pub fold_ids: Vec<usize>,
     /// The penalties of the path, largest first.
     pub lambda: Vec<f64>,
@@ -140,18 +140,14 @@ impl CrossValidation {
 /// The fold of each of `n` rows, from 0 to `nfolds - 1`: the rows are dealt to
 /// the folds in turn and the assignment is shuffled with a stream of
 /// `epistat-rng` seeded with `seed`. The rows are those of the design matrix,
-/// the anchors first and then the candidates.
+/// the cases first and then the controls.
 ///
 /// # Errors
 ///
-/// Returns [`EstimationError::InvalidCrossValidation`] when `nfolds` is 0.
-pub fn cross_validation_folds(
-    n: usize,
-    nfolds: usize,
-    seed: u64,
-) -> Result<Vec<usize>, EstimationError> {
+/// Returns [`Error::InvalidCrossValidation`] when `nfolds` is 0.
+pub fn cross_validation_folds(n: usize, nfolds: usize, seed: u64) -> Result<Vec<usize>, Error> {
     if nfolds == 0 {
-        return Err(EstimationError::InvalidCrossValidation);
+        return Err(Error::InvalidCrossValidation);
     }
     let mut folds: Vec<usize> = (0..n).map(|row| row % nfolds).collect();
     Stream::seeded(seed).shuffle(&mut folds);
@@ -192,16 +188,16 @@ fn glmnet_path(
     penalty: &[f64],
     settings: &NetSettings,
     config: &ElasticNetCvConfig,
-) -> Result<Path, EstimationError> {
+) -> Result<Path, Error> {
     let (n, p) = (problem.n_rows, problem.n_cols);
     let weight = |row: usize| problem.weights.as_ref().map_or(1.0, |w| w[row]);
     let total: f64 = (0..n).map(weight).sum();
     if !(total.is_finite() && total > 0.0) {
-        return Err(EstimationError::InvalidCrossValidation);
+        return Err(Error::InvalidCrossValidation);
     }
     let y_bar = (0..n).map(|row| weight(row) * problem.y[row]).sum::<f64>() / total;
     if !(y_bar > 0.0 && y_bar < 1.0) {
-        return Err(EstimationError::InvalidCrossValidation);
+        return Err(Error::InvalidCrossValidation);
     }
     // The path starts where the null model's gradient first allows a nonzero
     // penalised coefficient.
@@ -215,7 +211,7 @@ fn glmnet_path(
     }
     lambda_max /= config.alpha.max(1e-3);
     if !(lambda_max.is_finite() && lambda_max > 0.0) {
-        return Err(EstimationError::InvalidCrossValidation);
+        return Err(Error::InvalidCrossValidation);
     }
     let penalised = penalty.iter().filter(|f| **f > 0.0).count();
     let ratio = config
@@ -295,10 +291,10 @@ pub(super) fn fit_elastic_net_cv(
     labels: &[f64],
     weights: Option<&[f64]>,
     config: &ElasticNetCvConfig,
-) -> Result<LogisticFit, EstimationError> {
+) -> Result<LogisticFit, Error> {
     let n = matrix.n_rows;
     if labels.len() != n || weights.is_some_and(|w| w.len() != n) {
-        return Err(EstimationError::LinearSystemSolveFailed);
+        return Err(Error::LinearSystem);
     }
     let settings = NetSettings {
         alpha: config.alpha,
@@ -317,7 +313,7 @@ pub(super) fn fit_elastic_net_cv(
             .lambda_min_ratio
             .is_some_and(|r| !(r > 0.0 && r < 1.0))
     {
-        return Err(EstimationError::InvalidCrossValidation);
+        return Err(Error::InvalidCrossValidation);
     }
     let weight = |row: usize| weights.map_or(1.0, |w| w[row]);
 
@@ -336,7 +332,7 @@ pub(super) fn fit_elastic_net_cv(
     // their own rows, so they are fitted at the same time. Each result is
     // computed by one thread, so none depends on the number of threads, and the
     // first error in the order master, fold 0, fold 1, ... is the one returned.
-    let fit_fold = |fold: usize| -> Result<FoldPath, EstimationError> {
+    let fit_fold = |fold: usize| -> Result<FoldPath, Error> {
         let train: Vec<usize> = (0..n).filter(|&row| fold_ids[row] != fold).collect();
         let held: Vec<usize> = (0..n).filter(|&row| fold_ids[row] == fold).collect();
         let has_both = [false, true].iter().all(|&positive| {
@@ -346,7 +342,7 @@ pub(super) fn fit_elastic_net_cv(
         });
         let held_weight: f64 = held.iter().map(|&row| weight(row)).sum();
         if !has_both || held_weight <= 0.0 {
-            return Err(EstimationError::InvalidCrossValidation);
+            return Err(Error::InvalidCrossValidation);
         }
         let problem = NetProblem::new(
             matrix,
@@ -426,7 +422,7 @@ pub(super) fn fit_elastic_net_cv(
         deviance_se.push((spread / (config.nfolds as f64 - 1.0)).sqrt());
     }
     if deviance.iter().any(|d| !d.is_finite()) {
-        return Err(EstimationError::InvalidCrossValidation);
+        return Err(Error::InvalidCrossValidation);
     }
 
     // The path runs from the largest penalty down, so the first position that

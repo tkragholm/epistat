@@ -1,7 +1,6 @@
 use epistat_linalg::SolveLstsq;
 use epistat_linalg::{Mat, MatRef};
 use epistat_linalg::{weighted_gram as linalg_weighted_gram, weighted_xtz};
-use itertools::izip;
 
 use super::design::{DEPENDENCE_TOLERANCE, prune_design};
 use crate::estimators::common::linalg::{solve_spd_system, solve_spd_system_multi_rhs};
@@ -103,7 +102,7 @@ pub fn estimate_drdid_panel_flat(
 }
 
 /// The panel DR estimator's two nuisance models, as
-/// [`estimate_drdid_panel_flat`] fits them for its ATT.
+/// [`estimate_drdid_panel`] fits them for its ATT.
 ///
 /// The fits are the estimator's own: the same pruning of `input`'s design, the
 /// same weighted logistic propensity score by maximum likelihood, and the same
@@ -112,7 +111,9 @@ pub fn estimate_drdid_panel_flat(
 /// computed here and play no part in the ATT. Neither accounts for clustering.
 ///
 /// # Errors
-/// As [`estimate_drdid_panel_flat`], and [`DrDidError::SingularSystem`] when
+/// As [`estimate_drdid_panel`], plus [`DrDidError::InconsistentCovariateCount`]
+/// if `design_matrix_flat` is not `rows * feature_count` long, and
+/// [`DrDidError::SingularSystem`] when
 /// an information matrix cannot be inverted for the standard errors.
 pub fn fit_drdid_panel_nuisance(
     input: PanelFlatInput<'_>,
@@ -149,8 +150,9 @@ pub fn fit_drdid_panel_nuisance(
 /// fail with [`DrDidError::SingularSystem`] therefore succeeds here.
 ///
 /// # Errors
-/// As [`estimate_drdid_panel_flat`], and the errors of the propensity
-/// iterations.
+/// As [`estimate_drdid_panel`], plus [`DrDidError::InconsistentCovariateCount`]
+/// if `design_matrix_flat` is not `rows * feature_count` long, and the errors
+/// of the propensity iterations.
 pub fn fit_drdid_panel_propensity_coefficients(
     input: PanelFlatInput<'_>,
     config: DrDidConfig,
@@ -610,15 +612,15 @@ fn estimate_panel_att_and_influence(
 
     for (
         row_index,
-        (treated, outcome_delta, propensity_score, normalized_weight, outcome_prediction),
-    ) in izip!(
-        prepared.treated_indicator.iter(),
-        prepared.outcome_delta.iter(),
-        propensity_scores.iter(),
-        normalized_weights.iter(),
-        outcome_predictions.iter()
-    )
-    .enumerate()
+        ((((treated, outcome_delta), propensity_score), normalized_weight), outcome_prediction),
+    ) in prepared
+        .treated_indicator
+        .iter()
+        .zip(&prepared.outcome_delta)
+        .zip(propensity_scores)
+        .zip(normalized_weights)
+        .zip(outcome_predictions)
+        .enumerate()
     {
         let residual = outcome_delta - outcome_prediction;
         if *treated < 0.5 && *propensity_score >= PANEL_TRIM_LEVEL {

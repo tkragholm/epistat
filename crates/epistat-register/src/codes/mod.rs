@@ -65,7 +65,7 @@ pub mod atc;
 
 use std::collections::BTreeMap;
 
-use crate::RegisterError;
+use crate::Error;
 
 pub use hierarchy::{CodeHierarchy, Icd10Level, icd10_levels};
 pub use icd8::{
@@ -202,17 +202,17 @@ fn subtract_lists(a: &[Interval], b: &[Interval], width: usize) -> Vec<Interval>
 }
 
 /// Validate and upper-case one end of an item, dropping dots.
-fn clean_part(part: &str, whole: &str) -> Result<(Key, usize), RegisterError> {
+fn clean_part(part: &str, whole: &str) -> Result<(Key, usize), Error> {
     let mut key = [0_u8; MAX_LEN];
     let mut len = 0;
     for ch in part.chars().filter(|&c| c != '.') {
         if !ch.is_ascii_alphanumeric() {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "code item {whole:?} holds the character {ch:?}, which is neither a letter, a digit nor a dot"
             )));
         }
         if len == MAX_LEN {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "code item {whole:?} is longer than {MAX_LEN} characters"
             )));
         }
@@ -220,7 +220,7 @@ fn clean_part(part: &str, whole: &str) -> Result<(Key, usize), RegisterError> {
         len += 1;
     }
     if len == 0 {
-        return Err(RegisterError::input(format!(
+        return Err(Error::invalid(format!(
             "code item {whole:?} has an empty code"
         )));
     }
@@ -303,11 +303,11 @@ impl CodeSet {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when an item holds a character other than a
+    /// [`Error::Input`] when an item holds a character other than a
     /// letter, a digit or a dot, is longer than 8 characters, has ends of
     /// different lengths or an end before its start, or has more than one
     /// hyphen.
-    pub fn parse(spec: &str) -> Result<Self, RegisterError> {
+    pub fn parse(spec: &str) -> Result<Self, Error> {
         let mut items = Vec::new();
         for token in spec
             .split(|c: char| c.is_whitespace() || c == ',')
@@ -320,18 +320,18 @@ impl CodeSet {
                 None => lo,
                 Some(second) => {
                     if parts.next().is_some() {
-                        return Err(RegisterError::input(format!(
+                        return Err(Error::invalid(format!(
                             "code item {token:?} has more than one hyphen"
                         )));
                     }
                     let (hi, hi_len) = clean_part(second, token)?;
                     if hi_len != len {
-                        return Err(RegisterError::input(format!(
+                        return Err(Error::invalid(format!(
                             "range {token:?} has ends of different lengths"
                         )));
                     }
                     if hi < lo {
-                        return Err(RegisterError::input(format!(
+                        return Err(Error::invalid(format!(
                             "range {token:?} ends before it starts"
                         )));
                     }
@@ -347,11 +347,9 @@ impl CodeSet {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when a prefix is empty, longer than 8
+    /// [`Error::Input`] when a prefix is empty, longer than 8
     /// characters or holds a character other than a letter, a digit or a dot.
-    pub fn from_prefixes<'a>(
-        prefixes: impl IntoIterator<Item = &'a str>,
-    ) -> Result<Self, RegisterError> {
+    pub fn from_prefixes<'a>(prefixes: impl IntoIterator<Item = &'a str>) -> Result<Self, Error> {
         let mut items = Vec::new();
         for prefix in prefixes {
             let (key, len) = clean_part(prefix, prefix)?;
@@ -487,17 +485,17 @@ impl CodeMap {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] for more than 64 sets or a name used twice.
-    pub fn new(sets: Vec<(String, CodeSet)>) -> Result<Self, RegisterError> {
+    /// [`Error::Input`] for more than 64 sets or a name used twice.
+    pub fn new(sets: Vec<(String, CodeSet)>) -> Result<Self, Error> {
         if sets.len() > 64 {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "a code map holds at most 64 sets, got {}",
                 sets.len()
             )));
         }
         for (k, (name, _)) in sets.iter().enumerate() {
             if sets[..k].iter().any(|(other, _)| other == name) {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "the code map names the set {name:?} twice"
                 )));
             }
@@ -555,15 +553,12 @@ impl CodeMap {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when a set has no original items (it came from
+    /// [`Error::Input`] when a set has no original items (it came from
     /// an intersection or a difference) or when a code matches two sets with
     /// prefixes of the same length.
-    pub fn longest_match(
-        &self,
-        distinct_codes: &[&str],
-    ) -> Result<Vec<Option<u32>>, RegisterError> {
+    pub fn longest_match(&self, distinct_codes: &[&str]) -> Result<Vec<Option<u32>>, Error> {
         if let Some((name, _)) = self.sets.iter().find(|(_, set)| !set.has_items()) {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "the set {name:?} has no original items, so a longest prefix cannot be read from it"
             )));
         }
@@ -577,7 +572,7 @@ impl CodeMap {
                 match best {
                     Some((best_len, _)) if len < best_len => {}
                     Some((best_len, other)) if len == best_len => {
-                        return Err(RegisterError::input(format!(
+                        return Err(Error::invalid(format!(
                             "code {code:?} matches the sets {:?} and {name:?} with prefixes of the same length",
                             self.sets[other].0
                         )));
@@ -608,17 +603,15 @@ impl<'a> Dictionary<'a> {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] for more distinct codes than a `u32` holds.
-    pub fn new(rows: &[&'a str]) -> Result<Self, RegisterError> {
+    /// [`Error::Input`] for more distinct codes than a `u32` holds.
+    pub fn new(rows: &[&'a str]) -> Result<Self, Error> {
         let mut seen: BTreeMap<&'a str, u32> = BTreeMap::new();
         for &code in rows {
             seen.entry(code).or_insert(0);
         }
         let distinct: Vec<&'a str> = seen.keys().copied().collect();
         if u32::try_from(distinct.len()).is_err() {
-            return Err(RegisterError::input(
-                "more distinct codes than a UInt32 holds",
-            ));
+            return Err(Error::invalid("more distinct codes than a UInt32 holds"));
         }
         for (i, value) in seen.values_mut().enumerate() {
             *value = u32::try_from(i).unwrap_or(u32::MAX);

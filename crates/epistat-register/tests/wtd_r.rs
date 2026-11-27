@@ -14,7 +14,7 @@
 //! order 10, so the two sums differ by rounding of about `n * 10 * n * eps`,
 //! below `1e-8` for these `n`.
 
-use epistat_register::wtd::{Direction, Family, fit_wtd, waiting_times};
+use epistat_register::wtd::{Family, WaitingTime, fit_wtd, waiting_times};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -63,8 +63,8 @@ fn fits_agree_with_the_likelihood_in_r() {
     assert_eq!(r.fits.len(), 4);
     for f in &r.fits {
         let direction = match f.direction.as_str() {
-            "forward" => Direction::Forward,
-            _ => Direction::Reverse,
+            "forward" => WaitingTime::Forward,
+            _ => WaitingTime::Reverse,
         };
         let family = match f.family.as_str() {
             "lognormal" => Family::LogNormal,
