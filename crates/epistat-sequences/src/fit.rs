@@ -9,7 +9,8 @@
 use epistat_rng::Stream;
 use rayon::prelude::*;
 
-use crate::{Attempt, Restarts, SequenceError, best_attempt};
+use crate::error::{below, length};
+use crate::{Attempt, Error, Restarts, best_attempt};
 
 /// What a fit needs to know about a distance. Positions are the caller's
 /// order of the sequences, the order the seeding walks and a tie between two
@@ -26,42 +27,25 @@ pub(crate) trait FitDistance: Sync {
     fn medoids_from(&self, weights: &[f64], labels: &[u32], k: usize) -> Vec<Option<u32>>;
 }
 
-/// That there is one weight per sequence, with `noun` naming what `count`
-/// counts in the message.
-pub(crate) fn check_weights(noun: &str, count: usize, weights: usize) -> Result<(), SequenceError> {
-    if weights != count {
-        return Err(SequenceError::input(format!(
-            "{count} {noun} but {weights} weights; they must correspond one to one"
-        )));
-    }
-    Ok(())
+/// That there is one weight per sequence, and `count` the number of sequences.
+pub(crate) fn check_weights(count: usize, weights: usize) -> Result<(), Error> {
+    length("weights", count, weights)
 }
 
 /// That `k` types can be drawn from `count` sequences.
-pub(crate) fn check_types(count: usize, k: usize) -> Result<(), SequenceError> {
+pub(crate) fn check_types(count: usize, k: usize) -> Result<(), Error> {
     if k == 0 || k > count {
-        return Err(SequenceError::input(format!(
+        return Err(Error::invalid(format!(
             "asked for {k} types from {count} distinct sequences"
         )));
     }
     Ok(())
 }
 
-/// That `weights` and `labels` both have one entry per sequence, with `noun`
-/// naming what `count` counts in the message.
-pub(crate) fn check_lengths(
-    noun: &str,
-    count: usize,
-    weights: usize,
-    labels: usize,
-) -> Result<(), SequenceError> {
-    if weights != count || labels != count {
-        return Err(SequenceError::input(format!(
-            "{count} {noun} but {weights} weights and {labels} labels; all three \
-             describe the same sequences"
-        )));
-    }
-    Ok(())
+/// That `weights` and `labels` both have one entry per sequence.
+pub(crate) fn check_lengths(count: usize, weights: usize, labels: usize) -> Result<(), Error> {
+    length("weights", count, weights)?;
+    length("labels", count, labels)
 }
 
 /// That a partition of `count` sequences into `k` clusters is well formed:
@@ -71,12 +55,10 @@ pub(crate) fn check_partition(
     weights: usize,
     labels: &[u32],
     k: usize,
-) -> Result<(), SequenceError> {
-    check_lengths("sequences", count, weights, labels.len())?;
-    if let Some(bad) = labels.iter().find(|&&label| label as usize >= k) {
-        return Err(SequenceError::input(format!(
-            "cluster label {bad} is outside the {k} clusters declared"
-        )));
+) -> Result<(), Error> {
+    check_lengths(count, weights, labels.len())?;
+    for &label in labels {
+        below("labels", label as usize, k, "below the number of clusters")?;
     }
     Ok(())
 }
@@ -90,14 +72,14 @@ pub(crate) fn fit<D: FitDistance>(
     k: usize,
     restarts: &Restarts,
     max_iterations: usize,
-) -> Result<Attempt, SequenceError> {
+) -> Result<Attempt, Error> {
     // The restarts are independent, and each owns a stream seeded from the
     // caller's, so the set is one deterministic fit.
     let attempts: Vec<Attempt> = epistat_optim::multistart::run(restarts.len(), |attempt| {
         let mut stream = Stream::seeded(restarts.seeds()[attempt]);
         one_fit(distance, count, weights, k, max_iterations, &mut stream)
     });
-    best_attempt(attempts).ok_or_else(|| SequenceError::input("a fit needs at least one restart"))
+    best_attempt(attempts).ok_or_else(|| Error::invalid("a fit needs at least one restart"))
 }
 
 /// k-means++ seeding: `k` starting medoids, drawn proportional to `d^2 * w`.

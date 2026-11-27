@@ -82,9 +82,9 @@
 //!
 //! A code shorter than the longest item of a list cannot match every item:
 //! `E10` is not in diabetes without complications, which lists `E10.0` and
-//! four others. [`Classification::short_codes`] counts them. An ICD-8 code
+//! four others. [`ClassifiedCodes::short_codes`] counts them. An ICD-8 code
 //! matches no condition of a map with no ICD-8 codes, and
-//! [`Classification::icd8_codes`] counts those too. Nothing is repaired.
+//! [`ClassifiedCodes::icd8_codes`] counts those too. Nothing is repaired.
 //!
 //! # References
 //!
@@ -118,7 +118,7 @@
 mod denmark;
 mod lists;
 
-use crate::RegisterError;
+use crate::Error;
 use crate::codes::{CodeSet, EraCodeSet, Revision, revision_of};
 use crate::events::{EventRows, Lookback};
 
@@ -217,11 +217,11 @@ impl ComorbidityMap {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] for more than 64 conditions, a key used twice, a
+    /// [`Error::Input`] for more than 64 conditions, a key used twice, a
     /// `supersedes` key that names no condition or the condition itself.
-    pub fn new(conditions: Vec<Condition>) -> Result<Self, RegisterError> {
+    pub fn new(conditions: Vec<Condition>) -> Result<Self, Error> {
         if conditions.len() > 64 {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "a comorbidity map holds at most 64 conditions, got {}",
                 conditions.len()
             )));
@@ -229,7 +229,7 @@ impl ComorbidityMap {
         let mut cancels = Vec::with_capacity(conditions.len());
         for (k, c) in conditions.iter().enumerate() {
             if conditions[..k].iter().any(|o| o.key == c.key) {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "the condition {:?} is listed twice",
                     c.key
                 )));
@@ -237,16 +237,13 @@ impl ComorbidityMap {
             let mut mask = 0_u64;
             for key in &c.supersedes {
                 let Some(j) = conditions.iter().position(|o| &o.key == key) else {
-                    return Err(RegisterError::input(format!(
+                    return Err(Error::invalid(format!(
                         "{:?} supersedes {key:?}, which is not a condition of the map",
                         c.key
                     )));
                 };
                 if j == k {
-                    return Err(RegisterError::input(format!(
-                        "{:?} supersedes itself",
-                        c.key
-                    )));
+                    return Err(Error::invalid(format!("{:?} supersedes itself", c.key)));
                 }
                 mask |= 1 << j;
             }
@@ -314,19 +311,19 @@ impl ComorbidityMap {
         &self.conditions
     }
 
-    fn position(&self, key: &str) -> Result<usize, RegisterError> {
+    fn position(&self, key: &str) -> Result<usize, Error> {
         self.conditions
             .iter()
             .position(|c| c.key == key)
-            .ok_or_else(|| RegisterError::input(format!("the map has no condition {key:?}")))
+            .ok_or_else(|| Error::invalid(format!("the map has no condition {key:?}")))
     }
 
     /// Replace the ICD-10 codes of a condition, for a Danish or study list.
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when no condition has the key.
-    pub fn set_icd10(&mut self, key: &str, codes: CodeSet) -> Result<(), RegisterError> {
+    /// [`Error::Input`] when no condition has the key.
+    pub fn set_icd10(&mut self, key: &str, codes: CodeSet) -> Result<(), Error> {
         let k = self.position(key)?;
         self.conditions[k].codes.icd10 = codes;
         Ok(())
@@ -336,8 +333,8 @@ impl ComorbidityMap {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when no condition has the key.
-    pub fn set_icd8(&mut self, key: &str, codes: CodeSet) -> Result<(), RegisterError> {
+    /// [`Error::Input`] when no condition has the key.
+    pub fn set_icd8(&mut self, key: &str, codes: CodeSet) -> Result<(), Error> {
         let k = self.position(key)?;
         self.conditions[k].codes.icd8 = codes;
         Ok(())
@@ -357,7 +354,7 @@ impl ComorbidityMap {
     /// set when the code is in condition `k`, and counts of what cannot be
     /// classified in full.
     #[must_use]
-    pub fn classify(&self, distinct_codes: &[&str]) -> Classification {
+    pub fn classify(&self, distinct_codes: &[&str]) -> ClassifiedCodes {
         let longest = |era: Revision| {
             self.conditions
                 .iter()
@@ -369,7 +366,7 @@ impl ComorbidityMap {
                 .unwrap_or(0)
         };
         let (longest8, longest10) = (longest(Revision::Icd8), longest(Revision::Icd10));
-        let mut out = Classification {
+        let mut out = ClassifiedCodes {
             masks: Vec::with_capacity(distinct_codes.len()),
             short_codes: 0,
             icd8_codes: 0,
@@ -407,18 +404,18 @@ impl ComorbidityMap {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when the weights are not one per condition, or
+    /// [`Error::Input`] when the weights are not one per condition, or
     /// a flag is set beyond the conditions.
-    pub fn score(&self, flags: u64, weights: &Weights) -> Result<f64, RegisterError> {
+    pub fn score(&self, flags: u64, weights: &Weights) -> Result<f64, Error> {
         if weights.value.len() != self.conditions.len() {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "{} weights for {} conditions",
                 weights.value.len(),
                 self.conditions.len()
             )));
         }
         if self.conditions.len() < 64 && flags >> self.conditions.len() != 0 {
-            return Err(RegisterError::input("a flag is set beyond the conditions"));
+            return Err(Error::invalid("a flag is set beyond the conditions"));
         }
         let mut sum = 0.0;
         for (k, w) in weights.value.iter().enumerate() {
@@ -432,7 +429,7 @@ impl ComorbidityMap {
 
 /// The classification of a dictionary of codes by a [`ComorbidityMap`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Classification {
+pub struct ClassifiedCodes {
     /// For each code, the mask of its conditions.
     pub masks: Vec<u64>,
     /// Codes shorter than the longest item of the lists of their revision,
@@ -444,6 +441,11 @@ pub struct Classification {
     /// Codes that are of neither revision, and match nothing.
     pub unroutable_codes: usize,
 }
+
+/// The name of [`ClassifiedCodes`] before it was distinguished from
+/// [`crate::codes::Classification`].
+#[deprecated(since = "0.2.0", note = "use `comorbidity::ClassifiedCodes`")]
+pub type Classification = ClassifiedCodes;
 
 /// The index dates of persons, in rows sorted by person.
 #[derive(Clone, Copy, Debug)]
@@ -480,7 +482,7 @@ impl IndexFlags {
         map: &ComorbidityMap,
         weights: &Weights,
         strict: bool,
-    ) -> Result<Option<f64>, RegisterError> {
+    ) -> Result<Option<f64>, Error> {
         let value = map.score(map.apply_hierarchy(self.flags), weights)?;
         Ok((!strict || self.history_complete).then_some(value))
     }
@@ -494,7 +496,7 @@ impl IndexFlags {
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when the columns differ in length, a person is out
+/// [`Error::Input`] when the columns differ in length, a person is out
 /// of range, the rows of a person are not sorted by day, the look-back is
 /// [`Lookback::None`] or negative, or the rows are not a CSR layout.
 pub fn flags_at_index(
@@ -502,15 +504,15 @@ pub fn flags_at_index(
     indices: &IndexTable<'_>,
     lookback: Lookback,
     include_index_day: bool,
-) -> Result<Vec<IndexFlags>, RegisterError> {
+) -> Result<Vec<IndexFlags>, Error> {
     let n = indices.person.len();
     if indices.day.len() != n || indices.history_start.len() != n {
-        return Err(RegisterError::input(
+        return Err(Error::invalid(
             "person, day and history_start must have one value per index",
         ));
     }
     if lookback == Lookback::None {
-        return Err(RegisterError::input(
+        return Err(Error::invalid(
             "flags need a look-back window, not Lookback::None",
         ));
     }
@@ -521,7 +523,7 @@ pub fn flags_at_index(
         || rows.mask.len() != rows.day.len()
         || offsets.windows(2).any(|w| w[0] > w[1])
     {
-        return Err(RegisterError::input(
+        return Err(Error::invalid(
             "person_offsets must be a CSR layout over day and mask",
         ));
     }
@@ -530,14 +532,14 @@ pub fn flags_at_index(
     for i in 0..n {
         let p = indices.person[i] as usize;
         if p >= persons {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "index {i} names person {p} of {persons}"
             )));
         }
         let (a, b) = (offsets[p], offsets[p + 1]);
         let days = &rows.day[a..b];
         if days.windows(2).any(|w| w[0] > w[1]) {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "the rows of person {p} are not sorted by day"
             )));
         }

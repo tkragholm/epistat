@@ -102,7 +102,8 @@
 //!    second generation method (PRE2DUP). BMC Med Inform Decis Mak.
 //!    2015;15:21.
 
-use crate::RegisterError;
+use crate::Error;
+use crate::error::{csr, length, row_count};
 use crate::exposure::Pauses;
 
 /// Purchases in CSR layout by person.
@@ -179,26 +180,80 @@ impl GlobalParameters {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct DrugUsePeriods {
     /// The person of each period.
-    pub person: Vec<u32>,
+    pub(crate) person: Vec<u32>,
     /// The group of each period.
-    pub group: Vec<u32>,
+    pub(crate) group: Vec<u32>,
     /// The day of the first purchase.
-    pub start: Vec<i64>,
+    pub(crate) start: Vec<i64>,
     /// The real day on which the period ends.
-    pub end: Vec<f64>,
+    pub(crate) end: Vec<f64>,
     /// The number of purchase days in the period.
-    pub n_purchases: Vec<u32>,
+    pub(crate) n_purchases: Vec<u32>,
     /// The DDD purchased in the period, [`None`] when a purchase has none.
-    pub ddd: Vec<Option<f64>>,
+    pub(crate) ddd: Vec<Option<f64>>,
     /// The hospital days inside the period.
-    pub hospital_days: Vec<f64>,
+    pub(crate) hospital_days: Vec<f64>,
     /// The DDD over the days of the period less its hospital days.
-    pub ddd_per_day: Vec<Option<f64>>,
+    pub(crate) ddd_per_day: Vec<Option<f64>>,
     /// The number of rows that belong to no group.
-    pub unassigned: u64,
+    pub(crate) unassigned: u64,
 }
 
 impl DrugUsePeriods {
+    /// The person of each period.
+    #[must_use]
+    pub fn person(&self) -> &[u32] {
+        &self.person
+    }
+
+    /// The group of each period.
+    #[must_use]
+    pub fn group(&self) -> &[u32] {
+        &self.group
+    }
+
+    /// The day of the first purchase.
+    #[must_use]
+    pub fn start(&self) -> &[i64] {
+        &self.start
+    }
+
+    /// The real day on which the period ends.
+    #[must_use]
+    pub fn end(&self) -> &[f64] {
+        &self.end
+    }
+
+    /// The number of purchase days in the period.
+    #[must_use]
+    pub fn n_purchases(&self) -> &[u32] {
+        &self.n_purchases
+    }
+
+    /// The DDD purchased in the period, [`None`] when a purchase has none.
+    #[must_use]
+    pub fn ddd(&self) -> &[Option<f64>] {
+        &self.ddd
+    }
+
+    /// The hospital days inside the period.
+    #[must_use]
+    pub fn hospital_days(&self) -> &[f64] {
+        &self.hospital_days
+    }
+
+    /// The DDD over the days of the period less its hospital days.
+    #[must_use]
+    pub fn ddd_per_day(&self) -> &[Option<f64>] {
+        &self.ddd_per_day
+    }
+
+    /// The number of rows that belong to no group.
+    #[must_use]
+    pub fn unassigned(&self) -> u64 {
+        self.unassigned
+    }
+
     /// The number of periods.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -211,14 +266,12 @@ impl DrugUsePeriods {
         self.person.is_empty()
     }
 
-    /// The first whole day of period `i` that it does not cover, `ceil(end)`.
+    /// The first whole day of period `i` that it does not cover, `ceil(end)`,
+    /// or [`None`] when there is no period `i` or its end is not a day an
+    /// `i64` holds.
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "an end day is far inside the i64 range"
-    )]
-    pub fn end_day(&self, i: usize) -> i64 {
-        self.end[i].ceil() as i64
+    pub fn end_day(&self, i: usize) -> Option<i64> {
+        crate::exposure::ceil_day(*self.end.get(i)?)
     }
 }
 
@@ -339,9 +392,9 @@ fn validate(
     groups: &[GroupParameters],
     globals: &GlobalParameters,
     stays: Option<&Pauses<'_>>,
-) -> Result<usize, RegisterError> {
+) -> Result<usize, Error> {
     if groups.is_empty() {
-        return Err(RegisterError::input(
+        return Err(Error::invalid(
             "no group parameters given; none is built in",
         ));
     }
@@ -357,7 +410,7 @@ fn validate(
         && g.dvar.is_finite()
         && g.adherence.is_finite())
     {
-        return Err(RegisterError::input("the global parameters are not valid"));
+        return Err(Error::invalid("the global parameters are not valid"));
     }
     for (k, q) in groups.iter().enumerate() {
         if !(positive(q.lower_ddd_per_day)
@@ -367,40 +420,29 @@ fn validate(
             && positive(q.min_period_days)
             && positive(q.max_refill_days))
         {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "the parameters of group {k} are not valid: doses and days must be positive and finite, the lower dose at most the upper"
             )));
         }
     }
     let o = p.person_offsets;
     let n = p.day.len();
-    if o.first() != Some(&0) || o.last() != Some(&n) || o.windows(2).any(|w| w[0] > w[1]) {
-        return Err(RegisterError::input(
-            "person_offsets must be a CSR layout over the rows",
-        ));
-    }
-    if p.group.len() != n
-        || p.ddd.len() != n
-        || p.packages.len() != n
-        || p.typical_refill_days.len() != n
-    {
-        return Err(RegisterError::input(
-            "group, day, ddd, packages and typical_refill_days must have one value per row",
-        ));
-    }
-    if u32::try_from(n).is_err() {
-        return Err(RegisterError::input("more rows than a u32 holds"));
-    }
+    csr("person_offsets", o, n)?;
+    length("group", n, p.group.len())?;
+    length("ddd", n, p.ddd.len())?;
+    length("packages", n, p.packages.len())?;
+    length("typical_refill_days", n, p.typical_refill_days.len())?;
+    row_count("day", n)?;
     for row in 0..n {
         let bad_ddd = p.ddd[row].is_some_and(|d| !positive(d));
         let bad_refill = p.typical_refill_days[row].is_some_and(|d| !positive(d));
         if bad_ddd || !positive(p.packages[row]) || bad_refill {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "row {row}: ddd, packages and typical refill days must be positive and finite"
             )));
         }
         if p.group[row].is_some_and(|g| g as usize >= groups.len()) {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "row {row} names a group without parameters"
             )));
         }
@@ -408,23 +450,16 @@ fn validate(
     let persons = o.len() - 1;
     if let Some(s) = stays {
         let so = s.person_offsets;
-        if so.len() != o.len()
-            || so.first() != Some(&0)
-            || so.last() != Some(&s.start.len())
-            || so.windows(2).any(|w| w[0] > w[1])
-            || s.end.len() != s.start.len()
-        {
-            return Err(RegisterError::input(
-                "hospital stays must be a CSR layout over the same persons as the purchases",
-            ));
-        }
+        length("hospital stay offsets", o.len(), so.len())?;
+        length("hospital stay end", s.start.len(), s.end.len())?;
+        csr("hospital stay offsets", so, s.start.len())?;
         for q in 0..persons {
             let (a, b) = (so[q], so[q + 1]);
             if s.start[a..b].windows(2).any(|w| w[0] > w[1])
                 || (a..b).any(|i| s.end[i] < s.start[i])
                 || (a + 1..b).any(|i| s.start[i] < s.end[i - 1])
             {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "the hospital stays of person {q} are not sorted, disjoint spans"
                 )));
             }
@@ -440,7 +475,7 @@ fn validate(
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when there are no group parameters or a
+/// [`Error::Input`] when there are no group parameters or a
 /// parameter is not valid, the columns differ in length or the offsets are
 /// not a layout, a value is not positive and finite, a row names a group
 /// without parameters, or the stays are not sorted, disjoint spans over the
@@ -455,7 +490,7 @@ pub fn drug_use_periods(
     groups: &[GroupParameters],
     globals: &GlobalParameters,
     stays: Option<&Pauses<'_>>,
-) -> Result<DrugUsePeriods, RegisterError> {
+) -> Result<DrugUsePeriods, Error> {
     let persons = validate(purchases, groups, globals, stays)?;
     let p = purchases;
     let mut out = DrugUsePeriods::default();

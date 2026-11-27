@@ -2,7 +2,7 @@
 
 use epistat_rng::replicate_seed;
 
-use crate::SequenceError;
+use crate::Error;
 
 /// One seed per restart of a k-medoids fit.
 ///
@@ -20,8 +20,8 @@ impl Restarts {
     ///
     /// # Errors
     ///
-    /// [`SequenceError::Input`] when `count` is zero.
-    pub fn from_seed(seed: u64, count: usize) -> Result<Self, SequenceError> {
+    /// [`Error::Input`] when `count` is zero.
+    pub fn from_seed(seed: u64, count: usize) -> Result<Self, Error> {
         Self::from_seeds((0..count as u64).map(|i| replicate_seed(seed, i)).collect())
     }
 
@@ -30,10 +30,10 @@ impl Restarts {
     ///
     /// # Errors
     ///
-    /// [`SequenceError::Input`] when `seeds` is empty.
-    pub fn from_seeds(seeds: Vec<u64>) -> Result<Self, SequenceError> {
+    /// [`Error::Input`] when `seeds` is empty.
+    pub fn from_seeds(seeds: Vec<u64>) -> Result<Self, Error> {
         if seeds.is_empty() {
-            return Err(SequenceError::input("a fit needs at least one restart"));
+            return Err(Error::invalid("a fit needs at least one restart"));
         }
         Ok(Self(seeds))
     }

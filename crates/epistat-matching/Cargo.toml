@@ -36,7 +36,7 @@ epistat-glm = { path = "../epistat-glm", version = "0.3.0" }
 epistat-inference = { path = "../epistat-inference", version = "0.4.0" }
 epistat-linalg = { path = "../epistat-linalg", version = "0.4.0" }
 epistat-optim = { path = "../epistat-optim", version = "0.2.0", features = ["rayon"] }
-epistat-register = { path = "../epistat-register", version = "0.1.1" }
+epistat-register = { path = "../epistat-register", version = "0.2.0" }
 epistat-rng = { path = "../epistat-rng", version = "0.2.0" }
 epistat-stats = { path = "../epistat-stats", version = "0.3.0" }
 chrono = { version = "0.4", features = ["serde"] }

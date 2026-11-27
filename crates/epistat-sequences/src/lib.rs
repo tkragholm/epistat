@@ -58,7 +58,7 @@
 //! from one seed as [`replicate_seed`](epistat_rng::replicate_seed)`(seed, i)`
 //! or given one by one, for a caller that has to reproduce earlier seeds. The
 //! restart with the least objective is kept, the earliest on a tie
-//! ([`best_attempt`]). The restarts run in parallel. Each owns
+//! (by [`fit_typology`] and the k-medoids functions). The restarts run in parallel. Each owns
 //! its stream and the choice does not depend on which finishes first, so a fit
 //! is the same on any number of threads.
 //!
@@ -75,7 +75,7 @@
 //!
 //! # Edge cases
 //!
-//! - Fewer than two distinct labels give a silhouette of 0.
+//! - Fewer than two distinct labels give no silhouette, `None`.
 //! - A cluster of zero total weight is skipped in the silhouette, and so is a
 //!   sequence whose own cluster has zero weight.
 //! - `k` greater than the number of sequences, or zero, is refused.
@@ -114,13 +114,18 @@ mod restarts;
 pub mod silhouette;
 pub mod validation;
 
-pub use error::SequenceError;
+pub use error::Error;
+
+/// The name of the error before the crates shared one error type.
+#[deprecated(since = "0.3.0", note = "use `epistat_sequences::Error`")]
+pub type SequenceError = Error;
+
 pub use nulls::{NullModel, null_sequences};
 pub use optimal_matching::{CondensedMatrix, condensed};
 pub use positionwise::Panel;
 pub use restarts::Restarts;
 pub use validation::{
-    Agreement, Distance, FitSettings, RestartSeeds, indel_for, null_silhouettes,
+    Agreement, Distance, FitSettings, Typology, fit_typology, indel_for, null_silhouettes,
     partition_agreement, refit_agreements, substitution_costs, transition_costs,
 };
 
@@ -151,7 +156,7 @@ pub struct Attempt {
 /// it wins only when it comes first and no later attempt is less than it.
 /// `None` when `attempts` is empty.
 #[must_use]
-pub fn best_attempt(attempts: Vec<Attempt>) -> Option<Attempt> {
+pub(crate) fn best_attempt(attempts: Vec<Attempt>) -> Option<Attempt> {
     epistat_optim::multistart::select(attempts.into_iter().map(Some), |candidate, incumbent| {
         candidate.objective < incumbent.objective
     })

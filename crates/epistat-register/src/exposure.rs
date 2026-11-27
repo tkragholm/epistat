@@ -129,8 +129,10 @@
 //!    graphical approach to epidemiologic measures of drug utilization.
 //!    Epidemiology. 1997;8(6):666-70.
 
-use crate::RegisterError;
+use crate::Error;
+use crate::error::{csr, length, row_count};
 use crate::intervals::SpanSet;
+use epistat_core::{InputError, check};
 
 /// How one group of drugs is taken, declared by the caller.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -214,30 +216,93 @@ pub struct Supply<'a> {
     pub pauses: Option<&'a Pauses<'a>>,
 }
 
+/// The first whole day on or after the real day `x`, or [`None`] when `x` is
+/// not finite or the day does not fit an `i64`.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "the value is checked against the i64 range"
+)]
+pub(crate) fn ceil_day(x: f64) -> Option<i64> {
+    let day = x.ceil();
+    // 2^63 is exactly representable; every f64 below it converts exactly.
+    (day.is_finite() && (-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&day))
+        .then_some(day as i64)
+}
+
 /// The exposure periods, ordered by person, group and start.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Periods {
     /// The person of each period, a position among the persons.
-    pub person: Vec<u32>,
+    pub(crate) person: Vec<u32>,
     /// The group of each period.
-    pub group: Vec<u32>,
+    pub(crate) group: Vec<u32>,
     /// The day of the first dispensing of the period.
-    pub start: Vec<i64>,
+    pub(crate) start: Vec<i64>,
     /// The real day on which the supply of the period runs out.
-    pub end: Vec<f64>,
+    pub(crate) end: Vec<f64>,
     /// The number of days with a dispensing in the period, same-day dispensings
     /// counted once.
-    pub n_dispensing_days: Vec<u32>,
+    pub(crate) n_dispensing_days: Vec<u32>,
     /// The total quantity dispensed in the period.
-    pub quantity: Vec<f64>,
+    pub(crate) quantity: Vec<f64>,
     /// The quantity over the sum of the durations of the supplies, or [`None`]
     /// when the sum is 0.
-    pub daily_dose: Vec<Option<f64>>,
+    pub(crate) daily_dose: Vec<Option<f64>>,
     /// The number of dispensings that belong to no group.
-    pub unassigned: u64,
+    pub(crate) unassigned: u64,
 }
 
 impl Periods {
+    /// The person of each period, a position among the persons.
+    #[must_use]
+    pub fn person(&self) -> &[u32] {
+        &self.person
+    }
+
+    /// The group of each period.
+    #[must_use]
+    pub fn group(&self) -> &[u32] {
+        &self.group
+    }
+
+    /// The day of the first dispensing of the period.
+    #[must_use]
+    pub fn start(&self) -> &[i64] {
+        &self.start
+    }
+
+    /// The real day on which the supply of the period runs out.
+    #[must_use]
+    pub fn end(&self) -> &[f64] {
+        &self.end
+    }
+
+    /// The number of days with a dispensing in the period, same-day dispensings
+    /// counted once.
+    #[must_use]
+    pub fn n_dispensing_days(&self) -> &[u32] {
+        &self.n_dispensing_days
+    }
+
+    /// The total quantity dispensed in the period.
+    #[must_use]
+    pub fn quantity(&self) -> &[f64] {
+        &self.quantity
+    }
+
+    /// The quantity over the sum of the durations of the supplies, or [`None`]
+    /// when the sum is 0.
+    #[must_use]
+    pub fn daily_dose(&self) -> &[Option<f64>] {
+        &self.daily_dose
+    }
+
+    /// The number of dispensings that belong to no group.
+    #[must_use]
+    pub fn unassigned(&self) -> u64 {
+        self.unassigned
+    }
+
     /// The number of periods.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -250,22 +315,20 @@ impl Periods {
         self.person.is_empty()
     }
 
-    /// The first whole day of period `i` with no supply left, `ceil(end)`.
-    /// The period covers the days `start..end_day`, which are the days
+    /// The first whole day of period `i` with no supply left, `ceil(end)`, or
+    /// [`None`] when there is no period `i` or its end is not a day an `i64`
+    /// holds. The period covers the days `start..end_day`, which are the days
     /// [`exposed_on`] reads as exposed.
     #[must_use]
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "an end day is far inside the i64 range"
-    )]
-    pub fn end_day(&self, i: usize) -> i64 {
-        self.end[i].ceil() as i64
+    pub fn end_day(&self, i: usize) -> Option<i64> {
+        ceil_day(*self.end.get(i)?)
     }
 
-    /// The last day of period `i` with some supply left, `end_day - 1`.
+    /// The last day of period `i` with some supply left, `end_day - 1`, or
+    /// [`None`] as for [`end_day`](Self::end_day).
     #[must_use]
-    pub fn last_day(&self, i: usize) -> i64 {
-        self.end_day(i) - 1
+    pub fn last_day(&self, i: usize) -> Option<i64> {
+        self.end_day(i)?.checked_sub(1)
     }
 
     /// The periods of one group as a half-open [`SpanSet`] over `persons`
@@ -279,12 +342,10 @@ impl Periods {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when a period names a person at or beyond
+    /// [`Error::Input`] when a period names a person at or beyond
     /// `persons`, or `persons` does not fit a `u32`.
-    pub fn span_set(&self, group: u32, persons: usize) -> Result<SpanSet, RegisterError> {
-        if u32::try_from(persons).is_err() {
-            return Err(RegisterError::input("more persons than a u32 holds"));
-        }
+    pub fn span_set(&self, group: u32, persons: usize) -> Result<SpanSet, Error> {
+        row_count("persons", persons)?;
         let mut start = Vec::new();
         let mut end = Vec::new();
         let mut offsets = vec![0_usize; persons + 1];
@@ -294,13 +355,15 @@ impl Periods {
             }
             let p = self.person[i] as usize;
             if p >= persons {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "period {i} names person {p} of {persons}"
                 )));
             }
             offsets[p + 1] += 1;
             start.push(self.start[i]);
-            end.push(self.end_day(i));
+            end.push(ceil_day(self.end[i]).ok_or_else(|| {
+                Error::invalid(format!("period {i} has an end that is not a day"))
+            })?);
         }
         for p in 0..persons {
             offsets[p + 1] += offsets[p];
@@ -309,9 +372,9 @@ impl Periods {
     }
 }
 
-fn validate_assumptions(a: &[Assumption]) -> Result<(), RegisterError> {
+fn validate_assumptions(a: &[Assumption]) -> Result<(), Error> {
     if a.is_empty() {
-        return Err(RegisterError::input(
+        return Err(Error::invalid(
             "no drug assumptions given; none is built in",
         ));
     }
@@ -327,7 +390,7 @@ fn validate_assumptions(a: &[Assumption]) -> Result<(), RegisterError> {
             && x.grace_days.is_finite()
             && x.grace_days >= 0.0;
         if !ok {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "assumption {g} is not valid: doses must be positive and finite with dose_min <= dose_max, max_stock_days at least 0 and grace_days finite and at least 0"
             )));
         }
@@ -335,39 +398,24 @@ fn validate_assumptions(a: &[Assumption]) -> Result<(), RegisterError> {
     Ok(())
 }
 
-fn validate(d: &Dispensings<'_>, s: &Supply<'_>) -> Result<usize, RegisterError> {
+fn validate(d: &Dispensings<'_>, s: &Supply<'_>) -> Result<usize, Error> {
     validate_assumptions(s.assumptions)?;
     if let DoseRule::Fixed { days } = s.rule
         && !(days.is_finite() && days > 0.0)
     {
-        return Err(RegisterError::input(
+        return Err(Error::invalid(
             "a fixed duration must be positive and finite",
         ));
     }
     let o = d.person_offsets;
-    if o.is_empty()
-        || o[0] != 0
-        || o[o.len() - 1] != d.day.len()
-        || o.windows(2).any(|w| w[0] > w[1])
-    {
-        return Err(RegisterError::input(
-            "person_offsets must be a CSR layout over the rows",
-        ));
-    }
     let n = d.day.len();
-    if d.group.len() != n || d.quantity.len() != n {
-        return Err(RegisterError::input(
-            "group, day and quantity must have one value per row",
-        ));
-    }
-    if u32::try_from(n).is_err() {
-        return Err(RegisterError::input(
-            "more rows than a UInt32 row number holds",
-        ));
-    }
+    csr("person_offsets", o, n)?;
+    length("group", n, d.group.len())?;
+    length("quantity", n, d.quantity.len())?;
+    row_count("day", n)?;
     for (row, &q) in d.quantity.iter().enumerate() {
         if !(q.is_finite() && q > 0.0) {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "row {row} has the quantity {q}, which is not positive and finite"
             )));
         }
@@ -377,32 +425,28 @@ fn validate(d: &Dispensings<'_>, s: &Supply<'_>) -> Result<usize, RegisterError>
         .iter()
         .position(|g| g.is_some_and(|g| g as usize >= s.assumptions.len()))
     {
-        return Err(RegisterError::input(format!(
+        return Err(Error::invalid(format!(
             "row {row} names a group without an assumption"
         )));
     }
     let persons = o.len() - 1;
     if let Some(p) = s.pauses {
         let po = p.person_offsets;
-        if po.len() != o.len()
-            || po[0] != 0
-            || po[po.len() - 1] != p.start.len()
-            || po.windows(2).any(|w| w[0] > w[1])
-            || p.end.len() != p.start.len()
-        {
-            return Err(RegisterError::input(
-                "pauses must be a CSR layout over the same persons as the dispensings",
-            ));
-        }
+        length("pause offsets", o.len(), po.len())?;
+        length("pause end", p.start.len(), p.end.len())?;
+        csr("pause offsets", po, p.start.len())?;
         for q in 0..persons {
             let (a, b) = (po[q], po[q + 1]);
-            if p.start[a..b].windows(2).any(|w| w[0] > w[1]) {
-                return Err(RegisterError::input(format!(
-                    "the pauses of person {q} are not sorted by start"
-                )));
-            }
+            check::sorted_by("pause start", &p.start[a..b], i64::cmp).map_err(
+                |error| match error {
+                    InputError::Unsorted { what, row } => {
+                        InputError::Unsorted { what, row: a + row }
+                    }
+                    other => other,
+                },
+            )?;
             if (a..b).any(|i| p.end[i] < p.start[i]) {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "a pause of person {q} ends before it starts"
                 )));
             }
@@ -562,12 +606,12 @@ fn series(
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when there are no assumptions or one is invalid,
+/// [`Error::Input`] when there are no assumptions or one is invalid,
 /// the columns differ in length or the offsets are not a CSR layout, a quantity
 /// is not positive and finite (with its row), a group has no assumption, a
 /// fixed duration is not positive, or the pauses are not sorted or do not cover
 /// the same persons.
-pub fn exposure_periods(d: &Dispensings<'_>, s: &Supply<'_>) -> Result<Periods, RegisterError> {
+pub fn exposure_periods(d: &Dispensings<'_>, s: &Supply<'_>) -> Result<Periods, Error> {
     let persons = validate(d, s)?;
     let (steps, unassigned) = walk(d, s, persons);
     let mut out = Periods {
@@ -635,7 +679,7 @@ pub struct Windows<'a> {
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] for window columns of different lengths, a window
+/// [`Error::Input`] for window columns of different lengths, a window
 /// that ends before it starts, a person out of range, a negative lag and, under
 /// [`DoseMode::ProratedOverSupply`], for the reasons of [`exposure_periods`].
 pub fn cumulative_dose(
@@ -643,42 +687,27 @@ pub fn cumulative_dose(
     windows: &Windows<'_>,
     lag_days: i64,
     mode: DoseMode<'_>,
-) -> Result<Vec<f64>, RegisterError> {
+) -> Result<Vec<f64>, Error> {
     let m = windows.person.len();
-    if windows.group.len() != m || windows.start.len() != m || windows.end.len() != m {
-        return Err(RegisterError::input(
-            "the window columns must have one value per window",
-        ));
-    }
+    length("window group", m, windows.group.len())?;
+    length("window start", m, windows.start.len())?;
+    length("window end", m, windows.end.len())?;
     if lag_days < 0 {
-        return Err(RegisterError::input("the lag must not be negative"));
+        return Err(Error::invalid("the lag must not be negative"));
     }
     let o = d.person_offsets;
-    if o.is_empty()
-        || o[0] != 0
-        || o[o.len() - 1] != d.day.len()
-        || o.windows(2).any(|w| w[0] > w[1])
-    {
-        return Err(RegisterError::input(
-            "person_offsets must be a CSR layout over the rows",
-        ));
-    }
-    if d.group.len() != d.day.len() || d.quantity.len() != d.day.len() {
-        return Err(RegisterError::input(
-            "group, day and quantity must have one value per row",
-        ));
-    }
+    csr("person_offsets", o, d.day.len())?;
+    length("group", d.day.len(), d.group.len())?;
+    length("quantity", d.day.len(), d.quantity.len())?;
     let persons = o.len() - 1;
     for w in 0..m {
         if windows.person[w] as usize >= persons {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "window {w} names a person out of range"
             )));
         }
         if windows.end[w] < windows.start[w] {
-            return Err(RegisterError::input(format!(
-                "window {w} ends before it starts"
-            )));
+            return Err(Error::invalid(format!("window {w} ends before it starts")));
         }
     }
     let mut out = vec![0.0; m];
@@ -742,20 +771,17 @@ pub struct PointTable<'a> {
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] for columns of different lengths or a negative lag.
+/// [`Error::Input`] for columns of different lengths or a negative lag.
 pub fn exposed_on(
     periods: &Periods,
     query: &PointTable<'_>,
     lag_days: i64,
-) -> Result<Vec<bool>, RegisterError> {
+) -> Result<Vec<bool>, Error> {
     let m = query.person.len();
-    if query.group.len() != m || query.day.len() != m {
-        return Err(RegisterError::input(
-            "the point columns must have one value per point",
-        ));
-    }
+    length("point group", m, query.group.len())?;
+    length("point day", m, query.day.len())?;
     if lag_days < 0 {
-        return Err(RegisterError::input("the lag must not be negative"));
+        return Err(Error::invalid("the lag must not be negative"));
     }
     Ok((0..m)
         .map(|i| {

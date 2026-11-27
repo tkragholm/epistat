@@ -82,8 +82,10 @@
 //!    study design in pharmacoepidemiology: historical foundations and
 //!    contemporary application. Curr Epidemiol Rep. 2015;2(4):221-8.
 
-use crate::person_time::{civil_from_days, days_from_civil};
-use crate::{LeapBirthday, RegisterError};
+use crate::error::{csr, length};
+use crate::person_time::add_years;
+use crate::{Error, LeapBirthday};
+use epistat_core::{InputError, check};
 
 /// How far back from the entry day the prior window reaches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,16 +106,12 @@ impl Lookback {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] for a negative number of days.
-    pub fn window_start(
-        self,
-        entry: i64,
-        history_start: i64,
-    ) -> Result<Option<i64>, RegisterError> {
+    /// [`Error::Input`] for a negative number of days.
+    pub fn window_start(self, entry: i64, history_start: i64) -> Result<Option<i64>, Error> {
         if let Self::Days(days) = self
             && days < 0
         {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "a look-back of {days} days is negative"
             )));
         }
@@ -125,26 +123,10 @@ impl Lookback {
         match self {
             Self::None => None,
             Self::Days(days) => Some(entry.saturating_sub(days)),
-            Self::Years(years, leap) => Some(years_before(entry, years, leap)),
+            Self::Years(years, leap) => Some(add_years(entry, -i64::from(years), leap)),
             Self::Unlimited => Some(history_start),
         }
     }
-}
-
-/// The day `years` civil years before `day`.
-fn years_before(day: i64, years: u32, leap: LeapBirthday) -> i64 {
-    let (y, m, d) = civil_from_days(day);
-    let target = y - i64::from(years);
-    let common_year = !(target % 4 == 0 && (target % 100 != 0 || target % 400 == 0));
-    let (m, d) = if m == 2 && d == 29 && common_year {
-        match leap {
-            LeapBirthday::March1 => (3, 1),
-            LeapBirthday::February28 => (2, 28),
-        }
-    } else {
-        (m, d)
-    };
-    days_from_civil(target, m, d)
 }
 
 /// Which event of a confirmed pair gives the day of the case.
@@ -254,53 +236,105 @@ pub struct Outcome {
     pub n_before_history: u32,
 }
 
+/// The outcomes of every definition for every person, in one column ordered
+/// by definition and then person.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Outcomes {
+    persons: usize,
+    definitions: usize,
+    cells: Vec<Outcome>,
+}
+
+impl Outcomes {
+    /// The number of persons.
+    #[must_use]
+    pub fn persons(&self) -> usize {
+        self.persons
+    }
+
+    /// The number of definitions.
+    #[must_use]
+    pub fn definitions(&self) -> usize {
+        self.definitions
+    }
+
+    /// All cells, definition by definition and person by person within it.
+    #[must_use]
+    pub fn as_slice(&self) -> &[Outcome] {
+        &self.cells
+    }
+
+    /// The outcomes of definition `k` for every person, or [`None`] when there
+    /// is no such definition.
+    #[must_use]
+    pub fn definition(&self, k: usize) -> Option<&[Outcome]> {
+        if k >= self.definitions {
+            return None;
+        }
+        let start = k * self.persons;
+        Some(&self.cells[start..start + self.persons])
+    }
+
+    /// The outcomes of each definition in turn, each for every person.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &[Outcome]> {
+        (0..self.definitions).map(|k| &self[k])
+    }
+
+    /// The outcome of definition `k` for person `p`, or [`None`] when either
+    /// is out of range.
+    #[must_use]
+    pub fn get(&self, k: usize, p: usize) -> Option<&Outcome> {
+        self.definition(k)?.get(p)
+    }
+}
+
+impl std::ops::Index<usize> for Outcomes {
+    type Output = [Outcome];
+
+    /// The outcomes of definition `k` for every person.
+    ///
+    /// # Panics
+    ///
+    /// If there is no definition `k`; [`Outcomes::definition`] returns
+    /// [`None`] instead.
+    fn index(&self, k: usize) -> &[Outcome] {
+        self.definition(k).expect("definition out of range")
+    }
+}
+
 fn validate(
     rows: &EventRows<'_>,
     windows: &PersonWindows<'_>,
     rules: &[Rule],
-) -> Result<usize, RegisterError> {
+) -> Result<usize, Error> {
     let offsets = rows.person_offsets;
     let persons = offsets.len().saturating_sub(1);
-    if offsets.is_empty() || offsets[0] != 0 || offsets[persons] != rows.day.len() {
-        return Err(RegisterError::input(
-            "person_offsets must start at 0 and end at the number of rows",
-        ));
+    csr("person_offsets", offsets, rows.day.len())?;
+    length("mask", rows.day.len(), rows.mask.len())?;
+    if let Some(contact) = rows.contact {
+        length("contact", rows.day.len(), contact.len())?;
     }
-    if rows.mask.len() != rows.day.len() || rows.contact.is_some_and(|c| c.len() != rows.day.len())
-    {
-        return Err(RegisterError::input(
-            "day, mask and contact must have one value per row",
-        ));
-    }
-    for (name, len) in [
-        ("entry", windows.entry.len()),
-        ("exit", windows.exit.len()),
-        ("history_start", windows.history_start.len()),
-    ] {
-        if len != persons {
-            return Err(RegisterError::input(format!(
-                "{name} has {len} values for {persons} persons"
-            )));
-        }
-    }
+    length("entry", persons, windows.entry.len())?;
+    length("exit", persons, windows.exit.len())?;
+    length("history_start", persons, windows.history_start.len())?;
     if rules.is_empty() || rules.len() > 64 {
-        return Err(RegisterError::input(format!(
+        return Err(Error::invalid(format!(
             "between 1 and 64 rules are needed, got {}",
             rules.len()
         )));
     }
     for rule in rules {
         if rule.require != 1 && rule.require != 2 {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "require must be 1 or 2, got {}",
                 rule.require
             )));
         }
         if rule.confirm_within.is_some_and(|w| w < 0) {
-            return Err(RegisterError::input("confirm_within must not be negative"));
+            return Err(Error::invalid("confirm_within must not be negative"));
         }
         if rule.require == 2 && rule.confirm_by == ConfirmBy::Contacts && rows.contact.is_none() {
-            return Err(RegisterError::input(
+            return Err(Error::invalid(
                 "a rule that confirms by contacts needs the contact column",
             ));
         }
@@ -308,16 +342,12 @@ fn validate(
     }
     for p in 0..persons {
         let (a, b) = (offsets[p], offsets[p + 1]);
-        if a > b {
-            return Err(RegisterError::input("person_offsets must not decrease"));
-        }
-        if rows.day[a..b].windows(2).any(|w| w[0] > w[1]) {
-            return Err(RegisterError::input(format!(
-                "the rows of person {p} are not sorted by day"
-            )));
-        }
+        check::sorted_by("day", &rows.day[a..b], i64::cmp).map_err(|error| match error {
+            InputError::Unsorted { what, row } => InputError::Unsorted { what, row: a + row },
+            other => other,
+        })?;
         if windows.entry[p] > windows.exit[p] {
-            return Err(RegisterError::input(format!(
+            return Err(Error::invalid(format!(
                 "person {p} has an entry after its exit"
             )));
         }
@@ -327,12 +357,12 @@ fn validate(
 
 /// Evaluate every definition for every person.
 ///
-/// `rules[k]` is the rule of the definition with bit `k`. The result is indexed
-/// `[definition][person]`.
+/// `rules[k]` is the rule of the definition with bit `k`. The result is one
+/// column of [`Outcomes`] ordered by definition and then person.
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when the columns differ in length, the offsets are
+/// [`Error::Input`] when the columns differ in length, the offsets are
 /// not a CSR layout, the rows of a person are not sorted by day, a person's
 /// entry is after its exit, there are no rules or more than 64, `require` is not
 /// 1 or 2, a look-back or `confirm_within` is negative, or a rule that confirms
@@ -341,7 +371,7 @@ pub fn evaluate(
     rows: &EventRows<'_>,
     windows: &PersonWindows<'_>,
     rules: &[Rule],
-) -> Result<Vec<Vec<Outcome>>, RegisterError> {
+) -> Result<Outcomes, Error> {
     let persons = validate(rows, windows, rules)?;
     let blank = Outcome {
         first_in_window: None,
@@ -350,7 +380,11 @@ pub fn evaluate(
         n_events_in_window: 0,
         n_before_history: 0,
     };
-    let mut out = vec![vec![blank; persons]; rules.len()];
+    let mut out = Outcomes {
+        persons,
+        definitions: rules.len(),
+        cells: vec![blank; persons * rules.len()],
+    };
     let mut events: Vec<usize> = Vec::new();
     let mut next_other: Vec<usize> = Vec::new();
     for (p, span) in rows.person_offsets.windows(2).enumerate() {
@@ -362,7 +396,7 @@ pub fn evaluate(
         for (k, rule) in rules.iter().enumerate() {
             let bit = 1_u64 << k;
             let start = rule.lookback.start(entry, history);
-            let outcome = &mut out[k][p];
+            let outcome = &mut out.cells[k * persons + p];
             let first_real = days.partition_point(|&d| d < history);
             let boundary = entry + i64::from(rule.entry_inclusive);
             let prior_lo = start.map(|s| s.max(history));
