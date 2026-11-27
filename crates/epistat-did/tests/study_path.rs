@@ -12,9 +12,8 @@
 //! event-time path restricted by `balance_e` as the kernels restrict it, and
 //! the fixed-weight aggregations under equal and total weights; the family
 //! cluster sums; the two-period doubly robust estimate and the nuisance fits
-//! of the pairwise estimator; and the HonestDiD relative-magnitude surface,
-//! joint path and smoothness bound on the event-time curve, scaled as the
-//! kernels scale it, with Study I's grids and 20,000 draws.
+//! of the pairwise estimator. The HonestDiD calls on the event-time curve are
+//! in epistat-honestdid's study path.
 //!
 //! The data are a simulated Study I panel: diagnosed children's parents in
 //! cohorts 2004 to 2013 and a few diagnosed in the first period, each family
@@ -30,8 +29,7 @@
 //! The hashes were recorded on aarch64 macOS and are asserted only there.
 //! Elsewhere the test computes them and, when `EPISTAT_HASH_OUT` is set,
 //! appends them to that file. Print them with
-//! `STUDY_PATH_PRINT=1 cargo test --features honest --test study_path -- --nocapture`.
-#![cfg(feature = "honest")]
+//! `STUDY_PATH_PRINT=1 cargo test --test study_path -- --nocapture`.
 
 use std::collections::BTreeSet;
 
@@ -41,14 +39,9 @@ use epistat_did::att_gt::{
     ComparisonGroup, FitFailure, NuisanceOptions, SkipReason, UnbalancedPanel,
 };
 use epistat_did::{
-    DesignPruning, DrDidConfig, DrDidObservation, HonestEventStudyInput, HonestJointPathConfig,
-    HonestJointPathMethod, HonestRelativeMagnitudeBound, HonestSensitivity, InferenceConfig,
-    LeastFavorableSimulation, PanelFlatInput, RelativeMagnitudeConfidenceSetConfig, StaggeredPanel,
-    assess_honest_event_study_joint_path_region_with_config, did_cluster_sums,
-    estimate_drdid_panel, estimate_smoothness_upper_bound_from_pretrends, fit_drdid_panel_nuisance,
-    fit_drdid_panel_propensity_coefficients, independent_design_columns,
-    summarize_relative_magnitude_sensitivity_many_with_simulation,
-    summarize_smoothness_sensitivity_with_simulation,
+    DesignPruning, DrDidConfig, DrDidObservation, PanelFlatInput, StaggeredPanel, did_cluster_sums,
+    estimate_drdid_panel, fit_drdid_panel_nuisance, fit_drdid_panel_propensity_coefficients,
+    independent_design_columns,
 };
 use epistat_inference::Clusters;
 use epistat_linalg::MatRef;
@@ -57,12 +50,6 @@ use epistat_testkit::{Fingerprint, SplitMix64};
 const CONFIDENCE: f64 = 0.95;
 const FIRST_YEAR: i32 = 2000;
 const LAST_YEAR: i32 = 2016;
-/// Draws behind every least-favorable critical value and the joint path's
-/// calibration, Study I's `analysis_honest_least_favorable_draws`.
-const DRAWS: usize = 20_000;
-const JOINT_SEED: u64 = 20_260_819;
-const RM_GRID: [f64; 9] = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.75, 1.0, 1.5];
-const JOINT_GRID: [f64; 3] = [0.0, 0.25, 0.5];
 
 /// A fingerprint that hashes NaN and `None` alike, so a value that becomes
 /// `Option` without changing leaves the hash alone.
@@ -406,81 +393,10 @@ fn att_gt_digest(fitted: &AttGt) -> u64 {
     h.finish()
 }
 
-/// `kernels::did::honest`'s scale: the root of the largest variance.
-fn honest_scale(covariance: &[Vec<f64>]) -> f64 {
-    let largest = covariance
-        .iter()
-        .enumerate()
-        .map(|(index, row)| row.get(index).copied().unwrap_or(0.0))
-        .fold(0.0_f64, f64::max);
-    if largest.is_finite() && largest > 0.0 {
-        largest.sqrt()
-    } else {
-        1.0
-    }
-}
-
-fn scaled(input: &HonestEventStudyInput, scale: f64) -> HonestEventStudyInput {
-    HonestEventStudyInput {
-        betahat: input.betahat.iter().map(|value| value / scale).collect(),
-        covariance: input
-            .covariance
-            .iter()
-            .map(|row| row.iter().map(|value| value / (scale * scale)).collect())
-            .collect(),
-        pre_periods: input.pre_periods.clone(),
-        post_periods: input.post_periods.clone(),
-    }
-}
-
-/// The event-time curve with its family-clustered covariance, as the kernels
-/// form it from the aggregated influence functions, without the reference
-/// period -1 and within event times -5 to 8.
-fn event_study(dynamic: &Aggte, clusters: &Clusters) -> HonestEventStudyInput {
-    let influence = dynamic.influence();
-    let rows: Vec<_> = dynamic
-        .points
-        .iter()
-        .enumerate()
-        .filter(|(_, row)| row.key != -1 && (-5..=8).contains(&row.key))
-        .collect();
-    let sums: Vec<Vec<f64>> = rows
-        .iter()
-        .map(|(j, _)| did_cluster_sums(influence.column(*j), clusters).expect("sums"))
-        .collect();
-    let covariance = sums
-        .iter()
-        .map(|left| {
-            sums.iter()
-                .map(|right| left.iter().zip(right).map(|(a, b)| a * b).sum())
-                .collect()
-        })
-        .collect();
-    let key = |k: i64| i32::try_from(k).expect("small");
-    HonestEventStudyInput {
-        betahat: rows.iter().map(|(_, row)| row.estimate.estimate).collect(),
-        covariance,
-        pre_periods: rows
-            .iter()
-            .map(|(_, row)| key(row.key))
-            .filter(|&k| k < 0)
-            .collect(),
-        post_periods: rows
-            .iter()
-            .map(|(_, row)| key(row.key))
-            .filter(|&k| k >= 0)
-            .collect(),
-    }
-}
-
 /// The aggregations of the kernels: `did::aggte`'s four summaries on the
 /// family-clustered fit, the event study restricted by `balance_e`, and the
 /// fixed-weight summaries, whose event-time path is unclustered.
-fn aggregations(
-    out: &mut Vec<(&'static str, u64)>,
-    fitted: &AttGt,
-    clustered: &AttGt,
-) -> (Aggte, Clusters) {
+fn aggregations(out: &mut Vec<(&'static str, u64)>, fitted: &AttGt, clustered: &AttGt) {
     let level = Level::confidence(CONFIDENCE).expect("level");
     let families = clustered.clusters().expect("clusters").to_vec();
     let clusters = Clusters::from_labels(&families);
@@ -546,130 +462,6 @@ fn aggregations(
         h.fs(&did_cluster_sums(dynamic.influence().column(j), &clusters).expect("sums"));
     }
     out.push(("cluster_sums", h.finish()));
-    (dynamic, clusters)
-}
-
-/// `kernels::did::honest`'s three entry points on the event-time curve.
-fn honest(out: &mut Vec<(&'static str, u64)>, study: &HonestEventStudyInput) {
-    let inference = InferenceConfig {
-        confidence_level: CONFIDENCE,
-    };
-    let simulation = LeastFavorableSimulation::new(DRAWS, 0);
-    let scale = honest_scale(&study.covariance);
-    let input = scaled(study, scale);
-    let n_post = input.post_periods.len();
-    let mut functionals: Vec<Vec<f64>> = (0..n_post)
-        .map(|k| (0..n_post).map(|j| f64::from(j == k)).collect())
-        .collect();
-    functionals.push(vec![1.0 / n_post as f64; n_post]);
-    functionals.push(
-        (0..n_post)
-            .map(|j| if j < 3 { 1.0 / 3.0 } else { 0.0 })
-            .collect(),
-    );
-
-    let weights: Vec<&[f64]> = functionals.iter().map(Vec::as_slice).collect();
-    let summaries = summarize_relative_magnitude_sensitivity_many_with_simulation(
-        &input,
-        inference,
-        &weights,
-        None,
-        Some(&RM_GRID),
-        Some(HonestRelativeMagnitudeBound::ParallelTrendsDeviation),
-        None,
-        None,
-        simulation,
-    )
-    .expect("relative magnitude");
-    let offset = input.pre_periods.len();
-    let mut h = Hash::new();
-    for (post_weights, summary) in functionals.iter().zip(&summaries) {
-        let estimate: f64 = post_weights
-            .iter()
-            .enumerate()
-            .map(|(index, weight)| weight * input.betahat[offset + index])
-            .sum();
-        let mut variance = 0.0;
-        for (i, wi) in post_weights.iter().enumerate() {
-            for (j, wj) in post_weights.iter().enumerate() {
-                variance += wi * wj * input.covariance[offset + i][offset + j];
-            }
-        }
-        h.f(estimate * scale);
-        h.f(variance.max(0.0).sqrt() * scale);
-        for row in &summary.rows {
-            h.f(row.sensitivity_value);
-            h.f(row.lb * scale);
-            h.f(row.ub * scale);
-            h.o(row.identified.as_ref().map(|set| set.lb * scale));
-            h.o(row.identified.as_ref().map(|set| set.ub * scale));
-            h.text(row.delta);
-        }
-    }
-    out.push(("honest/relative_magnitude", h.finish()));
-
-    let mut h = Hash::new();
-    for m in JOINT_GRID {
-        let region = assess_honest_event_study_joint_path_region_with_config(
-            &input,
-            HonestSensitivity::RelativeMagnitude(m),
-            inference,
-            0.0 / scale,
-            RelativeMagnitudeConfidenceSetConfig {
-                least_favorable_draws: DRAWS,
-                least_favorable_seed: 0,
-                ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
-            },
-            HonestJointPathConfig {
-                method: HonestJointPathMethod::GaussianSimulated,
-                simulation_draws: DRAWS,
-                simulation_seed: JOINT_SEED,
-            },
-        )
-        .expect("joint path");
-        h.f(region.pointwise_confidence_level);
-        h.f(region.calibrated_max_t_critical_value);
-        for point in &region.points {
-            let a = &point.assessment;
-            h.int(i64::from(point.post_period));
-            for value in [
-                a.estimate,
-                a.se,
-                a.original_ci.0,
-                a.original_ci.1,
-                a.robust_ci.0,
-                a.robust_ci.1,
-                a.identified_set.0,
-                a.identified_set.1,
-            ] {
-                h.f(value * scale);
-            }
-        }
-    }
-    out.push(("honest/joint_path", h.finish()));
-
-    let m = estimate_smoothness_upper_bound_from_pretrends(study, 0.05).expect("smoothness m");
-    let mut h = Hash::new();
-    h.f(m);
-    let grid = [0.0, 0.5 * m / scale, m / scale];
-    let summary = summarize_smoothness_sensitivity_with_simulation(
-        &input,
-        inference,
-        &functionals[n_post],
-        None,
-        Some(&grid),
-        None,
-        None,
-        simulation,
-    )
-    .expect("smoothness");
-    for row in &summary.rows {
-        h.f(row.sensitivity_value * scale);
-        h.f(row.lb * scale);
-        h.f(row.ub * scale);
-        h.text(row.delta);
-    }
-    out.push(("honest/smoothness", h.finish()));
 }
 
 fn drdid_config() -> DrDidConfig {
@@ -823,8 +615,7 @@ fn cases() -> Vec<(&'static str, u64)> {
     out.push(("att_gt/anticipation_2", att_gt_digest(&anticipation)));
 
     let clustered = study_att_gt(&data, ComparisonGroup::MatchedNeverTreated, 0, true);
-    let (dynamic, clusters) = aggregations(&mut out, &fitted, &clustered);
-    honest(&mut out, &event_study(&dynamic, &clusters));
+    aggregations(&mut out, &fitted, &clustered);
     pairwise(&mut out, &rows);
     out
 }
@@ -838,9 +629,6 @@ const GOLDEN: &[(&str, u64)] = &[
     ("fixed_weights/by_total_weight", 0xe22c_d8c7_552b_20a2),
     ("fixed_weights/equal", 0x6255_94e8_f6fc_0a38),
     ("cluster_sums", 0x7586_203b_1610_15b0),
-    ("honest/relative_magnitude", 0x9e84_13c7_b9f7_560b),
-    ("honest/joint_path", 0x40d8_ce11_2e5b_21b2),
-    ("honest/smoothness", 0x6b35_a17a_1a79_e667),
     ("pairwise/drdid_panel", 0xa3a8_c340_00d1_3388),
     ("pairwise/nuisance", 0x11d5_dcb5_3803_4f58),
 ];

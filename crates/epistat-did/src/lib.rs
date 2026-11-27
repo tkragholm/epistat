@@ -1,7 +1,6 @@
 //! Difference-in-differences: group-time average treatment effects for
 //! staggered adoption, their aggregations, two-period doubly robust
-//! estimators and the HonestDiD sensitivity analysis, with influence-function
-//! inference.
+//! estimators, with influence-function inference.
 //!
 //! # The estimators
 //!
@@ -45,7 +44,8 @@
 //!   [`synthdid::estimate_staggered`]. The module [`synthdid`] gives the
 //!   algorithm.
 //! - The power of the pre-trends test and the distortion after passing it,
-//!   after Roth \[10\], in [`pretrends`].
+//!   after Roth \[10\], are in the crate `epistat-honestdid`, which takes
+//!   the event study of [`att_gt::AttGt::event_study`].
 //! - The imputation estimator of Borusyak, Jaravel and Spiess \[12\]:
 //!   [`imputation::estimate`]; and the two-stage estimator of Gardner \[13\]:
 //!   [`two_stage::estimate`]. Both absorb the unit and period effects of the
@@ -71,8 +71,8 @@
 //!   parametric nuisance models, with or without cross-fitting, and
 //!   [`att_missing_pre_from_predictions`] for out-of-fold predictions of any
 //!   learner; the module [`missing`] gives the algorithm.
-//! - With the `honest` feature, the sensitivity analysis of Rambachan and
-//!   Roth \[7\] in [`inference::sensitivity`].
+//! - The sensitivity analysis of Rambachan and Roth \[7\] is in the crate
+//!   `epistat-honestdid`, on the same event study.
 //!
 //! # Inference
 //!
@@ -138,7 +138,6 @@ pub(crate) mod error;
 pub(crate) mod estimators;
 pub mod inference;
 pub(crate) mod methods;
-pub mod pretrends;
 #[cfg(test)]
 mod tests;
 pub(crate) mod types;
@@ -148,49 +147,6 @@ pub use error::Error;
 pub use estimators::common::basis::{BSplineBasis, Basis, PolynomialBasis};
 pub use inference::did_clusters::{
     DidClusterError, did_cluster_sums, did_covariance, did_standard_error,
-};
-#[cfg(feature = "honest")]
-pub use inference::sensitivity::{
-    HonestAssessment, HonestBiasDirection, HonestConditionalConfidenceSet,
-    HonestDirectionalFunctionalPoint, HonestDirectionalRegion, HonestDirectionalRegionDiagnostics,
-    HonestEventStudyInput, HonestEventStudyPoint, HonestFunctionalAssessmentPoint,
-    HonestIdentifiedSet, HonestJointPathConfig, HonestJointPathMethod, HonestJointPathPoint,
-    HonestJointPathRegion, HonestMonotonicityDirection, HonestOptimizationSurfaceAdaptiveConfig,
-    HonestOptimizationSurfaceAdaptiveRunConfig, HonestOptimizationSurfaceConfig,
-    HonestOriginalConfidenceSet, HonestPostFunctional, HonestRelativeMagnitudeBound, HonestResult,
-    HonestSensitivity, HonestStudyWorkflowResult, HonestWorkflowConfig,
-    HonestWorkflowDirectionMode, LeastFavorableSimulation, RelativeMagnitudeConfidenceSetConfig,
-    RelativeMagnitudeFlciProblem, RelativeMagnitudeFlciResult, RelativeMagnitudeHybrid,
-    RelativeMagnitudeMultiFlciPoint, RelativeMagnitudeMultiFlciProblem,
-    RelativeMagnitudeMultiFlciResult, SensitivitySummary, SensitivitySummaryMethod,
-    SensitivitySummaryRow, SolverCounts, assess_honest_event_study_directional_region,
-    assess_honest_event_study_directional_region_with_config, assess_honest_event_study_functional,
-    assess_honest_event_study_functional_with_config, assess_honest_event_study_joint_path_region,
-    assess_honest_event_study_joint_path_region_with_config,
-    assess_honest_event_study_optimization_surface_region,
-    assess_honest_event_study_optimization_surface_region_adaptive,
-    assess_honest_event_study_optimization_surface_region_adaptive_with_config,
-    assess_honest_event_study_optimization_surface_region_with_config,
-    assess_honest_event_study_period, assess_honest_event_study_period_with_config,
-    assess_honest_event_study_post_functional, assess_honest_event_study_post_functional_flci,
-    assess_honest_event_study_post_functional_flci_with_config,
-    assess_honest_event_study_post_functional_multi_flci,
-    assess_honest_event_study_post_functional_multi_flci_with_config,
-    assess_honest_event_study_post_functional_with_config, assess_honest_event_study_workflow,
-    assess_honest_event_study_workflow_with_config, build_relative_magnitude_flci_problem,
-    build_relative_magnitude_multi_flci_problem, compute_honest_event_study_scalar_for_input,
-    compute_monotone_smoothness_confidence_set_with_simulation, compute_original_confidence_set,
-    compute_relative_magnitude_confidence_set,
-    compute_relative_magnitude_confidence_set_with_config, compute_relative_magnitude_flci,
-    compute_relative_magnitude_flci_with_config, compute_relative_magnitude_identified_set,
-    compute_relative_magnitude_multi_flci, compute_relative_magnitude_multi_flci_with_config,
-    compute_signed_smoothness_confidence_set_with_simulation,
-    compute_smoothness_confidence_set_with_simulation,
-    estimate_smoothness_upper_bound_from_pretrends, summarize_relative_magnitude_sensitivity,
-    summarize_relative_magnitude_sensitivity_many,
-    summarize_relative_magnitude_sensitivity_many_with_simulation,
-    summarize_relative_magnitude_sensitivity_with_simulation, summarize_smoothness_sensitivity,
-    summarize_smoothness_sensitivity_with_simulation,
 };
 pub use methods::att_gt;
 pub use methods::bacon;

@@ -1,6 +1,6 @@
 [package]
 name = "epistat-did"
-description = "Difference-in-differences: staggered ATT(g,t) with its aggregations, doubly robust two-period estimators, triple differences, continuous treatments and HonestDiD sensitivity analysis, with influence-function inference"
+description = "Difference-in-differences: staggered ATT(g,t) with its aggregations, doubly robust two-period estimators, triple differences and continuous treatments, with influence-function inference"
 keywords = ["did", "causal-inference", "event-study", "epidemiology", "statistics"]
 categories = ["mathematics", "science"]
 readme = "README.md"
@@ -21,20 +21,14 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = []
-# HonestDiD sensitivity analysis (Rambachan-Roth). Optional because it is the
-# only consumer of the `clarabel` conic solver; the linear programs of the
-# conditional test run on the crate's own dense simplex. Consumers that only
-# need ATT(g,t), DRDID and the aggregations link no solver.
-honest = ["dep:clarabel"]
-# The parity suite covers the honest surface as well, so it implies the feature.
-parity-tests = ["honest"]
+# The R parity suites that take longest.
+parity-tests = []
 # faer's runtime-dispatched AVX-512 kernels, through epistat-linalg.
 nightly = ["epistat-linalg/nightly"]
 
 [dependencies]
 epistat-core = { path = "../epistat-core", version = "0.1.0" }
 bon = "3"
-clarabel = { version = "0.11.1", optional = true }
 epistat-inference = { path = "../epistat-inference", version = "0.4.0" }
 epistat-glm = { path = "../epistat-glm", version = "0.3.0" }
 epistat-linalg = { path = "../epistat-linalg", version = "0.4.0" }
@@ -59,12 +53,6 @@ proptest = "1.6.0"
 [[bench]]
 name = "core_workflows"
 harness = false
-required-features = ["honest"]
-
-[[test]]
-name = "solver_counts"
-path = "tests/solver_counts.rs"
-required-features = ["honest"]
 
 [[test]]
 name = "parity"
@@ -125,11 +113,6 @@ path = "tests/parity_drdid_improved.rs"
 required-features = ["parity-tests"]
 
 [[test]]
-name = "parity_smoothness"
-path = "tests/parity_smoothness.rs"
-required-features = ["parity-tests"]
-
-[[test]]
 name = "parity_twfe"
 path = "tests/parity_twfe.rs"
 
@@ -140,10 +123,6 @@ path = "tests/parity_bacon.rs"
 [[test]]
 name = "parity_synthdid"
 path = "tests/parity_synthdid.rs"
-
-[[test]]
-name = "parity_pretrends"
-path = "tests/parity_pretrends.rs"
 
 [[test]]
 name = "parity_imputation"
@@ -180,12 +159,10 @@ path = "tests/missing_properties.rs"
 [[test]]
 name = "fingerprint"
 path = "tests/fingerprint.rs"
-required-features = ["honest"]
 
 [[test]]
 name = "study_path"
 path = "tests/study_path.rs"
-required-features = ["honest"]
 
 [[bench]]
 name = "tier1_did"
