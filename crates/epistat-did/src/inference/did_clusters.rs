@@ -38,42 +38,16 @@
 //! periods. J Econom 2021;225(2):200-30. R package `did` 2.5.1, functions
 //! `getSE` and `mboot`.
 
+use epistat_core::check;
 use epistat_inference::Clusters;
 
+use crate::error::Error;
 use crate::util::usize_to_f64;
 
-/// Errors from the cluster sums.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum DidClusterError {
-    /// No units, or no estimates.
-    #[error("cluster sums need at least one unit and one estimate")]
-    Empty,
-    /// An influence vector and the clusters differ in length.
-    #[error("influence has {actual} values but the clusters cover {expected} units")]
-    Length {
-        /// Units covered by the clusters.
-        expected: usize,
-        /// Length of the influence vector.
-        actual: usize,
-    },
-    /// An influence value is NaN or infinite.
-    #[error("influence values must be finite")]
-    NotFinite,
-}
-
-fn check(influence: &[f64], clusters: &Clusters) -> Result<(), DidClusterError> {
-    if influence.is_empty() {
-        return Err(DidClusterError::Empty);
-    }
-    if influence.len() != clusters.len() {
-        return Err(DidClusterError::Length {
-            expected: clusters.len(),
-            actual: influence.len(),
-        });
-    }
-    if influence.iter().any(|value| !value.is_finite()) {
-        return Err(DidClusterError::NotFinite);
-    }
+fn validate(influence: &[f64], clusters: &Clusters) -> Result<(), Error> {
+    check::non_empty("influence", influence.len())?;
+    check::same_length("influence", clusters.len(), influence.len())?;
+    check::finite("influence", influence)?;
     Ok(())
 }
 
@@ -83,13 +57,10 @@ fn check(influence: &[f64], clusters: &Clusters) -> Result<(), DidClusterError> 
 /// The Euclidean norm of the result is the standard error of the estimate.
 ///
 /// # Errors
-/// [`DidClusterError`] for an empty vector, a length that differs from the
+/// [`Error::Input`] for an empty vector, a length that differs from the
 /// clusters' or a value that is not finite.
-pub fn did_cluster_sums(
-    influence: &[f64],
-    clusters: &Clusters,
-) -> Result<Vec<f64>, DidClusterError> {
-    check(influence, clusters)?;
+pub fn did_cluster_sums(influence: &[f64], clusters: &Clusters) -> Result<Vec<f64>, Error> {
+    validate(influence, clusters)?;
     Ok(cluster_sums(influence, clusters))
 }
 
@@ -112,8 +83,8 @@ fn cluster_sums(influence: &[f64], clusters: &Clusters) -> Vec<f64> {
 ///
 /// # Errors
 /// As [`did_cluster_sums`].
-pub fn did_standard_error(influence: &[f64], clusters: &Clusters) -> Result<f64, DidClusterError> {
-    check(influence, clusters)?;
+pub fn did_standard_error(influence: &[f64], clusters: &Clusters) -> Result<f64, Error> {
+    validate(influence, clusters)?;
     Ok(standard_error(influence, clusters))
 }
 
@@ -130,17 +101,12 @@ pub(crate) fn standard_error(influence: &[f64], clusters: &Clusters) -> f64 {
 /// clustered as `did` does, row-major `k x k`.
 ///
 /// # Errors
-/// As [`did_cluster_sums`], for every vector, and
-/// [`DidClusterError::Empty`] for no vectors.
-pub fn did_covariance(
-    influence: &[Vec<f64>],
-    clusters: &Clusters,
-) -> Result<Vec<f64>, DidClusterError> {
-    if influence.is_empty() {
-        return Err(DidClusterError::Empty);
-    }
+/// As [`did_cluster_sums`], for every vector, and [`Error::Input`] for no
+/// vectors.
+pub fn did_covariance(influence: &[Vec<f64>], clusters: &Clusters) -> Result<Vec<f64>, Error> {
+    check::non_empty("influence vectors", influence.len())?;
     for vector in influence {
-        check(vector, clusters)?;
+        validate(vector, clusters)?;
     }
     Ok(covariance(influence, clusters))
 }
@@ -248,22 +214,49 @@ mod tests {
     }
 
     #[test]
+    fn bad_influence_is_an_input_error() {
+        use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
+        let psi = [0.5, -1.25, 2.0, 0.75, -2.0, 0.0];
+        let clusters = Clusters::from_codes(&[0, 0, 1, 1, 2, 2]);
+        let code = |bad: BadInput| bad.code();
+        assert_rejects_bad_input_with_codes("did_cluster_sums", code, |bad| {
+            (bad != BadInput::Unsorted).then(|| did_cluster_sums(&bad.column(&psi), &clusters))
+        });
+        assert_rejects_bad_input_with_codes("did_covariance", code, |bad| {
+            (bad != BadInput::Unsorted)
+                .then(|| did_covariance(&[psi.to_vec(), bad.column(&psi)], &clusters))
+        });
+    }
+
+    #[test]
     fn bad_input_is_an_error() {
+        use epistat_core::InputError;
         let clusters = Clusters::singletons(3);
         assert_eq!(
             did_standard_error(&[1.0, 2.0], &clusters),
-            Err(DidClusterError::Length {
+            Err(Error::Input(InputError::Length {
+                what: "influence",
                 expected: 3,
-                actual: 2
-            })
+                found: 2
+            }))
         );
         assert_eq!(
             did_standard_error(&[1.0, f64::NAN, 2.0], &clusters),
-            Err(DidClusterError::NotFinite)
+            Err(Error::Input(InputError::NotFinite {
+                what: "influence",
+                row: 1,
+                column: None
+            }))
         );
         assert_eq!(
             did_standard_error(&[], &Clusters::singletons(0)),
-            Err(DidClusterError::Empty)
+            Err(Error::Input(InputError::Empty { what: "influence" }))
+        );
+        assert_eq!(
+            did_covariance(&[], &clusters),
+            Err(Error::Input(InputError::Empty {
+                what: "influence vectors"
+            }))
         );
     }
 }

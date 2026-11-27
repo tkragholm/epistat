@@ -277,7 +277,8 @@ pub(super) fn fit(
         }
         out
     };
-    // (X'WX)^-1 over the kept columns: the covariance at dispersion one.
+    // (X'WX)^-1 over the kept columns: the covariance at dispersion one. An
+    // entry the fit leaves undefined is NaN here and `None` in the result.
     let bread: Vec<f64> = (0..q * q)
         .map(|ac| {
             fit.covariance.as_slice()[kept[ac / q] * k_all + kept[ac % q]].unwrap_or(f64::NAN)
@@ -378,7 +379,7 @@ pub(super) fn fit(
     if let Some(v) = &covariance_kept {
         for (a, &i) in kept.iter().enumerate() {
             for (c, &j) in kept.iter().enumerate() {
-                covariance[i * k_all + j] = Some(v[a * q + c]);
+                covariance[i * k_all + j] = Some(v[a * q + c]).filter(|v| v.is_finite());
             }
         }
     }

@@ -28,7 +28,7 @@ mod common;
 
 use common::{Lines, Rng, Table, Writer};
 use epistat_did::{
-    MissingAssumption, MissingConfig, MissingFolds, MissingModels, MissingPreData, att_missing_pre,
+    MissingAssumption, MissingFolds, MissingModels, MissingOptions, MissingPreData, att_missing_pre,
 };
 use epistat_linalg::Mat;
 
@@ -92,7 +92,7 @@ fn main() {
         outcome: &all,
         nested: &all,
     };
-    let config = MissingConfig::default();
+    let config = MissingOptions::default();
     let (times, est) = common::timed(common::reps(), || {
         att_missing_pre(&data, z.as_ref(), assumption, &models, folds, &config).expect("estimate")
     });
@@ -102,7 +102,7 @@ fn main() {
     } else {
         "info_"
     };
-    lines.push(&format!("{prefix}att"), est.att);
-    lines.push(&format!("{prefix}se"), est.se);
+    lines.push(&format!("{prefix}att"), est.estimate.estimate);
+    lines.push(&format!("{prefix}se"), est.estimate.se.unwrap());
     common::finish(&method, n, &times, &lines);
 }

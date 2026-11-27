@@ -1198,8 +1198,14 @@ mod tests {
         let fit = fit_drdid_panel_nuisance(input, DrDidConfig::default()).unwrap();
         assert!(fit.converged);
         assert!(fit.iterations < DrDidConfig::default().max_iter);
-        let tight =
-            fit_drdid_panel_nuisance(input, DrDidConfig::builder().tol(1e-13).build()).unwrap();
+        let tight = fit_drdid_panel_nuisance(
+            input,
+            DrDidConfig {
+                tol: 1e-13,
+                ..DrDidConfig::default()
+            },
+        )
+        .unwrap();
         for (a, b) in fit
             .propensity_coefficients
             .iter()
@@ -1214,7 +1220,10 @@ mod tests {
         let (treated, delta, weight, design) = registry_like_panel(1, 4000);
         let fit = fit_drdid_panel_nuisance(
             flat(&treated, &delta, &weight, &design, 16),
-            DrDidConfig::builder().max_iter(2).build(),
+            DrDidConfig {
+                max_iter: 2,
+                ..DrDidConfig::default()
+            },
         )
         .unwrap();
         assert!(!fit.converged);
@@ -1231,26 +1240,32 @@ mod tests {
     #[test]
     fn validate_config_rejects_invalid_values() {
         assert!(matches!(
-            validate_drdid_config(DrDidConfig::builder().confidence_level(1.0).build()),
+            validate_drdid_config(DrDidConfig { confidence_level: 1.0, ..DrDidConfig::default() }),
             Err(DrDidError::InvalidConfig(msg)) if msg.contains("confidence_level")
         ));
         assert!(matches!(
-            validate_drdid_config(DrDidConfig::builder().propensity_clip(0.5).build()),
+            validate_drdid_config(DrDidConfig { propensity_clip: 0.5, ..DrDidConfig::default() }),
             Err(DrDidError::InvalidConfig(msg)) if msg.contains("propensity_clip")
         ));
         assert!(matches!(
-            validate_drdid_config(DrDidConfig::builder().ridge(-1.0).build()),
+            validate_drdid_config(DrDidConfig { ridge: -1.0, ..DrDidConfig::default() }),
             Err(DrDidError::InvalidConfig(msg)) if msg.contains("ridge")
         ));
         assert!(matches!(
-            validate_drdid_config(DrDidConfig::builder().max_iter(0).build()),
+            validate_drdid_config(DrDidConfig { max_iter: 0, ..DrDidConfig::default() }),
             Err(DrDidError::InvalidConfig(msg)) if msg.contains("max_iter")
         ));
         assert!(matches!(
-            validate_drdid_config(DrDidConfig::builder().tol(0.0).build()),
+            validate_drdid_config(DrDidConfig { tol: 0.0, ..DrDidConfig::default() }),
             Err(DrDidError::InvalidConfig(msg)) if msg.contains("tol")
         ));
-        assert!(validate_drdid_config(DrDidConfig::builder().bootstrap_reps(0).build()).is_ok());
+        assert!(
+            validate_drdid_config(DrDidConfig {
+                bootstrap_reps: 0,
+                ..DrDidConfig::default()
+            })
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1361,10 +1376,11 @@ mod tests {
     #[test]
     fn bootstrap_and_quantile_helpers_are_stable() {
         let influence = [1.0, -1.0, 2.0, -2.0];
-        let config = DrDidConfig::builder()
-            .bootstrap_reps(200)
-            .bootstrap_seed(42)
-            .build();
+        let config = DrDidConfig {
+            bootstrap_reps: 200,
+            bootstrap_seed: 42,
+            ..DrDidConfig::default()
+        };
         let ci_a = crate::inference::multiplier_bootstrap_ci(
             1.0,
             &influence,
@@ -1486,7 +1502,10 @@ mod tests {
             let (t, d, w, x, k) = dummy_design(400 + 37 * seed_index, seed);
             for config in [
                 DrDidConfig::default(),
-                DrDidConfig::builder().tol(1e-5).build(),
+                DrDidConfig {
+                    tol: 1e-5,
+                    ..DrDidConfig::default()
+                },
             ] {
                 compared += usize::from(assert_same_coefficients(&t, &d, &w, &x, k, config));
             }

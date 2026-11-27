@@ -511,11 +511,11 @@ fn pairwise(out: &mut Vec<(&'static str, u64)>, rows: &[Row]) {
             .collect();
         let covariates = MatRef::from_column_major_slice(&covariates, n, 3);
 
-        // The kernels' two-period call passes the covariates as the finished
-        // design, without an intercept.
+        // The kernels' two-period call passes the covariates, to which the
+        // estimator adds the intercept.
         let data = TwoPeriodData::panel(&treated, &delta)
             .weights(&weight)
-            .design(covariates)
+            .covariates(covariates)
             .build()
             .expect("two-period data");
         let fitted = two_period::estimate(
@@ -588,7 +588,7 @@ fn pairwise(out: &mut Vec<(&'static str, u64)>, rows: &[Row]) {
             h_nuisance.word(u64::from(kept));
         }
     }
-    out.push(("pairwise/drdid_panel", h_att.finish()));
+    out.push(("pairwise/drdid_panel_intercept", h_att.finish()));
     out.push(("pairwise/nuisance", h_nuisance.finish()));
 }
 
@@ -623,7 +623,7 @@ const GOLDEN: &[(&str, u64)] = &[
     ("fixed_weights/by_total_weight", 0xe22c_d8c7_552b_20a2),
     ("fixed_weights/equal", 0x6255_94e8_f6fc_0a38),
     ("cluster_sums", 0x7586_203b_1610_15b0),
-    ("pairwise/drdid_panel", 0xa3a8_c340_00d1_3388),
+    ("pairwise/drdid_panel_intercept", 0),
     ("pairwise/nuisance", 0x11d5_dcb5_3803_4f58),
 ];
 

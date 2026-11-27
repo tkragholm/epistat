@@ -158,10 +158,11 @@ mod tests {
     fn estimates_improved_repeated_cross_section_att() {
         let mut rng = Stream::seeded(20_260_309);
         let rows = simulate_repeated_cross_section(&mut rng, 2_000, 2.5);
-        let config = DrDidConfig::builder()
-            .bootstrap_reps(199)
-            .bootstrap_seed(42)
-            .build();
+        let config = DrDidConfig {
+            bootstrap_reps: 199,
+            bootstrap_seed: 42,
+            ..DrDidConfig::default()
+        };
         let estimate =
             estimate_drdid_improved_repeated_cross_section(&rows, config).expect("estimate");
 

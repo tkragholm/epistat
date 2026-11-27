@@ -16,16 +16,35 @@ pub(crate) fn estimate_from(
     (lower, upper): (f64, f64),
     level: Level,
 ) -> Estimate {
-    let finite = |value: f64| value.is_finite().then_some(value);
-    let se = finite(se);
+    estimate_from_parts(att, finite(se), (finite(lower), finite(upper)), level)
+}
+
+/// [`estimate_from`] with the parts already `None` where undefined; a part
+/// that is not finite is `None` as well.
+pub(crate) fn estimate_from_parts(
+    att: f64,
+    se: Option<f64>,
+    (lower, upper): (Option<f64>, Option<f64>),
+    level: Level,
+) -> Estimate {
+    let se = se.and_then(finite);
     let p_value = epistat_stats::wald(att, se, level, Scale::Identity).p_value;
     Estimate::new(
         att,
         se,
-        Some(Interval::new(finite(lower), finite(upper), level)),
+        Some(Interval::new(
+            lower.and_then(finite),
+            upper.and_then(finite),
+            level,
+        )),
         p_value,
         Scale::Identity,
     )
+}
+
+/// `Some(value)` when it is finite.
+pub(crate) fn finite(value: f64) -> Option<f64> {
+    value.is_finite().then_some(value)
 }
 
 /// Whether the confidence level is finite and strictly between 0 and 1.

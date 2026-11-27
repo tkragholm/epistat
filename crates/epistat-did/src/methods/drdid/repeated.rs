@@ -486,10 +486,11 @@ mod tests {
             rows.push(rc_row(true, true, 11.0, 1.0));
         }
 
-        let config = DrDidConfig::builder()
-            .bootstrap_reps(199)
-            .bootstrap_seed(42)
-            .build();
+        let config = DrDidConfig {
+            bootstrap_reps: 199,
+            bootstrap_seed: 42,
+            ..DrDidConfig::default()
+        };
         let estimate = estimate_drdid_repeated_cross_section(&rows, config).expect("estimate");
 
         assert_eq!(estimate.treated_n, 80);
@@ -525,7 +526,10 @@ mod tests {
             rc_row(true, true, 10.0, 0.0),
         ];
 
-        let bad_cfg = DrDidConfig::builder().confidence_level(1.0).build();
+        let bad_cfg = DrDidConfig {
+            confidence_level: 1.0,
+            ..DrDidConfig::default()
+        };
         let err = estimate_drdid_repeated_cross_section(&valid, bad_cfg).expect_err("bad config");
         assert!(matches!(err, DrDidError::InvalidConfig(msg) if msg.contains("confidence_level")));
 
@@ -607,10 +611,11 @@ mod tests {
 
         for draw in 0..draws {
             let rows = simulate_repeated_cross_section(&mut rng, 900, true_att);
-            let config = DrDidConfig::builder()
-                .bootstrap_reps(49)
-                .bootstrap_seed(200 + u64::try_from(draw).expect("draw index fits in u64"))
-                .build();
+            let config = DrDidConfig {
+                bootstrap_reps: 49,
+                bootstrap_seed: 200 + u64::try_from(draw).expect("draw index fits in u64"),
+                ..DrDidConfig::default()
+            };
             let est = estimate_drdid_repeated_cross_section(&rows, config).expect("simulation fit");
             estimates.push(est);
         }

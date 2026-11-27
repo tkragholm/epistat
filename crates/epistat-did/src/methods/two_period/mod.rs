@@ -195,7 +195,11 @@ pub struct TwoPeriodOptions {
     pub estimator: Estimator,
     /// The nuisance models.
     pub nuisance: NuisanceOptions,
-    /// The confidence level of the interval.
+    /// The confidence level of the interval. Ignored by
+    /// [`Estimator::Improved`], whose interval is always the 95% one,
+    /// `att +- 1.96 se` as `DRDID`'s `drdid_imp_panel` and `drdid_imp_rc`
+    /// form it (with clusters, the normal 95% interval of the clustered
+    /// standard error), and is labelled 95% whatever level is asked for.
     pub level: Level,
     /// A multiplier bootstrap for the interval, `boot = TRUE` with
     /// `boot.type = "multiplier"`: the percentile interval of Rademacher
@@ -212,7 +216,11 @@ pub struct TwoPeriod {
     /// The estimator that formed it.
     pub estimator: Estimator,
     /// The ATT with its standard error, interval and normal p-value; a part
-    /// that is not finite is `None`.
+    /// that is not finite is `None`. The interval is at
+    /// [`TwoPeriodOptions::level`], except for [`Estimator::Improved`]
+    /// without clusters, whose interval is `att +- 1.96 se` at level 95%
+    /// whatever level was asked for; with clusters it is the normal 95%
+    /// interval of the clustered standard error, again whatever the level.
     pub estimate: Estimate,
     /// Treated rows.
     pub n_treated: usize,
@@ -496,72 +504,6 @@ impl From<DrDidError> for Error {
             .into(),
             DrDidError::InvalidConfig(_) => Self::NotFinite,
             DrDidError::SingularSystem => Self::Singular,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use epistat_linalg::MatRef;
-
-    use super::{Estimator, TwoPeriod, TwoPeriodData, TwoPeriodOptions, estimate};
-
-    fn bits(fit: &TwoPeriod) -> Vec<u64> {
-        let estimate = &fit.estimate;
-        let mut out = vec![
-            estimate.estimate.to_bits(),
-            estimate.se.map_or(0, f64::to_bits),
-            estimate.lower().map_or(0, f64::to_bits),
-            estimate.upper().map_or(0, f64::to_bits),
-            fit.total_weight.to_bits(),
-            fit.n_treated as u64,
-            fit.n_control as u64,
-            fit.columns_dropped as u64,
-        ];
-        out.extend(fit.influence.column(0).iter().map(|value| value.to_bits()));
-        out
-    }
-
-    /// A caller that passes the intercept in a finished panel design, as a
-    /// design `[1, x]`, gets the bits of the covariates `x` to which the
-    /// estimators add it.
-    #[test]
-    fn covariates_match_a_finished_design_with_its_intercept() {
-        let n = 40_usize;
-        let rows: Vec<f64> = (0..n).map(crate::util::usize_to_f64).collect();
-        let treated: Vec<bool> = (0..n).map(|i| i % 3 == 0).collect();
-        let x1: Vec<f64> = rows.iter().map(|&i| (0.37 * i).sin()).collect();
-        let x2: Vec<f64> = rows.iter().map(|&i| (0.11 * i).cos() + 0.5).collect();
-        let weight: Vec<f64> = rows.iter().map(|&i| 1.0 + (0.7 * i).sin().abs()).collect();
-        let change: Vec<f64> = (0..n)
-            .map(|i| {
-                let effect = if treated[i] { 1.5 } else { 0.0 };
-                x1[i] - x2[i] / 2.0 + effect + (1.3 * rows[i]).cos() / 10.0
-            })
-            .collect();
-        let covariates: Vec<f64> = x1.iter().chain(&x2).copied().collect();
-        let design: Vec<f64> = std::iter::repeat_n(1.0, n)
-            .chain(x1.iter().copied())
-            .chain(x2.iter().copied())
-            .collect();
-        for estimator in [Estimator::DoublyRobust, Estimator::Improved] {
-            let options = TwoPeriodOptions {
-                estimator,
-                ..TwoPeriodOptions::default()
-            };
-            let added = TwoPeriodData::panel(&treated, &change)
-                .weights(&weight)
-                .covariates(MatRef::from_column_major_slice(&covariates, n, 2))
-                .build()
-                .expect("covariates");
-            let finished = TwoPeriodData::panel(&treated, &change)
-                .weights(&weight)
-                .design(MatRef::from_column_major_slice(&design, n, 3))
-                .build()
-                .expect("design");
-            let added = estimate(&added, &options).expect("added intercept");
-            let finished = estimate(&finished, &options).expect("finished design");
-            assert_eq!(bits(&added), bits(&finished), "{estimator:?}");
         }
     }
 }

@@ -144,9 +144,7 @@ pub(crate) mod types;
 pub(crate) mod util;
 
 pub use error::Error;
-pub use inference::did_clusters::{
-    DidClusterError, did_cluster_sums, did_covariance, did_standard_error,
-};
+pub use inference::did_clusters::{did_cluster_sums, did_covariance, did_standard_error};
 pub use methods::att_gt;
 pub use methods::bacon;
 pub use methods::bacon::{BaconComparison, BaconDecomposition, BaconKind, BaconWithin};
@@ -170,9 +168,9 @@ pub use methods::imputation::{
 };
 pub use methods::missing;
 pub use methods::missing::{
-    CrossFitFolds, MissingAssumption, MissingAtt, MissingConfig, MissingError, MissingFolds,
-    MissingModels, MissingNuisance, MissingPreData, MissingPredictions, NestedOutcome,
-    att_missing_pre, att_missing_pre_from_predictions, missing_cross_fit_folds,
+    CrossFitFolds, MissingAssumption, MissingAtt, MissingFolds, MissingModels, MissingNuisance,
+    MissingOptions, MissingPreData, MissingPredictions, NestedOutcome, att_missing_pre,
+    att_missing_pre_from_predictions, missing_cross_fit_folds,
 };
 pub use methods::staggered::{StaggeredPanel, StaggeredPanelBuilder};
 pub use methods::sunab;

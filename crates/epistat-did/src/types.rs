@@ -137,22 +137,20 @@ impl DidInputSummary {
 }
 
 /// One panel-level row for doubly robust `DiD` with outcome deltas.
-#[derive(bon::Builder, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DrDidObservation {
     /// Whether the unit is in the treated group.
     pub treated: bool,
     /// Change in outcome between the post and pre period.
     pub delta_outcome: f64,
-    /// Sampling weight, 1.0 by default.
-    #[builder(default = 1.0)]
+    /// Sampling weight.
     pub weight: f64,
-    /// Covariate values, empty by default.
-    #[builder(default)]
+    /// Covariate values.
     pub covariates: Vec<f64>,
 }
 
 /// One repeated cross-section row for doubly robust `DiD`.
-#[derive(bon::Builder, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DrDidRepeatedObservation {
     /// Whether the unit is in the treated group.
     pub treated: bool,
@@ -160,11 +158,9 @@ pub(crate) struct DrDidRepeatedObservation {
     pub post_period: bool,
     /// Observed outcome value.
     pub outcome: f64,
-    /// Sampling weight, 1.0 by default.
-    #[builder(default = 1.0)]
+    /// Sampling weight.
     pub weight: f64,
-    /// Covariate values, empty by default.
-    #[builder(default)]
+    /// Covariate values.
     pub covariates: Vec<f64>,
 }
 
@@ -184,27 +180,22 @@ impl DrDidRepeatedObservation {
 }
 
 /// Configuration for panel `DR-DiD` estimation.
-#[derive(bon::Builder, Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct DrDidConfig {
     /// Confidence level as a probability strictly between 0 and 1, such as 0.95.
     /// The default is 0.95.
-    #[builder(default = 0.95)]
     pub confidence_level: f64,
     /// Propensity scores are clipped to `[propensity_clip, 1 - propensity_clip]`.
     /// It must lie in `(0, 0.5)`. The default is 1e-6.
-    #[builder(default = 1e-6)]
     pub propensity_clip: f64,
     /// Ridge penalty added to the diagonal of the outcome regressions' normal
     /// equations, finite and non-negative. The default is 1e-8.
-    #[builder(default = 1e-8)]
     pub ridge: f64,
     /// Maximum number of iterations of the propensity fit, positive. The default
     /// is 200.
-    #[builder(default = 200_usize)]
     pub max_iter: usize,
     /// Convergence tolerance of the propensity fit, positive. The default is
     /// 1e-8.
-    #[builder(default = 1e-8)]
     pub tol: f64,
     /// Number of replications of the multiplier bootstrap behind the confidence
     /// interval. With 0, the default, the interval is the normal interval
@@ -212,10 +203,8 @@ pub(crate) struct DrDidConfig {
     /// `boot = FALSE` and `did::att_gt` with `bstrap = FALSE`. A positive count
     /// makes it the percentile interval of that many Rademacher multiplier
     /// replicates of the influence function.
-    #[builder(default = 0_usize)]
     pub bootstrap_reps: usize,
     /// Seed of the multiplier bootstrap, read only with replicates.
-    #[builder(default = 0_u64)]
     pub bootstrap_seed: u64,
     /// Whether the traditional repeated cross-section estimator computes as
     /// `epistat-did` 0.1 and `did_methods` 0.2 did, for reproducing results
@@ -224,7 +213,6 @@ pub(crate) struct DrDidConfig {
     /// and an influence function without the estimation of the nuisance
     /// models. Off, the default, it is `DRDID::drdid_rc1`. The other
     /// estimators ignore it.
-    #[builder(default = false)]
     pub legacy_repeated_cross_section: bool,
 }
 
