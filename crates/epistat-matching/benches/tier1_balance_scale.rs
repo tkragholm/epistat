@@ -18,8 +18,9 @@ mod common;
 
 use chrono::NaiveDate;
 use common::{Lines, Rng};
+use epistat_core::Estimand;
 use epistat_matching::{
-    BalanceReportOptions, BalanceWeights, Cohort, CohortRow, Estimand, MatchedPair, UnitWeightSet,
+    BalanceReportOptions, BalanceWeights, Cohort, CohortRow, MatchedPair, UnitWeightSet,
     balance_summary,
 };
 use rapidhash::RapidHashMap;

@@ -12,7 +12,7 @@ use crate::role_transition::{
 use crate::types::reject_invalid;
 use crate::types::{
     AgeLimitYears, BirthDateWindowDays, Estimand, MatchOutcome, MatchRatio, MatchingCriteria,
-    RoleTransitionOptions,
+    RoleTransitionOptions, matched_estimand,
 };
 use std::marker::PhantomData;
 
@@ -244,7 +244,8 @@ where
         self
     }
 
-    /// Set the target estimand (e.g., ATT, ATE).
+    /// Set the target estimand: the ATT, the ATC, the ATE or the ATM. `run`
+    /// refuses any other with [`Error::UnsupportedEstimand`].
     #[must_use]
     pub const fn with_estimand(mut self, estimand: Estimand) -> Self {
         self.criteria.estimand = estimand;
@@ -615,6 +616,7 @@ where
         S: SelectionStrategy<R> + Clone + Send + Sync,
         P: RiskSetPolicy<R> + Send + Sync,
     {
+        matched_estimand(self.criteria.estimand, "matching")?;
         self.constraints.check()?;
         let window = BirthWindowConstraint::new(
             (self.mode.birth_window_set && self.mode.distance_config.is_some())
@@ -677,6 +679,7 @@ where
     where
         S: SelectionStrategy<R> + Clone + Send + Sync,
     {
+        matched_estimand(self.criteria.estimand, "matching")?;
         self.constraints.check()?;
         let window = BirthWindowConstraint::new(
             (self.mode.birth_window_set && self.mode.distance_config.is_some())

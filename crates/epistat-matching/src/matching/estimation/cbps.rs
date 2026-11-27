@@ -109,7 +109,7 @@ use super::encoding::CovariateMatrix;
 use super::linalg::pseudo_inverse;
 use super::logistic::LogisticFit;
 use crate::Error;
-use crate::Estimand;
+use epistat_core::Estimand;
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::eigen::symmetric_eigen_jacobi;
 use epistat_linalg::{Mat, MatRef, matvec_into, weighted_gram, xtv};
@@ -522,7 +522,7 @@ pub(super) fn fit_cbps(
             Estimand::Ate => Target::Ate,
             other => {
                 return Err(Error::UnsupportedEstimand {
-                    estimand: other.into(),
+                    estimand: other,
                     method: "the covariate balancing propensity score",
                 });
             }

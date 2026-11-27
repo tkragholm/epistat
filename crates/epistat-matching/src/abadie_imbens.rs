@@ -117,9 +117,9 @@ use crate::Error;
 use epistat_linalg::{Attempt, Factor, Mat, Method, solve, weighted_gram, weighted_xtz};
 use rayon::prelude::*;
 
-use crate::Estimand;
 use crate::effects::UnitData;
 use crate::kdtree::{Euclidean, KdTree, worth_a_tree};
+use epistat_core::Estimand;
 
 /// The distance the matches are found with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -135,7 +135,7 @@ pub enum DistanceWeight {
 /// How the estimate and its error are made.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AbadieImbensSpec {
-    /// The group the effect is for.
+    /// The group the effect is for: the ATT, the ATC or the ATE.
     pub target: Estimand,
     /// The number of matches per unit, `M` in `Match`.
     pub matches: usize,
@@ -299,7 +299,9 @@ pub struct AbadieImbensEstimate {
 ///
 /// # Errors
 ///
-/// [`Error`] for the data and the spec that cannot be used.
+/// [`Error`] for the data and the spec that cannot be used, among them
+/// [`Error::UnsupportedEstimand`] for a target other than the ATT, the ATC and
+/// the ATE.
 pub fn abadie_imbens(
     data: &AbadieImbensData,
     spec: &AbadieImbensSpec,
@@ -336,6 +338,12 @@ impl<'a> Estimator<'a> {
         spec: &'a AbadieImbensSpec,
         use_trees: bool,
     ) -> Result<Self, Error> {
+        if !matches!(spec.target, Estimand::Att | Estimand::Atc | Estimand::Ate) {
+            return Err(Error::UnsupportedEstimand {
+                estimand: spec.target,
+                method: "the Abadie-Imbens estimator",
+            });
+        }
         if spec.matches == 0 {
             return Err(Error::ZeroMatches);
         }

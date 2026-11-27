@@ -517,7 +517,8 @@ fn nearest_available<R: MatchingRecord>(
 /// # Errors
 ///
 /// [`Error::CemOrder`] for the largest and smallest orders, which need a
-/// score.
+/// score, and [`Error::UnsupportedEstimand`] for an estimand no matcher
+/// targets.
 pub fn cem_k2k_pairs<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
@@ -530,6 +531,7 @@ pub fn cem_k2k_pairs<R: MatchingRecord>(
     if matches!(order, MatchOrder::Largest | MatchOrder::Smallest) {
         return Err(Error::CemOrder);
     }
+    crate::types::matched_estimand(estimand, "coarsened exact matching")?;
     let metric = distance.map(DistanceConfig::metric);
 
     let mut anchors_of: Vec<Vec<usize>> = vec![Vec::new(); strata.count];

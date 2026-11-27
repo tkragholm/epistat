@@ -35,7 +35,7 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
-use epistat_matching::Estimand;
+use epistat_core::Estimand;
 use epistat_matching::UnitRole;
 use epistat_matching::effects::{
     Clustering, EffectSpec, MatchedSample, OutcomeModel, UnitData, estimate_effects,

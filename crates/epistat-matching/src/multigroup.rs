@@ -85,9 +85,9 @@ use crate::types::{
     BalanceRecord, DistanceCaliper, MatchDiagnostics, MatchOutcome, MatchRatio, MatchedPair,
 };
 use crate::{
-    BalanceReport, BalanceReportOptions, BalanceWeights, DistanceConfig, Estimand, MatchJob,
-    balance_summary,
+    BalanceReport, BalanceReportOptions, BalanceWeights, DistanceConfig, MatchJob, balance_summary,
 };
+use epistat_core::Estimand;
 use rapidhash::RapidHashMap;
 
 /// How the generalised propensity score is fitted.
@@ -619,7 +619,7 @@ pub fn balance_by_group<R: CovariateRecord>(
                 .filter(|(r, g)| **g == comparison.group && kept.contains(r.id()))
                 .map(|(r, _)| r)
                 .collect();
-            let weights = BalanceWeights::from_outcome(&comparison.outcome);
+            let weights = BalanceWeights::from_outcome(&comparison.outcome)?;
             balance_summary(&focal_records, &others, &weights, options)
                 .map(|summary| summary.report)
                 .map(|report| (comparison.group, report))

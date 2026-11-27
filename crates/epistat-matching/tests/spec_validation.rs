@@ -3,6 +3,7 @@
 //! error names the option or the unit.
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::Error;
 use epistat_matching::FineBalance;
 use epistat_matching::prelude::*;
@@ -10,7 +11,7 @@ use epistat_matching::spec::{
     BinningSpec, CardinalitySpec, CemSpec, CemVariableSpec, CovarianceSpec, CovariatesSpec,
     DistanceSpec, MatchMethod, NearestSpec, TransformSpec, VariableRatioSpec,
 };
-use epistat_matching::{BalanceRecord, Estimand, SpecOutput};
+use epistat_matching::{BalanceRecord, SpecOutput};
 use std::collections::BTreeMap;
 
 fn day(day: u32) -> NaiveDate {

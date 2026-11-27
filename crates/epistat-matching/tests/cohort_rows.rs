@@ -782,8 +782,10 @@ fn balance_and_effects_are_the_same_on_rows() {
             numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
             ..BalanceReportOptions::default()
         };
-        let on_owned = balance_report(&g.anchors, &g.candidates, &outcome, &options);
-        let on_rows = balance_report(&g.anchor_rows, &g.candidate_rows, &outcome, &options);
+        let on_owned = balance_report(&g.anchors, &g.candidates, &outcome, &options)
+            .expect("a matched estimand");
+        let on_rows = balance_report(&g.anchor_rows, &g.candidate_rows, &outcome, &options)
+            .expect("a matched estimand");
         assert!(!on_owned.numeric.is_empty() && !on_owned.categorical.is_empty());
         assert_same(
             &format!("{on_owned:?}"),
@@ -791,7 +793,7 @@ fn balance_and_effects_are_the_same_on_rows() {
             &format!("seed {seed}"),
         );
 
-        let weights = BalanceWeights::from_outcome(&outcome);
+        let weights = BalanceWeights::from_outcome(&outcome).expect("a matched estimand");
         let summary_owned = balance_summary(&g.anchors, &g.candidates, &weights, &options);
         let summary_rows = balance_summary(&g.anchor_rows, &g.candidate_rows, &weights, &options);
         assert_same(

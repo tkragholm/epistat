@@ -1,6 +1,6 @@
 //! Match outcomes, diagnostics and the typed reasons they count.
 
-use super::criteria::{CommonSupport, Estimand};
+use super::criteria::{CommonSupport, Estimand, default_estimand};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
@@ -399,7 +399,7 @@ impl MatchDiagnostics {
 
 /// Run diagnostics for matching.
 #[non_exhaustive]
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct MatchDiagnostics {
     /// Total cases evaluated by the engine.
     pub total_cases_evaluated: usize,
@@ -423,10 +423,10 @@ pub struct MatchDiagnostics {
     /// Count of exclusions by reason.
     pub exclusion_counts: BTreeMap<ExclusionReason, usize>,
     /// Requested estimand from criteria.
-    #[serde(default)]
+    #[serde(default = "default_estimand")]
     pub requested_estimand: Estimand,
     /// Realized estimand after trimming/matching exclusions.
-    #[serde(default)]
+    #[serde(default = "default_estimand")]
     pub realized_estimand: Estimand,
     /// Number of cases discarded by common-support trimming.
     #[serde(default)]
@@ -454,6 +454,32 @@ pub struct MatchDiagnostics {
     /// Structured machine-readable drift reasons.
     #[serde(default)]
     pub estimand_drift_reasons: Vec<EstimandDriftReason>,
+}
+
+/// Empty diagnostics, with the ATT as the requested and the realised
+/// estimand.
+impl Default for MatchDiagnostics {
+    fn default() -> Self {
+        Self {
+            total_cases_evaluated: 0,
+            cases_with_no_controls: 0,
+            cases_below_required_ratio: 0,
+            cases_on_lower_tier: 0,
+            matched_cases: 0,
+            pairs_selected: 0,
+            exclusion_counts: BTreeMap::new(),
+            requested_estimand: default_estimand(),
+            realized_estimand: default_estimand(),
+            common_support_trimmed_cases: 0,
+            common_support_trimmed_controls: 0,
+            common_support_trimmed_ids: TrimmedUnits::default(),
+            common_support_overlap: None,
+            common_support_policy: None,
+            common_support_case_score_bounds: None,
+            common_support_control_score_bounds: None,
+            estimand_drift_reasons: Vec::new(),
+        }
+    }
 }
 
 /// The debug rendering lists every field but the ids of the trimmed units, which

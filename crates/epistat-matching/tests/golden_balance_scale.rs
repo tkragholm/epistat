@@ -14,9 +14,10 @@
 //! appends them to that file.
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::{
     BalanceRecord, BalanceReportOptions, BalanceSummary, BalanceWeights, Cohort, CohortRow,
-    CovariateValue, Estimand, MatchedPair, NumericBalanceTransform, SupplementalBalanceCovariates,
+    CovariateValue, MatchedPair, NumericBalanceTransform, SupplementalBalanceCovariates,
     UnitWeightSet, balance_summary,
 };
 use epistat_testkit::{Fingerprint, SplitMix64, on_threads};

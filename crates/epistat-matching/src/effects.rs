@@ -114,7 +114,8 @@
     reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
 )]
 
-use crate::{Error, Estimand};
+use crate::Error;
+use epistat_core::Estimand;
 use std::collections::HashMap;
 
 use epistat_core::{Interval, Level};
@@ -584,18 +585,18 @@ struct Means {
 }
 
 fn means(sample: &MatchedSample, spec: &EffectSpec, beta: &[f64]) -> Result<Means, Error> {
-    if spec.target == Estimand::Atm {
-        return Err(Error::UnsupportedEstimand {
-            estimand: spec.target.into(),
-            method: "the effect estimate",
-        });
-    }
+    let all = match spec.target {
+        Estimand::Att | Estimand::Atc => false,
+        Estimand::Ate => true,
+        other => {
+            return Err(Error::UnsupportedEstimand {
+                estimand: other,
+                method: "the effect estimate",
+            });
+        }
+    };
     let rows: Vec<usize> = (0..sample.len())
-        .filter(|&i| match spec.target {
-            Estimand::Att => sample.treated[i],
-            Estimand::Atc => !sample.treated[i],
-            Estimand::Ate | Estimand::Atm => true,
-        })
+        .filter(|&i| all || sample.treated[i] == (spec.target == Estimand::Att))
         .collect();
     let total: f64 = rows.iter().map(|&i| sample.weight[i]).sum();
     if total <= 0.0 {

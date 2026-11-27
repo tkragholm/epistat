@@ -594,9 +594,12 @@ pub fn match_cardinality(request: &CardinalityRequest<'_>) -> Result<Cardinality
     if request.discarded.is_some_and(|d| d.len() != n) {
         return Err(Error::Shape("discarded has the wrong length".to_string()));
     }
-    if request.estimand == Estimand::Atm {
+    if !matches!(
+        request.estimand,
+        Estimand::Att | Estimand::Atc | Estimand::Ate
+    ) {
         return Err(Error::UnsupportedEstimand {
-            estimand: request.estimand.into(),
+            estimand: request.estimand,
             method: "cardinality matching",
         });
     }

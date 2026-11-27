@@ -18,6 +18,7 @@
 mod common;
 
 use common::{Level, Person, cohort, records};
+use epistat_core::Estimand;
 use epistat_matching::Error;
 use epistat_matching::output::{MatchDataOptions, Units, get_matches, match_data};
 use epistat_matching::prelude::*;
@@ -31,16 +32,15 @@ use epistat_matching::spec::{
 use epistat_matching::{
     BalanceRecord, BalanceReportOptions, BalanceWeights, CemBinning, CemVariable, CommonSupport,
     CovariateEncodingConfig, CovariateValue, DeterministicSelection, DistanceCaliper,
-    DistanceConfig, ElasticNetCvConfig, Estimand, EuclideanPreparationConfig, EuclideanScale,
-    LambdaRule, LogisticRegressionConfig, MahalanobisPreparationConfig, MatchOrder,
-    MatchWeightMethod, MatchingCriteria, NearestBirthDateSelection, PairDistanceMatrix,
-    PropensityEstimator, PropensityLink, PropensityScoreConfig, PropensityScoreEstimate,
-    PropensityScoreOutputScale, Rounds, SpecOutput, SubclassificationConfig, UnitRole,
-    VariableRatio, balance_summary, cem_k2k_pairs, cem_strata, cem_subclasses,
-    estimate_propensity_and_match, exact_match_subclasses, match_weights_from_pairs,
-    pair_weights_from_pairs, prepare_euclidean_distance_config,
-    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
-    subclassify_by_propensity_score_map,
+    DistanceConfig, ElasticNetCvConfig, EuclideanPreparationConfig, EuclideanScale, LambdaRule,
+    LogisticRegressionConfig, MahalanobisPreparationConfig, MatchOrder, MatchWeightMethod,
+    MatchingCriteria, NearestBirthDateSelection, PairDistanceMatrix, PropensityEstimator,
+    PropensityLink, PropensityScoreConfig, PropensityScoreEstimate, PropensityScoreOutputScale,
+    Rounds, SpecOutput, SubclassificationConfig, UnitRole, VariableRatio, balance_summary,
+    cem_k2k_pairs, cem_strata, cem_subclasses, estimate_propensity_and_match,
+    exact_match_subclasses, match_weights_from_pairs, pair_weights_from_pairs,
+    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+    prepare_propensity_distance_config, subclassify_by_propensity_score_map,
 };
 use epistat_matching::{
     CardinalityLimits, CardinalityRequest, CbpsConfig, CbpsMethod, GeneticFit, GeneticMatchOptions,
@@ -2638,7 +2638,7 @@ fn spec_genetic_feeds_effects_and_balance() {
         estimates.difference.estimate
     );
 
-    let weights = BalanceWeights::from_outcome(&outcome);
+    let weights = BalanceWeights::from_outcome(&outcome).expect("a matched estimand");
     weights.validate().unwrap();
     let report = balance_summary(
         &anchors,

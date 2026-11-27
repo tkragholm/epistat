@@ -22,10 +22,10 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    Estimand, SubclassificationConfig, SubclassificationOutcome,
-    subclassify_by_propensity_score_map,
+    SubclassificationConfig, SubclassificationOutcome, subclassify_by_propensity_score_map,
 };
 
 use r_reference::{Versions, reference as load_reference, unit_id as id};

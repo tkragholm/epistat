@@ -37,13 +37,14 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::prelude::*;
 use epistat_matching::spec::{
     CovariatesSpec, DiscardSpec, DistanceSpec, GeneticSpec, LinkSpec, MatchMethod, ScaleSpec,
     SubclassSpec,
 };
 use epistat_matching::{
-    BalanceRecord, CovariateValue, Estimand, PropensityScoreEstimate, SpecOutput, SubclassedUnits,
+    BalanceRecord, CovariateValue, PropensityScoreEstimate, SpecOutput, SubclassedUnits,
     SubclassificationOutcome, TrimmedUnits,
 };
 

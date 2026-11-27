@@ -922,6 +922,7 @@ fn run_balance<R: CovariateRecord>(input: &Inputs<R>, reps: usize) -> (Timed, St
             &outcome,
             &epistat_matching::BalanceReportOptions::default(),
         )
+        .expect("a matched estimand")
     });
     for row in &report.numeric {
         writeln!(

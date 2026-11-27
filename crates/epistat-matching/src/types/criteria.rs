@@ -5,54 +5,31 @@ use crate::Error;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 
-/// The target population of a matched analysis: the one estimand of the
-/// crate, for the matchers, the weights, the balance statistics, the
-/// propensity scores and the effect estimates.
+pub use epistat_core::Estimand;
+
+/// `estimand` when the matchers can target it: the ATT, the ATC, the ATE or
+/// the ATM. A method that targets fewer refuses the others itself.
 ///
-/// It is [`epistat_core::Estimand`] without the overlap population, which no
-/// matcher targets, and with a default, the ATT, as `matchit()` has. The two
-/// convert into each other; a core estimand the crate does not have is
-/// [`Error::UnsupportedEstimand`]. A method that does not estimate the one
-/// asked for returns that error too.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum Estimand {
-    /// Average treatment effect in the treated, the cases.
-    #[default]
-    Att,
-    /// Average treatment effect in the controls.
-    Atc,
-    /// Average treatment effect in the overall population.
-    Ate,
-    /// Average treatment effect in the matched sample.
-    Atm,
-}
-
-impl From<Estimand> for epistat_core::Estimand {
-    fn from(estimand: Estimand) -> Self {
-        match estimand {
-            Estimand::Att => Self::Att,
-            Estimand::Atc => Self::Atc,
-            Estimand::Ate => Self::Ate,
-            Estimand::Atm => Self::Atm,
-        }
+/// # Errors
+///
+/// [`Error::UnsupportedEstimand`] for any other estimand, such as the ATO,
+/// naming `method`.
+pub(crate) fn matched_estimand(
+    estimand: Estimand,
+    method: &'static str,
+) -> Result<Estimand, Error> {
+    match estimand {
+        Estimand::Att | Estimand::Atc | Estimand::Ate | Estimand::Atm => Ok(estimand),
+        other => Err(Error::UnsupportedEstimand {
+            estimand: other,
+            method,
+        }),
     }
 }
 
-impl TryFrom<epistat_core::Estimand> for Estimand {
-    type Error = Error;
-
-    fn try_from(estimand: epistat_core::Estimand) -> Result<Self, Error> {
-        match estimand {
-            epistat_core::Estimand::Att => Ok(Self::Att),
-            epistat_core::Estimand::Atc => Ok(Self::Atc),
-            epistat_core::Estimand::Ate => Ok(Self::Ate),
-            epistat_core::Estimand::Atm => Ok(Self::Atm),
-            other => Err(Error::UnsupportedEstimand {
-                estimand: other,
-                method: "matching",
-            }),
-        }
-    }
+/// The ATT, the default estimand of `matchit()` and of every matcher here.
+pub(crate) const fn default_estimand() -> Estimand {
+    Estimand::Att
 }
 
 /// Common-support trimming policy.
@@ -91,8 +68,10 @@ pub struct MatchingCriteria {
     pub unique_by_key: Option<String>,
     /// Allow reusing controls across cases.
     pub allow_replacement: bool,
-    /// Requested target estimand.
-    #[serde(default)]
+    /// Requested target estimand, the ATT by default. The matchers target
+    /// the ATT, the ATC, the ATE and the ATM; [`MatchingCriteria::build`]
+    /// refuses any other.
+    #[serde(default = "default_estimand")]
     pub estimand: Estimand,
     /// Optional common-support trimming policy.
     #[serde(default)]
@@ -107,7 +86,7 @@ impl Default for MatchingCriteria {
             required_strata: Vec::new(),
             unique_by_key: None,
             allow_replacement: false,
-            estimand: Estimand::default(),
+            estimand: default_estimand(),
             common_support: None,
         }
     }
@@ -135,6 +114,7 @@ impl MatchingCriteria {
         if self.match_ratio == 0 {
             return Err(Error::ZeroMatchRatio);
         }
+        matched_estimand(self.estimand, "matching")?;
         Ok(ValidatedMatchingCriteria { inner: self })
     }
 

@@ -81,15 +81,19 @@ use std::sync::Arc;
 /// group is read at the smaller group's cumulative weights as a step function
 /// (see [`epistat_epi::balance::eqq_distance_weighted`]). Cramér's V uses the
 /// weights as counts.
-#[must_use]
+///
+/// # Errors
+///
+/// [`Error::UnsupportedEstimand`] when the outcome's realised estimand is not
+/// one a matcher targets.
 pub fn balance_report<R: CovariateRecord>(
     cases: &[R],
     controls: &[R],
     outcome: &MatchOutcome,
     options: &BalanceReportOptions,
-) -> BalanceReport {
-    let weights = BalanceWeights::from_outcome(outcome);
-    compute_summary(cases, controls, &weights, options, false).report
+) -> Result<BalanceReport, Error> {
+    let weights = BalanceWeights::from_outcome(outcome)?;
+    Ok(compute_summary(cases, controls, &weights, options, false).report)
 }
 
 /// Covariate balance before and after matching on weights given from outside,
@@ -732,7 +736,8 @@ impl Standardiser {
         match estimand {
             Estimand::Att => Self::Cases,
             Estimand::Atc => Self::Controls,
-            Estimand::Ate | Estimand::Atm => Self::Pooled,
+            // The ATE and the ATM; `BalanceWeights::validate` refuses any other.
+            _ => Self::Pooled,
         }
     }
 
@@ -1527,7 +1532,8 @@ mod tests {
             &[control_a, control_b],
             &test_outcome(vec![MatchedPair::new("case_a", "control_b")], 1, 0),
             &crate::BalanceReportOptions::default(),
-        );
+        )
+        .expect("a matched estimand");
 
         assert_eq!(report.numeric.len(), 1);
         assert_eq!(report.categorical.len(), 1);
@@ -1560,7 +1566,8 @@ mod tests {
             &[control_a, control_b],
             &test_outcome(vec![MatchedPair::new("case_a", "control_b")], 1, 0),
             &crate::BalanceReportOptions::default(),
-        );
+        )
+        .expect("a matched estimand");
 
         let numeric = &report.numeric[0];
         assert!((numeric.mean_case_post.unwrap() - 10.0).abs() < 1e-12);
@@ -1595,7 +1602,8 @@ mod tests {
                 numeric_transforms: NumericBalanceTransform::Squares,
                 ..BalanceReportOptions::default()
             },
-        );
+        )
+        .expect("a matched estimand");
 
         let names = report
             .numeric
@@ -1645,7 +1653,8 @@ mod tests {
                 numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
                 ..BalanceReportOptions::default()
             },
-        );
+        )
+        .expect("a matched estimand");
 
         let names = report
             .numeric
@@ -1745,7 +1754,8 @@ mod tests {
                     controls: supplemental_controls,
                 },
             },
-        );
+        )
+        .expect("a matched estimand");
 
         assert_eq!(report.numeric.len(), 1);
         assert_eq!(report.numeric[0].name, "age");
@@ -1778,7 +1788,8 @@ mod tests {
             &[control_a, control_b],
             &test_outcome(vec![MatchedPair::new("case_a", "control_b")], 1, 0),
             &crate::BalanceReportOptions::default(),
-        );
+        )
+        .expect("a matched estimand");
         let numeric = &report.numeric[0];
         assert!((numeric.var_ratio_pre.unwrap() - 0.0).abs() < 1e-12);
         assert!((numeric.ecdf_max_diff_pre.unwrap() - 0.5).abs() < 1e-12);
@@ -1803,7 +1814,8 @@ mod tests {
             &[control_a],
             &test_outcome(vec![MatchedPair::new("case_a", "control_a")], 1, 0),
             &crate::BalanceReportOptions::default(),
-        );
+        )
+        .expect("a matched estimand");
         let numeric = &report.numeric[0];
         assert_eq!(numeric.mean_case_pre, Some(3.0));
         assert_eq!(numeric.smd_pre, None);
@@ -1833,7 +1845,8 @@ mod tests {
             &[control_a],
             &test_outcome(Vec::new(), 0, 1),
             &crate::BalanceReportOptions::default(),
-        );
+        )
+        .expect("a matched estimand");
         let numeric = &report.numeric[0];
         assert_eq!(numeric.mean_case_post, None);
         assert_eq!(numeric.mean_control_post, None);
@@ -1970,8 +1983,9 @@ mod tests {
             numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
             ..BalanceReportOptions::default()
         };
-        let pairs = balance_report(&cases, &controls, &outcome, &options);
-        let weights = BalanceWeights::from_outcome(&outcome);
+        let pairs =
+            balance_report(&cases, &controls, &outcome, &options).expect("a matched estimand");
+        let weights = BalanceWeights::from_outcome(&outcome).expect("a matched estimand");
         let on_weights = balance_summary(&cases, &controls, &weights, &options)
             .map(|summary| summary.report)
             .unwrap();
@@ -2116,7 +2130,7 @@ mod tests {
             2,
             0,
         );
-        let weights = BalanceWeights::from_outcome(&outcome);
+        let weights = BalanceWeights::from_outcome(&outcome).expect("a matched estimand");
         let summary = balance_summary(
             &cases,
             &controls,
@@ -2174,7 +2188,8 @@ mod tests {
             numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
             ..BalanceReportOptions::default()
         };
-        let report = balance_report(&cases, &controls, &outcome, &options);
+        let report =
+            balance_report(&cases, &controls, &outcome, &options).expect("a matched estimand");
         let names = report
             .numeric
             .iter()

@@ -23,9 +23,10 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::Error;
 use epistat_matching::prelude::*;
-use epistat_matching::{DistanceCaliper, DistanceConfig, Estimand, InvalidCriteriaReason};
+use epistat_matching::{DistanceCaliper, DistanceConfig, InvalidCriteriaReason};
 use epistat_matching::{MatchOrder, PairDistanceMatrix};
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};

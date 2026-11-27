@@ -3,7 +3,7 @@
 //! `tests/data/abadie_imbens.json` with the ATE, three matches, the bias
 //! adjustment and the conditional variances.
 
-use epistat_matching::Estimand;
+use epistat_core::Estimand;
 use epistat_matching::abadie_imbens::{
     AbadieImbensData, AbadieImbensSpec, DistanceWeight, abadie_imbens,
 };

@@ -33,8 +33,9 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::prelude::*;
-use epistat_matching::{DistanceCaliper, DistanceConfig, Estimand, MatchWeightMethod};
+use epistat_matching::{DistanceCaliper, DistanceConfig, MatchWeightMethod};
 use epistat_matching::{MatchOrder, VariableRatio};
 use epistat_testkit::Tolerance;
 use r_reference::{Versions, assert_r_version, reference as load_reference};

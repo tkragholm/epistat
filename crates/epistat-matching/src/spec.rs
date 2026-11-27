@@ -1630,7 +1630,7 @@ fn propensity_config(
             estimand: match estimand {
                 Estimand::Att => Estimand::Att,
                 Estimand::Ate => Estimand::Ate,
-                Estimand::Atc | Estimand::Atm => {
+                _ => {
                     return Err(Error::option(
                         "estimand",
                         "the covariate balancing propensity score is defined for the \

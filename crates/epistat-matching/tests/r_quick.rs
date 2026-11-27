@@ -29,8 +29,8 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::Error;
-use epistat_matching::Estimand;
 use epistat_matching::prelude::*;
 use epistat_matching::spec::{DistanceSpec, MatchMethod};
 use epistat_matching::{

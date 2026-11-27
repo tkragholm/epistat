@@ -7,6 +7,7 @@ mod engine;
 pub(crate) use engine::{StandardCommonSupport, standard_common_support, trimmed_ids};
 mod estimation;
 mod exact;
+pub(crate) use exact::has_subclass_weights;
 mod fine_balance;
 mod genetic;
 mod index;

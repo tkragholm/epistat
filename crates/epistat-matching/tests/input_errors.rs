@@ -4,11 +4,12 @@
 //! estimators that take them. The codes of the crate's error are unique.
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_core::{Classify, ErrorKind, InputError};
-use epistat_matching::abadie_imbens::AbadieImbensData;
+use epistat_matching::abadie_imbens::{AbadieImbensData, AbadieImbensSpec, abadie_imbens};
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::{
-    AgeLimitYears, BaseRecord, BirthDateWindowDays, Error, MatchJob, MatchRatio,
+    AgeLimitYears, BaseRecord, BirthDateWindowDays, Error, MatchJob, MatchRatio, MatchWeightMethod,
     PairDistanceMatrix, RoleTransitionRecord,
 };
 use epistat_testkit::{
@@ -94,6 +95,43 @@ fn a_caliper_window_must_be_finite_and_not_negative() {
         .with_constraint(caliper_on_field("x", 0.0))
         .run()
         .expect("a zero window");
+}
+
+#[test]
+fn an_estimand_no_matcher_targets_is_an_error() {
+    let records = cohort();
+    let refused = MatchJob::new_transition(&records, 1)
+        .with_estimand(Estimand::Ato)
+        .run()
+        .unwrap_err();
+    assert_eq!(
+        refused,
+        Error::UnsupportedEstimand {
+            estimand: Estimand::Ato,
+            method: "matching",
+        }
+    );
+    assert_eq!(refused.kind(), ErrorKind::Unsupported);
+    assert!(matches!(
+        MatchWeightMethod::for_estimand(Estimand::Ato),
+        Err(Error::UnsupportedEstimand { .. })
+    ));
+    let data = AbadieImbensData::new(
+        vec![true, false, true, false],
+        vec![1.0, 2.0, 3.0, 4.0],
+        vec![vec![0.5, 1.5, 2.0, 3.5]],
+    )
+    .expect("valid columns");
+    for target in [Estimand::Atm, Estimand::Ato] {
+        let spec = AbadieImbensSpec {
+            target,
+            ..AbadieImbensSpec::new()
+        };
+        assert!(matches!(
+            abadie_imbens(&data, &spec),
+            Err(Error::UnsupportedEstimand { .. })
+        ));
+    }
 }
 
 #[test]

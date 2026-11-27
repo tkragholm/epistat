@@ -44,11 +44,12 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::prelude::*;
 use epistat_matching::{
     BalanceRecord, BalanceReport, BalanceReportOptions, BalanceSummary, BalanceWeights,
-    CategoricalBalance, CovariateValue, Estimand, MatchDiagnostics, NumericBalance,
-    NumericBalanceTransform, SampleSizeTable, balance_improvement, balance_summary,
+    CategoricalBalance, CovariateValue, MatchDiagnostics, NumericBalance, NumericBalanceTransform,
+    SampleSizeTable, balance_improvement, balance_summary,
 };
 use epistat_testkit::{Tolerance, load_json, na_f64, na_f64_vec};
 use r_reference::{Versions, assert_r_version};
@@ -247,6 +248,7 @@ fn weights_for(fit: &Fit, ids: &[String], sample: &Sample, source: Source) -> Ba
     let sampling = fit.name.contains("sampling");
     let mut weights = if source == Source::Pairs {
         BalanceWeights::from_outcome(&outcome(&fit.pairs, estimand(&fit.estimand)))
+            .expect("a matched estimand")
     } else if fit.name == "none" || fit.name == "none_sampling" {
         BalanceWeights::unmatched(&sample.cases, &sample.controls, estimand(&fit.estimand))
     } else {

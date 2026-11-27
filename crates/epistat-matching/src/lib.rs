@@ -306,7 +306,7 @@ pub use types::{
     BalanceReportOptions, BalanceThresholdSummary, BalanceThresholds, BaseRecord,
     BirthDateWindowDays, CategoricalBalance, CategoricalLevelBalance, CommonSupport,
     CommonSupportFailureReason, ConstraintReason, ControlIdx, CovariateRef, CovariateValue,
-    DistanceCaliper, DistanceCaliperReason, Estimand, EstimandDriftReason, ExclusionReason,
+    DistanceCaliper, DistanceCaliperReason, EstimandDriftReason, ExclusionReason,
     InvalidCriteriaReason, MatchDiagnostics, MatchOutcome, MatchRatio, MatchedPair,
     MatchingCriteria, NumericBalance, NumericBalanceThresholdCheck, NumericBalanceTransform,
     RoleTransitionOptions, RoleTransitionRecord, SupplementalBalanceCovariates, TrimmedUnits,
@@ -318,6 +318,12 @@ pub use types::{
 };
 
 pub use spec::{MatchSpec, SpecInput, SpecOutput, run_spec};
+
+/// The estimand of the matchers, the weights, the balance statistics and the
+/// effect estimates is [`epistat_core::Estimand`]. A method refuses an
+/// estimand it does not target with [`Error::UnsupportedEstimand`].
+#[deprecated(note = "use epistat_core::Estimand")]
+pub type Estimand = epistat_core::Estimand;
 
 /// The two eCDF distance statistics of `case_values` against `control_values`, for benchmarks. `None` when either slice is empty.
 #[cfg(feature = "bench-internals")]

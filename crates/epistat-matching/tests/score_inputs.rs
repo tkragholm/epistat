@@ -4,11 +4,12 @@
 //! documentation requires: an undefined value is `None` and invalid input an error.
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    BalanceRecord, ElasticNetLogisticConfig, Estimand, MahalanobisPreparationConfig,
-    PropensityEstimator, PropensityScoreConfig, SubclassificationConfig, cross_validation_folds,
+    BalanceRecord, ElasticNetLogisticConfig, MahalanobisPreparationConfig, PropensityEstimator,
+    PropensityScoreConfig, SubclassificationConfig, cross_validation_folds,
     prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
     subclassify_by_propensity_score_map,
 };
