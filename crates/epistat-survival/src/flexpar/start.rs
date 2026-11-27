@@ -17,7 +17,8 @@ pub(super) fn quantile_knots(events: &[f64], df: usize) -> Result<Vec<f64>> {
     for j in 0..=df {
         #[expect(clippy::cast_precision_loss, reason = "a few knots")]
         let p = j as f64 / df as f64;
-        let k = type7(events, p).ok_or_else(|| Error::invalid("no event times to place knots"))?;
+        let k = type7(events, p)
+            .ok_or_else(|| Error::no_information("no event times to place knots"))?;
         knots.push(k);
     }
     Ok(knots)

@@ -163,6 +163,7 @@ fn scale(
                     TimeWeight::SOverG => total * surv / (cens * at_risk),
                     TimeWeight::NOverG2 => 1.0 / (cens * cens),
                     TimeWeight::I => 1.0 / at_risk,
+                    _ => unreachable!("a kind this test does not cover"),
                 };
                 if ymax.is_some_and(|m| t > m) {
                     v = 0.0;

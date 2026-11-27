@@ -105,16 +105,19 @@
 //!    effectiveness of dynamic treatment regimes: an application of the
 //!    parametric g-formula. Stat Biosci 2011;3(1):119-43.
 
+use epistat_core::{InputError, check};
 use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef, ROW_BLOCK};
 use rayon::prelude::*;
 
 use super::trials::PersonCounts;
+use crate::check::check_lengths;
 use crate::error::{Error, Result};
 
 /// Whether a person who has started treatment must stay on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Adherence {
     /// Stopping treatment is a deviation.
     Continuous,
@@ -128,6 +131,7 @@ pub enum Adherence {
 
 /// When a covariate sets off a dynamic strategy.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum Trigger {
     /// The covariate is below the threshold.
     Below {
@@ -163,6 +167,7 @@ impl Trigger {
 
 /// A treatment strategy.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum Strategy {
     /// Start treatment in one of the periods `0..=grace`, and then follow
     /// `adherence`.
@@ -225,6 +230,7 @@ pub struct CloneInput<'a> {
 
 /// The clones of all persons under all strategies.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Cloned {
     /// The row of the input each clone row is made from, for building the
     /// designs of the models.
@@ -291,9 +297,21 @@ impl Cloned {
     ///
     /// # Errors
     ///
-    /// An input error for a person whose id was not among the ids resampled.
+    /// An input error for a person whose id was not among the ids resampled,
+    /// or a clone row whose person is not one of `ids`.
     pub fn case_weights(&self, counts: &PersonCounts) -> Result<Vec<f64>> {
         let by_person = counts.case_weights(&self.ids)?;
+        if let Some(row) = self
+            .person
+            .iter()
+            .position(|&p| p as usize >= self.ids.len())
+        {
+            return Err(Error::out_of_range(format!(
+                "person: clone row {row} names person {} of {}",
+                self.person[row],
+                self.ids.len()
+            )));
+        }
         Ok(self.person.iter().map(|&p| by_person[p as usize]).collect())
     }
 }
@@ -309,31 +327,26 @@ impl Cloned {
 /// reach.
 pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<Cloned> {
     let n = input.id.len();
-    for (name, len) in [
+    check_lengths(&[
+        ("id", n),
         ("period", input.period.len()),
         ("treatment", input.treatment.len()),
         ("outcome", input.outcome.len()),
-    ] {
-        if len != n {
-            return Err(Error::invalid(format!("{name}: {len} values for {n} rows")));
-        }
-    }
-    if strategies.is_empty() {
-        return Err(Error::invalid("strategies: at least one is needed"));
-    }
+    ])?;
+    check::non_empty("strategies", strategies.len())?;
     let mut n_persons = 0usize;
     let mut starts = Vec::new();
     let mut ids = Vec::new();
     for i in 0..n {
         if i == 0 || input.id[i] != input.id[i - 1] {
             if input.period[i] != 0 {
-                return Err(Error::invalid(format!(
+                return Err(Error::order(format!(
                     "period: person {} does not start at period 0 in row {i}",
                     input.id[i]
                 )));
             }
             if i > 0 && input.id[i] < input.id[i - 1] {
-                return Err(Error::invalid(format!(
+                return Err(Error::order(format!(
                     "id: the rows of a person must be next to each other and ordered, row {i}"
                 )));
             }
@@ -341,7 +354,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
             ids.push(input.id[i]);
             n_persons += 1;
         } else if input.period[i] != input.period[i - 1] + 1 {
-            return Err(Error::invalid(format!(
+            return Err(Error::order(format!(
                 "period: row {i} does not follow the row before it"
             )));
         }
@@ -353,7 +366,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
             Strategy::InitiateWithin { grace, .. } => Some(grace),
             Strategy::InitiateBetween { first, last, .. } => {
                 if first > last {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::options(format!(
                         "strategy {s:?}: the first period of starting is after the last"
                     )));
                 }
@@ -363,29 +376,27 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
             Strategy::InitiateWhen { trigger, .. } => {
                 let k = trigger.covariate();
                 let Some(column) = input.covariates.get(k) else {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::out_of_range(format!(
                         "strategy {s:?}: covariate {k} is not among the {} covariates",
                         input.covariates.len()
                     )));
                 };
                 if column.len() != n {
-                    return Err(Error::invalid(format!(
-                        "covariate {k}: {} values for {n} rows",
-                        column.len()
-                    )));
+                    return Err(InputError::Length {
+                        what: "covariates",
+                        expected: n,
+                        found: column.len(),
+                    }
+                    .into());
                 }
-                if let Some(r) = column.iter().position(|v| !v.is_finite()) {
-                    return Err(Error::invalid(format!(
-                        "covariate {k}: the value of row {r} is not finite"
-                    )));
-                }
+                check::finite_column("covariates", k, column)?;
                 None
             }
         };
         if let Some(r) = reach
             && r as usize >= longest
         {
-            return Err(Error::invalid(format!(
+            return Err(Error::options(format!(
                 "strategy {s:?}: period {r} is beyond the longest follow-up of {longest} periods"
             )));
         }
@@ -394,7 +405,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
         | Strategy::InitiateWhen { adherence, .. } = *s
             && adherence == Adherence::For(0)
         {
-            return Err(Error::invalid(format!(
+            return Err(Error::options(format!(
                 "strategy {s:?}: treatment must go on for at least one period"
             )));
         }
@@ -575,7 +586,7 @@ fn fit_deviation(
 ) -> Result<Vec<f64>> {
     let positives = rows.iter().filter(|&&r| d[r]).count();
     if positives == 0 || positives == rows.len() {
-        return Err(Error::invalid(format!(
+        return Err(Error::no_information(format!(
             "{what}: the rows at risk need both deviations and rows that are not"
         )));
     }
@@ -602,6 +613,7 @@ fn probability(x: MatRef<'_, f64>, coef: &[f64], row: usize) -> f64 {
 
 /// The weights of the clones of one fit of the deviation models.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct DeviationWeights {
     /// The weight of each clone row through the row.
     pub weight: Vec<f64>,
@@ -630,20 +642,18 @@ pub fn deviation_weights(
     models: &[DeviationModel<'_>],
     case_weight: Option<&[f64]>,
 ) -> Result<DeviationWeights> {
+    check_columns(cloned)?;
     let n = cloned.len();
     let n_arms = cloned.arm.iter().copied().max().map_or(0, |a| a + 1);
     if models.len() < n_arms {
-        return Err(Error::invalid(format!(
+        return Err(Error::mismatch(format!(
             "models: {} for {n_arms} strategies",
             models.len()
         )));
     }
-    if let Some(c) = case_weight
-        && (c.len() != n || c.iter().any(|v| !(v.is_finite() && *v >= 0.0)))
-    {
-        return Err(Error::invalid(
-            "case_weight: one non-negative finite value per clone row",
-        ));
+    if let Some(c) = case_weight {
+        check::same_length("case_weight", n, c.len())?;
+        check::weights("case_weight", c)?;
     }
     let mut p_d = vec![0.0; n];
     let mut p_n = vec![0.0; n];
@@ -655,14 +665,14 @@ pub fn deviation_weights(
         ] {
             if let Some(m) = m {
                 if m.nrows() != n || m.ncols() == 0 {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::mismatch(format!(
                         "strategy {k} {name}: {} rows and {} columns for {n} clone rows",
                         m.nrows(),
                         m.ncols()
                     )));
                 }
                 if !epistat_linalg::is_finite(m) {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::value(format!(
                         "strategy {k} {name}: a value is not finite"
                     )));
                 }
@@ -765,20 +775,18 @@ pub fn deviation_weights_rows(
     models: &[DeviationRows<'_>],
     case_weight: Option<&[f64]>,
 ) -> Result<DeviationWeights> {
+    check_columns(cloned)?;
     let n = cloned.len();
     let n_arms = cloned.arm.iter().copied().max().map_or(0, |a| a + 1);
     if models.len() < n_arms {
-        return Err(Error::invalid(format!(
+        return Err(Error::mismatch(format!(
             "models: {} for {n_arms} strategies",
             models.len()
         )));
     }
-    if let Some(c) = case_weight
-        && (c.len() != n || c.iter().any(|v| !(v.is_finite() && *v >= 0.0)))
-    {
-        return Err(Error::invalid(
-            "case_weight: one non-negative finite value per clone row",
-        ));
+    if let Some(c) = case_weight {
+        check::same_length("case_weight", n, c.len())?;
+        check::weights("case_weight", c)?;
     }
     let mut p_d = vec![0.0; n];
     let mut coefficients = Vec::new();
@@ -790,12 +798,12 @@ pub fn deviation_weights_rows(
         ] {
             if let Some(m) = m {
                 if m.columns == 0 {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::mismatch(format!(
                         "strategy {k} {name}: {n} rows and 0 columns for {n} clone rows"
                     )));
                 }
                 if !finite_design(m, n) {
-                    return Err(Error::invalid(format!(
+                    return Err(Error::value(format!(
                         "strategy {k} {name}: a value is not finite"
                     )));
                 }
@@ -858,6 +866,17 @@ pub fn deviation_weights_rows(
         probability: p_d,
         coefficients,
     })
+}
+
+/// Refuse clones whose columns differ in length from `source`.
+fn check_columns(cloned: &Cloned) -> Result<()> {
+    check_lengths(&[
+        ("source", cloned.source.len()),
+        ("arm", cloned.arm.len()),
+        ("person", cloned.person.len()),
+        ("deviation", cloned.deviation.len()),
+        ("at_risk", cloned.at_risk.len()),
+    ])
 }
 
 /// Whether `design` gives finite values in every one of `n` clone rows.
@@ -982,7 +1001,7 @@ fn fit_deviation_rows(
     what: &str,
 ) -> Result<Vec<f64>> {
     if at_risk.deviations == 0 || at_risk.deviations == at_risk.rows {
-        return Err(Error::invalid(format!(
+        return Err(Error::no_information(format!(
             "{what}: the rows at risk need both deviations and rows that are not"
         )));
     }
@@ -1017,24 +1036,14 @@ pub fn fit_msm_clones(
     design: &(dyn Fn(usize, &mut [f64]) + Sync),
 ) -> Result<super::trials::Msm> {
     let n = cloned.len();
-    if weight.len() != n {
-        return Err(Error::invalid(format!(
-            "weight: {} values for {n} clone rows",
-            weight.len()
-        )));
-    }
-    for (name, len) in [
+    check::same_length("weight", n, weight.len())?;
+    check_lengths(&[
+        ("source", n),
         ("arm", cloned.arm.len()),
         ("person", cloned.person.len()),
         ("deviation", cloned.deviation.len()),
         ("outcome", cloned.outcome.len()),
-    ] {
-        if len != n {
-            return Err(Error::invalid(format!(
-                "{name}: {len} values for {n} clone rows"
-            )));
-        }
-    }
+    ])?;
     let mut blocks = Vec::new();
     let (mut kept, mut clusters) = (0_usize, 0_usize);
     let mut last: Option<u32> = None;
@@ -1046,7 +1055,7 @@ pub fn fit_msm_clones(
         if let Some(l) = last
             && person < l
         {
-            return Err(Error::invalid(format!(
+            return Err(Error::order(format!(
                 "person: clone row {r} is before the rows of an earlier person"
             )));
         }

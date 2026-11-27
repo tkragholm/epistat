@@ -208,7 +208,7 @@
     reason = "the entry points check that the row count fits in u32"
 )]
 
-use epistat_core::Level;
+use epistat_core::{InputError, Level};
 use std::borrow::Cow;
 
 use epistat_linalg::MatRef;
@@ -239,6 +239,7 @@ pub struct FittedModel<'a> {
 
 /// The point the covariates are measured from. See the module documentation.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[non_exhaustive]
 pub enum Centring<'a> {
     /// The means `coxph` stores: weighted without entry times, unweighted with
     /// them, and 0 for a column with all values in `{-1, 0, 1}`.
@@ -252,6 +253,7 @@ pub enum Centring<'a> {
 
 /// How the cumulative hazard handles tied events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CoxHazardType {
     /// `W / S_0` at each time, `ctype = 1`.
     Breslow,
@@ -265,6 +267,7 @@ pub type HazardType = CoxHazardType;
 
 /// Which covariance matrix of the coefficients the standard errors use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum CoxVariance {
     /// The cluster-robust matrix when the fit has one, otherwise the
     /// model-based one, as `var` of a `coxph` fit.
@@ -282,6 +285,7 @@ pub type Variance = CoxVariance;
 
 /// What a prediction is measured from, as `reference` of `predict.coxph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Reference {
     /// The case-weighted mean of the covariates in the row's own stratum.
     /// Without strata it is the means.
@@ -294,6 +298,7 @@ pub enum Reference {
 
 /// What [`predict`] returns for a row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CoxPredictType {
     /// `(x - reference)' beta + offset - mean offset`.
     LinearPredictor,
@@ -389,6 +394,7 @@ pub use crate::survfit::ConfType;
 
 /// The survival estimate of a curve, `stype` of `survfit.coxph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum CurveType {
     /// `exp(-H(t))` of the cumulative hazard, `stype = 2`.
     #[default]
@@ -450,6 +456,7 @@ pub type SurvfitOptions<'a> = CoxSurvfitOptions<'a>;
 
 /// The baseline of one stratum at its event times, in ascending order.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct StratumBaseline {
     /// The caller's code of the stratum, `None` without strata.
     pub code: Option<u32>,
@@ -489,6 +496,7 @@ impl StratumBaseline {
 
 /// The baseline hazard of every stratum, the result of [`basehaz`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Baseline {
     /// One entry per stratum in the order of the codes, one entry without strata.
     pub strata: Vec<StratumBaseline>,
@@ -510,6 +518,7 @@ pub struct Baseline {
 /// The result of [`predict`]: a value per row, and its standard error when
 /// requested.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CoxPrediction {
     /// The predicted value of each row.
     pub fit: Vec<f64>,
@@ -523,6 +532,7 @@ pub type Prediction = CoxPrediction;
 
 /// The result of [`predict_terms`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct TermsPrediction {
     /// Row-major, one row per row and one column per group.
     pub fit: Vec<f64>,
@@ -538,6 +548,7 @@ pub struct TermsPrediction {
 
 /// The times of the curves of one stratum.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CurveTimes {
     /// The caller's code of the stratum, `None` without strata.
     pub code: Option<u32>,
@@ -553,6 +564,7 @@ pub struct CurveTimes {
 
 /// The curve of one row of new data.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Curve {
     /// The index in [`SurvCurves::strata`] of the stratum of the row.
     pub stratum: usize,
@@ -571,6 +583,7 @@ pub struct Curve {
 
 /// The curves of [`survfit`], one per row of the new data.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SurvCurves {
     /// The times of every stratum.
     pub strata: Vec<CurveTimes>,
@@ -652,15 +665,20 @@ impl<'a> Model<'a> {
         check_lengths(&[("data", rows), ("x", m.x.nrows())])?;
         let p = m.x.ncols();
         check_lengths(&[("x columns", p), ("coefficients", m.fit.coefficients.len())])?;
-        for j in 0..p {
-            for i in 0..rows {
+        for i in 0..rows {
+            for j in 0..p {
                 if !m.x[(i, j)].is_finite() {
-                    return Err(Error::invalid("x: a value is not finite"));
+                    return Err(InputError::NotFinite {
+                        what: "x",
+                        row: i,
+                        column: Some(j),
+                    }
+                    .into());
                 }
             }
         }
         if p > 0 && m.fit.coefficients.iter().all(Option::is_none) {
-            return Err(Error::invalid(
+            return Err(Error::fit(
                 "fit: the model has no estimate, so there is nothing to predict from",
             ));
         }
@@ -670,19 +688,20 @@ impl<'a> Model<'a> {
             .iter()
             .map(|c| c.unwrap_or(0.0))
             .collect();
-        let chosen = match variance {
-            CoxVariance::Auto => m
-                .fit
-                .robust_covariance
-                .as_ref()
-                .unwrap_or(&m.fit.covariance),
-            CoxVariance::Model => &m.fit.covariance,
-            CoxVariance::Robust => m.fit.robust_covariance.as_ref().ok_or_else(|| {
-                Error::invalid("variance: the fit has no cluster-robust covariance")
-            })?,
-        };
+        let chosen =
+            match variance {
+                CoxVariance::Auto => m
+                    .fit
+                    .robust_covariance
+                    .as_ref()
+                    .unwrap_or(&m.fit.covariance),
+                CoxVariance::Model => &m.fit.covariance,
+                CoxVariance::Robust => m.fit.robust_covariance.as_ref().ok_or_else(|| {
+                    Error::fit("variance: the fit has no cluster-robust covariance")
+                })?,
+            };
         if chosen.dim() != p {
-            return Err(Error::invalid("fit: the covariance is not p by p"));
+            return Err(Error::mismatch("fit: the covariance is not p by p"));
         }
         let variance: Vec<f64> = chosen.as_slice().iter().map(|v| v.unwrap_or(0.0)).collect();
         let data = m.data.clone().with_timefix(m.options.timefix)?;
@@ -691,7 +710,7 @@ impl<'a> Model<'a> {
             (None, 1) => 1,
             (Some(code), _) => code,
             (None, _) => {
-                return Err(Error::invalid(
+                return Err(Error::missing(
                     "cause: the status has several codes, so the event code is required",
                 ));
             }
@@ -808,7 +827,7 @@ impl<'a> Model<'a> {
             return Ok(vec![0; rows]);
         };
         let Some(codes) = new.stratum else {
-            return Err(Error::invalid(
+            return Err(Error::missing(
                 "newdata: the stratum is required, the fit has strata",
             ));
         };
@@ -817,7 +836,7 @@ impl<'a> Model<'a> {
             .iter()
             .map(|code| {
                 levels.binary_search(code).map_err(|_| {
-                    Error::invalid(format!(
+                    Error::out_of_range(format!(
                         "newdata: stratum {code} is not a stratum of the fit"
                     ))
                 })
@@ -828,16 +847,21 @@ impl<'a> Model<'a> {
     fn check_new(&self, new: &NewData<'_>) -> Result<()> {
         let rows = new.x.nrows();
         if new.x.ncols() != self.p {
-            return Err(Error::invalid(format!(
+            return Err(Error::mismatch(format!(
                 "newdata x has {} columns, the fit has {}",
                 new.x.ncols(),
                 self.p
             )));
         }
-        for j in 0..self.p {
-            for i in 0..rows {
+        for i in 0..rows {
+            for j in 0..self.p {
                 if !new.x[(i, j)].is_finite() {
-                    return Err(Error::invalid("newdata x: a value is not finite"));
+                    return Err(InputError::NotFinite {
+                        what: "newdata x",
+                        row: i,
+                        column: Some(j),
+                    }
+                    .into());
                 }
             }
         }
@@ -865,7 +889,7 @@ impl<'a> Model<'a> {
         for s in 0..self.n_strata {
             let total = totals[s].value();
             if total <= 0.0 {
-                return Err(Error::invalid(format!(
+                return Err(Error::no_information(format!(
                     "reference: stratum level {s} has no weight, so its mean is undefined"
                 )));
             }
@@ -1042,7 +1066,7 @@ fn build_baseline(
             let eta = model.dot_beta(&z) + model.offset.map_or(0.0, |o| o[i] - offset_centre);
             let theta = eta.exp();
             if !theta.is_finite() {
-                return Err(Error::invalid(
+                return Err(Error::undefined(
                     "the risk score of a row is not finite; the offset or the coefficients are too large",
                 ));
             }
@@ -1056,7 +1080,7 @@ fn build_baseline(
         let any_event =
             (0..rows).any(|i| model.weight[i] > 0.0 && model.is_event[i] && stop[i] >= from);
         if !any_event {
-            return Err(Error::invalid(
+            return Err(Error::no_information(
                 "start_time: no event is at or after it, so there is no curve",
             ));
         }
@@ -1420,18 +1444,18 @@ pub fn predict(
                 None => (m.start().map(<[f64]>::to_vec), m.stop().to_vec()),
                 Some(new) => {
                     let Some(stop) = new.stop else {
-                        return Err(Error::invalid("newdata: the stop is required"));
+                        return Err(Error::missing("newdata: the stop is required"));
                     };
                     check_lengths(&[("newdata x", rows), ("newdata stop", stop.len())])?;
                     refuse_non_finite(stop, "newdata stop")?;
                     match (m.has_start, new.start) {
                         (true, None) => {
-                            return Err(Error::invalid(
+                            return Err(Error::missing(
                                 "newdata: the fit has entry times, so the start is required",
                             ));
                         }
                         (false, Some(_)) => {
-                            return Err(Error::invalid(
+                            return Err(Error::not_applicable(
                                 "newdata: the fit has no entry times, so the start is refused",
                             ));
                         }
@@ -1441,7 +1465,7 @@ pub fn predict(
                         check_lengths(&[("newdata x", rows), ("newdata start", start.len())])?;
                         refuse_non_finite(start, "newdata start")?;
                         if start.iter().zip(stop).any(|(a, b)| a >= b) {
-                            return Err(Error::invalid("newdata: a start is not before its stop"));
+                            return Err(Error::value("newdata: a start is not before its stop"));
                         }
                     }
                     (new.start.map(<[f64]>::to_vec), stop.to_vec())
@@ -1453,7 +1477,7 @@ pub fn predict(
                 let eta = m.dot_beta(&z) + offset.map_or(0.0, |o| o[i] - baseline.offset_centre);
                 let theta = eta.exp();
                 if !theta.is_finite() {
-                    return Err(Error::invalid("the risk score of a row is not finite"));
+                    return Err(Error::undefined("the risk score of a row is not finite"));
                 }
                 let begin = starts.as_ref().map_or(f64::NEG_INFINITY, |s| s[i]);
                 let (increment, variance, k1, k2) =
@@ -1511,7 +1535,7 @@ pub fn predict_terms(
     let m = Model::new(model, opts.variance)?;
     let p = m.p;
     if groups.iter().flat_map(|g| g.iter()).any(|&a| a >= p) {
-        return Err(Error::invalid("groups: an index is not a column of x"));
+        return Err(Error::out_of_range("groups: an index is not a column of x"));
     }
     let aliased: Vec<bool> = model.fit.coefficients.iter().map(Option::is_none).collect();
     let reference = opts.reference.unwrap_or(Reference::Sample);
@@ -1634,14 +1658,14 @@ fn bands(kind: ConfType, survival: &[f64], se: Option<&[f64]>, z: f64) -> (Band,
 fn curve_baseline(m: &Model<'_>, opts: &CoxSurvfitOptions<'_>) -> Result<Baseline> {
     let product_limit = opts.curve_type == CurveType::KalbfleischPrentice;
     if product_limit && opts.hazard.is_some() {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "hazard: the Kalbfleisch-Prentice curve has no choice of hazard form",
         ));
     }
     if let Some(from) = opts.start_time
         && !from.is_finite()
     {
-        return Err(Error::invalid("start_time: must be finite"));
+        return Err(Error::options("start_time: must be finite"));
     }
     let centre = m.means(opts.centring)?;
     build_baseline(
@@ -1694,7 +1718,7 @@ pub fn survfit(
         let eta = m.dot_beta(&z) + newdata.offset.map_or(0.0, |o| o[i]) - baseline.offset_centre;
         let theta = eta.exp();
         if !theta.is_finite() {
-            return Err(Error::invalid("the risk score of a row is not finite"));
+            return Err(Error::undefined("the risk score of a row is not finite"));
         }
         let base = &baseline.strata[s];
         let n = base.time.len();
@@ -1784,7 +1808,7 @@ pub fn predict_expected_martingale(model: &FittedModel<'_>) -> Result<Vec<f64>> 
         (None, 1) => 1,
         (Some(code), _) => code,
         (None, _) => {
-            return Err(Error::invalid(
+            return Err(Error::missing(
                 "cause: the status has several codes, so the event code is required",
             ));
         }
@@ -1792,7 +1816,7 @@ pub fn predict_expected_martingale(model: &FittedModel<'_>) -> Result<Vec<f64>> 
     let is_event: Vec<bool> = data.cause(code)?.iter().collect();
     let column = m.columns[0]
         .as_ref()
-        .ok_or_else(|| Error::invalid("the fit has no estimate"))?;
+        .ok_or_else(|| Error::fit("the fit has no estimate"))?;
     let mut out = defined.fit;
     for (value, &row) in column.iter().zip(&m.rows) {
         let i = row as usize;

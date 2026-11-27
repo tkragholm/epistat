@@ -80,12 +80,14 @@ use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef};
 
 use super::summary::WeightSummary;
+use crate::check::refuse_non_finite_matrix;
 use crate::error::{Error, Result};
 
 /// The subset of the population the weights are restricted to: the optimal
 /// subset of Crump, Hotz, Imbens and Mitnik, the subjects whose propensity is in
 /// `[alpha, 1 - alpha]`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[non_exhaustive]
 pub enum OptimalSubset {
     /// The cut-off `alpha` of Crump et al., as `WeightIt` finds it with
     /// `estimand = "ATOS"`.
@@ -125,6 +127,7 @@ impl Default for IptwOptions {
 
 /// The summary of the weights in each treatment group.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct IptwSummary {
     /// The treated, `None` when there are none.
     pub treated: Option<WeightSummary>,
@@ -138,6 +141,7 @@ pub struct IptwSummary {
 /// It keeps the treatment and the design, which the stacked variance reads
 /// again.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct Iptw {
     /// The estimand of the weights.
     pub estimand: Estimand,
@@ -195,10 +199,10 @@ pub fn fit(treatment: &[bool], design: MatRef<'_, f64>, opts: &IptwOptions) -> R
     if let Some(OptimalSubset::Alpha(a)) = opts.optimal_subset
         && !(0.0..0.5).contains(&a)
     {
-        return Err(Error::invalid(format!("alpha: {a} is not in [0, 0.5)")));
+        return Err(Error::options(format!("alpha: {a} is not in [0, 0.5)")));
     }
     if opts.optimal_subset.is_some() && opts.estimand != Estimand::Ate {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "optimal_subset: the optimal subset is for the average treatment effect only",
         ));
     }
@@ -248,24 +252,19 @@ fn fit_with(
     alpha: Option<f64>,
 ) -> Result<Iptw> {
     let n = treatment.len();
-    if design.nrows() != n {
-        return Err(Error::invalid(format!(
-            "design has {} rows for {n} subjects",
-            design.nrows()
-        )));
-    }
+    epistat_core::check::same_length("design", n, design.nrows())?;
     if design.ncols() == 0 {
-        return Err(Error::invalid("design has no columns"));
+        return Err(Error::no_information("design has no columns"));
     }
-    if !epistat_linalg::is_finite(design) {
-        return Err(Error::invalid("design: a value is not finite"));
-    }
+    refuse_non_finite_matrix(design, "design")?;
     let n_treated = treatment.iter().filter(|&&a| a).count();
     if n_treated == 0 || n_treated == n {
-        return Err(Error::invalid("treatment: both groups need subjects"));
+        return Err(Error::no_information(
+            "treatment: both groups need subjects",
+        ));
     }
     if opts.stabilise && (opts.estimand != Estimand::Ate || opts.optimal_subset.is_some()) {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "stabilise: weights are stabilised for the average treatment effect without an optimal subset only",
         ));
     }
@@ -278,7 +277,7 @@ fn fit_with(
         .map_err(Error::model("propensity model"))?;
     let propensity = model.fitted;
     if let Some(i) = propensity.iter().position(|&p| !(p > 0.0 && p < 1.0)) {
-        return Err(Error::invalid(format!(
+        return Err(Error::value(format!(
             "propensity model: subject {i} has fitted probability {}",
             propensity[i]
         )));

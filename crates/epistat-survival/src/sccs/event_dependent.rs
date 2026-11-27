@@ -68,10 +68,11 @@
 //!    censored, perturbed, or curtailed post-event exposures. Biostatistics
 //!    2009;10(1):3-16.
 
-use epistat_core::Covariance;
+use epistat_core::{Covariance, InputError};
 use epistat_linalg::{Attempt, Mat, Method, inverse};
 
 use super::{SccsData, SccsOptions, WindowSpec, fit};
+use crate::check::{check_ascending, check_lengths};
 use crate::covariance;
 use crate::error::{Error, Result};
 
@@ -128,6 +129,7 @@ impl Default for EventDependentOptions {
 
 /// A fitted event-dependent exposure model.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct EventDependentFit {
     /// The coefficients: the exposure columns, then the age bands after the
     /// first. `None` for all when the last fit has no estimate or a column is
@@ -178,68 +180,58 @@ struct Row {
     case: u32,
 }
 
-fn invalid(message: impl Into<String>) -> Error {
-    Error::invalid(message)
-}
-
 #[expect(
     clippy::float_cmp,
     reason = "contiguous windows share their boundary exactly"
 )]
 fn check(spec: &EventDependentSpec<'_>) -> Result<usize> {
     let n = spec.start.len();
-    if spec.end.len() != n || spec.event.len() != n || spec.dose_offsets.len() != n + 1 {
-        return Err(invalid(
-            "start, end and event need one entry per case and dose_offsets one more",
-        ));
-    }
+    check_lengths(&[
+        ("start", n),
+        ("end", spec.end.len()),
+        ("event", spec.event.len()),
+    ])?;
+    epistat_core::check::same_length("dose_offsets", n + 1, spec.dose_offsets.len())?;
     if u32::try_from(n).is_err() {
-        return Err(invalid("more cases than a u32 addresses"));
+        return Err(InputError::TooLarge {
+            what: "start",
+            limit: u64::from(u32::MAX),
+            found: n as u64,
+        }
+        .into());
     }
     let o = spec.dose_offsets;
-    if o[0] != 0 || o[n] != spec.doses.len() || o.windows(2).any(|w| w[0] > w[1]) {
-        return Err(invalid(
-            "the dose offsets must start at 0, not decrease and end at the number of doses",
-        ));
-    }
+    epistat_core::check::csr_offsets("dose_offsets", o, spec.doses.len())?;
     for i in 0..n {
         let (a, b, t) = (spec.start[i], spec.end[i], spec.event[i]);
         if !(a.is_finite() && b.is_finite() && a < b) {
-            return Err(invalid(format!(
+            return Err(Error::value(format!(
                 "case {i} has the observation period [{a}, {b}), which is not a finite, non-empty interval"
             )));
         }
         if !(t >= a && t < b) {
-            return Err(invalid(format!(
+            return Err(Error::value(format!(
                 "case {i} has its event at {t}, outside the observation period [{a}, {b})"
             )));
         }
         let d = &spec.doses[o[i]..o[i + 1]];
         if d.iter().any(|x| !x.is_finite()) || d.windows(2).any(|w| w[0] > w[1]) {
-            return Err(invalid(format!(
+            return Err(Error::order(format!(
                 "the doses of case {i} are not finite and increasing"
             )));
         }
     }
     let w = spec.windows;
-    if w.is_empty() {
-        return Err(invalid("a dose needs at least one risk window"));
-    }
+    epistat_core::check::non_empty("windows", w.len())?;
     if !(w[0].from >= 0.0 && w[0].from.is_finite())
         || w.iter().any(|x| !(x.from < x.to && x.to.is_finite()))
         || w.windows(2).any(|p| p[0].to != p[1].from)
     {
-        return Err(invalid(
+        return Err(Error::order(
             "the risk windows must be finite, contiguous and start at or after the dose date; a window before the dose is not allowed",
         ));
     }
-    if !spec.age_cuts.iter().all(|c| c.is_finite())
-        || spec.age_cuts.windows(2).any(|p| p[0] >= p[1])
-    {
-        return Err(invalid(
-            "the age cut points must be finite and strictly increasing",
-        ));
-    }
+    check_ascending(spec.age_cuts, "age_cuts", true)?;
     Ok(n)
 }
 
@@ -320,7 +312,7 @@ pub fn fit_event_dependent(
 ) -> Result<EventDependentFit> {
     let n = check(spec)?;
     if !(opts.tolerance > 0.0 && opts.tolerance.is_finite()) || opts.max_iterations == 0 {
-        return Err(invalid(
+        return Err(Error::options(
             "the tolerance must be positive and finite and max_iterations at least 1",
         ));
     }

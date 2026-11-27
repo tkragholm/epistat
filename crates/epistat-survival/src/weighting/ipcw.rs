@@ -62,6 +62,7 @@ use crate::timefix::TimeFix;
 
 /// The model of the censoring hazard.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub enum CensoringModel<'a> {
     /// The Kaplan-Meier curve of censoring, by the strata of the data.
     KaplanMeier,
@@ -99,6 +100,7 @@ impl Default for IpcwOptions {
 
 /// The censoring weights of every row.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Ipcw {
     /// `1 / G(stop-)` of each row, stabilised when asked.
     pub weight_at_stop: Vec<f64>,
@@ -184,7 +186,7 @@ pub(super) fn fit_parts<'a>(
             }
         }
         if let Some(bad) = last.iter().find(|l| l.2 > 1) {
-            return Err(Error::invalid(format!(
+            return Err(Error::inconsistent(format!(
                 "id: row {} has the same stop as another row of its subject",
                 bad.1
             )));
@@ -363,7 +365,7 @@ pub(super) fn fit_parts<'a>(
             (lambda_start - num_start).exp(),
         );
         if !(ws.is_finite() && w0.is_finite()) {
-            return Err(Error::invalid(format!(
+            return Err(Error::no_information(format!(
                 "the censoring survival is 0 before row {r}, so its weight is infinite"
             )));
         }

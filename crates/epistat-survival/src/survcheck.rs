@@ -101,6 +101,7 @@ use crate::surv::SurvData;
 
 /// The rows and subjects that one flag marks.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Flagged {
     /// Row numbers from 0 in the order of the input, ascending. The row is
     /// the one that starts the interval compared with the one before it.
@@ -122,6 +123,7 @@ impl Flagged {
 
 /// The number of rows that start in one state and end in one status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Transition {
     /// The state the row starts in, 0 when it is not given.
     pub from: u32,
@@ -133,6 +135,7 @@ pub struct Transition {
 
 /// What [`survcheck`] found.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SurvCheck {
     /// Rows that start before the row before them stopped.
     pub overlap: Flagged,
@@ -196,7 +199,7 @@ impl SurvCheck {
             return Ok(());
         };
         let id = flag.first_id;
-        Err(Error::invalid(format!(
+        Err(Error::inconsistent(format!(
             "follow-up of one subject is inconsistent: {count} rows with {name}, first at row {row} \
              (id code {id}); multi-state data allows gaps only",
             count = flag.count(),
@@ -206,6 +209,7 @@ impl SurvCheck {
 
 /// What a caller tolerates in a report.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Policy {
     /// Everything is reported and nothing is an error. For binary status,
     /// which `survival` accepts as it is.
@@ -242,7 +246,7 @@ impl Policy {
 /// `u32::MAX`, or a time that is not finite.
 pub fn survcheck(data: &SurvData<'_>) -> Result<SurvCheck> {
     let ids = data.id().ok_or_else(|| {
-        Error::invalid("survcheck needs an id column to know which rows belong together".to_owned())
+        Error::missing("survcheck needs an id column to know which rows belong together".to_owned())
     })?;
     let surv = data.followup()?;
     let (stop, start, status) = (surv.stop(), surv.start(), surv.status());

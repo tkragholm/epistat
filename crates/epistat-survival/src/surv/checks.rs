@@ -1,7 +1,10 @@
 //! The build-time rules of [`SurvData`](super::SurvData), one function each.
 //!
-//! Every function reports the number of offending rows and the first one, with
-//! row numbers counted from 0, so a caller can find the data to repair.
+//! Every function reports the first offending row, counted from 0, so a caller
+//! can find the data to repair. The rules the shared checks of `epistat_core`
+//! have no error for report the number of offending rows too.
+
+use epistat_core::InputError;
 
 use crate::error::{Error, Result};
 
@@ -20,8 +23,14 @@ fn count_and_first(len: usize, mut offends: impl FnMut(usize) -> bool) -> Option
     (count > 0).then_some((count, first))
 }
 
-fn refuse(name: &str, problem: &str, (count, first): (usize, usize)) -> Error {
-    Error::invalid(format!(
+/// The error `variant` of the rows of column `name` that have `problem`.
+fn refuse(
+    variant: fn(String) -> Error,
+    name: &str,
+    problem: &str,
+    (count, first): (usize, usize),
+) -> Error {
+    variant(format!(
         "{name}: {count} values {problem}, first at row {first}"
     ))
 }
@@ -29,29 +38,43 @@ fn refuse(name: &str, problem: &str, (count, first): (usize, usize)) -> Error {
 /// Refuse `n_codes == 0`, which leaves no code for an event.
 pub(super) fn check_n_codes(n_codes: u32) -> Result<()> {
     if n_codes == 0 {
-        return Err(Error::invalid(
-            "n_codes is 0; status needs at least one event code".to_owned(),
+        return Err(Error::options(
+            "n_codes is 0; status needs at least one event code",
         ));
     }
     Ok(())
 }
 
-/// Refuse NaN and infinities in a time or weight column.
-pub(super) fn check_finite(values: &[f64], name: &str) -> Result<()> {
+/// Refuse NaN and infinities in a time or weight column, as
+/// [`InputError::NotFinite`] at the first such row with the number of them.
+pub(super) fn check_finite(values: &[f64], name: &'static str) -> Result<()> {
     match count_and_first(values.len(), |row| !values[row].is_finite()) {
-        Some(found) => Err(refuse(
-            name,
-            "are not finite; drop or resolve them before building",
-            found,
-        )),
+        Some((count, row)) => Err(Error::Counted {
+            error: InputError::NotFinite {
+                what: name,
+                row,
+                column: None,
+            },
+            count,
+        }),
         None => Ok(()),
     }
 }
 
-/// Refuse a weight below zero. A weight of exactly 0 is allowed.
+/// Refuse a weight below zero, as [`InputError::Domain`] at the first such
+/// row with the number of them. A weight of exactly 0 is allowed. The weights
+/// are finite when this runs.
 pub(super) fn check_weights(weight: &[f64]) -> Result<()> {
     match count_and_first(weight.len(), |row| weight[row] < 0.0) {
-        Some(found) => Err(refuse("weight", "are negative", found)),
+        Some((count, row)) => Err(Error::Counted {
+            error: InputError::Domain {
+                what: "weight",
+                value: weight[row],
+                domain: "[0, inf)",
+                row: Some(row),
+            },
+            count,
+        }),
         None => Ok(()),
     }
 }
@@ -64,6 +87,7 @@ pub(super) fn check_status(status: &[i32], n_codes: u32) -> Result<()> {
         code < 0 || code > limit
     }) {
         Some(found) => Err(refuse(
+            Error::out_of_range,
             "status",
             &format!("are outside 0..={n_codes}"),
             found,
@@ -76,6 +100,7 @@ pub(super) fn check_status(status: &[i32], n_codes: u32) -> Result<()> {
 pub(super) fn check_istate(istate: &[u32], n_codes: u32) -> Result<()> {
     match count_and_first(istate.len(), |row| istate[row] > n_codes) {
         Some(found) => Err(refuse(
+            Error::out_of_range,
             "istate",
             &format!("are above n_codes = {n_codes}"),
             found,
@@ -89,7 +114,12 @@ pub(super) fn check_istate(istate: &[u32], n_codes: u32) -> Result<()> {
 /// Both columns are finite when this runs.
 pub(super) fn check_intervals(start: &[f64], stop: &[f64]) -> Result<()> {
     match count_and_first(stop.len(), |row| start[row] >= stop[row]) {
-        Some(found) => Err(refuse("start", "are not below their stop", found)),
+        Some(found) => Err(refuse(
+            Error::value,
+            "start",
+            "are not below their stop",
+            found,
+        )),
         None => Ok(()),
     }
 }
@@ -105,6 +135,7 @@ pub(super) fn check_interval_bounds(lower: &[f64], upper: &[f64]) -> Result<()> 
         lower[row].is_nan() || upper[row].is_nan()
     }) {
         return Err(refuse(
+            Error::value,
             "lower and upper",
             "are NaN; a missing bound is written -inf for lower and +inf for upper",
             found,
@@ -114,6 +145,7 @@ pub(super) fn check_interval_bounds(lower: &[f64], upper: &[f64]) -> Result<()> 
         lower[row] == f64::INFINITY || upper[row] == f64::NEG_INFINITY
     }) {
         return Err(refuse(
+            Error::value,
             "lower and upper",
             "are infinite on the wrong side; only lower may be -inf and only upper +inf",
             found,
@@ -123,13 +155,19 @@ pub(super) fn check_interval_bounds(lower: &[f64], upper: &[f64]) -> Result<()> 
         lower[row] == f64::NEG_INFINITY && upper[row] == f64::INFINITY
     }) {
         return Err(refuse(
+            Error::value,
             "lower and upper",
             "are both infinite, which says nothing about the time",
             found,
         ));
     }
     match count_and_first(lower.len(), |row| lower[row] > upper[row]) {
-        Some(found) => Err(refuse("lower", "are above their upper", found)),
+        Some(found) => Err(refuse(
+            Error::value,
+            "lower",
+            "are above their upper",
+            found,
+        )),
         None => Ok(()),
     }
 }
@@ -142,12 +180,18 @@ pub(super) fn check_interval_times(time: &[f64], time2: &[f64], status: &[i32]) 
     if let Some(found) = count_and_first(time.len(), |row| {
         status[row] == 3 && !time2[row].is_finite()
     }) {
-        return Err(refuse("time2", "are not finite on rows of status 3", found));
+        return Err(refuse(
+            Error::value,
+            "time2",
+            "are not finite on rows of status 3",
+            found,
+        ));
     }
     match count_and_first(time.len(), |row| {
         status[row] == 3 && time[row] >= time2[row]
     }) {
         Some(found) => Err(refuse(
+            Error::value,
             "time",
             "are not below their time2 on rows of status 3",
             found,

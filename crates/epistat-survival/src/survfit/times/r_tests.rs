@@ -37,8 +37,8 @@
 
 use std::collections::HashMap;
 
-use epistat_survival::SurvData;
-use epistat_survival::survfit::{
+use crate::SurvData;
+use crate::survfit::{
     ConfType, CurveIndex, GroupCurve, HazardType, ReadOptions, SurvfitOptions, SurvivalType,
     estimate,
 };
@@ -385,7 +385,7 @@ fn estimated_lung_curve_read_matches_r() {
 /// incidence adds terms no larger than the survival before them.
 #[test]
 fn aalen_johansen_curves_are_read_by_the_same_index() {
-    use epistat_survival::aalen_johansen::{AalenJohansenOptions, estimate as aj};
+    use crate::aalen_johansen::{AalenJohansenOptions, estimate as aj};
     let r: Reference = load_json(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/data/survfit_times.json"

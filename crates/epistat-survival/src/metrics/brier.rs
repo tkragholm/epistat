@@ -73,11 +73,12 @@
 //!    score in general survival models with right-censored event times.
 //!    Biom J 2006;48(6):1029-40. doi:10.1002/bimj.200610301
 
+use epistat_core::InputError;
 use epistat_linalg::MatRef;
 use rayon::prelude::*;
 
 use super::censoring::CensoringKm;
-use super::prepare::check_common_start;
+use super::prepare::{check_common_start, check_shape};
 use crate::error::{Error, Result};
 use crate::order::sort_by_key;
 use crate::surv::SurvData;
@@ -105,6 +106,7 @@ impl Default for BrierOptions {
 
 /// The result of [`estimate`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Brier {
     /// The times, as given.
     pub times: Vec<f64>,
@@ -173,36 +175,38 @@ pub fn estimate(
     opts: &BrierOptions,
 ) -> Result<Brier> {
     if times.is_empty() {
-        return Err(Error::invalid("times: at least one time is needed"));
+        return Err(Error::from(InputError::Empty { what: "times" }));
     }
     if let Some(position) = times.iter().position(|t| !t.is_finite()) {
-        return Err(Error::invalid(format!(
-            "times: value {position} is not finite"
-        )));
+        return Err(Error::from(InputError::NotFinite {
+            what: "times",
+            row: position,
+            column: None,
+        }));
     }
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     check_common_start(&data)?;
     if surv.n_codes() != 1 {
-        return Err(Error::invalid(format!(
+        return Err(Error::not_applicable(format!(
             "status has {} event codes, and the Brier score takes one; pass one cause as 0 and 1",
             surv.n_codes()
         )));
     }
     let n = data.n_rows();
-    if predicted.nrows() != n || predicted.ncols() != times.len() {
-        return Err(Error::invalid(format!(
-            "predicted is {} by {}, but there are {n} rows and {} times",
-            predicted.nrows(),
-            predicted.ncols(),
-            times.len()
-        )));
-    }
+    check_shape("predicted", predicted, n, times.len())?;
     for j in 0..times.len() {
         for i in 0..n {
             let p = predicted[(i, j)];
+            if !p.is_finite() {
+                return Err(Error::from(InputError::NotFinite {
+                    what: "predicted",
+                    row: i,
+                    column: Some(j),
+                }));
+            }
             if !(0.0..=1.0).contains(&p) {
-                return Err(Error::invalid(format!(
+                return Err(Error::value(format!(
                     "predicted: row {i}, column {j} is {p}, which is not a probability"
                 )));
             }
@@ -215,7 +219,7 @@ pub fn estimate(
     unique.sort_by(f64::total_cmp);
     unique.dedup();
     if unique.len() < 2 {
-        return Err(Error::invalid(
+        return Err(Error::no_information(
             "the follow-up times take one value, so no gap between them exists",
         ));
     }
@@ -231,7 +235,7 @@ pub fn estimate(
         .collect();
     let total: f64 = case_weight.iter().sum();
     if !total.is_finite() {
-        return Err(Error::invalid(
+        return Err(Error::value(
             "the case weights sum to more than a double can hold",
         ));
     }

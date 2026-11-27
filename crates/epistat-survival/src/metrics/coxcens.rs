@@ -87,7 +87,7 @@ impl CoxCens {
         let n = sorted.n();
         let p = spec.x.ncols();
         if spec.x.nrows() != sorted.n_rows {
-            return Err(Error::invalid(format!(
+            return Err(Error::mismatch(format!(
                 "the censoring model's x has {} rows for {} rows of data",
                 spec.x.nrows(),
                 sorted.n_rows
@@ -137,7 +137,7 @@ impl CoxCens {
             })
             .collect();
         if q.iter().any(|v| !v.is_finite() || *v <= 0.0) {
-            return Err(Error::invalid(
+            return Err(Error::undefined(
                 "a risk score of the censoring model is not finite",
             ));
         }
@@ -301,7 +301,9 @@ fn influence_of_coefficients(
         .covariance
         .as_slice()
         .iter()
-        .map(|c| c.ok_or_else(|| Error::invalid("the censoring model's covariance is not defined")))
+        .map(|c| {
+            c.ok_or_else(|| Error::undefined("the censoring model's covariance is not defined"))
+        })
         .collect::<Result<_>>()?;
     let mut out = vec![0.0; n * p];
     for i in 0..n {

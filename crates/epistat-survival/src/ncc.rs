@@ -99,6 +99,7 @@
     reason = "the row counts are checked to fit in u32"
 )]
 
+use epistat_core::InputError;
 use epistat_linalg::MatRef;
 
 use crate::check::{check_lengths, refuse_non_finite, refuse_non_finite_matrix};
@@ -130,6 +131,7 @@ pub struct NccDesign<'a> {
 
 /// The risk-set sizes and inclusion probabilities of a design.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct InclusionProbabilities {
     /// The probability of each person of the cohort that they were sampled as
     /// a control for at least one case, 1 for a case. A person who is at risk
@@ -195,7 +197,7 @@ pub fn inclusion_probabilities(design: &NccDesign<'_>) -> Result<InclusionProbab
         check_lengths(&[("exit", n), ("entry", entry.len())])?;
         refuse_non_finite(entry, "entry")?;
         if entry.iter().zip(design.exit).any(|(a, b)| a >= b) {
-            return Err(Error::invalid(
+            return Err(Error::value(
                 "entry: a person enters at or after their exit",
             ));
         }
@@ -205,14 +207,19 @@ pub fn inclusion_probabilities(design: &NccDesign<'_>) -> Result<InclusionProbab
     }
     refuse_non_finite(design.exit, "exit")?;
     if u32::try_from(n).is_err() {
-        return Err(Error::invalid("exit: more rows than a u32 index addresses"));
+        return Err(InputError::TooLarge {
+            what: "exit",
+            limit: u64::from(u32::MAX),
+            found: n as u64,
+        }
+        .into());
     }
     let m = design.controls_per_case;
     if m == 0 {
-        return Err(Error::invalid("controls_per_case: must be at least 1"));
+        return Err(Error::options("controls_per_case: must be at least 1"));
     }
     if !design.case.iter().any(|&c| c) {
-        return Err(Error::invalid("case: there is no case"));
+        return Err(Error::no_information("case: there is no case"));
     }
 
     // The rows of each stratum, in the order of the stratum codes.
@@ -282,7 +289,7 @@ fn stratum_probabilities(
         let at_or_after_entry = entries.len() - entries.partition_point(|&e| e < t);
         let size = at_or_after_exit - at_or_after_entry;
         if size < m + 1 {
-            return Err(Error::invalid(format!(
+            return Err(Error::no_information(format!(
                 "case: the risk set of row {row} has {size} people, fewer than the {} needed for {m} controls",
                 m + 1
             )));
@@ -344,7 +351,7 @@ pub fn weights(
         } else if sampled[i] {
             let p = probabilities.probability[i];
             if p <= 0.0 {
-                return Err(Error::invalid(format!(
+                return Err(Error::inconsistent(format!(
                     "sampled: row {i} is a sampled control with inclusion probability 0"
                 )));
             }
@@ -364,7 +371,7 @@ fn weighted_data<'a>(
 ) -> Result<SurvData<'a>> {
     check_lengths(&[("data", data.n_rows()), ("weights", weights.len())])?;
     if data.weight().is_some() || data.cluster().is_some() {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "data: the weights and the clusters are set by the analysis, so the data may not carry them",
         ));
     }
@@ -412,6 +419,7 @@ pub fn fit_weighted(
 /// The cumulative baseline hazard of a weighted fit, for the subject whose
 /// covariates are all 0.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct NccBaseline {
     /// The distinct event times in ascending order.
     pub times: Vec<f64>,
@@ -439,7 +447,7 @@ pub fn baseline(
     opts: &CoxOptions,
 ) -> Result<NccBaseline> {
     if data.stratum().is_some() {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "data: the baseline of a stratified fit is not provided",
         ));
     }
@@ -462,7 +470,7 @@ pub fn baseline(
     let stratum = result
         .strata
         .first()
-        .ok_or_else(|| Error::invalid("fit: the baseline has no stratum"))?;
+        .ok_or_else(|| Error::no_information("fit: the baseline has no stratum"))?;
     let last_time = weighted
         .followup()?
         .stop()

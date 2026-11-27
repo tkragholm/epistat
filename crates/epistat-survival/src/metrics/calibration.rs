@@ -75,6 +75,7 @@ use epistat_core::InputError;
 
 /// How the rows are divided into groups.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum Groups<'a> {
     /// This many groups of about equal size, from the quantiles of the
     /// predictions. At least 1.
@@ -110,6 +111,7 @@ impl<'a> CalibrationOptions<'a> {
 
 /// One group of the predictions.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct RiskGroup {
     /// The lower cut point: the group holds risks above it, or at it for the
     /// first group. For a group of one distinct value, that value.
@@ -128,6 +130,7 @@ pub struct RiskGroup {
 
 /// The result of [`estimate`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Calibration {
     /// The time the risks are for.
     pub time: f64,
@@ -162,9 +165,17 @@ pub fn estimate(
 ) -> Result<Calibration> {
     let sorted = sort_rows(data, opts.timefix, opts.cause)?;
     if !time.is_finite() {
-        return Err(Error::invalid("time is not finite"));
+        return Err(Error::from(InputError::Domain {
+            what: "time",
+            value: time,
+            domain: "(-inf, inf)",
+            row: None,
+        }));
     }
     if risk.len() != sorted.n_rows {
+        if risk.is_empty() {
+            return Err(Error::from(InputError::Empty { what: "risk" }));
+        }
         return Err(Error::from(InputError::Length {
             what: "risk",
             expected: sorted.n_rows,
@@ -172,7 +183,14 @@ pub fn estimate(
         }));
     }
     if let Some(position) = risk.iter().position(|p| !(0.0..=1.0).contains(p)) {
-        return Err(Error::invalid(format!(
+        if !risk[position].is_finite() {
+            return Err(Error::from(InputError::NotFinite {
+                what: "risk",
+                row: position,
+                column: None,
+            }));
+        }
+        return Err(Error::value(format!(
             "risk: row {position} is {}, which is not a probability",
             risk[position]
         )));
@@ -188,18 +206,20 @@ pub fn estimate(
     let mut breaks: Vec<f64> = match opts.groups {
         Groups::Quantiles(q) => {
             if q == 0 {
-                return Err(Error::invalid("the number of groups must be at least 1"));
+                return Err(Error::options("the number of groups must be at least 1"));
             }
             (0..=q)
                 .map(|k| epistat_stats::quantile::type7_ratio(&values, k, q))
                 .collect::<Option<Vec<f64>>>()
-                .ok_or_else(|| Error::invalid("no predicted risk to cut into groups"))?
+                .ok_or_else(|| Error::no_information("no predicted risk to cut into groups"))?
         }
         Groups::Breaks(b) => {
             if let Some(position) = b.iter().position(|v| !v.is_finite()) {
-                return Err(Error::invalid(format!(
-                    "breaks: value {position} is not finite"
-                )));
+                return Err(Error::from(InputError::NotFinite {
+                    what: "breaks",
+                    row: position,
+                    column: None,
+                }));
             }
             b.to_vec()
         }
@@ -210,7 +230,7 @@ pub fn estimate(
         && (breaks.first().is_none_or(|&b| b > values[0])
             || breaks.last().is_none_or(|&b| b < values[n - 1]))
     {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "the breaks must cover every predicted risk, from the smallest to the largest",
         ));
     }

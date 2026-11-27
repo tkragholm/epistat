@@ -225,6 +225,7 @@ mod robust;
 mod tdist;
 
 use dist::Base;
+use epistat_core::{InputError, check};
 use epistat_linalg::MatRef;
 use newton::{Control, Problem, factorise, newton};
 
@@ -242,6 +243,7 @@ use crate::surv::{IntervalKind, Outcome, SurvData};
 /// The distribution of the error term, and with it the transformation of the
 /// times. See the [module documentation](self) for the list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Distribution {
     /// Weibull: minimum extreme value on `ln T`. The default.
     #[default]
@@ -342,6 +344,7 @@ impl Default for SurvregOptions {
 
 /// An accelerated failure time model.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct SurvregFit {
     /// One coefficient per column of the design, `None` for an aliased column.
     pub coefficients: Vec<Option<f64>>,
@@ -457,7 +460,7 @@ pub(super) fn times_of(data: &SurvData<'_>, distribution: Distribution) -> Resul
                 ));
             }
             if surv.n_codes() != 1 {
-                return Err(Error::invalid(format!(
+                return Err(Error::not_applicable(format!(
                     "survreg needs a binary status; the data has {} event codes",
                     surv.n_codes()
                 )));
@@ -600,18 +603,18 @@ pub fn fit(
     let dist = options.distribution;
     match (dist, options.df) {
         (Distribution::StudentT, None) => {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "the t distribution needs its degrees of freedom (df)".to_owned(),
             ));
         }
         (Distribution::StudentT, Some(df)) if !(df.is_finite() && df > 2.0) => {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "the degrees of freedom of the t distribution must be greater than 2".to_owned(),
             ));
         }
         (Distribution::StudentT, Some(_)) => {}
         (_, Some(_)) => {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "df applies to the t distribution only".to_owned(),
             ));
         }
@@ -620,31 +623,31 @@ pub fn fit(
     let base = dist.base(options.df);
     let n_all = data.n_rows();
     let p = x.ncols();
-    if x.nrows() != n_all {
-        return Err(Error::invalid(format!(
-            "the design has {} rows against {n_all} rows of data",
-            x.nrows()
-        )));
-    }
+    check::same_length("x", n_all, x.nrows())?;
     if p == 0 {
-        return Err(Error::invalid("the design has no columns".to_owned()));
+        return Err(Error::no_information(
+            "the design has no columns".to_owned(),
+        ));
     }
     for col in 0..p {
-        if (0..n_all).any(|row| !x[(row, col)].is_finite()) {
-            return Err(Error::invalid(format!(
-                "design column {col} has a value that is not finite"
-            )));
+        if let Some(row) = (0..n_all).find(|&row| !x[(row, col)].is_finite()) {
+            return Err(InputError::NotFinite {
+                what: "x",
+                row,
+                column: Some(col),
+            }
+            .into());
         }
     }
     if options.max_iterations == 0 {
-        return Err(Error::invalid("max_iterations is 0".to_owned()));
+        return Err(Error::options("max_iterations is 0".to_owned()));
     }
     for (name, value) in [
         ("tolerance", options.tolerance),
         ("toler_chol", options.toler_chol),
     ] {
         if !(value.is_finite() && value > 0.0) {
-            return Err(Error::invalid(format!(
+            return Err(Error::options(format!(
                 "{name} must be positive and finite"
             )));
         }
@@ -652,7 +655,7 @@ pub fn fit(
     let n_strata = data.n_strata().max(1);
     let fixed_scale = match (dist.fixed_scale(), options.scale) {
         (Some(_), Some(_)) => {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "this distribution has a fixed scale; the scale option does not apply".to_owned(),
             ));
         }
@@ -661,10 +664,10 @@ pub fn fit(
     };
     if let Some(scale) = fixed_scale {
         if !(scale.is_finite() && scale > 0.0) {
-            return Err(Error::invalid("a fixed scale must be positive".to_owned()));
+            return Err(Error::options("a fixed scale must be positive".to_owned()));
         }
         if n_strata > 1 {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "a fixed scale cannot be combined with strata on the scale".to_owned(),
             ));
         }
@@ -675,12 +678,14 @@ pub fn fit(
     let times = times_of(data, dist)?;
     let used: Vec<usize> = data.used_rows().map(|row| row as usize).collect();
     if used.is_empty() {
-        return Err(Error::invalid("no row has a positive weight".to_owned()));
+        return Err(Error::no_information(
+            "no row has a positive weight".to_owned(),
+        ));
     }
     let bad_times = used.iter().filter(|&&row| times.y1[row].is_nan()).count();
     if bad_times > 0 {
         let first = used.iter().find(|&&row| times.y1[row].is_nan()).unwrap();
-        return Err(Error::invalid(format!(
+        return Err(Error::value(format!(
             "{bad_times} times are not positive, which this distribution needs, first at row {first}"
         )));
     }
@@ -703,7 +708,7 @@ pub fn fit(
             seen[c as usize] = true;
         }
         if let Some(empty) = seen.iter().position(|&s| !s) {
-            return Err(Error::invalid(format!(
+            return Err(Error::no_information(format!(
                 "stratum {empty} has no row with a positive weight"
             )));
         }
@@ -783,7 +788,7 @@ pub fn fit(
             let eta_i = centre_of_row(i) - offset.as_ref().map_or(0.0, |o| o[i]);
             let target = wt * eta_i + weight[i] * d.g_eta;
             if !(wt.is_finite() && target.is_finite()) {
-                return Err(Error::invalid(
+                return Err(Error::value(
                     "the starting values are not finite; check the times against the \
                      distribution"
                         .to_owned(),

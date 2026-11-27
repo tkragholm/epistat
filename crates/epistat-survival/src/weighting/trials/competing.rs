@@ -82,11 +82,13 @@ use epistat_inference::sandwich::SmallSample;
 use epistat_linalg::{Attempt, Mat, inverse};
 
 use super::{Msm, MsmInput, check_design, dense, fit_msm, quadratic_form};
+use crate::check::check_lengths;
 use crate::covariance;
 use crate::error::{Error, Result};
 
 /// The two outcome models of the stacked trials with a competing event.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct MsmCompeting {
     /// The model of the event, fitted on the rows without the competing event.
     pub event: Msm,
@@ -113,13 +115,14 @@ pub struct MsmCompeting {
 pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<MsmCompeting> {
     let n = input.outcome.len();
     check_design("design", input.design, n)?;
-    if competing.len() != n || input.weight.len() != n || input.person.len() != n {
-        return Err(Error::invalid(
-            "competing, weight and person need one value per row",
-        ));
-    }
+    check_lengths(&[
+        ("outcome", n),
+        ("competing", competing.len()),
+        ("weight", input.weight.len()),
+        ("person", input.person.len()),
+    ])?;
     if let Some(r) = (0..n).find(|&r| input.outcome[r] && competing[r]) {
-        return Err(Error::invalid(format!(
+        return Err(Error::inconsistent(format!(
             "row {r} has both the event and the competing event; give each row at most one"
         )));
     }
@@ -181,7 +184,7 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
     // covariance, which the cross-covariance shares.
     let factor = SmallSample::Clusters
         .factor(n, p, Some(g))
-        .ok_or_else(|| Error::invalid("outcome model: at least two persons are needed"))?;
+        .ok_or_else(|| Error::no_information("outcome model: at least two persons are needed"))?;
     let am = product(&a_inv, &meat);
     let cross = product(&am, &b_inv);
     let cross_covariance: Vec<f64> = (0..p * p).map(|k| cross[(k / p, k % p)] * factor).collect();
@@ -225,6 +228,7 @@ fn add_information(m: &mut Mat<f64>, x: &[f64], scale: f64) {
 /// The cumulative incidence of the event and of the competing event at each
 /// follow-up time, with their standard errors.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CompetingIncidence {
     /// The risk of the event by each time, in the presence of the competing
     /// event.
@@ -258,12 +262,12 @@ pub fn cumulative_incidence_competing(
 ) -> Result<CompetingIncidence> {
     let p = fit.event.coefficients.len();
     if fit.competing.coefficients.len() != p || fit.covariance.dim() != 2 * p {
-        return Err(Error::invalid(
+        return Err(Error::mismatch(
             "the two models need the same number of coefficients, and the covariance 2p by 2p",
         ));
     }
     if times == 0 {
-        return Err(Error::invalid("designs: no times"));
+        return Err(Error::no_information("designs: no times"));
     }
     if rows == 0 {
         return Err(Error::from(InputError::Empty { what: "designs" }));
@@ -290,7 +294,7 @@ pub fn cumulative_incidence_competing(
         for t in 0..times {
             design(r, t, &mut x);
             if x.iter().any(|v| !v.is_finite()) {
-                return Err(Error::invalid(format!(
+                return Err(Error::value(format!(
                     "design: a value of row {r} at time {t} is not finite"
                 )));
             }

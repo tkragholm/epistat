@@ -9,7 +9,7 @@
     reason = "times are compared with the values they were copied from, counts of rows are far below 2^53, and the number of grid steps is a floor of a non-negative quotient"
 )]
 
-use epistat_core::Covariance;
+use epistat_core::{Covariance, check};
 use epistat_linalg::cholesky::{Pivot, cholesky_lower};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
@@ -25,6 +25,7 @@ const WAVE: usize = 64;
 
 /// The test of equal net survival in several groups.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct NetSurvivalTest {
     /// The chi-square statistic `z' V^-1 z` on the first `G - 1` groups.
     pub statistic: f64,
@@ -87,20 +88,14 @@ pub fn net_survival_test(
     expected: &ExpectedHazard,
     grid_step: Option<f64>,
 ) -> Result<NetSurvivalTest> {
-    if groups.len() != data.n_rows() {
-        return Err(Error::invalid(format!(
-            "{} groups for {} rows",
-            groups.len(),
-            data.n_rows()
-        )));
-    }
+    check::same_length("groups", data.n_rows(), groups.len())?;
     if let Some(w) = grid_step
         && !(w.is_finite() && w > 0.0)
     {
-        return Err(Error::invalid("the step must be finite and positive"));
+        return Err(Error::options("the step must be finite and positive"));
     }
     if data.followup()?.n_codes() != 1 {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "the test needs a binary status of death from any cause",
         ));
     }
@@ -119,7 +114,7 @@ pub fn net_survival_test(
         present[groups[i] as usize] = true;
     }
     if present.iter().filter(|&&p| p).count() < 2 || present.iter().any(|&p| !p) {
-        return Err(Error::invalid(
+        return Err(Error::no_information(
             "the groups must be coded 0 to G - 1, each with rows, and G at least 2",
         ));
     }
@@ -142,7 +137,7 @@ pub fn net_survival_test(
         })
         .sum();
     if work > SWEEP_LIMIT {
-        return Err(Error::invalid(format!(
+        return Err(Error::options(format!(
             "the test would visit {work:.3e} pairs of a person and a point, above the limit of \
              {SWEEP_LIMIT:.0e}: use a coarser step"
         )));
@@ -162,9 +157,9 @@ pub fn net_survival_test(
                 let mut s = vec![[0.0_f64; 3]; m * g];
                 let mut reader = expected.reader();
                 for &i in &rows[range] {
-                    let pieces = reader
-                        .row_until(i, expected.horizon(i))
-                        .ok_or_else(|| Error::invalid(format!("row {i} has no expected hazard")))?;
+                    let pieces = reader.row_until(i, expected.horizon(i)).ok_or_else(|| {
+                        Error::out_of_range(format!("row {i} has no expected hazard"))
+                    })?;
                     let first = points.partition_point(|&p| p <= begin(i));
                     let last = points.partition_point(|&p| p <= stop[i]);
                     let mut h_prev = if first == 0 {

@@ -1,6 +1,6 @@
 //! The transition probabilities of a multi-state model, `mstate::probtrans`.
 
-use epistat_core::Covariance;
+use epistat_core::{Covariance, InputError, check};
 use rayon::prelude::*;
 
 use super::CumulativeHazards;
@@ -10,6 +10,7 @@ use crate::error::{Error, Result};
 /// The form of the variance of the transition probabilities, `method` of
 /// `probtrans`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ProbTransMethod {
     /// The recursion of Andersen et al., `method = "aalen"`. It evaluates the
     /// derivative of the product at the matrix after the step.
@@ -22,6 +23,7 @@ pub enum ProbTransMethod {
 
 /// The direction of the product, `direction` of `probtrans`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ProbTransDirection {
     /// `P(predt, t)` for the times `t` after `predt`: the probabilities of
     /// being in each state at `t` for a subject in each state at `predt`.
@@ -72,6 +74,7 @@ impl Default for ProbTransOptions {
 ///
 /// States are numbered from 0 here: state index `s` is the state code `s + 1`.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ProbTrans {
     /// The number of states.
     pub n_states: usize,
@@ -287,7 +290,7 @@ fn step_matrix(h: &CumulativeHazards, j: usize, s: usize) -> Result<Vec<f64>> {
         b[from * s + from] -= d;
     }
     if let Some(from) = (0..s).find(|&i| b[i * s + i] < 0.0) {
-        return Err(Error::invalid(format!(
+        return Err(Error::value(format!(
             "the diagonal of I + dA for state {} is negative at time {}: the hazards are too large \
              for the product integral",
             from + 1,
@@ -321,25 +324,62 @@ fn std_errs(var_p: &[f64], s: usize) -> impl Iterator<Item = Option<f64>> + '_ {
 ///
 /// An input error when `predt` is not finite, when the standard errors or
 /// the covariance are asked for and the cumulative hazards have no covariances,
+/// when a transition of `h` is not between its states or its hazards and
+/// covariances are not one for each transition and time,
 /// when no time is after `predt` (forward) or at or before it (fixed horizon),
 /// and when the diagonal of `I + dA` is negative at an event time, which is where
 /// `probtrans` warns that the estimate may not be meaningful: the hazards of
 /// the profile are too large for one step of the product integral.
 pub fn probtrans(h: &CumulativeHazards, predt: f64, opts: &ProbTransOptions) -> Result<ProbTrans> {
     if !predt.is_finite() {
-        return Err(Error::invalid("predt: must be finite"));
+        return Err(Error::from(InputError::Domain {
+            what: "predt",
+            value: predt,
+            domain: "(-inf, inf)",
+            row: None,
+        }));
     }
     let variance = opts.se || opts.covariance;
     if variance && h.covariance.is_none() {
-        return Err(Error::invalid(
+        return Err(Error::fit(
             "se: the cumulative hazards have no covariances; ask `msfit` for them or set `se` false",
         ));
     }
+    check_hazards(h)?;
     let s = h.n_states as usize;
     match opts.direction {
         ProbTransDirection::Forward => forward(h, predt, *opts, s, variance),
         ProbTransDirection::FixedHorizon => fixed_horizon(h, predt, *opts, s, variance),
     }
+}
+
+/// Refuse cumulative hazards whose parts do not agree: a transition from or
+/// to a state outside `1..=n_states`, or hazards and covariances that are not
+/// one for each transition and time.
+fn check_hazards(h: &CumulativeHazards) -> Result<()> {
+    let outside = |state: u32| state == 0 || state > h.n_states;
+    if let Some(&(from, to)) = h
+        .transitions
+        .iter()
+        .find(|&&(from, to)| outside(from) || outside(to))
+    {
+        return Err(Error::out_of_range(format!(
+            "transitions: ({from}, {to}) is not a pair of the states 1..={}",
+            h.n_states
+        )));
+    }
+    check::same_length(
+        "cumulative_hazard",
+        h.transitions.len(),
+        h.cumulative_hazard.len(),
+    )?;
+    for hazard in &h.cumulative_hazard {
+        check::same_length("cumulative_hazard", h.time.len(), hazard.len())?;
+    }
+    if let Some(covariance) = &h.covariance {
+        check::same_length("covariance", h.time.len(), covariance.len())?;
+    }
+    Ok(())
 }
 
 /// [`probtrans`] for each of several sets of cumulative hazards, in the order
@@ -371,7 +411,7 @@ fn forward(
     let n = s * s;
     let first = h.time.partition_point(|&t| t <= predt);
     if first == h.time.len() {
-        return Err(Error::invalid("predt: no event time is after it"));
+        return Err(Error::no_information("predt: no event time is after it"));
     }
     let mut time = vec![predt];
     let mut probability = identity(s);
@@ -447,7 +487,9 @@ fn fixed_horizon(
     let n = s * s;
     let last = h.time.partition_point(|&t| t <= predt);
     if last == 0 {
-        return Err(Error::invalid("predt: no event time is at or before it"));
+        return Err(Error::no_information(
+            "predt: no event time is at or before it",
+        ));
     }
     let eye = identity(s);
     let mut p = identity(s);

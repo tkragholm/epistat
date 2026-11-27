@@ -4,6 +4,7 @@
 /// The scale on which the confidence limits of an absolute risk are formed,
 /// `absRisk.transform` of `confint.predictCSC`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum RiskLimits {
     /// No limits.
     None,

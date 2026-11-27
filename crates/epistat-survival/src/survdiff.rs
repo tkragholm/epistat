@@ -72,6 +72,7 @@
 
 use rayon::prelude::*;
 
+use epistat_core::InputError;
 use epistat_linalg::eigen::pinv_quadratic_form;
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
@@ -102,6 +103,7 @@ pub type Options = SurvdiffOptions;
 
 /// The result of [`fn@test`]. Matrices are row-major.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Survdiff {
     /// The caller's code of each group present among the rows used, ascending.
     pub groups: Vec<u32>,
@@ -140,6 +142,7 @@ pub struct Survdiff {
 
 /// The one-sample test of [`one_sample`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct OneSample {
     /// The observed events.
     pub observed: f64,
@@ -163,29 +166,29 @@ fn prepare<'a>(data: &SurvData<'a>, opts: &SurvdiffOptions) -> Result<SurvData<'
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     if surv.start().is_some() {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "survdiff is defined for right-censored data: leave the start column out",
         ));
     }
     if surv.n_codes() != 1 {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "survdiff is defined for one event type: n_codes must be 1",
         ));
     }
     if !opts.rho.is_finite() {
-        return Err(Error::invalid("rho must be finite"));
+        return Err(Error::options("rho must be finite"));
     }
     #[expect(clippy::float_cmp, reason = "a weight of 0 or 1 is exact")]
     if data
         .weight()
         .is_some_and(|w| w.iter().any(|&w| w != 0.0 && w != 1.0))
     {
-        return Err(Error::invalid(
+        return Err(Error::value(
             "survdiff has no case weights: a weight is 0, to leave the row out, or 1",
         ));
     }
     if data.n_used() == 0 {
-        return Err(Error::invalid(
+        return Err(Error::no_information(
             "no row has weight 1, so there is nothing to test",
         ));
     }
@@ -230,6 +233,9 @@ struct Block {
 /// found, or more groups than rows.
 pub fn test(data: &SurvData<'_>, group: &[u32], opts: &SurvdiffOptions) -> Result<Survdiff> {
     let data = prepare(data, opts)?;
+    if group.is_empty() {
+        return Err(Error::from(InputError::Empty { what: "group" }));
+    }
     check_lengths(&[("time", data.n_rows()), ("group", group.len())])?;
     let surv = data.followup()?;
     let time = surv.stop();
@@ -473,6 +479,11 @@ pub fn one_sample(
     opts: &SurvdiffOptions,
 ) -> Result<OneSample> {
     let data = prepare(data, opts)?;
+    if expected_survival.is_empty() {
+        return Err(Error::from(InputError::Empty {
+            what: "expected_survival",
+        }));
+    }
     check_lengths(&[
         ("time", data.n_rows()),
         ("expected_survival", expected_survival.len()),
@@ -486,7 +497,14 @@ pub fn one_sample(
     for row in data.used_rows() {
         let s = expected_survival[row as usize];
         if !(s > 0.0 && s <= 1.0) {
-            return Err(Error::invalid(
+            if !s.is_finite() {
+                return Err(Error::from(InputError::NotFinite {
+                    what: "expected_survival",
+                    row: row as usize,
+                    column: None,
+                }));
+            }
+            return Err(Error::value(
                 "the expected survival must be a probability in (0, 1]",
             ));
         }

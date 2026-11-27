@@ -2,6 +2,7 @@
 
 /// The summary of the weights of one group, as `summary.weightit` reports it.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct WeightSummary {
     /// The number of weights.
     pub n: usize,

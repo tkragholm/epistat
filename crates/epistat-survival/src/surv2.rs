@@ -87,6 +87,7 @@
 //! the `survival` package, Therneau T. M., Grambsch P. M. (2000) Modeling
 //! Survival Data, Springer.
 
+use epistat_core::InputError;
 use rayon::slice::ParallelSliceMut;
 
 use crate::check::{check_lengths, check_row_count};
@@ -94,6 +95,7 @@ use crate::error::{Error, Result};
 
 /// What the status column of a timeline holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StatusKind {
     /// 0 for no event at that time and 1 for an event, `Surv2(time, 0/1)`.
     Binary,
@@ -104,6 +106,7 @@ pub enum StatusKind {
 
 /// What a repeated status means, `repeated` of `Surv2`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Repeated {
     /// Every repeat of a status is a new event, `repeated = TRUE`.
     Events,
@@ -143,6 +146,7 @@ pub struct Timeline<'a> {
 
 /// The intervals of a timeline, as columns of equal length.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Counting {
     /// The subject of each interval.
     pub id: Vec<u32>,
@@ -194,12 +198,27 @@ impl Counting {
     /// The intervals with a status and every covariate present, which are the
     /// ones `coxph` and `survfit` keep under their default `na.action`, as
     /// indices into the columns, ascending.
-    #[must_use]
-    pub fn complete_rows(&self) -> Vec<u32> {
-        (0..self.len())
+    ///
+    /// # Errors
+    ///
+    /// An input error when `status` or a column of `covariates` has another
+    /// length than `stop`, or there are more intervals than `u32::MAX`.
+    pub fn complete_rows(&self) -> Result<Vec<u32>> {
+        let n = self.len();
+        check_lengths(&[("stop", n), ("status", self.status.len())])?;
+        for (k, c) in self.covariates.iter().enumerate() {
+            if c.len() != n {
+                return Err(Error::mismatch(format!(
+                    "columns differ in length: covariate {k} has {} values against {n} in stop",
+                    c.len()
+                )));
+            }
+        }
+        check_row_count(n)?;
+        Ok((0..n)
             .filter(|&i| self.status[i].is_some() && self.covariates.iter().all(|c| c[i].is_some()))
             .map(index_u32)
-            .collect()
+            .collect())
     }
 }
 
@@ -238,7 +257,7 @@ pub fn counting(timeline: &Timeline<'_>, opts: &TimelineOptions) -> Result<Count
     ])?;
     for (k, c) in timeline.covariates.iter().enumerate() {
         if c.len() != n {
-            return Err(Error::invalid(format!(
+            return Err(Error::mismatch(format!(
                 "columns differ in length: covariate {k} has {} values against {n} in id",
                 c.len()
             )));
@@ -248,21 +267,26 @@ pub fn counting(timeline: &Timeline<'_>, opts: &TimelineOptions) -> Result<Count
     let n_states = match opts.status {
         StatusKind::Binary => 1,
         StatusKind::States(0) => {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "a status of states needs at least one state",
             ));
         }
         StatusKind::States(m) => m,
     };
     if let Some(i) = timeline.time.iter().position(|t| !t.is_finite()) {
-        return Err(Error::invalid(format!("the time of row {i} is not finite")));
+        return Err(InputError::NotFinite {
+            what: "time",
+            row: i,
+            column: None,
+        }
+        .into());
     }
     if let Some(i) = timeline
         .status
         .iter()
         .position(|s| s.is_some_and(|v| v > n_states))
     {
-        return Err(Error::invalid(format!(
+        return Err(Error::out_of_range(format!(
             "the status of row {i} is above {n_states}"
         )));
     }
@@ -279,7 +303,7 @@ pub fn counting(timeline: &Timeline<'_>, opts: &TimelineOptions) -> Result<Count
     for w in order.windows(2) {
         let (a, b) = (w[0] as usize, w[1] as usize);
         if id[a] == id[b] && time[a] == time[b] {
-            return Err(Error::invalid(format!(
+            return Err(Error::inconsistent(format!(
                 "subject {} has two observations at time {}",
                 id[a], time[a]
             )));
@@ -321,12 +345,12 @@ pub fn counting(timeline: &Timeline<'_>, opts: &TimelineOptions) -> Result<Count
     let has_istate = if censored_first == bounds.len() {
         false
     } else if censored_first > 0 {
-        return Err(Error::invalid(
+        return Err(Error::inconsistent(
             "everyone or no one should have an initial state: \
              some subjects have a status at their first observation and some do not",
         ));
     } else if opts.status == StatusKind::Binary {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "a binary status cannot have an initial state, \
              but every subject has an event at its first observation",
         ));

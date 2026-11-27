@@ -177,12 +177,12 @@ impl<'a> ProcessNuisance<'a> {
         n_units: usize,
     ) -> Result<(Vec<f64>, Self)> {
         if data.weight().is_some() {
-            return Err(Error::invalid(
+            return Err(Error::not_applicable(
                 "data: carries case weights, but the weights come from the weighting",
             ));
         }
         if opts.ties == Ties::Exact && matches!(model, CensoringModel::Cox { .. }) {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "ties: the variance of weights from a Cox model of censoring is not \
                  available for the exact method",
             ));
@@ -211,9 +211,7 @@ impl<'a> ProcessNuisance<'a> {
                 let p = x.ncols();
                 let mut beta = Vec::with_capacity(p);
                 for (j, c) in coefficients.iter().enumerate() {
-                    beta.push(c.ok_or_else(|| {
-                        Error::invalid(format!("the censoring model: column {j} is aliased"))
-                    })?);
+                    beta.push(c.ok_or(Error::Aliased { column: j })?);
                 }
                 let v: Vec<f64> = covariance
                     .as_slice()

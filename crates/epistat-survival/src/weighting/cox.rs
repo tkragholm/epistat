@@ -119,7 +119,7 @@ pub fn fit(
     weights: &Weights<'_>,
 ) -> Result<EstimatedCox> {
     if weights.is_known() {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "weights: no model of the weights is given; cox::fit takes case weights as known",
         ));
     }
@@ -172,7 +172,7 @@ fn fit_iptw(
         .coefficients
         .iter()
         .enumerate()
-        .map(|(j, c)| c.ok_or_else(|| Error::invalid(format!("x: column {j} is aliased"))))
+        .map(|(j, c)| c.ok_or(Error::Aliased { column: j }))
         .collect::<Result<_>>()?;
     let v: Vec<f64> = model
         .covariance
@@ -259,6 +259,7 @@ fn fit_iptw(
 
 /// A Cox fit weighted by estimated weights and its two variances.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct EstimatedCox {
     /// The weighted fit of [`crate::cox::fit`].
     pub fit: CoxModelFit,
@@ -305,7 +306,7 @@ fn fit_general(
         .coefficients
         .iter()
         .enumerate()
-        .map(|(j, c)| c.ok_or_else(|| Error::invalid(format!("x: column {j} is aliased"))))
+        .map(|(j, c)| c.ok_or(Error::Aliased { column: j }))
         .collect::<Result<_>>()?;
     let v: Vec<f64> = model
         .covariance

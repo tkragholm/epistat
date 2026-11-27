@@ -24,6 +24,7 @@ const EXACT_LIMIT: f64 = 3e8;
 
 /// The estimator of the cumulative excess hazard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NetMethod {
     /// Ederer II: the observed hazard minus the mean reference hazard of the
     /// persons at risk. It is not a consistent estimator of net survival when
@@ -49,6 +50,7 @@ pub enum NetMethod {
 
 /// How the limits of the net survival are formed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NetTransform {
     /// Normal limits for `ln Lambda`, where `Lambda` is the cumulative excess
     /// hazard.
@@ -61,6 +63,7 @@ pub enum NetTransform {
 
 /// The time points at which the estimate is formed.
 #[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
 pub enum Grid {
     /// The continuous estimator, evaluated exactly at every distinct exit and
     /// entry time. Its cost is the number of persons at risk summed over the
@@ -110,6 +113,7 @@ impl Default for NetOptions<'_> {
 /// [`Grid::EventTimes`] these are the distinct exit times; with
 /// [`Grid::Width`] the end of each interval in which someone is at risk.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct NetSurvival {
     /// The level of the stratum, 0 when the data has no strata.
     pub stratum: usize,
@@ -182,7 +186,7 @@ struct Raw {
 
 fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions<'_>) -> Result<()> {
     if expected.n_rows() != data.n_rows() {
-        return Err(Error::invalid(format!(
+        return Err(Error::mismatch(format!(
             "the expected hazards are for {} rows and the data has {}",
             expected.n_rows(),
             data.n_rows()
@@ -191,28 +195,28 @@ fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions<'_>) 
     if let Grid::Width(w) = opts.grid
         && !(w.is_finite() && w > 0.0)
     {
-        return Err(Error::invalid("the grid width must be finite and positive"));
+        return Err(Error::options("the grid width must be finite and positive"));
     }
     if data.followup()?.n_codes() != 1 {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "net survival needs a binary status: use SurvData::cause for competing events",
         ));
     }
     if let Some(w) = data.weight()
         && w.iter().any(|&v| v != 0.0 && v != 1.0)
     {
-        return Err(Error::invalid(
+        return Err(Error::value(
             "net survival takes weights of 0 and 1 only, which select rows",
         ));
     }
     let hakulinen = opts.method == NetMethod::Hakulinen;
     if hakulinen && opts.potential.is_none() {
-        return Err(Error::invalid(
+        return Err(Error::missing(
             "the Hakulinen estimator needs the potential follow-up of every row",
         ));
     }
     if !hakulinen && opts.potential.is_some() {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "only the Hakulinen estimator takes a potential follow-up",
         ));
     }
@@ -253,10 +257,10 @@ pub fn net_survival(
     for row in data.used_rows() {
         let i = row as usize;
         if start.is_some_and(|s| s[i] < 0.0) {
-            return Err(Error::invalid(format!("row {i} has a negative entry time")));
+            return Err(Error::value(format!("row {i} has a negative entry time")));
         }
         if expected.horizon(i) < stop[i] {
-            return Err(Error::invalid(format!(
+            return Err(Error::value(format!(
                 "the expected hazard of row {i} ends at {} before its follow-up at {}",
                 expected.horizon(i),
                 stop[i]
@@ -309,7 +313,7 @@ fn exact(
         })
         .sum();
     if work > EXACT_LIMIT {
-        return Err(Error::invalid(format!(
+        return Err(Error::options(format!(
             "the exact estimator would visit {work:.3e} pairs of a person and a time point, \
              above the limit of {EXACT_LIMIT:.0e}: use a grid width"
         )));
@@ -412,7 +416,7 @@ fn relative(
     if let Some(s) = start
         && let Some(&i) = rows.iter().find(|&&i| s[i] > 0.0)
     {
-        return Err(Error::invalid(format!(
+        return Err(Error::not_applicable(format!(
             "row {i} has delayed entry, which Ederer I and Hakulinen do not take"
         )));
     }
@@ -422,18 +426,12 @@ fn relative(
     };
     let method = match (opts.method, opts.potential) {
         (NetMethod::Hakulinen, Some(potential)) => {
-            if potential.len() != stop.len() {
-                return Err(Error::invalid(format!(
-                    "{} potential follow-up times for {} rows",
-                    potential.len(),
-                    stop.len()
-                )));
-            }
+            epistat_core::check::same_length("potential", stop.len(), potential.len())?;
             if let Some(&i) = rows
                 .iter()
                 .find(|&&i| !(potential[i].is_finite() && potential[i] >= 0.0))
             {
-                return Err(Error::invalid(format!(
+                return Err(Error::value(format!(
                     "the potential follow-up of row {i} is not finite and not negative"
                 )));
             }
@@ -458,7 +456,7 @@ fn relative(
     };
     for (k, s) in survival.into_iter().enumerate() {
         let s = s.ok_or_else(|| {
-            Error::invalid(format!(
+            Error::no_information(format!(
                 "no row has potential follow-up to time {}, where the observed survival is estimated",
                 raw.times[k]
             ))
@@ -699,5 +697,30 @@ fn finish(stratum: usize, raw: Raw, z: f64, transform: NetTransform) -> NetSurvi
         upper,
         n_at_risk: raw.at_risk,
         events: raw.events,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NetSurvival;
+
+    #[test]
+    fn a_net_survival_curve_is_read_at_the_last_time_before() {
+        let curve = NetSurvival {
+            stratum: 0,
+            times: vec![1.0, 2.5, 4.0],
+            cumulative_excess_hazard: vec![0.1, 0.2, 0.3],
+            variance: vec![0.01, 0.02, 0.03],
+            survival: vec![0.9, 0.8, 0.7],
+            lower: vec![Some(0.85), None, Some(0.6)],
+            upper: vec![Some(0.95), None, Some(0.8)],
+            n_at_risk: vec![10.0, 8.0, 5.0],
+            events: vec![1.0, 1.0, 1.0],
+        };
+        assert!(curve.at(0.5).is_none());
+        let at = curve.at(3.0).unwrap();
+        assert_eq!((at.time, at.survival, at.lower), (2.5, 0.8, None));
+        assert_eq!(curve.at(9.0).unwrap().survival, 0.7);
+        assert_eq!(curve.position_at(1.0), Some(0));
     }
 }

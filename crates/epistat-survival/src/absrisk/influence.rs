@@ -64,7 +64,7 @@ impl Baselines {
         let mut offset_centres = Vec::with_capacity(models.len());
         for (m, model) in models.iter().enumerate() {
             if model.fit.coefficients.iter().any(Option::is_none) {
-                return Err(Error::invalid(format!(
+                return Err(Error::fit(format!(
                     "model {m}: a coefficient is not defined; drop the aliased column"
                 )));
             }
@@ -105,9 +105,9 @@ impl Baselines {
                 let mut lam = vec![0.0; grid.len()];
                 let mut jumps = Vec::with_capacity(b.time.len());
                 for (t, h) in b.time.iter().zip(&b.hazard) {
-                    let j = grid.binary_search_by(|g| g.total_cmp(t)).map_err(|_| {
-                        Error::invalid("internal: an event time is missing from the grid")
-                    })?;
+                    let j = grid
+                        .binary_search_by(|g| g.total_cmp(t))
+                        .map_err(|_| Error::internal("an event time is missing from the grid"))?;
                     lam[j] = *h;
                     jumps.push(j);
                 }
@@ -280,7 +280,7 @@ fn train_model(
         .collect();
     let weighted_risk: Vec<f64> = risk.iter().zip(weight).map(|(r, w)| r * w).collect();
     if risk.iter().any(|v| !v.is_finite() || *v <= 0.0) {
-        return Err(Error::invalid(format!(
+        return Err(Error::undefined(format!(
             "model {m}: a risk score of the fit is not finite"
         )));
     }
@@ -345,9 +345,7 @@ fn train_model(
                 let t = stop[row];
                 let l = jumps
                     .binary_search_by(|&j| base.grid[j].total_cmp(&t))
-                    .map_err(|_| {
-                        Error::invalid("internal: an event time is not a jump of its model")
-                    })?;
+                    .map_err(|_| Error::internal("an event time is not a jump of its model"))?;
                 event_over_s0[i] = 1.0 / s0[l];
             }
         }
@@ -394,16 +392,14 @@ fn covariance(model: &ModelInput<'_>, m: usize) -> Result<Vec<f64>> {
         .unwrap_or(&model.fit.covariance);
     let p = model.x.ncols();
     if chosen.dim() != p {
-        return Err(Error::invalid(format!(
+        return Err(Error::mismatch(format!(
             "model {m}: the covariance is not p by p"
         )));
     }
     chosen
         .as_slice()
         .iter()
-        .map(|v| {
-            v.ok_or_else(|| Error::invalid(format!("model {m}: the covariance is not defined")))
-        })
+        .map(|v| v.ok_or_else(|| Error::fit(format!("model {m}: the covariance is not defined"))))
         .collect()
 }
 
@@ -481,6 +477,7 @@ fn risk_sets(
 /// Without the product limit the survival is the exponential of minus the
 /// cumulative hazard and the two forms are the same.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum InfluenceForm {
     /// The derivative of the product limit itself, `d log S(s_j-) = - sum over
     /// l < j of d h_l / (1 - h_l)`. The influence function is that of the

@@ -88,11 +88,19 @@ pub fn integrate(
             found: u64::MAX,
         })?;
     epistat_core::check::same_length("curve", expected, curve.len())?;
-    if !(horizon.is_finite() && origin.is_finite()) {
-        return Err(Error::invalid("horizon and origin must be finite"));
+    for (what, value) in [("horizon", horizon), ("origin", origin)] {
+        if !value.is_finite() {
+            return Err(InputError::Domain {
+                what,
+                value,
+                domain: "(-inf, inf)",
+                row: None,
+            }
+            .into());
+        }
     }
     if horizon < origin {
-        return Err(Error::invalid(format!(
+        return Err(Error::options(format!(
             "horizon: {horizon} is before the origin {origin}"
         )));
     }

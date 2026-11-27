@@ -387,7 +387,7 @@
     reason = "the entry point checks that the row count fits in u32"
 )]
 
-use epistat_core::Covariance;
+use epistat_core::{Covariance, InputError};
 use epistat_inference::sandwich::{meat, sandwich_with_inverse};
 use epistat_linalg::{Mat, MatRef};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
@@ -412,6 +412,7 @@ const TOLER_CHOL: f64 = 1.818_989_403_545_856_5e-12;
 
 /// One Cox fit on a design matrix. See [`fit`] for when entries are `None`.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct CoxModelFit {
     /// One coefficient per column of the design, `None` for an aliased column
     /// and for every column when the fit is degenerate or a coefficient
@@ -460,6 +461,7 @@ pub struct CoxModelFit {
 /// A chi-square test: the statistic, its degrees of freedom and the upper tail
 /// probability.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct ChiSquareTest {
     /// The statistic.
     pub statistic: f64,
@@ -491,6 +493,7 @@ impl ChiSquareTest {
 /// other tests could be computed from the rest of the fit, but they are given
 /// here so that the four are in one place.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[non_exhaustive]
 pub struct CoxTests {
     /// The Wald test with the model-based covariance matrix.
     pub wald: Option<ChiSquareTest>,
@@ -666,7 +669,7 @@ fn with_input<R>(
         (None, 1) => 1,
         (Some(code), _) => code,
         (None, _) => {
-            return Err(Error::invalid(
+            return Err(Error::missing(
                 "cause: the status has several codes, so the event code is required",
             ));
         }
@@ -715,14 +718,22 @@ fn check_exact(data: &SurvData<'_>) -> Result<()> {
 /// The checks on the offset, the starting values and the convergence limit.
 fn check_control(opts: &CoxOptions, data: &SurvData<'_>, columns: usize) -> Result<()> {
     if !(opts.tolerance.is_finite() && opts.tolerance > 0.0) {
-        return Err(Error::invalid("tolerance: must be finite and positive"));
+        return Err(Error::options("tolerance: must be finite and positive"));
     }
     if let Some(offset) = data.offset()
-        && offset
+        && let Some(row) = offset
             .iter()
-            .any(|o| !o.is_finite() || !o.exp().is_finite())
+            .position(|o| !o.is_finite() || !o.exp().is_finite())
     {
-        return Err(Error::invalid(
+        if !offset[row].is_finite() {
+            return Err(InputError::NotFinite {
+                what: "offset",
+                row,
+                column: None,
+            }
+            .into());
+        }
+        return Err(Error::value(
             "offset: a value is not finite or gives a risk score that is not finite",
         ));
     }
@@ -1900,7 +1911,7 @@ pub(crate) fn newton(model: &impl PartialLikelihood, settings: &Newton<'_>) -> R
     let beta0 = beta.clone();
     let Some(start) = model.evaluate(&beta) else {
         if init.is_some() {
-            return Err(Error::invalid(
+            return Err(Error::options(
                 "init: the starting coefficients give a risk score or a partial \
                  likelihood that is not finite",
             ));
@@ -2233,13 +2244,13 @@ fn score_residuals_checked(
 ) -> Result<Vec<Option<Vec<f64>>>> {
     let (rows, p) = (data.x.nrows(), data.x.ncols());
     if coefficients.len() != p {
-        return Err(Error::invalid(format!(
+        return Err(Error::mismatch(format!(
             "coefficients: {} values for {p} columns",
             coefficients.len()
         )));
     }
     if coefficients.iter().flatten().any(|c| !c.is_finite()) {
-        return Err(Error::invalid("coefficients: a value is not finite"));
+        return Err(Error::value("coefficients: a value is not finite"));
     }
     let mut columns: Vec<Option<Vec<f64>>> = coefficients
         .iter()
@@ -2271,7 +2282,7 @@ fn score_residuals_checked(
             }
         })
         .ok_or_else(|| {
-            Error::invalid(
+            Error::value(
                 "coefficients: a risk score or a denominator of the partial likelihood \
                  is not finite and positive at these values",
             )

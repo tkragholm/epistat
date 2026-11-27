@@ -30,6 +30,7 @@ use crate::surv::SurvData;
 
 /// The model of censoring whose weights an outcome uses.
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub enum OutcomeCensoring<'a> {
     /// The Kaplan-Meier or Cox model of the censoring hazard of
     /// [`ipcw::fit`](super::ipcw::fit), fitted again to the data of the outcome
@@ -133,12 +134,12 @@ pub(super) struct Prepared<'a> {
 pub(super) fn prepare<'a>(data: &SurvData<'_>, est: &Weights<'a>) -> Result<Prepared<'a>> {
     let n = data.n_rows();
     if est.iptw.is_none() && est.censoring.is_none() {
-        return Err(Error::invalid(
+        return Err(Error::missing(
             "weights: neither treatment nor censoring weights are given",
         ));
     }
     if est.iptw.is_none() && est.subject.is_some() {
-        return Err(Error::invalid(
+        return Err(Error::missing(
             "subject: it indexes the treatment weights, which are not given",
         ));
     }
@@ -175,7 +176,7 @@ pub(super) fn prepare<'a>(data: &SurvData<'_>, est: &Weights<'a>) -> Result<Prep
         None => {}
         Some(OutcomeCensoring::Pooled { fit, at }) => {
             if fit.len() != n {
-                return Err(Error::invalid(format!(
+                return Err(Error::fit(format!(
                     "censoring: the pooled fit has {} rows for {n} rows of data",
                     fit.len()
                 )));

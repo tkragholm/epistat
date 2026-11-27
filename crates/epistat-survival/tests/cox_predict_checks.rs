@@ -7,6 +7,7 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
+use epistat_core::{Classify, ErrorKind};
 use epistat_linalg::Mat;
 use epistat_survival::cox::predict::{
     BaselineOptions, Centring, ConfType, CoxHazardType, CoxPredictOptions, CoxPredictType,
@@ -282,11 +283,11 @@ fn refusals() {
     let strata_unknown = [9u32];
     let t0 = [0.5];
     let t1 = [2.0];
-    let expect_err = |r: Result<_, _>, what: &str| {
+    let expect_err = |r: Result<_, epistat_survival::Error>, what: &str| {
         assert!(
             matches!(
                 r,
-                Err(epistat_survival::Error::Input(_) | epistat_survival::Error::Invalid(_))
+                Err(ref e) if e.kind() == ErrorKind::Input
             ),
             "{what} should be refused"
         );

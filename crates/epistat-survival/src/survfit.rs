@@ -167,13 +167,14 @@ mod times;
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
-use epistat_core::Level;
+use epistat_core::{InputError, Level};
 
 pub use rmean::RestrictedMean;
 pub use times::{CurveAt, CurveIndex, ReadOptions};
 
 /// The estimator of the survival curve, `stype` in `survfit`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum SurvivalType {
     /// The Kaplan-Meier product limit, `stype = 1`.
     #[default]
@@ -184,6 +185,7 @@ pub enum SurvivalType {
 
 /// The estimator of the cumulative hazard, `ctype` in `survfit`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum HazardType {
     /// Nelson-Aalen, `ctype = 1`.
     #[default]
@@ -196,6 +198,7 @@ pub enum HazardType {
 /// The transformation of the confidence limits, `conf.type` in `survfit`. The
 /// same type is the one of [`cox::survfit`](crate::cox::survfit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ConfType {
     /// Limits on the log scale, `S exp(-+ z se)`, the upper limit at most 1.
     #[default]
@@ -215,6 +218,7 @@ pub enum ConfType {
 
 /// The standard error of the lower limit, `conf.lower` in `survfit`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ConfLower {
     /// The curve's own standard error.
     #[default]
@@ -228,6 +232,7 @@ pub enum ConfLower {
 
 /// Which variance a curve's standard errors come from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Variance {
     /// Greenwood's formula and the variances of the hazard estimators.
     Greenwood,
@@ -275,6 +280,7 @@ impl Default for SurvfitOptions {
 
 /// The curve of one group, one entry per reporting time in each vector.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GroupCurve {
     /// The caller's stratum code, 0 without a stratum column.
     pub group: u32,
@@ -317,6 +323,7 @@ pub struct GroupCurve {
 
 /// The estimate of every group, and how it was made.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Survfit {
     /// The number of rows given.
     pub n_rows: usize,
@@ -334,6 +341,7 @@ pub struct Survfit {
 
 /// One quantile of a curve, with the limits of its confidence interval.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct Quantile {
     /// The probability asked for.
     pub prob: f64,
@@ -362,10 +370,14 @@ impl GroupCurve {
     ///
     /// An input error when a probability is outside `[0, 1]` or NaN.
     pub fn quantiles(&self, probs: &[f64]) -> Result<Vec<Quantile>> {
-        if let Some(bad) = probs.iter().find(|p| !(0.0..=1.0).contains(*p)) {
-            return Err(Error::invalid(format!(
-                "quantile probability {bad} is outside [0, 1]"
-            )));
+        if let Some(row) = probs.iter().position(|p| !(0.0..=1.0).contains(p)) {
+            return Err(InputError::Domain {
+                what: "probs",
+                value: probs[row],
+                domain: "[0, 1]",
+                row: Some(row),
+            }
+            .into());
         }
         let mut x = Vec::with_capacity(self.time.len() + 1);
         x.push(0.0);
@@ -459,14 +471,14 @@ pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup()?;
     if surv.n_codes() != 1 {
-        return Err(Error::invalid(format!(
+        return Err(Error::not_applicable(format!(
             "survfit takes one event code and the data has {}; \
              use aalen_johansen::estimate for competing events",
             surv.n_codes()
         )));
     }
     if data.n_used() == 0 {
-        return Err(Error::invalid("no row has positive weight"));
+        return Err(Error::no_information("no row has positive weight"));
     }
     let counting = surv.start().is_some();
     let has_cluster = data.cluster().is_some();
@@ -474,7 +486,7 @@ pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
     let robust = match opts.robust {
         Some(true) => {
             if counting && !has_cluster && !has_id {
-                return Err(Error::invalid(
+                return Err(Error::missing(
                     "the jackknife variance of counting-process data needs a cluster or an id column",
                 ));
             }
@@ -482,7 +494,7 @@ pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
         }
         Some(false) => {
             if has_cluster {
-                return Err(Error::invalid(
+                return Err(Error::options(
                     "a cluster column needs the jackknife variance, but robust is false",
                 ));
             }

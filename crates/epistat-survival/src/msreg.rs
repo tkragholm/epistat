@@ -273,6 +273,7 @@ impl MsTerm {
 
 /// The coefficients of the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum MsTerms<'a> {
     /// A coefficient for each covariate in each transition, covariate by
     /// covariate and within a covariate in the order of the transitions.
@@ -286,6 +287,7 @@ pub enum MsTerms<'a> {
 
 /// The baseline hazards of the transitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum MsBaseline<'a> {
     /// A baseline hazard of its own for each transition.
     #[default]
@@ -348,6 +350,7 @@ impl Default for MsOptions<'_> {
 /// The result of [`fit`]: the coefficients of every term, the covariance, and
 /// what the predictions need.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct MsModel {
     /// The transitions, in the order of the state they leave and the state they
     /// enter.
@@ -406,7 +409,7 @@ fn resolve<'a>(data: &SurvData<'a>, timefix: TimeFix) -> Result<(SurvData<'a>, V
     let data = data.clone().with_timefix(timefix)?;
     let surv = data.followup()?;
     if surv.n_codes() < 2 {
-        return Err(Error::invalid(
+        return Err(Error::not_applicable(
             "the status has one code, so there is one transition and no multi-state model; \
              use `cox::fit` for it",
         ));

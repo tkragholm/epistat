@@ -53,6 +53,7 @@ pub struct ContrastOptions {
 
 /// The difference between two models at each time.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ScoreContrast {
     /// The times.
     pub times: Vec<f64>,
@@ -82,8 +83,9 @@ pub type Contrast = ScoreContrast;
 /// # Errors
 ///
 /// An input error when a score has no influence function, when the two are
-/// at different times or from data of different numbers of rows, or when
-/// their influence functions are of other rows.
+/// at different times or from data of different numbers of rows, when their
+/// influence functions are of other rows, or when a score or influence
+/// function does not have one value or column per time.
 pub fn brier_difference(
     model: &Score,
     reference: &Score,
@@ -93,7 +95,7 @@ pub fn brier_difference(
         || model.n_rows != reference.n_rows
         || model.n_used != reference.n_used
     {
-        return Err(Error::invalid(
+        return Err(Error::fit(
             "the two scores must be on the same data and times",
         ));
     }
@@ -123,7 +125,7 @@ pub fn auc_difference(
         || model.n_rows != reference.n_rows
         || model.n_used != reference.n_used
     {
-        return Err(Error::invalid(
+        return Err(Error::fit(
             "the two areas must be on the same data and times",
         ));
     }
@@ -148,14 +150,22 @@ fn contrast(
     opts: ContrastOptions,
 ) -> Result<ScoreContrast> {
     let (Some(a), Some(b)) = (model_influence, reference_influence) else {
-        return Err(Error::invalid(
+        return Err(Error::fit(
             "the scores need their influence functions: compute them with variance and \
              keep_influence",
         ));
     };
     if a.keys() != b.keys() {
-        return Err(Error::invalid(
+        return Err(Error::fit(
             "the two influence functions must be of the same rows",
+        ));
+    }
+    if model.len() != times.len() || reference.len() != times.len() {
+        return Err(Error::fit("a score must have one value per time"));
+    }
+    if a.n_columns() != times.len() || b.n_columns() != times.len() {
+        return Err(Error::fit(
+            "the influence function of a score must have one column per time",
         ));
     }
     let z = epistat_stats::dist::normal::quantile(opts.level.upper_probability());

@@ -32,6 +32,7 @@
 //! pieces of a cell in piece order and give the same bits. The first takes
 //! `24 K` bytes and the second `16` bytes per piece.
 
+use epistat_core::{InputError, check};
 use rayon::prelude::*;
 
 use crate::error::{Error, Result};
@@ -47,6 +48,7 @@ pub struct CellKey<'a> {
 
 /// The cells of an aggregation.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Cells {
     /// For each key, the level of each cell.
     pub codes: Vec<Vec<u32>>,
@@ -84,48 +86,37 @@ impl Cells {
 /// `u64`.
 pub fn aggregate(keys: &[CellKey<'_>], length: &[f64], events: &[f64]) -> Result<Cells> {
     let n = length.len();
-    if events.len() != n {
-        return Err(Error::invalid(format!(
-            "events has {} values against {n} lengths",
-            events.len()
-        )));
-    }
-    if let Some(i) = length.iter().position(|v| !(v.is_finite() && *v >= 0.0)) {
-        return Err(Error::invalid(format!(
-            "the length of piece {i} is not finite and non-negative"
-        )));
-    }
-    if let Some(i) = events.iter().position(|v| !(v.is_finite() && *v >= 0.0)) {
-        return Err(Error::invalid(format!(
-            "the events of piece {i} are not finite and non-negative"
-        )));
-    }
+    check::same_length("events", n, events.len())?;
+    check::weights("length", length)?;
+    check::weights("events", events)?;
     let mut strides = Vec::with_capacity(keys.len());
     let mut possible = 1_usize;
     for (k, key) in keys.iter().enumerate() {
         if key.codes.len() != n {
-            return Err(Error::invalid(format!(
-                "key {k} has {} codes against {n} pieces",
-                key.codes.len()
-            )));
+            return Err(InputError::Length {
+                what: "keys",
+                expected: n,
+                found: key.codes.len(),
+            }
+            .into());
         }
         if key.levels == 0 {
-            return Err(Error::invalid(format!("key {k} has no levels")));
+            return Err(Error::value(format!("key {k} has no levels")));
         }
         if let Some(i) = key
             .codes
             .iter()
             .position(|&c| usize::try_from(c).map_or(true, |c| c >= key.levels))
         {
-            return Err(Error::invalid(format!(
+            return Err(Error::out_of_range(format!(
                 "key {k}: the code {} of piece {i} is not below its {} levels",
                 key.codes[i], key.levels
             )));
         }
         strides.push(possible);
-        possible = possible
-            .checked_mul(key.levels)
-            .ok_or_else(|| Error::invalid("the number of possible cells does not fit a usize"))?;
+        possible = possible.checked_mul(key.levels).ok_or_else(|| {
+            Error::out_of_range("the number of possible cells does not fit a usize")
+        })?;
     }
     let combined = |i: usize| -> usize {
         keys.iter()

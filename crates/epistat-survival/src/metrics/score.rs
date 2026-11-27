@@ -206,6 +206,7 @@ use crate::timefix::TimeFix;
 
 /// How the censoring distribution is obtained.
 #[derive(Debug, Clone, Default)]
+#[non_exhaustive]
 pub enum Censoring<'a> {
     /// The Kaplan-Meier estimate of the censoring times, `cens.model = "km"`.
     #[default]
@@ -232,6 +233,7 @@ pub struct SuppliedCensoring<'a> {
 
 /// The scale the predictions are on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum Predicted {
     /// The probability of the event by the time.
     #[default]
@@ -243,6 +245,7 @@ pub enum Predicted {
 
 /// Which rows are controls when there is a competing event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum ControlSet {
     /// Rows still at risk after the time, and rows with a competing event by
     /// the time: `AUC_2` of `timeROC` and the area of `Score`.
@@ -254,6 +257,7 @@ pub enum ControlSet {
 
 /// How a row whose time is exactly the evaluation time is counted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum HorizonRule {
     /// An event at the time is a case, `Score`.
     #[default]
@@ -307,6 +311,7 @@ impl Default for ScoreOptions<'_> {
 
 /// The Brier score at each time.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Score {
     /// The times, as given.
     pub times: Vec<f64>,
@@ -328,6 +333,7 @@ pub struct Score {
 
 /// The index of prediction accuracy at each time.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Ipa {
     /// The times, as given.
     pub times: Vec<f64>,
@@ -340,6 +346,7 @@ pub struct Ipa {
 
 /// The area under the ROC curve at each time.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Auc {
     /// The times, as given.
     pub times: Vec<f64>,
@@ -428,7 +435,7 @@ impl<'a> Core<'a> {
                     .flat_map(|&r| (0..n_times).map(move |j| at[(r as usize, j)]));
                 for g in g_own.iter().copied().chain(at_values) {
                     if !(g > 0.0 && g <= 1.0) {
-                        return Err(Error::invalid(format!(
+                        return Err(Error::value(format!(
                             "censoring probabilities must be in (0, 1], got {g}"
                         )));
                     }
@@ -673,7 +680,7 @@ pub fn brier(
         Predicted::AbsoluteRisk => false,
         Predicted::EventFreeProbability => {
             if core.sorted.kind.contains(&Kind::Competing) || data.followup()?.n_codes() > 1 {
-                return Err(Error::invalid(
+                return Err(Error::not_applicable(
                     "event-free probabilities are for data with one event code; with competing \
                      risks give the absolute risk of the cause",
                 ));
@@ -684,7 +691,7 @@ pub fn brier(
     for j in 0..times.len() {
         for i in 0..predicted.nrows() {
             if !(0.0..=1.0).contains(&predicted[(i, j)]) {
-                return Err(Error::invalid(format!(
+                return Err(Error::value(format!(
                     "predicted: row {i}, column {j} is {}, which is not a probability",
                     predicted[(i, j)]
                 )));
@@ -732,12 +739,26 @@ pub fn null_brier(data: &SurvData<'_>, times: &[f64], opts: &ScoreOptions<'_>) -
 /// # Errors
 ///
 /// An input error when the two scores are at different times, from data of
-/// different numbers of rows, or with influence functions of other rows.
+/// different numbers of rows, with a score or influence function that does
+/// not have one value or column per time, or with influence functions of
+/// other rows.
 pub fn ipa(model: &Score, null: &Score) -> Result<Ipa> {
     if model.times != null.times || model.n_rows != null.n_rows || model.n_used != null.n_used {
-        return Err(Error::invalid(
+        return Err(Error::fit(
             "the model and the null model must be scored on the same data and times",
         ));
+    }
+    for score in [model, null] {
+        if score.brier.len() != score.times.len() {
+            return Err(Error::fit("a score must have one value per time"));
+        }
+        if let Some(influence) = &score.influence
+            && influence.n_columns() != score.times.len()
+        {
+            return Err(Error::fit(
+                "the influence function of a score must have one column per time",
+            ));
+        }
     }
     let mut out = Ipa {
         times: model.times.clone(),
@@ -755,7 +776,7 @@ pub fn ipa(model: &Score, null: &Score) -> Result<Ipa> {
         let se = match (&model.influence, &null.influence) {
             (Some(m), Some(z)) => {
                 if m.keys() != z.keys() {
-                    return Err(Error::invalid(
+                    return Err(Error::fit(
                         "the model and the null model must have influence functions of the same rows",
                     ));
                 }

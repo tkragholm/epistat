@@ -5,6 +5,7 @@ use crate::error::{Error, Result};
 
 /// A restricted mean survival time.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct RestrictedMean {
     /// The horizon the curve was integrated to.
     pub tau: f64,
@@ -16,12 +17,12 @@ pub struct RestrictedMean {
 
 pub(super) fn restricted_mean(curve: &GroupCurve, tau: f64) -> Result<RestrictedMean> {
     if !tau.is_finite() {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "the horizon of a restricted mean must be finite",
         ));
     }
     if tau < curve.origin {
-        return Err(Error::invalid(format!(
+        return Err(Error::options(format!(
             "the horizon {tau} of a restricted mean is before the start of the curve, {}",
             curve.origin
         )));

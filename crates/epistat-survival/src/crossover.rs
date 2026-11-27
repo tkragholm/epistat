@@ -109,15 +109,16 @@ pub use controls::{
     case_time_control_windows, sample_controls,
 };
 
-use epistat_core::day;
+use epistat_core::{InputError, day};
 use epistat_linalg::Mat;
 use rayon::prelude::*;
 
-use crate::check::refuse_non_finite;
+use crate::check::{check_lengths, refuse_non_finite};
 use crate::error::{Error, Result};
 
 /// The calendar stratum within which time-stratified referents are chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum StratumUnit {
     /// The same calendar month and year.
     Month,
@@ -138,6 +139,7 @@ pub enum StratumUnit {
 
 /// How the referent windows of an event are chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Referent {
     /// `n` windows before the hazard window, `step` days apart.
     Unidirectional {
@@ -193,6 +195,7 @@ pub struct Observation<'a> {
 
 /// The windows of a set of events, grouped by set, the hazard window first.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Windows {
     /// The set of each window: the position of its event in the input.
     pub set: Vec<u32>,
@@ -236,22 +239,13 @@ impl Windows {
     /// An input error when `per_event` has no value for the event of some
     /// window.
     pub fn gather<T: Copy>(&self, per_event: &[T]) -> Result<Vec<T>> {
-        self.set
-            .iter()
-            .map(|&s| {
-                per_event.get(s as usize).copied().ok_or_else(|| {
-                    Error::invalid(format!(
-                        "per_event: {} values, and a window belongs to event {s}",
-                        per_event.len()
-                    ))
-                })
-            })
-            .collect()
+        crate::expanded::gather(&self.set, per_event, "per_event")
     }
 }
 
 /// How an exposure interval series is turned into a number per window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Measure {
     /// The days of the window covered by the series.
     Days,
@@ -272,10 +266,6 @@ pub struct ExposureIntervals<'a> {
 
 /// Events per task of the construction.
 const BLOCK: usize = 1024;
-
-fn invalid(message: impl Into<String>) -> Error {
-    Error::invalid(message)
-}
 
 /// The first day of the month `months` months after January of year `y`.
 fn first_of_month(y: i64, months: i64) -> i64 {
@@ -361,7 +351,7 @@ pub fn build_windows(
     let smallest = match referent {
         Referent::Unidirectional { n, step } | Referent::Bidirectional { n, step } => {
             if n == 0 {
-                return Err(invalid("a referent needs at least one window"));
+                return Err(Error::options("a referent needs at least one window"));
             }
             step
         }
@@ -372,7 +362,7 @@ pub fn build_windows(
         Referent::Stratified { unit, spacing } => {
             check_unit(unit)?;
             if spacing < 1 {
-                return Err(invalid(format!(
+                return Err(Error::options(format!(
                     "the spacing of the referents is {spacing}, which is less than a day"
                 )));
             }
@@ -410,19 +400,21 @@ pub fn build_windows_in_strata(
     observation: Option<Observation<'_>>,
 ) -> Result<Windows> {
     let n = event_day.len();
-    if strata.first.len() != n || strata.last.len() != n {
-        return Err(invalid("the strata columns must have one entry per event"));
-    }
+    check_lengths(&[
+        ("event_day", n),
+        ("strata first", strata.first.len()),
+        ("strata last", strata.last.len()),
+    ])?;
     if let Some(i) =
         (0..n).find(|&i| !(strata.first[i] <= event_day[i] && event_day[i] <= strata.last[i]))
     {
-        return Err(invalid(format!(
+        return Err(Error::value(format!(
             "event {i} on day {} is not within its stratum [{}, {}]",
             event_day[i], strata.first[i], strata.last[i]
         )));
     }
     if spacing < 1 {
-        return Err(invalid(format!(
+        return Err(Error::options(format!(
             "the spacing of the referents is {spacing}, which is less than a day"
         )));
     }
@@ -439,7 +431,7 @@ pub fn build_windows_in_strata(
 
 fn check_unit(unit: StratumUnit) -> Result<()> {
     match unit {
-        StratumUnit::Fixed { length, .. } if length < 1 => Err(invalid(format!(
+        StratumUnit::Fixed { length, .. } if length < 1 => Err(Error::options(format!(
             "a fixed stratum of {length} days is shorter than a day"
         ))),
         _ => Ok(()),
@@ -455,31 +447,34 @@ fn check_events(
     observation: Option<Observation<'_>>,
 ) -> Result<()> {
     let n = event_day.len();
-    if person.len() != n {
-        return Err(invalid(
-            "event_day and person must have one entry per event",
-        ));
-    }
+    check_lengths(&[("event_day", n), ("person", person.len())])?;
     if let Some(o) = observation {
-        if o.start.len() != n || o.end.len() != n {
-            return Err(invalid(
-                "the observation columns must have one entry per event",
-            ));
-        }
+        check_lengths(&[
+            ("event_day", n),
+            ("observation start", o.start.len()),
+            ("observation end", o.end.len()),
+        ])?;
         if let Some(i) = (0..n).find(|&i| o.end[i] < o.start[i]) {
-            return Err(invalid(format!(
+            return Err(Error::value(format!(
                 "event {i} has an observation period that ends before it starts"
             )));
         }
     }
     if u32::try_from(n).is_err() {
-        return Err(invalid("more events than a u32 addresses"));
+        return Err(InputError::TooLarge {
+            what: "event_day",
+            limit: u64::from(u32::MAX),
+            found: n as u64,
+        }
+        .into());
     }
     if hazard_days < 1 || lag < 0 {
-        return Err(invalid("hazard_days must be at least 1 and lag at least 0"));
+        return Err(Error::options(
+            "hazard_days must be at least 1 and lag at least 0",
+        ));
     }
     if smallest < hazard_days {
-        return Err(invalid(format!(
+        return Err(Error::options(format!(
             "referent windows are {smallest} days apart, fewer than the {hazard_days} days of the hazard window, so they would overlap it"
         )));
     }
@@ -562,24 +557,31 @@ fn build_with(
 ///
 /// # Errors
 ///
-/// An input error when the columns of `exposure` differ in length or an
-/// interval ends before it starts.
+/// An input error when the columns of `exposure` differ in length, an
+/// interval ends before it starts, or the columns of `windows` differ in
+/// length.
 pub fn exposure_in_windows(
     windows: &Windows,
     exposure: &ExposureIntervals<'_>,
     measure: Measure,
 ) -> Result<Vec<f64>> {
     let m = exposure.person.len();
-    if exposure.start.len() != m || exposure.end.len() != m {
-        return Err(invalid(
-            "person, start and end of the exposure must have one entry per interval",
-        ));
-    }
+    check_lengths(&[
+        ("exposure person", m),
+        ("exposure start", exposure.start.len()),
+        ("exposure end", exposure.end.len()),
+    ])?;
     if let Some(i) = (0..m).find(|&i| exposure.end[i] < exposure.start[i]) {
-        return Err(invalid(format!(
+        return Err(Error::value(format!(
             "exposure interval {i} ends before it starts"
         )));
     }
+    check_lengths(&[
+        ("windows set", windows.len()),
+        ("windows person", windows.person.len()),
+        ("windows start", windows.start.len()),
+        ("windows end", windows.end.len()),
+    ])?;
     let mut order: Vec<usize> = (0..m).collect();
     order.sort_by_key(|&i| (exposure.person[i], exposure.start[i], exposure.end[i]));
     // Merged intervals as (person, start, end), sorted.
@@ -619,11 +621,10 @@ pub fn exposure_in_windows(
 /// An input error when the two have different lengths or an exposure is not
 /// finite.
 pub fn case_time_control_design(exposure: &[f64], case_group: &[bool]) -> Result<Mat<f64>> {
-    if exposure.len() != case_group.len() {
-        return Err(invalid(
-            "exposure and case_group must have one entry per window",
-        ));
-    }
+    check_lengths(&[
+        ("exposure", exposure.len()),
+        ("case_group", case_group.len()),
+    ])?;
     refuse_non_finite(exposure, "exposure")?;
     Ok(Mat::from_fn(exposure.len(), 2, |i, j| {
         if j == 0 || case_group[i] {

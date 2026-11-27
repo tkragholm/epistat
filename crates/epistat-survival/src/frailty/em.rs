@@ -97,7 +97,7 @@ pub(super) fn fit_em(
         let mut beta = Vec::with_capacity(layout.p);
         for c in &fit.coefficients {
             beta.push(c.ok_or_else(|| {
-                Error::invalid("the Cox fit of an EM step has no estimate for a coefficient")
+                Error::fit("the Cox fit of an EM step has no estimate for a coefficient")
             })?);
         }
         state.beta = beta;

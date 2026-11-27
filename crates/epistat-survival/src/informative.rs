@@ -35,14 +35,16 @@
 
 use std::collections::HashMap;
 
+use epistat_core::check;
 use epistat_linalg::MatRef;
 
-use crate::check::{check_lengths, check_row_count};
+use crate::check::{check_lengths, check_row_count, refuse_non_finite_matrix};
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 
 /// What one set or stratum holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SetInformation {
     /// The label of the set, as given.
     pub set: u32,
@@ -71,6 +73,7 @@ impl SetInformation {
 
 /// The sets of a data set and how many carry information.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InformativeSets {
     /// Every set, in the order of its first row.
     pub sets: Vec<SetInformation>,
@@ -106,11 +109,7 @@ pub fn informative_sets(
     check_lengths(&[("case", case.len()), ("set", set.len()), ("x", x.nrows())])?;
     if let Some(w) = weight {
         check_lengths(&[("case", case.len()), ("weight", w.len())])?;
-        if w.iter().any(|v| !v.is_finite() || *v < 0.0) {
-            return Err(Error::invalid(
-                "a weight is negative or not finite".to_owned(),
-            ));
-        }
+        check::weights("weight", w)?;
     }
     count(case, set, x, weight)
 }
@@ -147,16 +146,10 @@ fn count(
 ) -> Result<InformativeSets> {
     let p = x.ncols();
     if p == 0 {
-        return Err(Error::invalid("x has no column".to_owned()));
+        return Err(Error::missing("x has no column".to_owned()));
     }
     check_row_count(case.len())?;
-    for j in 0..p {
-        if (0..x.nrows()).any(|i| !x[(i, j)].is_finite()) {
-            return Err(Error::invalid(
-                "x has a value that is not finite".to_owned(),
-            ));
-        }
-    }
+    refuse_non_finite_matrix(x, "x")?;
     let used = |row: usize| weight.is_none_or(|w| w[row] > 0.0);
     // Group the used rows by set, sets in the order of their first row.
     let mut index: HashMap<u32, usize> = HashMap::new();

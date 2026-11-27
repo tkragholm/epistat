@@ -383,7 +383,7 @@ fn occupation(
 ) -> Result<Occupation> {
     check_lengths(&[("starts", intervals.len()), ("weights", weights.len())])?;
     if initial.len() != states {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "the initial distribution must have one entry per state",
         ));
     }
@@ -427,7 +427,7 @@ fn initial_distribution(
     }
     let total = compensated(occupancy.iter().copied());
     if total <= 0.0 {
-        return Err(Error::invalid(
+        return Err(Error::no_information(
             "the opening intervals carry no weight in the state space, so there is no initial distribution",
         ));
     }
@@ -487,7 +487,7 @@ fn product_integral(
                 leaving += rate;
             }
             if leaving > 1.0 + rate_tolerance {
-                return Err(Error::invalid(format!(
+                return Err(Error::inconsistent(format!(
                     "more weight left state {i} at time {time} than was at risk \
                      in it ({leaving:.4}); the interval data is malformed"
                 )));
@@ -618,7 +618,7 @@ fn bootstrap_rows(
     rate_tolerance: f64,
 ) -> Result<Vec<f64>> {
     if states == 0 {
-        return Err(Error::invalid(
+        return Err(Error::no_information(
             "an empty state space has no occupation probabilities to estimate",
         ));
     }
@@ -635,19 +635,25 @@ fn bootstrap_rows(
         .iter()
         .any(|&code| code as usize >= n_clusters)
     {
-        return Err(Error::invalid("cluster_codes must be below n_clusters"));
+        return Err(Error::out_of_range(
+            "cluster_codes must be below n_clusters",
+        ));
     }
     if first_positions
         .iter()
         .any(|&position| position as usize >= intervals.len())
     {
-        return Err(Error::invalid("first_positions index past the intervals"));
+        return Err(Error::out_of_range(
+            "first_positions index past the intervals",
+        ));
     }
     if first_states
         .iter()
         .any(|&state| usize::try_from(state).is_ok_and(|rank| rank >= states))
     {
-        return Err(Error::invalid("first_states must be below the state count"));
+        return Err(Error::out_of_range(
+            "first_states must be below the state count",
+        ));
     }
 
     let plan = Plan::new(intervals, times, states);
@@ -727,7 +733,7 @@ pub type Options = MultistateOptions;
 fn rate_tolerance(opts: &MultistateOptions, rows: usize, states: usize) -> Result<f64> {
     match opts.rate_tolerance {
         Some(tolerance) if tolerance.is_finite() && tolerance >= 0.0 => Ok(tolerance),
-        Some(tolerance) => Err(Error::invalid(format!(
+        Some(tolerance) => Err(Error::options(format!(
             "rate_tolerance must be finite and not negative, got {tolerance}"
         ))),
         None => Ok((2 * rows + states) as f64 * f64::EPSILON),
@@ -736,6 +742,7 @@ fn rate_tolerance(opts: &MultistateOptions, rows: usize, states: usize) -> Resul
 
 /// The occupation probabilities at every time, with the rows behind them.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct OccupationEstimate {
     /// `time * state`, row-major: the probability of each state after each
     /// time. State `k` is status code `k + 1`.
@@ -759,6 +766,7 @@ pub type Estimate = OccupationEstimate;
 
 /// The replicates of a clustered bootstrap, with the rows behind them.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct Replicates {
     /// The replicates concatenated in replicate order. Without horizons each is
     /// `time * state`, the occupation probabilities. With horizons each is
@@ -805,17 +813,17 @@ impl<'a> Prepared<'a> {
         let surv = data.followup()?;
         let stop = surv.stop();
         let start = surv.start().ok_or_else(|| {
-            Error::invalid(
+            Error::missing(
                 "multi-state estimates need the start of each interval, the start column",
             )
         })?;
         if data.n_used() == 0 {
-            return Err(Error::invalid(
+            return Err(Error::no_information(
                 "no row has positive weight, so there is nothing to estimate",
             ));
         }
         let ids = data.id().ok_or_else(|| {
-            Error::invalid(
+            Error::missing(
                 "multi-state estimates need an id column to know which rows belong together",
             )
         })?;
@@ -834,7 +842,7 @@ impl<'a> Prepared<'a> {
         for &row in rows {
             let state = check.istate[row as usize];
             if state == 0 {
-                return Err(Error::invalid(format!(
+                return Err(Error::missing(format!(
                     "row {row} has no starting state: give istate, or drop the row"
                 )));
             }
@@ -876,14 +884,14 @@ impl<'a> Prepared<'a> {
                 first_positions.push(at);
                 let rank = from_states[at as usize];
                 first_states.push(i32::try_from(rank).map_err(|_| {
-                    Error::invalid("a state code above the largest i32 is not supported")
+                    Error::out_of_range("a state code above the largest i32 is not supported")
                 })?);
             }
         }
 
         let clusters = if clustered {
             let codes = data.cluster().ok_or_else(|| {
-                Error::invalid(
+                Error::missing(
                     "the bootstrap resamples clusters, so the data need a cluster column",
                 )
             })?;
@@ -908,7 +916,7 @@ impl<'a> Prepared<'a> {
         let surv = self.data.followup()?;
         let start = surv
             .start()
-            .ok_or_else(|| Error::invalid("multi-state estimates need a start column"))?;
+            .ok_or_else(|| Error::missing("multi-state estimates need a start column"))?;
         let index = self.index.as_deref();
         Ok(Columns {
             starts: pick_used(start, index),
@@ -992,12 +1000,12 @@ pub fn estimate(
 /// number, summing to 1 to within the rounding of its entries.
 fn check_distribution(initial: &[f64], states: usize) -> Result<()> {
     if initial.len() != states {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "the initial distribution must have one entry per state",
         ));
     }
     if initial.iter().any(|&p| !(p >= 0.0 && p.is_finite())) {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "the initial distribution must not hold a negative or non-finite entry",
         ));
     }
@@ -1006,7 +1014,7 @@ fn check_distribution(initial: &[f64], states: usize) -> Result<()> {
     // state. The sum itself is compensated.
     let total = compensated(initial.iter().copied());
     if (total - 1.0).abs() > states as f64 * f64::EPSILON {
-        return Err(Error::invalid(format!(
+        return Err(Error::options(format!(
             "the initial distribution must sum to 1, and sums to {total}"
         )));
     }
@@ -1044,7 +1052,7 @@ pub fn bootstrap(
     opts: &MultistateOptions,
 ) -> Result<Replicates> {
     if opts.initial.is_some() {
-        return Err(Error::invalid(
+        return Err(Error::options(
             "the bootstrap forms the initial distribution in each replicate, so none can be given",
         ));
     }
@@ -1066,7 +1074,7 @@ pub fn bootstrap(
     let clusters = prepared
         .clusters
         .as_deref()
-        .ok_or_else(|| Error::invalid("the bootstrap needs a cluster column"))?;
+        .ok_or_else(|| Error::missing("the bootstrap needs a cluster column"))?;
     let seeds: Vec<u64> = (0..bootstrap.replicates as u64)
         .map(|r| replicate_seed(bootstrap.seed, r))
         .collect();
@@ -1131,6 +1139,7 @@ pub type VarianceOptions = OccupationVarianceOptions;
 /// The standard errors of the occupation probabilities and the cumulative
 /// hazards by the infinitesimal jackknife, with what is needed to read them.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct OccupationVariance {
     /// `time * state`, row-major: the probability of each state after each
     /// time, from the recursion the standard errors come from. It equals
@@ -1251,10 +1260,10 @@ pub(crate) fn variance_dfbeta(
     check_ascending(&v.horizons, "horizons", false)?;
     check_ascending(&v.influence_times, "influence_times", false)?;
     if !v.origin.is_finite() {
-        return Err(Error::invalid("origin must be finite"));
+        return Err(Error::options("origin must be finite"));
     }
     if times.first().is_some_and(|&t| t < v.origin) {
-        return Err(Error::invalid("no time may be before the origin"));
+        return Err(Error::value("no time may be before the origin"));
     }
     let prepared = Prepared::new(data, opts.timefix, false)?;
     let Columns {

@@ -38,10 +38,12 @@
 //!
 //! All checks run once, when the builder's `build` is called, so an estimator
 //! and the loops around it never repeat them. Each is an error, never a
-//! repair, and names the count of offending rows and the first row number
-//! (from 0).
+//! repair, and names the first offending row (from 0), with the count of
+//! offending rows where the shared checks of `epistat_core` have no error for
+//! the rule.
 //!
-//! - Columns of different lengths, since rows would not line up.
+//! - An empty column among columns with rows, and columns of different
+//!   lengths, since rows would not line up.
 //! - More rows than `u32::MAX`, since row indices are `u32` downstream.
 //! - `n_codes` of 0, which leaves no code for an event.
 //! - A start, stop, weight or offset that is NaN or infinite. An infinite stop has no
@@ -113,6 +115,8 @@
 //! copying the status column.
 
 use std::borrow::Cow;
+
+use epistat_core::InputError;
 
 use crate::check::{check_lengths, check_row_count};
 use crate::error::{Error, Result};
@@ -271,7 +275,7 @@ impl<'a> SurvData<'a> {
     pub fn followup(&self) -> Result<&Surv<'a>> {
         match &self.outcome {
             Outcome::Followup(surv) => Ok(surv),
-            Outcome::Interval(_) => Err(Error::invalid(
+            Outcome::Interval(_) => Err(Error::not_applicable(
                 "the outcome is interval-censored; this estimator needs follow-up data \
                  (stop and status)"
                     .to_owned(),
@@ -287,7 +291,7 @@ impl<'a> SurvData<'a> {
     pub fn interval(&self) -> Result<&IntervalSurv<'a>> {
         match &self.outcome {
             Outcome::Interval(surv) => Ok(surv),
-            Outcome::Followup(_) => Err(Error::invalid(
+            Outcome::Followup(_) => Err(Error::not_applicable(
                 "the outcome is follow-up data; this estimator needs interval-censored data"
                     .to_owned(),
             )),
@@ -417,7 +421,7 @@ impl<'a> SurvData<'a> {
             Outcome::Followup(surv) => surv.apply_timefix(policy)?,
             Outcome::Interval(_) => {
                 if !matches!(policy, TimeFix::Exact | TimeFix::Aeq { tolerance: 0.0 }) {
-                    return Err(Error::invalid(
+                    return Err(Error::not_applicable(
                         "a tie policy applies to follow-up times, not to interval-censored data"
                             .to_owned(),
                     ));
@@ -493,7 +497,7 @@ impl<'a> SurvData<'a> {
                 weight: self.weight,
                 code: signed,
             }),
-            _ => Err(Error::invalid(format!(
+            _ => Err(Error::out_of_range(format!(
                 "cause {code} is outside 1..={}; 0 is censoring",
                 surv.n_codes
             ))),
@@ -546,6 +550,13 @@ impl<'a> Columns<'a> {
                 .into_iter()
                 .filter_map(|(name, len)| Some((name, len?))),
         );
+        // An empty column among columns with rows is refused as empty rather
+        // than by its length.
+        if let Some(&(name, _)) = lengths.iter().find(|&&(_, len)| len == 0)
+            && lengths.iter().any(|&(_, len)| len != 0)
+        {
+            return Err(Error::from(InputError::Empty { what: name }));
+        }
         check_lengths(&lengths)?;
         check_row_count(self.stop.len())?;
         checks::check_n_codes(self.n_codes)?;

@@ -38,10 +38,12 @@
 //!    cases as present controls to adjust for exposure trend bias in
 //!    case-only studies. Epidemiology 2011;22(4):568-74.
 
+use epistat_core::InputError;
 use epistat_rng::{Stream, replicate_seed};
 use rayon::prelude::*;
 
 use super::{Observation, Referent, Windows, build_windows};
+use crate::check::check_lengths;
 use crate::error::{Error, Result};
 
 /// The case events at whose dates controls are sampled.
@@ -74,6 +76,7 @@ pub struct Candidates<'a> {
 
 /// Who may serve as the control of a case event on day `t`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ControlRule {
     /// People without an event on or before `t`: the case-time-control
     /// design.
@@ -89,6 +92,7 @@ pub enum ControlRule {
 
 /// The sampled controls, one entry per control, in the order of the cases.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Controls {
     /// The position of the control's case event in the input.
     pub case: Vec<u32>,
@@ -116,10 +120,6 @@ impl Controls {
     pub fn is_empty(&self) -> bool {
         self.case.is_empty()
     }
-}
-
-fn invalid(message: impl Into<String>) -> Error {
-    Error::invalid(message)
 }
 
 /// The candidates of one key, sorted by first event with `None` last.
@@ -153,42 +153,48 @@ pub fn sample_controls(
 ) -> Result<Controls> {
     let n = cases.day.len();
     let m = candidates.person.len();
-    if cases.person.len() != n || cases.key.is_some_and(|k| k.len() != n) {
-        return Err(invalid(
-            "day, person and key of the cases must have one entry per case",
-        ));
+    check_lengths(&[("cases day", n), ("cases person", cases.person.len())])?;
+    if let Some(k) = cases.key {
+        check_lengths(&[("cases day", n), ("cases key", k.len())])?;
     }
-    if candidates.start.len() != m
-        || candidates.end.len() != m
-        || candidates.first_event.len() != m
-        || candidates.key.is_some_and(|k| k.len() != m)
-    {
-        return Err(invalid(
-            "person, start, end, first_event and key of the candidates must have one entry per candidate",
-        ));
+    check_lengths(&[
+        ("candidates person", m),
+        ("candidates start", candidates.start.len()),
+        ("candidates end", candidates.end.len()),
+        ("candidates first_event", candidates.first_event.len()),
+    ])?;
+    if let Some(k) = candidates.key {
+        check_lengths(&[("candidates person", m), ("candidates key", k.len())])?;
     }
     if cases.key.is_some() != candidates.key.is_some() {
-        return Err(invalid(
+        return Err(Error::missing(
             "the cases and the candidates must both have a key or both have none",
         ));
     }
     if let Some(i) = (0..m).find(|&i| candidates.end[i] < candidates.start[i]) {
-        return Err(invalid(format!(
+        return Err(Error::value(format!(
             "candidate {i} has an observation period that ends before it starts"
         )));
     }
     if per_case == 0 {
-        return Err(invalid("per_case must be at least 1"));
+        return Err(Error::options("per_case must be at least 1"));
     }
     let gap = match rule {
         ControlRule::EventFree => 0,
         ControlRule::FutureCases { gap } if gap >= 0 => gap,
         ControlRule::FutureCases { gap } => {
-            return Err(invalid(format!("the gap is {gap}, which is negative")));
+            return Err(Error::options(format!(
+                "the gap is {gap}, which is negative"
+            )));
         }
     };
     if u32::try_from(n).is_err() {
-        return Err(invalid("more cases than a u32 addresses"));
+        return Err(InputError::TooLarge {
+            what: "cases day",
+            limit: u64::from(u32::MAX),
+            found: n as u64,
+        }
+        .into());
     }
     let key_of = |i: usize| candidates.key.map_or(0, |k| k[i]);
     let mut order: Vec<usize> = (0..m).collect();
@@ -284,6 +290,7 @@ fn draw(pool: &[usize], k: usize, ok: &impl Fn(usize) -> bool, seed: u64) -> Vec
 /// those of the case events, with their observation, and those of the
 /// controls at their index days, built alike.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CaseTimeControlWindows {
     /// The windows. Sets `0..n_cases` are the case events, in their order,
     /// and set `n_cases + k` is control `k`.
@@ -311,12 +318,13 @@ pub fn case_time_control_windows(
     referent: Referent,
 ) -> Result<CaseTimeControlWindows> {
     let n = case_day.len();
-    if case_person.len() != n
-        || case_observation.is_some_and(|o| o.start.len() != n || o.end.len() != n)
-    {
-        return Err(invalid(
-            "the case columns and their observation must have one entry per case",
-        ));
+    check_lengths(&[("case_day", n), ("case_person", case_person.len())])?;
+    if let Some(o) = case_observation {
+        check_lengths(&[
+            ("case_day", n),
+            ("case_observation start", o.start.len()),
+            ("case_observation end", o.end.len()),
+        ])?;
     }
     let day: Vec<i64> = case_day.iter().chain(&controls.day).copied().collect();
     let person: Vec<u32> = case_person
