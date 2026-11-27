@@ -37,7 +37,10 @@
 //! with `e2` the second-stage residual, `u` the first-stage residual and `z`
 //! the first stage's covariates and dummies. The covariance is
 //! `sum_c (sum_{i in c} psi_i)(sum_{i in c} psi_i)'` over the clusters,
-//! without small-sample factors, as in the package. The products
+//! without small-sample factors, as in the package. The intervals and
+//! p-values use the t distribution with `n - K` degrees of freedom, `n` the
+//! rows of positive weight in the estimation and `K` the coefficients, as
+//! `fixest` forms them from the package's covariance. The products
 //! `z_i' Gamma` on the untreated rows are the projections of the module
 //! `first_stage` of [`crate::imputation`] with the column `x2k` on the
 //! untreated rows and `w x2k` on the treated rows, so no dummies are formed.
@@ -47,9 +50,9 @@
 //!
 //! The influence function of a coefficient for unit `u` is `N sum_t
 //! psi_ut`, `N` the units in the estimation; it sums to zero over the units
-//! (the two stages' normal equations), so
-//! [`did_cluster_sums`](crate::did_cluster_sums) over the clusters gives the
-//! covariance above.
+//! (the two stages' normal equations), so [`Influence::variance`] over the
+//! clusters gives the covariance above, under its rule
+//! [`ClusterRule::NoSmallSample`](epistat_inference::ClusterRule).
 //!
 //! # References
 //!
@@ -64,83 +67,74 @@
 
 use std::collections::BTreeSet;
 
+use epistat_core::{Covariance, Estimate, Level};
 use epistat_glm::{Absorb, Feols};
+use epistat_inference::{ClusterRule, Influence};
 
+use crate::error::Error;
+use crate::methods::fe_output::{self, Reference};
 use crate::methods::imputation::first_stage::{FirstStage, Projection, Projector};
 use crate::methods::imputation::{
-    ImputationError, Prepared, UnitIndex, first_stage_fixed_effects, outer_covariance,
+    Prepared, UnitIndex, first_stage_fixed_effects, outer_covariance,
 };
 use crate::methods::staggered::StaggeredPanel;
 
 /// The second-stage indicators.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TwoStageSpec<'a> {
-    /// One indicator of being treated.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum TwoStageSpec {
+    /// One indicator of being treated, `second_stage = ~ i(treat, ref =
+    /// FALSE)`.
+    #[default]
     Static,
     /// One indicator per period relative to treatment of the units ever
-    /// treated, but the reference periods.
+    /// treated, but the reference periods, `~ i(rel, ref = c(-1, Inf))`.
     EventStudy {
         /// The relative periods left out, each negative.
-        references: &'a [i64],
+        references: Vec<i64>,
     },
 }
 
-/// The controls of the two-stage estimator.
-#[derive(Clone, Copy, Debug)]
-pub struct TwoStageConfig<'a> {
-    /// The second stage.
-    pub spec: TwoStageSpec<'a>,
+/// The options of [`estimate`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TwoStageOptions {
+    /// The second stage; by default the static effect.
+    pub spec: TwoStageSpec,
     /// The demeaning of the first stage and of the variance's projections.
     pub absorb: Absorb,
     /// Whether to return the projections `z_i' Gamma` of each term.
     pub keep_projections: bool,
-}
-
-impl TwoStageConfig<'_> {
-    /// The static effect.
-    #[must_use]
-    pub const fn static_effect() -> Self {
-        Self {
-            spec: TwoStageSpec::Static,
-            absorb: Absorb::new(),
-            keep_projections: false,
-        }
-    }
-
-    /// The event study with reference period -1.
-    #[must_use]
-    pub const fn event_study() -> Self {
-        Self {
-            spec: TwoStageSpec::EventStudy { references: &[-1] },
-            ..Self::static_effect()
-        }
-    }
+    /// The level of the intervals.
+    pub level: Level,
 }
 
 /// One second-stage coefficient.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct TwoStageTerm {
     /// The relative period, `None` for the static indicator.
     pub relative_period: Option<i64>,
-    /// The coefficient, `None` when the indicator has no rows of positive
-    /// weight.
-    pub estimate: Option<f64>,
-    /// Its corrected clustered standard error.
-    pub std_error: Option<f64>,
+    /// The coefficient with its corrected clustered standard error, interval
+    /// and p-value, `None` when the indicator has no rows of positive weight.
+    pub estimate: Option<Estimate>,
 }
 
 /// The two-stage estimates.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
-pub struct TwoStageResult {
+pub struct TwoStage {
     /// The coefficients, in increasing relative period.
     pub terms: Vec<TwoStageTerm>,
-    /// Their corrected clustered covariance, row-major.
-    pub covariance: Vec<Option<f64>>,
-    /// The influence function of each coefficient, one value per unit of
-    /// [`TwoStageResult::units`].
-    pub influence: Vec<Option<Vec<f64>>>,
-    /// The units in the estimation, in increasing code.
-    pub units: Vec<u32>,
+    /// Their corrected clustered covariance, `None` where a coefficient is
+    /// undefined.
+    pub covariance: Covariance,
+    /// The influence functions of the coefficients that are defined, one
+    /// column each in their order with one value per unit in the estimation
+    /// in increasing code; `None` when none is. [`TwoStage::influence_of`]
+    /// finds the column of a coefficient.
+    pub influence: Option<Influence>,
+    /// The units in the estimation.
+    pub n_units: usize,
     /// The number of clusters.
     pub n_clusters: usize,
     /// The coefficients of the first stage's covariates, `None` if aliased.
@@ -154,10 +148,20 @@ pub struct TwoStageResult {
     /// The residualised outcome `y - y^(0)` of every row, `None` on dropped
     /// rows.
     pub residualised: Vec<Option<f64>>,
-    /// With [`TwoStageConfig::keep_projections`], `z_i' Gamma` of each term
+    /// With [`TwoStageOptions::keep_projections`], `z_i' Gamma` of each term
     /// on the untreated rows of the first stage, one value per input row and
     /// zero elsewhere.
     pub projections: Option<Vec<Vec<f64>>>,
+}
+
+impl TwoStage {
+    /// The influence function of coefficient `j`; `None` for an undefined
+    /// coefficient or one out of range.
+    #[must_use]
+    pub fn influence_of(&self, j: usize) -> Option<&[f64]> {
+        let defined = self.terms.iter().map(|t| t.estimate.is_some());
+        fe_output::column_of(self.influence.as_ref(), defined, j)
+    }
 }
 
 /// Estimates Gardner's two-stage estimator, with standard errors clustered by
@@ -166,22 +170,24 @@ pub struct TwoStageResult {
 ///
 /// # Errors
 ///
-/// [`ImputationError`] for reference periods that are not negative, periods
-/// out of range, and the errors of the first stage.
-pub fn estimate_did2s(
-    panel: &StaggeredPanel<'_>,
-    config: &TwoStageConfig<'_>,
-) -> Result<TwoStageResult, ImputationError> {
+/// [`Error::Reference`] for a reference period that is not negative,
+/// [`Error::Periods`] for periods out of range, and [`Error::Glm`] for the
+/// errors of the first stage.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pass from the first stage to the second and its variance"
+)]
+pub fn estimate(panel: &StaggeredPanel<'_>, options: &TwoStageOptions) -> Result<TwoStage, Error> {
     let n = panel.len();
-    if let TwoStageSpec::EventStudy { references } = config.spec
+    if let TwoStageSpec::EventStudy { references } = &options.spec
         && let Some(&bad) = references.iter().find(|&&r| r >= 0)
     {
-        return Err(ImputationError::Reference(bad));
+        return Err(Error::Reference(bad));
     }
     let prepared = Prepared::new(panel)?;
     let fe = first_stage_fixed_effects(panel, &prepared)?;
     let feols = Feols {
-        absorb: config.absorb,
+        absorb: options.absorb,
     };
     let x = prepared.covariates.as_ref();
     let fit = feols.fit(x, panel.outcome(), &fe)?;
@@ -202,7 +208,7 @@ pub fn estimate_did2s(
     let n_units = index.units.len();
 
     // The indicator of each row: its term, or None.
-    let periods: Vec<Option<i64>> = match config.spec {
+    let periods: Vec<Option<i64>> = match &options.spec {
         TwoStageSpec::Static => vec![None],
         TwoStageSpec::EventStudy { references } => {
             let set: BTreeSet<i64> = (0..n)
@@ -214,7 +220,7 @@ pub fn estimate_did2s(
         }
     };
     let term_of = |i: usize| -> Option<usize> {
-        match config.spec {
+        match options.spec {
             TwoStageSpec::Static => stage.treated[i].then_some(0),
             TwoStageSpec::EventStudy { .. } => {
                 let e = prepared.event[i]?;
@@ -245,7 +251,7 @@ pub fn estimate_did2s(
     let fit_weights = fe.weights();
     let mut sums: Vec<Option<Vec<f64>>> = Vec::with_capacity(k_terms);
     let mut influence = Vec::with_capacity(k_terms);
-    let mut kept_projections = config.keep_projections.then(Vec::new);
+    let mut kept_projections = options.keep_projections.then(Vec::new);
     for k in 0..k_terms {
         let Some(b) = beta[k] else {
             sums.push(None);
@@ -272,7 +278,7 @@ pub fn estimate_did2s(
                 treated: &treated,
             },
             &treated_rows,
-            &config.absorb,
+            &options.absorb,
         )?;
         let scale = 1.0 / weight_sum[k];
         let mut by_unit = vec![0.0; n_units];
@@ -298,21 +304,30 @@ pub fn estimate_did2s(
             p.push(full);
         }
     }
-    let covariance = outer_covariance(&sums);
+    let covariance = outer_covariance(&sums)?;
+    // fixest's residual degrees of freedom of the second stage: its rows of
+    // positive weight less its coefficients.
+    let n_fit = (0..n)
+        .filter(|&i| stage.adjusted[i].is_some() && stage.weight[i] > 0.0)
+        .count();
+    let k_fit = beta.iter().flatten().count();
+    let reference = Reference::StudentT(n_fit.saturating_sub(k_fit).max(1) as f64);
     let terms = periods
         .iter()
         .enumerate()
         .map(|(k, &r)| TwoStageTerm {
             relative_period: r,
-            estimate: beta[k],
-            std_error: covariance[k * k_terms + k].map(|v| v.max(0.0).sqrt()),
+            estimate: beta[k].map(|b| {
+                let se = covariance.get(k, k).map(|v| v.max(0.0).sqrt());
+                fe_output::estimate(b, se, options.level, reference)
+            }),
         })
         .collect();
-    Ok(TwoStageResult {
+    Ok(TwoStage {
         terms,
         covariance,
-        influence,
-        units: index.units,
+        influence: fe_output::influence(influence, index.units, ClusterRule::NoSmallSample)?,
+        n_units,
         n_clusters: index.clusters.count(),
         covariate_coefficients: stage.coefficients.clone(),
         n_rows: n - dropped_rows.len(),

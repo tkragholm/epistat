@@ -281,8 +281,8 @@ pub use methods::etwfe::{
 };
 pub use methods::imputation;
 pub use methods::imputation::{
-    ImputationConfig, ImputationError, ImputationEstimate, ImputationResult, ImputationTarget,
-    ImputationTerm, PretrendResult, PretrendTerm, Pretrends, estimate_did_imputation,
+    Imputation, ImputationEffect, ImputationOptions, ImputationPretrends, ImputationTarget,
+    ImputationTerm, PretrendTerm, Pretrends,
 };
 pub use methods::missing;
 pub use methods::missing::{
@@ -308,7 +308,5 @@ pub use methods::triple_did::aggregator::estimate_dr_ddd;
 pub use methods::twfe;
 pub use methods::twfe::{TwfeFit, TwfeOptions, TwfeSpec, TwfeTerm};
 pub use methods::two_stage;
-pub use methods::two_stage::{
-    TwoStageConfig, TwoStageResult, TwoStageSpec, TwoStageTerm, estimate_did2s,
-};
+pub use methods::two_stage::{TwoStage, TwoStageOptions, TwoStageSpec, TwoStageTerm};
 pub use types::*;

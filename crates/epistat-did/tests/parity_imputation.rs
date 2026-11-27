@@ -64,8 +64,8 @@
 use std::collections::HashMap;
 
 use epistat_did::{
-    ImputationConfig, ImputationTarget, Pretrends, StaggeredPanel, TwoStageConfig, TwoStageSpec,
-    estimate_did_imputation, estimate_did2s,
+    ImputationOptions, ImputationTarget, Pretrends, StaggeredPanel, TwoStageOptions, TwoStageSpec,
+    imputation, two_stage,
 };
 use epistat_glm::Absorb;
 use epistat_linalg::Mat;
@@ -341,59 +341,54 @@ fn imputation_matches_the_exact_values_and_did_imputation() {
         for spec in &case.imputation {
             let weighted = spec.weighted;
             let label = format!("{} {}", case.name, spec.name);
-            let horizons: Vec<i64>;
-            let custom: Vec<&[f64]>;
             let target = match spec.target.as_str() {
                 "static" => ImputationTarget::Static,
                 "horizons" => {
                     if spec.all_horizons {
                         ImputationTarget::Horizons(None)
                     } else {
-                        horizons = spec.horizons.clone().unwrap();
-                        ImputationTarget::Horizons(Some(&horizons))
+                        ImputationTarget::Horizons(spec.horizons.clone())
                     }
                 }
-                _ => {
-                    custom = vec![spec.custom.as_deref().unwrap()];
-                    ImputationTarget::Weights(&custom)
-                }
+                _ => ImputationTarget::Weights(vec![spec.custom.clone().unwrap()]),
             };
             let periods = spec.pretrends.as_ref().map(pretrend_values);
-            let pretrends = periods.as_ref().map(|p| match p {
+            let pretrends = periods.map(|p| match p {
                 None => Pretrends::All,
                 Some(p) => Pretrends::Periods(p),
             });
-            let config = ImputationConfig {
+            let config = ImputationOptions {
                 target,
                 pretrends,
                 absorb: TIGHT,
                 keep_weights: true,
+                ..ImputationOptions::default()
             };
-            let out = estimate_did_imputation(&panel(case, weighted, x.as_ref()), &config).unwrap();
+            let out = imputation::estimate(&panel(case, weighted, x.as_ref()), &config).unwrap();
             let (dropped, units) = if weighted {
                 (case.dropped, &case.units)
             } else {
                 (case.dropped_unweighted, &case.units_unweighted)
             };
             assert_eq!(out.dropped_rows.len(), dropped, "{label}");
-            assert_eq!(&out.units, units, "{label}");
+            assert_eq!(out.influence.as_ref().unwrap().units(), units, "{label}");
             let b = Bounds::new(
                 case,
                 weighted,
                 &out.dropped_rows,
                 &out.covariate_coefficients,
             );
-            let k = out.estimates.len();
+            let k = out.effects.len();
             assert_eq!(k, spec.exact.estimate.len(), "{label}");
-            let n_units = out.units.len() as f64;
+            let n_units = out.n_units as f64;
             let mut s_bound = vec![0.0; k];
-            for (j, e) in out.estimates.iter().enumerate() {
+            for (j, e) in out.effects.iter().enumerate() {
                 let what = format!("{label} term {j}");
                 let Some(want) = spec.exact.estimate[j] else {
                     assert!(e.estimate.is_none(), "{what}");
                     continue;
                 };
-                let got = e.estimate.unwrap();
+                let got = e.estimate.unwrap().estimate;
                 let tol = b.p + b.rounding * want.abs().max(1.0);
                 close(got, want, tol, &format!("{what} estimate"));
                 close(
@@ -416,7 +411,7 @@ fn imputation_matches_the_exact_values_and_did_imputation() {
                     + b.p * (2.0 + v0)
                     + b.rounding * spec.exact.std_error[j].unwrap();
                 s_bound[j] = bound;
-                let se = e.std_error.unwrap();
+                let se = e.estimate.unwrap().se.unwrap();
                 close(
                     se,
                     spec.exact.std_error[j].unwrap(),
@@ -431,7 +426,7 @@ fn imputation_matches_the_exact_values_and_did_imputation() {
                         &format!("{what} se against the package"),
                     );
                 }
-                let influence = out.influence[j].as_ref().unwrap();
+                let influence = out.influence_of(j).unwrap();
                 for (u, value) in influence.iter().enumerate() {
                     close(
                         *value,
@@ -444,7 +439,7 @@ fn imputation_matches_the_exact_values_and_did_imputation() {
             for a in 0..k {
                 for c in 0..k {
                     if let (Some(want), Some(got)) =
-                        (spec.exact.covariance[a][c], out.covariance[a * k + c])
+                        (spec.exact.covariance[a][c], out.covariance.get(a, c))
                     {
                         let (sa, sc) = (
                             spec.exact.std_error[a].unwrap(),
@@ -466,7 +461,7 @@ fn check_pretrends(
     label: &str,
     spec: &Imputation,
     pre: &PretrendExact,
-    out: &epistat_did::ImputationResult,
+    out: &epistat_did::Imputation,
     b: &Bounds,
 ) {
     let result = out.pretrends.as_ref().unwrap();
@@ -493,11 +488,16 @@ fn check_pretrends(
     for (j, term) in result.terms.iter().enumerate() {
         match (term.estimate, pre.estimate[j]) {
             (Some(got), Some(want)) => {
-                close(got, want, tol_beta, &format!("{label} pre-trend {j}"));
+                close(
+                    got.estimate,
+                    want,
+                    tol_beta,
+                    &format!("{label} pre-trend {j}"),
+                );
                 let se_want = pre.std_error[j].unwrap();
                 let rel = 2.0 * (e + pre.tight_error) + 100.0 * pre.kappa * EPS;
                 close(
-                    term.std_error.unwrap(),
+                    got.se.unwrap(),
                     se_want,
                     rel * se_want,
                     &format!("{label} pre-trend se {j}"),
@@ -517,18 +517,19 @@ fn did2s_matches_the_exact_values_and_the_package() {
         let n = case.y.len();
         for spec in &case.did2s {
             let label = format!("{} did2s {}", case.name, spec.name);
-            let config = TwoStageConfig {
+            let config = TwoStageOptions {
                 spec: if spec.spec == "static" {
                     TwoStageSpec::Static
                 } else {
                     TwoStageSpec::EventStudy {
-                        references: &spec.references,
+                        references: spec.references.clone(),
                     }
                 },
                 absorb: TIGHT,
                 keep_projections: true,
+                ..TwoStageOptions::default()
             };
-            let out = estimate_did2s(&panel(case, spec.weighted, x.as_ref()), &config).unwrap();
+            let out = two_stage::estimate(&panel(case, spec.weighted, x.as_ref()), &config).unwrap();
             let b = Bounds::new(
                 case,
                 spec.weighted,
@@ -545,7 +546,7 @@ fn did2s_matches_the_exact_values_and_the_package() {
                 ),
             }
             let k_terms = out.terms.len();
-            let n_units = out.units.len() as f64;
+            let n_units = out.n_units as f64;
             let mut s_bound = vec![0.0; k_terms];
             for (k, term) in out.terms.iter().enumerate() {
                 let what = format!("{label} term {k}");
@@ -557,7 +558,7 @@ fn did2s_matches_the_exact_values_and_the_package() {
                         }
                 };
                 let want = spec.exact.estimate[k].unwrap();
-                let got = term.estimate.unwrap();
+                let got = term.estimate.unwrap().estimate;
                 let tol = b.p + b.rounding * want.abs().max(1.0);
                 close(got, want, tol, &format!("{what} estimate"));
                 close(
@@ -593,7 +594,7 @@ fn did2s_matches_the_exact_values_and_the_package() {
                     (2.0 * b.p * w_k + r / b.lambda.full_plus.sqrt() * uu.sqrt() + b.p * wh) / w_k
                         + b.rounding * se_want;
                 s_bound[k] = bound;
-                let se = term.std_error.unwrap();
+                let se = term.estimate.unwrap().se.unwrap();
                 close(se, se_want, bound, &format!("{what} se"));
                 close(
                     se,
@@ -601,7 +602,7 @@ fn did2s_matches_the_exact_values_and_the_package() {
                     bound + spec.package_error.std_error,
                     &format!("{what} se against the package"),
                 );
-                let influence = out.influence[k].as_ref().unwrap();
+                let influence = out.influence_of(k).unwrap();
                 for (u, value) in influence.iter().enumerate() {
                     close(
                         *value,
@@ -614,7 +615,7 @@ fn did2s_matches_the_exact_values_and_the_package() {
             for a in 0..k_terms {
                 for c in 0..k_terms {
                     let want = spec.exact.covariance[a][c].unwrap();
-                    let got = out.covariance[a * k_terms + c].unwrap();
+                    let got = out.covariance.get(a, c).unwrap();
                     let (sa, sc) = (
                         spec.exact.std_error[a].unwrap(),
                         spec.exact.std_error[c].unwrap(),
@@ -637,19 +638,23 @@ fn did2s_and_imputation_agree_on_the_effects_after_treatment() {
         let x = case.covariates();
         for weighted in [false, true] {
             let p = panel(case, weighted, x.as_ref());
-            let two = estimate_did2s(
+            let two = two_stage::estimate(
                 &p,
-                &TwoStageConfig {
+                &TwoStageOptions {
+                    spec: TwoStageSpec::EventStudy {
+                        references: vec![-1],
+                    },
                     absorb: TIGHT,
-                    ..TwoStageConfig::event_study()
+                    ..TwoStageOptions::default()
                 },
             )
             .unwrap();
-            let imp = estimate_did_imputation(
+            let imp = imputation::estimate(
                 &p,
-                &ImputationConfig {
+                &ImputationOptions {
+                    target: ImputationTarget::Horizons(None),
                     absorb: TIGHT,
-                    ..ImputationConfig::event_study()
+                    ..ImputationOptions::default()
                 },
             )
             .unwrap();
@@ -665,37 +670,42 @@ fn did2s_and_imputation_agree_on_the_effects_after_treatment() {
                     continue;
                 };
                 let e = imp
-                    .estimates
+                    .effects
                     .iter()
                     .find(|e| e.term == epistat_did::ImputationTerm::Horizon(r))
                     .unwrap();
                 match (term.estimate, e.estimate) {
-                    (Some(a), Some(b)) => close(a, b, tol, &format!("{} horizon {r}", case.name)),
+                    (Some(a), Some(b)) => close(
+                        a.estimate,
+                        b.estimate,
+                        tol,
+                        &format!("{} horizon {r}", case.name),
+                    ),
                     (None, None) => {}
                     other => panic!("{} horizon {r}: {other:?}", case.name),
                 }
                 compared += 1;
             }
             assert!(compared > 0, "{}", case.name);
-            let two_static = estimate_did2s(
+            let two_static = two_stage::estimate(
                 &p,
-                &TwoStageConfig {
+                &TwoStageOptions {
                     absorb: TIGHT,
-                    ..TwoStageConfig::static_effect()
+                    ..TwoStageOptions::default()
                 },
             )
             .unwrap();
-            let imp_static = estimate_did_imputation(
+            let imp_static = imputation::estimate(
                 &p,
-                &ImputationConfig {
+                &ImputationOptions {
                     absorb: TIGHT,
-                    ..ImputationConfig::static_effect()
+                    ..ImputationOptions::default()
                 },
             )
             .unwrap();
             close(
-                two_static.terms[0].estimate.unwrap(),
-                imp_static.estimates[0].estimate.unwrap(),
+                two_static.terms[0].estimate.unwrap().estimate,
+                imp_static.effects[0].estimate.unwrap().estimate,
                 tol,
                 &format!("{} static", case.name),
             );
@@ -709,7 +719,7 @@ fn did_imputation_understates_the_weighted_variance_on_castle() {
     // weights in its auxiliary system (module documentation). On castle its
     // standard error of the static effect is 0.0224 where the derivative of
     // its own estimate gives 0.0268; the parity test checks that
-    // estimate_did_imputation gives the latter.
+    // imputation::estimate gives the latter.
     let reference = reference();
     let case = reference.cases.iter().find(|c| c.name == "castle").unwrap();
     let spec = case
