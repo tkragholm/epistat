@@ -6,7 +6,8 @@ Rust crates for statistics in epidemiology and register research.
 |---|---|
 | [`epistat-causal`](crates/epistat-causal) | Augmented inverse probability weighting for binary and continuous outcomes, with efficient and stacked variances |
 | [`epistat-core`](crates/epistat-core) | The shared types: confidence levels, intervals, estimates, covariances, codes for labels, the person-period key, civil dates, input checks and error kinds |
-| [`epistat-did`](crates/epistat-did) | Difference-in-differences: staggered ATT(g,t) and its aggregations, doubly robust two-period estimators and HonestDiD sensitivity analysis |
+| [`epistat-did`](crates/epistat-did) | Difference-in-differences: staggered ATT(g,t) and its aggregations, doubly robust two-period estimators, fixed-effects, imputation, switching and synthetic estimators |
+| [`epistat-honestdid`](crates/epistat-honestdid) | HonestDiD sensitivity analysis of event studies and the power of the pre-trends test |
 | [`epistat-glm`](crates/epistat-glm) | Generalised linear models fitted by IRLS as R's `glm.fit` does |
 | [`epistat-impute`](crates/epistat-impute) | Multiple imputation by chained equations: normal, predictive mean matching, logistic and multinomial methods, passive columns and survival predictors |
 | [`epistat-inference`](crates/epistat-inference) | Influence-function and sandwich variances, cluster-robust and bootstrap intervals |

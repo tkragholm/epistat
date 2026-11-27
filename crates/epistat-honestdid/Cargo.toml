@@ -1,0 +1,54 @@
+[package]
+name = "epistat-honestdid"
+description = "HonestDiD sensitivity analysis of event studies (Rambachan and Roth) and the power of the pre-trends test with the bias after passing it (Roth)"
+keywords = ["did", "event-study", "sensitivity-analysis", "causal-inference", "statistics"]
+categories = ["mathematics", "science"]
+readme = "README.md"
+# The R references are JSON that only this repository's tests read; the R
+# scripts that write them stay in the package as their provenance.
+exclude = ["tests/data/*.json"]
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+epistat-core = { path = "../epistat-core", version = "0.1.0" }
+# The conic programs of the fixed-length intervals and the identified sets,
+# until epistat has its own cone solver.
+clarabel = "0.11.1"
+epistat-inference = { path = "../epistat-inference", version = "0.4.0" }
+epistat-linalg = { path = "../epistat-linalg", version = "0.4.0" }
+epistat-optim = { path = "../epistat-optim", version = "0.2.0" }
+epistat-rng = { path = "../epistat-rng", version = "0.2.0" }
+epistat-stats = { path = "../epistat-stats", version = "0.3.0" }
+rayon = "1.11.0"
+thiserror = "2.0.18"
+
+[dev-dependencies]
+# The study-path test builds its event study with epistat-did, as Study I does.
+epistat-did = { path = "../epistat-did" }
+epistat-inference = { path = "../epistat-inference" }
+epistat-linalg = { path = "../epistat-linalg" }
+# The unit tests draw their data through rand on an epistat-rng stream.
+epistat-rng = { path = "../epistat-rng", features = ["rand"] }
+epistat-testkit = { path = "../epistat-testkit" }
+criterion = { version = "0.8.2", default-features = false }
+proptest = "1.6.0"
+rstest = "0.26"
+rand = "0.10.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.145", features = ["float_roundtrip"] }
+
+[[bench]]
+name = "honest"
+harness = false
+
+[lints]
+workspace = true
