@@ -318,28 +318,46 @@ fn pt_qt_and_pbeta() {
     println!("worst deviation from pt, qt and pbeta, in units of its bound: {worst:e}");
 }
 
-/// The bound on `I_x(a, b)` when a shape is 1000 or more, where `ln B(a, b)` is
-/// formed as `ln Gamma(small) - (ln Gamma(a + b) - ln Gamma(large))` with the
-/// difference from its Stirling series, so the error is eps times the terms of
-/// the exponent that remain: `a ln x`, `b ln y`, `ln Gamma(small)` and the
-/// difference, about `small ln(large)`. The continued fraction takes of the
-/// order of `sqrt(a + b)` terms, each with a rounding.
+/// The bound on `I_x(a, b)` when a shape is 1000 or more. The factor
+/// `x^a y^b / B(a, b)` is formed from the smaller of `x` and `y`, so the
+/// rounding of the larger does not enter.
+///
+/// While the smaller shape is below 10, `ln B(a, b)` is formed as
+/// `ln Gamma(small) - (ln Gamma(a + b) - ln Gamma(large))` with the difference
+/// from its Stirling series, so the error is eps times the terms of the
+/// exponent that remain: `a ln x`, `b ln y`, `ln Gamma(small)` and the
+/// difference, about `small ln(large)`.
+///
+/// When both shapes are 10 or more the factor is formed about the mean, as
+/// `exp(-[a g(u) + b g(v)])` times Stirling corrections and a square root,
+/// with `g(z) = z - ln(1 + z)`, `u = (b x - a y) / a` and `v = -(b x - a y) / b`.
+/// The exponent is then of its own size, eps times `a g(u) + b g(v)`, and
+/// `b x - a y` is formed with an absolute error of eps times `a + b` times the
+/// larger of `x` and `y`, which moves the exponent by eps times
+/// `a |u| + b |v|` up to a factor 2. The coefficient on both is 8, as for the
+/// terms of the exponent below.
+///
+/// The continued fraction takes of the order of `sqrt(a + b)` terms, each
+/// with a rounding.
 fn large_beta_bound(a: f64, b: f64, x: f64, y: f64) -> f64 {
     use epistat_stats::dist::gamma::ln_gamma;
     let (small, large) = if a < b { (a, b) } else { (b, a) };
-    let terms = (a * x.ln()).abs()
-        + (b * y.ln()).abs()
-        + ln_gamma(small).abs()
-        + small * large.ln()
-        + small;
+    let terms = if small >= 10.0 {
+        let s = a + b;
+        let scaled = if x <= y { s * x - a } else { b - s * y };
+        let (u, v) = (scaled / a, -scaled / b);
+        a * (u - u.ln_1p()) + b * (v - v.ln_1p()) + a * u.abs() + b * v.abs() + 1.0
+    } else {
+        (a * x.ln()).abs() + (b * y.ln()).abs() + ln_gamma(small).abs() + small * large.ln() + small
+    };
     8.0 * f64::EPSILON * terms + (64.0 + 4.0 * (a + b).sqrt()) * f64::EPSILON
 }
 
 /// Large shapes: the t distribution from 2000 degrees of freedom and the
 /// incomplete beta function with a shape of 1000 or more, where `ln B(a, b)`
 /// would lose `eps ln Gamma(a)` relative if it were the sum of three log-gamma
-/// values. For the t tail, `x = nu / (nu + z^2)` and `y = z^2 / (nu + z^2)` are
-/// rounded, which adds `a eps + b eps` to the exponent. The function computes
+/// values. For the t tail, `y = z^2 / (nu + z^2)` is rounded, which moves
+/// `b ln y` by `b eps` and `a ln(1 - y)` by `a y eps`. The function computes
 /// whichever of `I` and `1 - I` its continued fraction converges for, with the
 /// relative bound, so the absolute error in `I` is the bound times the larger
 /// of the two.
@@ -361,7 +379,8 @@ fn pt_and_pbeta_at_large_shapes() {
         let (cdf, sf) = (t::cdf(z, nu), t::sf(z, nu));
         let q = nu + z * z;
         let (a, b) = (0.5 * nu, 0.5);
-        let bound = large_beta_bound(a, b, nu / q, z * z / q) + (a + b) * f64::EPSILON;
+        let y = z * z / q;
+        let bound = large_beta_bound(a, b, nu / q, y) + (b + a * y) * f64::EPSILON;
         let (small, big, want_small, want_big) = if z > 0.0 {
             (sf, cdf, f64::from_bits(upper), f64::from_bits(lower))
         } else {
