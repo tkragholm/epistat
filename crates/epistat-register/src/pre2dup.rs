@@ -102,6 +102,8 @@
 //!    second generation method (PRE2DUP). BMC Med Inform Decis Mak.
 //!    2015;15:21.
 
+use epistat_core::{InputError, check};
+
 use crate::Error;
 use crate::error::{csr, length, row_count};
 use crate::exposure::Pauses;
@@ -178,6 +180,7 @@ impl GlobalParameters {
 
 /// The drug use periods, ordered by person, group and start.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct DrugUsePeriods {
     /// The person of each period.
     pub(crate) person: Vec<u32>,
@@ -393,37 +396,53 @@ fn validate(
     globals: &GlobalParameters,
     stays: Option<&Pauses<'_>>,
 ) -> Result<usize, Error> {
-    if groups.is_empty() {
-        return Err(Error::invalid(
-            "no group parameters given; none is built in",
-        ));
-    }
+    // None is built in: the caller states the parameters of every group.
+    check::non_empty("group parameters", groups.len())?;
     let positive = |x: f64| x.is_finite() && x > 0.0;
+    let at_least_0 = |x: f64| x.is_finite() && x >= 0.0;
+    let domain = |what, value: f64, ok: bool, domain, row| {
+        if ok {
+            Ok(())
+        } else {
+            Err(InputError::Domain {
+                what,
+                value,
+                domain,
+                row,
+            })
+        }
+    };
     let g = globals;
-    if !(positive(g.max_refill_for_average_days)
-        && g.max_hospital_stay_days >= 0.0
-        && positive(g.max_ddd_per_day)
-        && positive(g.max_single_purchase_days)
-        && g.dvar >= 0.0
-        && g.adherence >= 0.0
-        && g.max_hospital_stay_days.is_finite()
-        && g.dvar.is_finite()
-        && g.adherence.is_finite())
-    {
-        return Err(Error::invalid("the global parameters are not valid"));
+    for (what, value) in [
+        ("max_refill_for_average_days", g.max_refill_for_average_days),
+        ("max_ddd_per_day", g.max_ddd_per_day),
+        ("max_single_purchase_days", g.max_single_purchase_days),
+    ] {
+        domain(what, value, positive(value), "(0, inf)", None)?;
+    }
+    for (what, value) in [
+        ("max_hospital_stay_days", g.max_hospital_stay_days),
+        ("dvar", g.dvar),
+        ("adherence", g.adherence),
+    ] {
+        domain(what, value, at_least_0(value), "[0, inf)", None)?;
     }
     for (k, q) in groups.iter().enumerate() {
-        if !(positive(q.lower_ddd_per_day)
-            && positive(q.common_ddd_per_day)
-            && positive(q.upper_ddd_per_day)
-            && q.lower_ddd_per_day <= q.upper_ddd_per_day
-            && positive(q.min_period_days)
-            && positive(q.max_refill_days))
-        {
-            return Err(Error::invalid(format!(
-                "the parameters of group {k} are not valid: doses and days must be positive and finite, the lower dose at most the upper"
-            )));
+        for (what, value) in [
+            ("lower_ddd_per_day", q.lower_ddd_per_day),
+            ("common_ddd_per_day", q.common_ddd_per_day),
+            ("min_period_days", q.min_period_days),
+            ("max_refill_days", q.max_refill_days),
+        ] {
+            domain(what, value, positive(value), "(0, inf)", Some(k))?;
         }
+        domain(
+            "upper_ddd_per_day",
+            q.upper_ddd_per_day,
+            q.upper_ddd_per_day.is_finite() && q.lower_ddd_per_day <= q.upper_ddd_per_day,
+            "[lower_ddd_per_day, inf)",
+            Some(k),
+        )?;
     }
     let o = p.person_offsets;
     let n = p.day.len();
@@ -434,17 +453,38 @@ fn validate(
     length("typical_refill_days", n, p.typical_refill_days.len())?;
     row_count("day", n)?;
     for row in 0..n {
-        let bad_ddd = p.ddd[row].is_some_and(|d| !positive(d));
-        let bad_refill = p.typical_refill_days[row].is_some_and(|d| !positive(d));
-        if bad_ddd || !positive(p.packages[row]) || bad_refill {
-            return Err(Error::invalid(format!(
-                "row {row}: ddd, packages and typical refill days must be positive and finite"
-            )));
+        for (what, value) in [
+            ("ddd", p.ddd[row]),
+            ("packages", Some(p.packages[row])),
+            ("typical_refill_days", p.typical_refill_days[row]),
+        ] {
+            if let Some(value) = value
+                && !positive(value)
+            {
+                return Err(if value.is_finite() {
+                    InputError::Domain {
+                        what,
+                        value,
+                        domain: "(0, inf)",
+                        row: Some(row),
+                    }
+                } else {
+                    InputError::NotFinite {
+                        what,
+                        row,
+                        column: None,
+                    }
+                }
+                .into());
+            }
         }
-        if p.group[row].is_some_and(|g| g as usize >= groups.len()) {
-            return Err(Error::invalid(format!(
-                "row {row} names a group without parameters"
-            )));
+        if let Some(g) = p.group[row].filter(|&g| g as usize >= groups.len()) {
+            return Err(Error::OutOfRange {
+                what: "group",
+                row: Some(row),
+                value: u64::from(g),
+                limit: groups.len() as u64,
+            });
         }
     }
     let persons = o.len() - 1;
@@ -455,13 +495,19 @@ fn validate(
         csr("hospital stay offsets", so, s.start.len())?;
         for q in 0..persons {
             let (a, b) = (so[q], so[q + 1]);
-            if s.start[a..b].windows(2).any(|w| w[0] > w[1])
-                || (a..b).any(|i| s.end[i] < s.start[i])
-                || (a + 1..b).any(|i| s.start[i] < s.end[i - 1])
-            {
-                return Err(Error::invalid(format!(
-                    "the hospital stays of person {q} are not sorted, disjoint spans"
-                )));
+            if let Some(row) = (a..b).find(|&i| s.end[i] < s.start[i]) {
+                return Err(Error::EndBeforeStart {
+                    what: "hospital stay end",
+                    row,
+                });
+            }
+            // Sorted, disjoint stays: each starts after the one before ends.
+            if let Some(row) = (a + 1..b).find(|&i| s.start[i] < s.end[i - 1]) {
+                return Err(InputError::Unsorted {
+                    what: "hospital stays",
+                    row,
+                }
+                .into());
             }
         }
     }
@@ -475,11 +521,13 @@ fn validate(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when there are no group parameters or a
-/// parameter is not valid, the columns differ in length or the offsets are
-/// not a layout, a value is not positive and finite, a row names a group
-/// without parameters, or the stays are not sorted, disjoint spans over the
-/// same persons.
+/// [`Error::Input`] when there are no group parameters or a parameter is
+/// outside its domain (with the group's position as the row for a group
+/// parameter), the columns differ in length or the offsets are not a layout, a
+/// value is not positive and finite (with its row), or the stays are not
+/// sorted, disjoint spans over the same persons; [`Error::OutOfRange`] when a
+/// row names a group without parameters, and [`Error::EndBeforeStart`] for a
+/// stay that ends before it starts.
 #[expect(
     clippy::cast_precision_loss,
     clippy::too_many_lines,

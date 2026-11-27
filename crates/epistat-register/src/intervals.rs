@@ -18,6 +18,12 @@
 //! [`closed_to_half_open`] (`end + 1`) and [`half_open_to_closed`], and a
 //! [`SpanSet`] is built from closed ends with [`SpanSet::from_closed`].
 //!
+//! A set is malformed when its columns differ in length or its offsets are
+//! not a layout ([`Error::Input`]), an interval is empty or inverted
+//! ([`Error::EndBeforeStart`]), or two intervals of a key are out of order or
+//! overlap ([`Error::Input`] with `input.unsorted`), each with the row of the
+//! interval.
+//!
 //! # Conversions
 //!
 //! | Form | Day `t` is inside when | Into a [`SpanSet`] |
@@ -71,6 +77,8 @@
 //! - Days are `i64`, and `end + 1` in a conversion from closed ends that would
 //!   overflow is refused.
 
+use epistat_core::InputError;
+
 use crate::Error;
 use crate::error::{csr, length, row_count};
 use crate::spans::MergedSpans;
@@ -83,6 +91,7 @@ use crate::spans::MergedSpans;
 /// set checks it again, so a set built by filling the fields directly is
 /// still refused when it is malformed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct SpanSet {
     /// First day of each interval.
     pub start: Vec<i64>,
@@ -99,7 +108,8 @@ impl SpanSet {
     ///
     /// [`Error::Input`] when the columns differ in length, the offsets
     /// are not a non-decreasing sequence from 0 to the number of intervals, or
-    /// an interval is empty, inverted or overlaps the one before it.
+    /// an interval overlaps the one before it, and [`Error::EndBeforeStart`]
+    /// for an empty or inverted interval.
     pub fn new(start: Vec<i64>, end: Vec<i64>, key_offsets: Vec<usize>) -> Result<Self, Error> {
         let set = Self {
             start,
@@ -116,7 +126,8 @@ impl SpanSet {
     ///
     /// # Errors
     ///
-    /// As [`SpanSet::new`], and when a last day is `i64::MAX`.
+    /// As [`SpanSet::new`], and [`Error::DayOverflow`] when a last day is
+    /// `i64::MAX`.
     pub fn from_closed(
         start: Vec<i64>,
         last_day: &[i64],
@@ -126,7 +137,10 @@ impl SpanSet {
             .iter()
             .map(|&day| closed_to_half_open(day))
             .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| Error::invalid("a closed end of i64::MAX has no half-open end"))?;
+            .ok_or_else(|| Error::DayOverflow {
+                what: "last_day",
+                row: last_day.iter().position(|&d| d == i64::MAX).unwrap_or(0),
+            })?;
         Self::new(start, end, key_offsets)
     }
 
@@ -149,9 +163,10 @@ impl SpanSet {
     ///
     /// [`Error::Input`] when the columns differ in length, the offsets
     /// are not a non-decreasing sequence from 0 to the number of intervals, the
-    /// window columns do not have one entry per key, a window ends before it
-    /// starts, an interval has a last day before its start, or the intervals of
-    /// a key overlap or are out of order.
+    /// window columns do not have one entry per key, or the intervals of a
+    /// key overlap or are out of order, and [`Error::EndBeforeStart`] when a
+    /// window ends before it starts or an interval has a last day before its
+    /// start.
     pub fn from_closed_within(
         start: &[Option<i64>],
         last_day: &[Option<i64>],
@@ -170,9 +185,10 @@ impl SpanSet {
                 if let (Some(s), Some(d)) = (start[i], last_day[i])
                     && d < s
                 {
-                    return Err(Error::invalid(format!(
-                        "key {key} has a closed interval [{s}, {d}] that ends before it starts"
-                    )));
+                    return Err(Error::EndBeforeStart {
+                        what: "last_day",
+                        row: i,
+                    });
                 }
                 let s = start[i].map_or(lo, |s| s.max(lo));
                 let e = last_day[i].map_or(hi, |d| d.saturating_add(1).min(hi));
@@ -195,8 +211,10 @@ impl SpanSet {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when the columns differ in length, the first
-    /// row does not begin a key, a span names a row out of range, or a last
+    /// [`Error::Input`] when the columns differ in length, the spans are not
+    /// in key order or a span crosses keys, [`Error::FirstRowBeginsNoKey`]
+    /// when the first row does not begin a key, [`Error::OutOfRange`] when a
+    /// span names a row out of range, and [`Error::DayOverflow`] when a last
     /// day is `i64::MAX`.
     pub fn from_merged_spans(
         merged: &MergedSpans,
@@ -209,7 +227,7 @@ impl SpanSet {
         length("last_day", n, last_day.len())?;
         length("last_row", merged.first_row.len(), merged.last_row.len())?;
         if n > 0 && !new_key[0] {
-            return Err(Error::invalid("the first row must begin a key"));
+            return Err(Error::FirstRowBeginsNoKey { what: "new_key" });
         }
         let mut key_of_row = Vec::with_capacity(n);
         let mut keys = 0_usize;
@@ -221,25 +239,37 @@ impl SpanSet {
         }
         let mut out = Builder::new(keys);
         let mut key = 0;
-        for (&first, &last) in merged.first_row.iter().zip(&merged.last_row) {
+        for (span, (&first, &last)) in merged.first_row.iter().zip(&merged.last_row).enumerate() {
+            let out_of_range = |what, value: usize, limit: usize| Error::OutOfRange {
+                what,
+                row: Some(span),
+                value: value as u64,
+                limit: limit as u64,
+            };
             let (first, last) = (first as usize, last as usize);
-            if first >= n || last >= n {
-                return Err(Error::invalid(format!(
-                    "a merged span names row {} of {n}",
-                    first.max(last)
-                )));
+            if first >= n {
+                return Err(out_of_range("first_row", first, n));
             }
+            if last >= n {
+                return Err(out_of_range("last_row", last, n));
+            }
+            // A span whose last row lies in another key than its first is out
+            // of order with the keys as much as a span of an earlier key.
             if key_of_row[first] < key || key_of_row[last] != key_of_row[first] {
-                return Err(Error::invalid(
-                    "the merged spans are not in key order, or a span crosses keys",
-                ));
+                return Err(InputError::Unsorted {
+                    what: "merged spans",
+                    row: span,
+                }
+                .into());
             }
             while key < key_of_row[first] {
                 out.close_key();
                 key += 1;
             }
-            let end = closed_to_half_open(last_day[last])
-                .ok_or_else(|| Error::invalid("a closed end of i64::MAX has no half-open end"))?;
+            let end = closed_to_half_open(last_day[last]).ok_or(Error::DayOverflow {
+                what: "last_day",
+                row: last,
+            })?;
             out.out.start.push(start[first]);
             out.out.end.push(end);
         }
@@ -300,14 +330,10 @@ impl SpanSet {
             for row in self.range(key) {
                 let (s, e) = (self.start[row], self.end[row]);
                 if s >= e {
-                    return Err(Error::invalid(format!(
-                        "{what}: key {key} has an empty or inverted interval [{s}, {e})"
-                    )));
+                    return Err(Error::EndBeforeStart { what, row });
                 }
                 if s < previous_end {
-                    return Err(Error::invalid(format!(
-                        "{what}: key {key} has intervals that are unsorted or overlap, at day {s}"
-                    )));
+                    return Err(InputError::Unsorted { what, row }.into());
                 }
                 previous_end = e;
             }
@@ -332,6 +358,7 @@ pub fn half_open_to_closed(end: i64) -> i64 {
 
 /// Counts of the rows of raw start and end columns by what is wrong with them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct IntervalCounts {
     /// Rows with both ends present and `start < end`.
     pub valid: usize,
@@ -470,8 +497,9 @@ pub fn subtract(a: &SpanSet, b: &SpanSet) -> Result<SpanSet, Error> {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `a` is malformed, the window columns do not
-/// have one entry per key of `a`, or a window ends before it starts.
+/// [`Error::Input`] when `a` is malformed or the window columns do not
+/// have one entry per key of `a`, and [`Error::EndBeforeStart`] when a window
+/// ends before it starts.
 pub fn complement_within(
     a: &SpanSet,
     window_start: &[i64],
@@ -485,8 +513,8 @@ pub fn complement_within(
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when `a` is malformed, `lo` and `hi` do not have
-/// one entry per key of `a`, or `hi < lo`.
+/// [`Error::Input`] when `a` is malformed or `lo` and `hi` do not have
+/// one entry per key of `a`, and [`Error::EndBeforeStart`] when `hi < lo`.
 pub fn clip(a: &SpanSet, lo: &[i64], hi: &[i64]) -> Result<SpanSet, Error> {
     let window = window_set(lo, hi, a.n_keys())?;
     intersect(a, &window)
@@ -496,9 +524,10 @@ fn check_window(lo: &[i64], hi: &[i64], keys: usize) -> Result<(), Error> {
     length("window start", keys, lo.len())?;
     length("window end", keys, hi.len())?;
     if let Some(key) = (0..keys).find(|&k| hi[k] < lo[k]) {
-        return Err(Error::invalid(format!(
-            "key {key} has a window that ends before it starts"
-        )));
+        return Err(Error::EndBeforeStart {
+            what: "window",
+            row: key,
+        });
     }
     Ok(())
 }
@@ -527,6 +556,7 @@ fn window_set(lo: &[i64], hi: &[i64], keys: usize) -> Result<SpanSet, Error> {
 /// `Observations { id: &s.key, time: &s.time, value: Some(&s.value) }` passes
 /// them to `Tmerge::tdc`.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct Switches {
     /// The key of each switch.
     pub key: Vec<u32>,
@@ -539,6 +569,7 @@ pub struct Switches {
 /// Follow-up rows that tile a window, each inside or outside a set, in the
 /// counting-process form `(tstart, tstop]` of `tmerge` and `SurvData`.
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct FollowUpRows {
     /// The key of each row.
     pub key: Vec<u32>,
@@ -608,9 +639,9 @@ impl SpanSet {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when the set is malformed, a window or origin
-    /// column does not have one entry per key, or a window ends before it
-    /// starts.
+    /// [`Error::Input`] when the set is malformed or a window or origin
+    /// column does not have one entry per key, and [`Error::EndBeforeStart`]
+    /// when a window ends before it starts.
     #[expect(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,

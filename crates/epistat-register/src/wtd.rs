@@ -124,6 +124,7 @@ pub type Direction = WaitingTime;
 
 /// A fitted parametric WTD.
 #[derive(Clone, Debug, PartialEq)]
+#[non_exhaustive]
 pub struct WtdFit {
     /// The family of the inter-arrival distribution.
     pub family: Family,
@@ -233,9 +234,10 @@ fn objective(family: Family, times: &[f64], delta: f64, x: &[f64]) -> (f64, Vec<
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when there are fewer than three times, the
-/// window is not positive and finite, or a time is outside `(0, window_days]`,
-/// and [`Error::Numerical`] when the optimiser cannot start.
+/// [`Error::TooFew`] when there are fewer than three times,
+/// [`Error::Input`] when the window is not positive and finite or a time is
+/// outside `(0, window_days]` (with its row), and [`Error::Optim`] when the
+/// optimiser cannot start.
 pub fn fit_wtd(times: &[f64], window_days: f64, family: Family) -> Result<WtdFit, Error> {
     if !(window_days.is_finite() && window_days > 0.0) {
         return Err(InputError::Domain {
@@ -247,17 +249,26 @@ pub fn fit_wtd(times: &[f64], window_days: f64, family: Family) -> Result<WtdFit
         .into());
     }
     if times.len() < 3 {
-        return Err(Error::invalid(format!(
-            "the waiting time distribution needs at least three times, got {}",
-            times.len()
-        )));
+        return Err(Error::TooFew {
+            what: "times",
+            needed: 3,
+            found: times.len(),
+        });
     }
     if let Some(i) = times.iter().position(|&t| !(t > 0.0 && t <= window_days)) {
-        return Err(InputError::Domain {
-            what: "times",
-            value: times[i],
-            domain: "(0, window_days]",
-            row: None,
+        return Err(if times[i].is_finite() {
+            InputError::Domain {
+                what: "times",
+                value: times[i],
+                domain: "(0, window_days]",
+                row: Some(i),
+            }
+        } else {
+            InputError::NotFinite {
+                what: "times",
+                row: i,
+                column: None,
+            }
         }
         .into());
     }
@@ -283,9 +294,7 @@ pub fn fit_wtd(times: &[f64], window_days: f64, family: Family) -> Result<WtdFit
         cost_tolerance: f64::MIN_POSITIVE,
         ..Bfgs::default()
     };
-    let minimum = bfgs
-        .minimize(&start, |x| objective(family, times, window_days, x), None)
-        .map_err(|e| Error::numerical(format!("the WTD fit could not run: {e}")))?;
+    let minimum = bfgs.minimize(&start, |x| objective(family, times, window_days, x), None)?;
     let (x, gradient) = polish(family, times, window_days, &minimum.x, &minimum.gradient);
     let converged = minimum.converged || norm(&gradient) < bfgs.gradient_tolerance;
     let (prevalent, a, b) = natural(family, &x);
@@ -386,7 +395,8 @@ fn polish(
 /// # Errors
 ///
 /// [`Error::Input`] when the offsets are not a layout over the days
-/// or the window is empty or inverted.
+/// or the window is empty or inverted (`window_start` not below
+/// `window_end`).
 #[expect(
     clippy::cast_precision_loss,
     reason = "day differences of register data are far below 2^53"
@@ -400,7 +410,12 @@ pub fn waiting_times(
 ) -> Result<Vec<f64>, Error> {
     csr("person_offsets", person_offsets, day.len())?;
     if window_end <= window_start {
-        return Err(Error::invalid("the window must end after it starts"));
+        return Err(InputError::NotBelow {
+            what: "window_start",
+            value: window_start as f64,
+            limit: window_end as f64,
+        }
+        .into());
     }
     let inside = |d: &&i64| (window_start..window_end).contains(*d);
     Ok(person_offsets
