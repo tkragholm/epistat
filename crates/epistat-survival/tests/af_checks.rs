@@ -3,6 +3,7 @@
 //! that are not numbers.
 
 use epistat_glm::attributable::IntervalScale;
+use epistat_survival::Level;
 use epistat_survival::standardise::Standardised;
 use epistat_survival::standardise::attributable::af_from_standardised;
 
@@ -34,7 +35,7 @@ fn risks(cov: bool) -> Standardised {
         lower: None,
         upper: None,
         covariance,
-        conf_level: 0.95,
+        level: Level::default(),
     }
 }
 
@@ -42,7 +43,8 @@ fn risks(cov: bool) -> Standardised {
 fn the_fraction_is_one_minus_the_ratio_with_the_delta_method_variance() {
     let s = risks(true);
     let times = [1.0, 2.0, 3.0];
-    let c = af_from_standardised(&s, &times, 0, 1, 0.95, IntervalScale::Identity).unwrap();
+    let c =
+        af_from_standardised(&s, &times, 0, 1, Level::default(), IntervalScale::Identity).unwrap();
     assert!((c.af[0].unwrap() - 0.6).abs() < 1e-15);
     assert!((c.af[1].unwrap() - 0.6).abs() < 1e-15);
     assert!(c.af[2].is_none() && c.se[2].is_none() && c.lower[2].is_none());
@@ -65,7 +67,7 @@ fn the_log_scale_keeps_the_upper_limit_below_one() {
         &[1.0, 2.0, 3.0],
         0,
         1,
-        0.999_999,
+        Level::confidence(0.999_999).unwrap(),
         IntervalScale::LogComplement,
     )
     .unwrap();
@@ -81,8 +83,15 @@ fn the_log_scale_keeps_the_upper_limit_below_one() {
 #[test]
 fn no_covariance_gives_no_standard_error_and_zero_unexposed_risk_gives_no_log_limits() {
     let s = risks(false);
-    let c =
-        af_from_standardised(&s, &[1.0, 2.0, 3.0], 0, 1, 0.95, IntervalScale::Identity).unwrap();
+    let c = af_from_standardised(
+        &s,
+        &[1.0, 2.0, 3.0],
+        0,
+        1,
+        Level::default(),
+        IntervalScale::Identity,
+    )
+    .unwrap();
     assert!(c.af[0].is_some() && c.se[0].is_none() && c.lower[0].is_none());
     let mut s = risks(true);
     s.risk[0] = Some(0.0);
@@ -91,7 +100,7 @@ fn no_covariance_gives_no_standard_error_and_zero_unexposed_risk_gives_no_log_li
         &[1.0, 2.0, 3.0],
         0,
         1,
-        0.95,
+        Level::default(),
         IntervalScale::LogComplement,
     )
     .unwrap();
@@ -100,8 +109,15 @@ fn no_covariance_gives_no_standard_error_and_zero_unexposed_risk_gives_no_log_li
     // Zero observed risk: no ratio.
     let mut s = risks(true);
     s.risk[3] = Some(0.0);
-    let c =
-        af_from_standardised(&s, &[1.0, 2.0, 3.0], 0, 1, 0.95, IntervalScale::Identity).unwrap();
+    let c = af_from_standardised(
+        &s,
+        &[1.0, 2.0, 3.0],
+        0,
+        1,
+        Level::default(),
+        IntervalScale::Identity,
+    )
+    .unwrap();
     assert!(c.af[0].is_none());
 }
 
@@ -109,8 +125,15 @@ fn no_covariance_gives_no_standard_error_and_zero_unexposed_risk_gives_no_log_li
 fn a_protective_exposure_has_a_negative_fraction() {
     let mut s = risks(true);
     s.risk.swap(0, 3);
-    let c =
-        af_from_standardised(&s, &[1.0, 2.0, 3.0], 0, 1, 0.95, IntervalScale::Identity).unwrap();
+    let c = af_from_standardised(
+        &s,
+        &[1.0, 2.0, 3.0],
+        0,
+        1,
+        Level::default(),
+        IntervalScale::Identity,
+    )
+    .unwrap();
     assert!(c.af[0].unwrap() < 0.0);
 }
 
@@ -119,10 +142,7 @@ fn unusable_input_is_refused() {
     let s = risks(true);
     let t = [1.0, 2.0, 3.0];
     let id = IntervalScale::Identity;
-    assert!(af_from_standardised(&s, &t[..2], 0, 1, 0.95, id).is_err());
-    assert!(af_from_standardised(&s, &t, 0, 0, 0.95, id).is_err());
-    assert!(af_from_standardised(&s, &t, 0, 2, 0.95, id).is_err());
-    for level in [0.0, 1.0, -0.1] {
-        assert!(af_from_standardised(&s, &t, 0, 1, level, id).is_err());
-    }
+    assert!(af_from_standardised(&s, &t[..2], 0, 1, Level::default(), id).is_err());
+    assert!(af_from_standardised(&s, &t, 0, 0, Level::default(), id).is_err());
+    assert!(af_from_standardised(&s, &t, 0, 2, Level::default(), id).is_err());
 }

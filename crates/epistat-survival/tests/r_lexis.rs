@@ -9,6 +9,7 @@
 //! off by at most `(k + 4)` units in the last place of the largest magnitude
 //! of the case, which is the tolerance used.
 
+use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::lexis::rates::{RateOptions, fit_rates};
 use epistat_survival::lexis::{Lexis, LexisOptions, TimeScale, split_lexis};
@@ -233,8 +234,8 @@ fn rates_match_glm_and_ci() {
     }
     check(fit.fit.deviance, r.deviance);
     let contrasts: Vec<&[f64]> = r.ctr.iter().map(Vec::as_slice).collect();
-    let lin = fit.ci_lin(&contrasts, 0.05).unwrap();
-    let exp = fit.ci_exp(&contrasts, 0.05).unwrap();
+    let lin = fit.ci_lin(&contrasts, Level::alpha(0.05).unwrap()).unwrap();
+    let exp = fit.ci_exp(&contrasts, Level::alpha(0.05).unwrap()).unwrap();
     for (i, (l, e)) in lin.iter().zip(&exp).enumerate() {
         let want = &r.ci_lin[i];
         check(l.estimate.unwrap(), want[0]);

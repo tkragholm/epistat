@@ -45,6 +45,7 @@
 use std::collections::HashMap;
 
 use epistat_linalg::Mat;
+use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::rmst::{RmstOptions, RmstRegression, Tau, rmst2_adjusted};
 use epistat_testkit::load_json;
@@ -221,7 +222,7 @@ fn rmst_covariates_agree_with_r() {
                 .map(|(i, j)| x[(i, j)].abs())
                 .fold(1.0f64, f64::max);
             let mut opts = RmstOptions::new(fit.tau_given.map_or(Tau::Largest, Tau::Fixed));
-            opts.conf_level = 1.0 - fit.alpha;
+            opts.level = Level::confidence(1.0 - fit.alpha).unwrap();
             let label = format!(
                 "{} {:?} tau {:?} alpha {}",
                 case.name, fit.covs, fit.tau_given, fit.alpha
@@ -233,8 +234,7 @@ fn rmst_covariates_agree_with_r() {
                 fit.tau.to_bits(),
                 "{label}: tau"
             );
-            let z_alpha =
-                epistat_stats::dist::normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
+            let z_alpha = epistat_stats::dist::normal::quantile(opts.level.upper_probability());
             // The arm is the stratum, with `xmax` at least 1 for it.
             let (nf, xm) = (n as f64, xmax);
             check(

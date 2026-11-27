@@ -38,22 +38,17 @@
 //!    riskRegression: predicting the risk of an event using Cox regression
 //!    models. R J 2017;9(2):440-60. doi:10.32614/RJ-2017-062
 
+use epistat_core::Level;
 use epistat_linalg::Mat;
 
 use super::score::{Auc, Score, std_err_of};
 use crate::error::{Error, Result};
 
 /// What the contrasts take.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ContrastOptions {
-    /// The confidence level of the limits, `conf.int` of `Score`: 0.95.
-    pub level: f64,
-}
-
-impl Default for ContrastOptions {
-    fn default() -> Self {
-        Self { level: 0.95 }
-    }
+    /// The confidence level of the limits, `conf.int` of `Score`.
+    pub level: Level,
 }
 
 /// The difference between two models at each time.
@@ -83,8 +78,7 @@ pub struct Contrast {
 /// # Errors
 ///
 /// An input error when a score has no influence function, when the two are
-/// at different times or from data of different numbers of rows, or when
-/// `opts.level` is not in `(0, 1)`.
+/// at different times or from data of different numbers of rows.
 pub fn brier_difference(
     model: &Score,
     reference: &Score,
@@ -144,16 +138,13 @@ fn contrast(
     reference_influence: Option<&Mat<f64>>,
     opts: ContrastOptions,
 ) -> Result<Contrast> {
-    if !(opts.level > 0.0 && opts.level < 1.0) {
-        return Err(Error::invalid("level must be in (0, 1)"));
-    }
     let (Some(a), Some(b)) = (model_influence, reference_influence) else {
         return Err(Error::invalid(
             "the scores need their influence functions: compute them with variance and \
              keep_influence",
         ));
     };
-    let z = epistat_stats::dist::normal::quantile(1.0 - (1.0 - opts.level) / 2.0);
+    let z = epistat_stats::dist::normal::quantile(opts.level.upper_probability());
     let mut out = Contrast {
         times: times.to_vec(),
         difference: Vec::new(),

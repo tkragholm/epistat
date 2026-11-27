@@ -13,6 +13,7 @@ use super::expected::Pieces;
 use crate::error::{Error, Result};
 use crate::par;
 use crate::surv::SurvData;
+use epistat_core::Level;
 use epistat_stats::dist::normal;
 
 const BLOCK: usize = 1024;
@@ -79,8 +80,8 @@ pub struct NetOptions<'a> {
     pub method: Method,
     /// The time points.
     pub grid: Grid,
-    /// The confidence level of the limits, in `(0, 1)`.
-    pub level: f64,
+    /// The confidence level of the limits.
+    pub level: Level,
     /// The scale of the limits.
     pub transform: Transform,
     /// The potential follow-up of every row of the data, which
@@ -96,7 +97,7 @@ impl Default for NetOptions<'_> {
         Self {
             method: Method::PoharPerme,
             grid: Grid::EventTimes,
-            level: 0.95,
+            level: Level::default(),
             transform: Transform::LogLog,
             potential: None,
         }
@@ -148,9 +149,6 @@ fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions<'_>) 
             data.n_rows()
         )));
     }
-    if !(opts.level > 0.0 && opts.level < 1.0) {
-        return Err(Error::invalid("level must be in (0, 1)"));
-    }
     if let Grid::Width(w) = opts.grid
         && !(w.is_finite() && w > 0.0)
     {
@@ -194,7 +192,7 @@ fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions<'_>) 
 ///
 /// An input error for expected hazards of another number of rows than the
 /// data, a status with more than one event code, weights other than 0 and 1,
-/// a level outside `(0, 1)`, a grid width that is not positive, an entry
+/// a grid width that is not positive, an entry
 /// before time 0, follow-up beyond what `expected` covers, a potential
 /// follow-up missing for Hakulinen or given for another method, delayed entry
 /// or a walk off the table for Ederer I and Hakulinen (see
@@ -228,7 +226,7 @@ pub fn net_survival(
         let g = data.stratum().map_or(0, |s| s[i] as usize);
         groups[g].push(i);
     }
-    let z = normal::quantile(1.0 - (1.0 - opts.level) / 2.0);
+    let z = normal::quantile(opts.level.upper_probability());
     groups
         .into_iter()
         .enumerate()

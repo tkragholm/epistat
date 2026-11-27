@@ -211,11 +211,6 @@ fn invalid_input_is_an_error() {
     let c = cohort(200, 11, false);
     let data = c.data(false);
     let expected = c.expected(&t, &data);
-    let bad_level = NetOptions {
-        level: 1.0,
-        ..NetOptions::default()
-    };
-    assert!(net_survival(&data, &expected, &bad_level).is_err());
     let bad_width = NetOptions {
         grid: Grid::Width(0.0),
         ..NetOptions::default()

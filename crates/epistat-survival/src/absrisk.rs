@@ -174,6 +174,7 @@
 //! 4. Beyersmann J, Allignol A, Schumacher M. Competing risks and multistate
 //!    models with R. New York: Springer; 2012.
 
+use epistat_core::Level;
 use epistat_linalg::MatRef;
 use epistat_stats::dist::normal;
 use rayon::prelude::*;
@@ -284,8 +285,8 @@ pub struct RiskOptions {
     pub influence: InfluenceForm,
     /// The scale of the confidence limits, which exist with `std_err`.
     pub limits: RiskLimits,
-    /// The confidence level, in `(0, 1)`.
-    pub conf_level: f64,
+    /// The confidence level.
+    pub level: Level,
 }
 
 impl Default for RiskOptions {
@@ -295,7 +296,7 @@ impl Default for RiskOptions {
             std_err: false,
             influence: InfluenceForm::Exact,
             limits: RiskLimits::LogLog,
-            conf_level: 0.95,
+            level: Level::default(),
         }
     }
 }
@@ -395,8 +396,7 @@ impl<'a> CauseSpecificCox<'a> {
     /// covariate is not finite, when the new designs do not match the models in
     /// number or in columns, when a new stratum is not one of the data or is
     /// missing for data with strata, when a model has a coefficient that is
-    /// `None` (drop the aliased column), when a risk score is not finite, when
-    /// `conf_level` is not in `(0, 1)`, and with `std_err` for a covariance
+    /// `None` (drop the aliased column), when a risk score is not finite, and with `std_err` for a covariance
     /// that is not defined.
     pub fn predict(
         &self,
@@ -427,7 +427,7 @@ impl<'a> CauseSpecificCox<'a> {
         }
         let (lower, upper) = match &std_err {
             Some(se) if opts.limits != RiskLimits::None => {
-                let z = normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
+                let z = normal::quantile(opts.level.upper_probability());
                 let (lo, up) = limits::limits(&risk, se, opts.limits, z);
                 (Some(lo), Some(up))
             }
@@ -608,9 +608,6 @@ impl CauseSpecificCox<'_> {
         cause: u32,
         opts: &RiskOptions,
     ) -> Result<Context> {
-        if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-            return Err(Error::invalid("conf_level: must be in (0, 1)"));
-        }
         refuse_non_finite(times, "times")?;
         let n_codes = self.data.followup()?.n_codes();
         if cause == 0 || cause > n_codes {

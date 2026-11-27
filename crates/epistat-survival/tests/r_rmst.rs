@@ -47,6 +47,7 @@
 
 use std::collections::HashMap;
 
+use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::rmst::{Contrast, GroupRmst, RmstOptions, Tau, rmst2};
 use epistat_testkit::load_json;
@@ -177,7 +178,7 @@ fn rmst2_agrees_with_survrm2() {
             let label = format!("{} fit {i} (tau {:?})", case.name, fit.tau_given);
             let tau = fit.tau_given.map_or(Tau::Largest, Tau::Fixed);
             let mut opts = RmstOptions::new(tau);
-            opts.conf_level = 1.0 - fit.alpha;
+            opts.level = Level::confidence(1.0 - fit.alpha).unwrap();
             let got = rmst2(&data, &opts);
             if fit.error {
                 assert!(got.is_err(), "{label}: R refuses the horizon");

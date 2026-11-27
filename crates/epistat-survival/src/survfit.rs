@@ -167,6 +167,7 @@ mod times;
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
+use epistat_core::Level;
 
 pub use rmean::RestrictedMean;
 pub use times::{CurveAt, CurveIndex, ReadOptions};
@@ -246,8 +247,8 @@ pub struct SurvfitOptions {
     pub hazard: HazardType,
     /// The confidence limit transformation.
     pub conf_type: ConfType,
-    /// The confidence level, in `(0, 1)`. Not used with [`ConfType::None`].
-    pub conf_level: f64,
+    /// The confidence level. Not used with [`ConfType::None`].
+    pub level: Level,
     /// The standard error of the lower limit.
     pub conf_lower: ConfLower,
     /// `Some(true)` for the infinitesimal jackknife variance, `Some(false)`
@@ -265,7 +266,7 @@ impl Default for SurvfitOptions {
             survival: SurvivalType::default(),
             hazard: HazardType::default(),
             conf_type: ConfType::default(),
-            conf_level: 0.95,
+            level: Level::default(),
             conf_lower: ConfLower::default(),
             robust: None,
         }
@@ -324,7 +325,7 @@ pub struct Survfit {
     /// The variance the standard errors come from.
     pub variance: Variance,
     /// The confidence level of the limits.
-    pub conf_level: f64,
+    pub level: Level,
     /// The transformation of the limits.
     pub conf_type: ConfType,
     /// One curve per stratum that has rows, in the order of the stratum codes.
@@ -443,8 +444,7 @@ impl Survfit {
 /// # Errors
 ///
 /// An input error when `data` has more than one event code, no row has
-/// positive weight, the tie rule fails (see [`SurvData::with_timefix`]), the
-/// confidence level is not in `(0, 1)`, `robust` is `Some(false)` with a
+/// positive weight, the tie rule fails (see [`SurvData::with_timefix`]), `robust` is `Some(false)` with a
 /// cluster column, or `robust` is `Some(true)` for counting-process data with
 /// neither a cluster nor an id column.
 ///
@@ -463,12 +463,6 @@ pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
             "survfit takes one event code and the data has {}; \
              use aalen_johansen::estimate for competing events",
             surv.n_codes()
-        )));
-    }
-    if opts.conf_type != ConfType::None && !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-        return Err(Error::invalid(format!(
-            "the confidence level {} is not in (0, 1)",
-            opts.conf_level
         )));
     }
     if data.n_used() == 0 {
@@ -510,7 +504,7 @@ pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
     let z = if opts.conf_type == ConfType::None {
         f64::NAN
     } else {
-        epistat_stats::dist::normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0)
+        epistat_stats::dist::normal::quantile(opts.level.upper_probability())
     };
     let settings = group::Settings {
         survival: opts.survival,
@@ -598,7 +592,7 @@ pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
         n_rows: data.n_rows(),
         n_used: data.n_used(),
         variance,
-        conf_level: opts.conf_level,
+        level: opts.level,
         conf_type: opts.conf_type,
         groups,
     })

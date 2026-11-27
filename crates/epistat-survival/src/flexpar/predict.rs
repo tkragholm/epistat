@@ -1,5 +1,6 @@
 //! Predictions and contrasts with delta-method intervals.
 
+use epistat_core::Level;
 use epistat_linalg::MatRef;
 use epistat_stats::dist::normal;
 
@@ -31,25 +32,15 @@ pub enum Contrast {
 }
 
 /// Settings of a prediction.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct PredictOptions {
-    /// The level of the limits is `1 - alpha`.
-    pub alpha: f64,
+    /// The level of the limits.
+    pub level: Level,
     /// Use the cluster-robust covariance, which the fit must have.
     pub robust: bool,
     /// Predict from a fit whose derivative in log time is not positive
     /// everywhere on the data.
     pub allow_non_monotone: bool,
-}
-
-impl Default for PredictOptions {
-    fn default() -> Self {
-        Self {
-            alpha: 0.05,
-            robust: false,
-            allow_non_monotone: false,
-        }
-    }
 }
 
 /// An estimate at a time with its delta-method standard error and limits.
@@ -76,9 +67,6 @@ struct Point {
 }
 
 fn covariance<'a>(fit: &'a FlexParFit, opts: &PredictOptions) -> Result<&'a [Option<f64>]> {
-    if !(opts.alpha > 0.0 && opts.alpha < 1.0) {
-        return Err(Error::invalid("alpha must be in (0, 1)"));
-    }
     if !fit.monotone_on_data && !opts.allow_non_monotone {
         return Err(Error::invalid(
             "the fitted spline is not increasing on the data, so its curves are not survivor functions: set allow_non_monotone to predict anyway",
@@ -177,8 +165,7 @@ fn survival_gradient(scale: Scale, p: &Point) -> (f64, Vec<f64>) {
 ///
 /// # Errors
 ///
-/// An input error for a time that is not positive and finite, an `alpha`
-/// outside `(0, 1)`, covariates that do not have the columns of the fit, a
+/// An input error for a time that is not positive and finite, covariates that do not have the columns of the fit, a
 /// fit without the covariance asked for, and a fit that is not monotone on the
 /// data unless allowed. At a time where the derivative in log time is not
 /// positive the hazard is not positive either, and its limits are `None`.
@@ -191,7 +178,7 @@ pub fn predict(
 ) -> Result<Vec<Vec<Prediction>>> {
     let cov = covariance(fit, options)?;
     check_columns(fit, x_new)?;
-    let z = normal::quantile(1.0 - (1.0 - (1.0 - options.alpha)) / 2.0);
+    let z = normal::quantile(1.0 - (1.0 - options.level.confidence_value()) / 2.0);
     let scale = fit.scale;
     let mut out = Vec::with_capacity(x_new.nrows());
     for row in 0..x_new.nrows() {
@@ -274,7 +261,7 @@ pub fn contrast(
             "the reference has one row or as many as the rows to compare",
         ));
     }
-    let z = normal::quantile(1.0 - (1.0 - (1.0 - options.alpha)) / 2.0);
+    let z = normal::quantile(1.0 - (1.0 - options.level.confidence_value()) / 2.0);
     let scale = fit.scale;
     let mut out = Vec::with_capacity(x_new.nrows());
     for row in 0..x_new.nrows() {

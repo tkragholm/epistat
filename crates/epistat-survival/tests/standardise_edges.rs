@@ -56,12 +56,6 @@ fn refused_input_and_undefined_times() {
     let narrow = Mat::<f64>::zeros(80, 1);
     let wrong_shape = Level::single(Counterfactual::Design(narrow.as_ref()));
     assert!(run(&[wrong_shape], &[1.0], &plain).is_err());
-    let bad_level = StandardiseOptions {
-        conf_level: 1.0,
-        ..plain
-    };
-    assert!(run(std::slice::from_ref(&level), &[1.0], &bad_level).is_err());
-
     // A time before the first event has risk 0 and standard error 0, a time
     // after the last follow-up has none.
     let last = stop.iter().copied().fold(0.0, f64::max);

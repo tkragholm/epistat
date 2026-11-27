@@ -12,6 +12,7 @@ use super::cohort::{SWEEP_LIMIT, rows_by_stratum};
 use super::expected::Pieces;
 use crate::error::{Error, Result};
 use crate::surv::SurvData;
+use epistat_core::Level;
 use epistat_stats::dist::normal;
 
 /// The crude probabilities of death of one stratum.
@@ -78,17 +79,14 @@ pub struct CrudeMortality {
 ///
 /// An input error for expected hazards of another number of rows than the
 /// data, a status with more than one event code, weights other than 0 and 1,
-/// a level outside `(0, 1)`, an entry before time 0, follow-up beyond what
+/// an entry before time 0, follow-up beyond what
 /// `expected` covers, or more than 3e8 pairs of a person at risk and a time
 /// point.
 pub fn crude_mortality(
     data: &SurvData<'_>,
     expected: &ExpectedHazard,
-    level: f64,
+    level: Level,
 ) -> Result<Vec<CrudeMortality>> {
-    if !(level > 0.0 && level < 1.0) {
-        return Err(Error::invalid("level must be in (0, 1)"));
-    }
     if data.followup()?.n_codes() != 1 {
         return Err(Error::invalid(
             "the crude probabilities need a binary status of death from any cause",
@@ -97,7 +95,7 @@ pub fn crude_mortality(
     let groups = rows_by_stratum(data, expected)?;
     let surv = data.followup()?;
     let (start, stop, status) = (surv.start(), surv.stop(), surv.status());
-    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
+    let z = normal::quantile(level.upper_probability());
     groups
         .into_iter()
         .enumerate()

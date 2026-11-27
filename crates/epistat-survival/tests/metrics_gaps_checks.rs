@@ -120,8 +120,6 @@ fn contrasts_need_matching_scores_with_influence() {
     let other = brier(&data, a.as_ref().get(.., ..1), &[3.0], &kept).unwrap();
     let e = brier_difference(&other, &sb, &ContrastOptions::default()).unwrap_err();
     assert!(e.to_string().contains("same data and times"), "{e}");
-    let e = brier_difference(&sa, &sb, &ContrastOptions { level: 1.0 }).unwrap_err();
-    assert!(e.to_string().contains("level"), "{e}");
     let aa = auc(&data, a.as_ref(), &[3.0, 6.0], &kept).unwrap();
     let ab = auc(&data, b.as_ref(), &[3.0, 6.0], &kept).unwrap();
     assert!(auc_difference(&aa, &ab, &ContrastOptions::default()).is_ok());

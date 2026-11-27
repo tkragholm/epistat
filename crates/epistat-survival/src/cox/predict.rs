@@ -208,6 +208,7 @@
     reason = "the entry points check that the row count fits in u32"
 )]
 
+use epistat_core::Level;
 use std::borrow::Cow;
 
 use epistat_linalg::MatRef;
@@ -396,8 +397,8 @@ pub struct SurvfitOptions<'a> {
     pub se_fit: bool,
     /// The kind of confidence limit.
     pub conf_type: ConfType,
-    /// The confidence level, `conf.int`, in `(0, 1)`.
-    pub conf_level: f64,
+    /// The confidence level, `conf.int`.
+    pub level: Level,
     /// The survival estimate, `stype`.
     pub curve_type: CurveType,
     /// Curves conditional on survival to this time, `start.time`: the rows
@@ -419,7 +420,7 @@ impl Default for SurvfitOptions<'_> {
             variance: Variance::Auto,
             se_fit: true,
             conf_type: ConfType::Log,
-            conf_level: 0.95,
+            level: Level::default(),
             curve_type: CurveType::ExpCumulativeHazard,
             start_time: None,
             censor_times: true,
@@ -1650,24 +1651,20 @@ fn curve_baseline(m: &Model<'_>, opts: &SurvfitOptions<'_>) -> Result<Baseline> 
 ///
 /// # Errors
 ///
-/// An input error as for [`predict`], and when `conf_level` is not in
-/// `(0, 1)`, `start_time` is not finite or leaves no event, or `hazard` is set
-/// for the Kalbfleisch-Prentice curve.
+/// An input error as for [`predict`], and when `start_time` is not finite or leaves no event, or `hazard` is
+/// set for the Kalbfleisch-Prentice curve.
 pub fn survfit(
     model: &FittedModel<'_>,
     newdata: &NewData<'_>,
     opts: &SurvfitOptions<'_>,
 ) -> Result<SurvCurves> {
-    if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-        return Err(Error::invalid("conf_level: must be between 0 and 1"));
-    }
     let m = Model::new(model, opts.variance)?;
     m.check_new(newdata)?;
     let strata = m.new_strata(newdata)?;
     let baseline = curve_baseline(&m, opts)?;
     let product_limit = opts.curve_type == CurveType::KalbfleischPrentice;
     let p = m.p;
-    let z_value = normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
+    let z_value = normal::quantile(opts.level.upper_probability());
     let mut z = vec![0.0; p];
     let mut g = vec![0.0; p];
     let mut curves = Vec::with_capacity(newdata.x.nrows());

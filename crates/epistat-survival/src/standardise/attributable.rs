@@ -68,6 +68,7 @@
 //!    and cohort studies using the R package AF. Eur J Epidemiol
 //!    2016;31(6):575-82.
 
+use epistat_core::Level;
 use epistat_glm::attributable::IntervalScale;
 use epistat_stats::dist::normal;
 
@@ -98,14 +99,13 @@ pub struct AfCurve {
 /// # Errors
 ///
 /// An input error for a level outside the levels of `s`, the same level
-/// twice, `times` of another length than the times of `s`, and a `level` outside
-/// `(0, 1)`.
+/// twice, `times` of another length than the times of `s`.
 pub fn af_from_standardised(
     s: &Standardised,
     times: &[f64],
     unexposed: usize,
     observed: usize,
-    level: f64,
+    level: Level,
     scale: IntervalScale,
 ) -> Result<AfCurve> {
     if times.len() != s.n_times {
@@ -120,11 +120,8 @@ pub fn af_from_standardised(
             "the unexposed and the observed level must be different levels",
         ));
     }
-    if !(level > 0.0 && level < 1.0) {
-        return Err(Error::invalid("level must be in (0, 1)"));
-    }
     let contrast = s.contrast(unexposed, observed)?;
-    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
+    let z = normal::quantile(level.upper_probability());
     let t = s.n_times;
     let mut curve = AfCurve {
         times: times.to_vec(),

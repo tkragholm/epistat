@@ -4,6 +4,7 @@
 //! start of observation) and the piece rules written out.
 
 use epistat_linalg::Mat;
+use epistat_survival::Level;
 use epistat_survival::sccs::{
     ExposureSeries, PieceSpec, SccsData, SccsOptions, WindowSpec, build_pieces, fit,
 };
@@ -214,7 +215,7 @@ fn the_estimate_of_two_pieces_per_person_is_the_log_odds_ratio_of_the_counts() {
     // 1e-9 of it, and each derived quantity within a few times that.
     let se = (1.0_f64 / 8.0 + 1.0 / 12.0).sqrt();
     assert_eq!(f.standard_errors[0], Some(var.sqrt()));
-    let ri = f.relative_incidence(0.95, false).unwrap()[0].unwrap();
+    let ri = f.relative_incidence(Level::default(), false).unwrap()[0].unwrap();
     let z = 1.959_963_984_540_054;
     assert!((ri.relative_incidence - 8.0 / 12.0).abs() < 1e-8);
     assert!((ri.lower - ((8.0f64 / 12.0).ln() - z * se).exp()).abs() < 1e-8);
@@ -224,9 +225,7 @@ fn the_estimate_of_two_pieces_per_person_is_the_log_odds_ratio_of_the_counts() {
     assert!((ri.p_value - 0.374_363_512_135_005).abs() < 1e-8);
     // Every person is observed in and out of the window and has an event.
     assert_eq!(f.n_informative_by_column, vec![20]);
-    assert!(f.relative_incidence(1.0, false).is_err());
-    assert!(f.relative_incidence(f64::NAN, false).is_err());
-    assert!(f.relative_incidence(0.95, true).is_err());
+    assert!(f.relative_incidence(Level::default(), true).is_err());
 }
 
 #[test]

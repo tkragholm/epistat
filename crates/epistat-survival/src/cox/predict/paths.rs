@@ -114,9 +114,6 @@ pub fn survfit_paths(
     paths: &PathData<'_>,
     opts: &SurvfitOptions<'_>,
 ) -> Result<PathCurves> {
-    if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-        return Err(Error::invalid("conf_level: must be between 0 and 1"));
-    }
     let m = Model::new(model, opts.variance)?;
     let rows = paths.x.nrows();
     check_lengths(&[
@@ -165,7 +162,7 @@ pub fn survfit_paths(
     let baseline = curve_baseline(&m, opts)?;
     let product_limit = opts.curve_type == CurveType::KalbfleischPrentice;
     let p = m.p;
-    let z_value = normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
+    let z_value = normal::quantile(opts.level.upper_probability());
     let mut z = vec![0.0; p];
     let mut d = vec![0.0; p];
     let mut curves = Vec::with_capacity(order.len());

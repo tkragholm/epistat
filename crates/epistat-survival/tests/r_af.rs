@@ -111,8 +111,15 @@ fn the_attributable_fraction_function_matches_afcoxph() {
             &opts,
         )
         .unwrap();
-        let curve =
-            af_from_standardised(&s, &c.times, 0, 1, 0.95, IntervalScale::Identity).unwrap();
+        let curve = af_from_standardised(
+            &s,
+            &c.times,
+            0,
+            1,
+            epistat_survival::Level::default(),
+            IntervalScale::Identity,
+        )
+        .unwrap();
         let t = c.times.len();
         let mut worst = [0.0f64; 4];
         let mut af_package_ratio = (f64::INFINITY, 0.0f64);

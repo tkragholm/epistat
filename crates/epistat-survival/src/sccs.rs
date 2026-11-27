@@ -157,6 +157,7 @@ pub use event_dependent::{
 pub use sample_size::{SampleSizeSpec, sample_size};
 pub use semiparametric::{SemiparametricPieces, semiparametric_pieces};
 
+use epistat_core::Level;
 use epistat_linalg::{Mat, MatRef, congruence};
 
 use crate::error::{Error, Result};
@@ -698,18 +699,12 @@ impl SccsFit {
     ///
     /// # Errors
     ///
-    /// An input error when `level` is not strictly between 0 and 1, or
-    /// `robust` is asked for a fit without the sandwich.
+    /// An input error when `robust` is asked for a fit without the sandwich.
     pub fn relative_incidence(
         &self,
-        level: f64,
+        level: Level,
         robust: bool,
     ) -> Result<Vec<Option<RelativeIncidence>>> {
-        if !(level > 0.0 && level < 1.0) {
-            return Err(invalid(format!(
-                "the level is {level}, which is not strictly between 0 and 1"
-            )));
-        }
         let se = if robust {
             self.robust_standard_errors.as_ref().ok_or_else(|| {
                 invalid("the fit has no robust covariance: set SccsOptions::robust")
@@ -717,7 +712,7 @@ impl SccsFit {
         } else {
             &self.standard_errors
         };
-        let z = epistat_stats::dist::normal::quantile(1.0 - (1.0 - level) / 2.0);
+        let z = epistat_stats::dist::normal::quantile(level.upper_probability());
         Ok(self
             .coefficients
             .iter()

@@ -269,7 +269,15 @@ fn main() {
                     },
                 )
                 .expect("standardise");
-                af_from_standardised(&s, &at, 0, 1, 0.95, IntervalScale::LogComplement).expect("af")
+                af_from_standardised(
+                    &s,
+                    &at,
+                    0,
+                    1,
+                    epistat_survival::Level::default(),
+                    IntervalScale::LogComplement,
+                )
+                .expect("af")
             });
             for k in 0..at.len() {
                 lines.push_opt(&format!("af{k}"), curve.af[k]);

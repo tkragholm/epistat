@@ -296,20 +296,6 @@ fn refusals() {
         "unknown stratum",
     );
     new.stratum = Some(&strata);
-    for level in [0.0, 1.0, f64::NAN] {
-        expect_err(
-            survfit(
-                &fitted,
-                &new,
-                &SurvfitOptions {
-                    conf_level: level,
-                    ..SurvfitOptions::default()
-                },
-            )
-            .map(|_| ()),
-            "conf_level",
-        );
-    }
     expect_err(
         survfit(
             &fitted,

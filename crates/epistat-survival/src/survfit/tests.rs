@@ -122,16 +122,8 @@ fn input_that_survfit_cannot_use_is_refused() {
     };
     assert!(estimate(&data, &robust_false).is_err());
     let plain = SurvData::builder(&stop, &status).build().unwrap();
-    for level in [0.0, 1.0, f64::NAN] {
-        let opts = SurvfitOptions {
-            conf_level: level,
-            ..SurvfitOptions::default()
-        };
-        assert!(estimate(&plain, &opts).is_err());
-    }
     let none = SurvfitOptions {
         conf_type: ConfType::None,
-        conf_level: 2.0,
         ..SurvfitOptions::default()
     };
     assert_eq!(

@@ -14,6 +14,7 @@
 mod relsurv_sim;
 
 use epistat_linalg::Mat;
+use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::flexpar::{self, FlexParOptions, Scale};
 use epistat_survival::relsurv::{
@@ -50,7 +51,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
             let opts = NetOptions {
                 method,
                 grid,
-                level: 0.9,
+                level: Level::confidence(0.9).unwrap(),
                 transform: Transform::LogLog,
                 potential: None,
             };

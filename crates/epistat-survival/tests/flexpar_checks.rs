@@ -146,8 +146,6 @@ fn prediction_refusals() {
     assert!(predict(&f, x.as_ref(), &[1.0], Predict::Survival, &ok).is_ok());
     assert!(predict(&f, x.as_ref(), &[0.0], Predict::Survival, &ok).is_err());
     assert!(predict(&f, x.as_ref(), &[f64::INFINITY], Predict::Survival, &ok).is_err());
-    let bad_alpha = PredictOptions { alpha: 1.5, ..ok };
-    assert!(predict(&f, x.as_ref(), &[1.0], Predict::Survival, &bad_alpha).is_err());
     let wide = Mat::<f64>::zeros(1, 3);
     assert!(predict(&f, wide.as_ref(), &[1.0], Predict::Survival, &ok).is_err());
     // no clusters, so no robust covariance

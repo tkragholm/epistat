@@ -10,6 +10,7 @@
 )]
 
 use epistat_rng::Stream;
+use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::lexis::cells::{CellKey, aggregate};
 use epistat_survival::lexis::rates::{RateOptions, fit_rates};
@@ -590,7 +591,10 @@ fn rate_model_edges() {
     assert_eq!(fit.n_used, 4);
     assert!(fit.fit.coefficients[2].is_none());
     let est = fit
-        .ci_exp(&[&[1.0, 1.0, 0.0], &[0.0, 0.0, 1.0]], 0.05)
+        .ci_exp(
+            &[&[1.0, 1.0, 0.0], &[0.0, 0.0, 1.0]],
+            Level::alpha(0.05).unwrap(),
+        )
         .unwrap();
     assert!(est[0].estimate.is_some());
     assert!(est[1].estimate.is_none());
@@ -601,7 +605,6 @@ fn rate_model_edges() {
     let bad = fit_rates(&[0.0, 1.0], &[1.0, 1.0], &[&[1.0, 1.0]], &o);
     assert!(bad.is_err());
     assert!(fit_rates(&length, &events, &[], &o).is_err());
-    assert!(fit.ci_lin(&[&[1.0, 0.0, 0.0]], 1.5).is_err());
 }
 
 /// A measurement at register scale: `cargo test --release -p epistat-survival

@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 
 use epistat_linalg::Mat;
+use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::flexpar::{self, FlexParOptions, Predict, PredictOptions, Scale};
 use epistat_survival::ratetable::{RateDim, RateTable};
@@ -320,7 +321,7 @@ fn net_survival_matches_relsurv() {
         let opts = NetOptions {
             method,
             grid: Grid::EventTimes,
-            level: 0.95,
+            level: Level::default(),
             transform,
             potential: None,
         };

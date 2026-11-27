@@ -18,6 +18,7 @@
 
 mod relsurv_sim;
 
+use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::relsurv::{
     ExcessOptions, ExpectedHazard, Grid, Method, NetOptions, Transform, excess_hazard, net_survival,
@@ -90,7 +91,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
             let opts = NetOptions {
                 method,
                 grid,
-                level: 0.95,
+                level: Level::default(),
                 transform: Transform::Log,
                 potential: None,
             };

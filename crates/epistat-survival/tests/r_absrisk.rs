@@ -53,6 +53,7 @@ mod absrisk_naive;
 use absrisk_naive::{NCase, NModel, model_pieces, naive_se};
 use epistat_linalg::{Mat, Side};
 use epistat_stats::dist::normal;
+use epistat_survival::Level;
 use epistat_survival::absrisk::{
     CauseSpecificCox, CscOptions, InfluenceForm, NewRows, RiskLimits, RiskOptions, SurvType,
 };
@@ -408,7 +409,7 @@ fn absolute_risk_matches_r() {
                 // riskRegression's first-order form, which the reference has.
                 influence: InfluenceForm::Exponential,
                 limits: RiskLimits::LogLog,
-                conf_level: 0.95,
+                level: Level::default(),
             };
             let got = model
                 .predict(&new, &case.times, case.cause, &ropts)

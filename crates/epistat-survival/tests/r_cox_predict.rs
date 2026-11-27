@@ -36,6 +36,7 @@
 //! its bound is printed for each output.
 
 use epistat_linalg::{Mat, Side};
+use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::cox::predict::{
     BaselineOptions, Centring, ConfType, FittedModel, HazardType, NewData, PredictOptions,
@@ -766,7 +767,7 @@ fn predictions_match_r() {
                 );
             }
             let o90 = SurvfitOptions {
-                conf_level: 0.9,
+                level: Level::confidence(0.9).unwrap(),
                 ..at_events()
             };
             let c90 = survfit(&fitted, &new, &o90).unwrap();

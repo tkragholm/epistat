@@ -126,12 +126,6 @@ fn refusals() {
             )
             .is_err()
     );
-    // A level outside (0, 1).
-    let bad = RiskOptions {
-        conf_level: 1.0,
-        ..risk_opts(true)
-    };
-    assert!(model.predict(&new, &[1.0], 1, &bad).is_err());
     // One code, and a wrong number of designs at the fit.
     let single: Vec<i32> = s.status.iter().map(|&c| i32::from(c != 0)).collect();
     let one_code = SurvData::builder(&s.stop, &single).build().unwrap();

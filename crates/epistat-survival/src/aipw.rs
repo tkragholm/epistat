@@ -142,6 +142,7 @@
 //!    Biometrics 2012;68(4):999-1009.
 
 use epistat_core::InputError;
+use epistat_core::Level;
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::MatRef;
 use rayon::prelude::*;
@@ -219,8 +220,8 @@ pub struct AipwSurvOptions {
     pub ties: Ties,
     /// The rule that makes times equal when they differ by rounding error.
     pub timefix: TimeFix,
-    /// The confidence level of the limits, in `(0, 1)`.
-    pub conf_level: f64,
+    /// The confidence level of the limits.
+    pub level: Level,
     /// Whether the weight of an event, `1 / G(T-)`, takes the censoring survival
     /// of a Kaplan-Meier model as the product limit or, as `ate` of riskRegression
     /// does by default, as the exponential of minus the sum of the hazard
@@ -243,7 +244,7 @@ impl Default for AipwSurvOptions {
             estimator: Estimator::Aiptw,
             ties: Ties::Efron,
             timefix: TimeFix::default(),
-            conf_level: 0.95,
+            level: Level::default(),
             product_limit: false,
             grid: None,
             truncation: None,
@@ -289,7 +290,7 @@ pub struct AipwSurv {
 /// treatment that is the same for every row, a model that has an aliased column
 /// or does not converge, a propensity of exactly 0 or 1, a censoring survival of 0
 /// before an event, censoring with `Censoring::None`, truncation limits that
-/// are not ordered probabilities, and a `conf_level` outside `(0, 1)`.
+/// are not ordered probabilities.
 pub fn aipw_cox(
     data: &SurvData<'_>,
     spec: &AipwSurvSpec<'_>,
@@ -462,9 +463,6 @@ impl Model {
         times: &[f64],
         opts: &AipwSurvOptions,
     ) -> Result<Self> {
-        if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-            return Err(Error::invalid("conf_level must be in (0, 1)"));
-        }
         if let Some((lo, hi)) = opts.truncation
             && !(0.0 < lo && lo < hi && hi < 1.0)
         {
@@ -1207,7 +1205,7 @@ impl Model {
                 influence[1][i * k + s] = (phi[i * 2 * k + k + s] - est[k + s]) / nf;
             }
         }
-        let z = epistat_stats::dist::normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
+        let z = epistat_stats::dist::normal::quantile(opts.level.upper_probability());
         let mut risk = vec![None; 2 * k];
         let mut std_err = vec![None; 2 * k];
         let mut lower = vec![None; 2 * k];
@@ -1243,7 +1241,7 @@ impl Model {
                 lower: Some(lower),
                 upper: Some(upper),
                 covariance: Some(covariance),
-                conf_level: opts.conf_level,
+                level: opts.level,
             },
             times: self.times.clone(),
             influence,

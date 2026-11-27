@@ -3,6 +3,7 @@
 
 use super::{NetSurvival, Transform};
 use crate::error::{Error, Result};
+use epistat_core::Level;
 use epistat_stats::dist::normal;
 
 /// The weights of the International Cancer Survival Standards 1, 2 and 3 for
@@ -60,12 +61,12 @@ pub struct StandardisedNet {
 ///
 /// An input error for no curve, a number of weights other than the number of
 /// curves, a weight that is negative or not finite, weights that sum to 0,
-/// times that are not finite, or a level outside `(0, 1)`.
+/// times that are not finite.
 pub fn standardise_net(
     curves: &[NetSurvival],
     weights: &[f64],
     times: &[f64],
-    level: f64,
+    level: Level,
     transform: Transform,
 ) -> Result<StandardisedNet> {
     if curves.is_empty() {
@@ -90,10 +91,7 @@ pub fn standardise_net(
     if times.iter().any(|t| !t.is_finite()) {
         return Err(Error::invalid("the times must be finite"));
     }
-    if !(level > 0.0 && level < 1.0) {
-        return Err(Error::invalid("level must be in (0, 1)"));
-    }
-    let z = normal::quantile(1.0 - (1.0 - level) / 2.0);
+    let z = normal::quantile(level.upper_probability());
     let mut out = StandardisedNet {
         times: times.to_vec(),
         survival: Vec::with_capacity(times.len()),

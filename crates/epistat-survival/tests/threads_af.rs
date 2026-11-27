@@ -55,7 +55,15 @@ fn the_attributable_fraction_function_does_not_depend_on_the_number_of_threads()
             },
         )
         .unwrap();
-        let c = af_from_standardised(&s, &times, 0, 1, 0.95, IntervalScale::LogComplement).unwrap();
+        let c = af_from_standardised(
+            &s,
+            &times,
+            0,
+            1,
+            epistat_survival::Level::default(),
+            IntervalScale::LogComplement,
+        )
+        .unwrap();
         let mut out = vec![];
         for v in [&c.af, &c.se, &c.lower, &c.upper, &c.ratio] {
             out.extend(absent_all(v));

@@ -23,6 +23,7 @@
     reason = "statuses, sexes and groups are small whole numbers written by R as doubles, and times are compared with the values they were copied from"
 )]
 
+use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::ratetable::{LongDim, RateDim, RateTable};
 use epistat_survival::relsurv::{
@@ -371,7 +372,7 @@ fn age_standardised_net_survival() {
         &curves,
         &ICSS[0],
         &r.standardised.times,
-        0.95,
+        Level::default(),
         Transform::LogLog,
     )
     .unwrap();
@@ -386,7 +387,14 @@ fn age_standardised_net_survival() {
     }
     worst.report("standardised net survival");
     // Beyond the follow-up of a group the curve is undefined.
-    let late = standardise_net(&curves, &ICSS[0], &[1e7], 0.95, Transform::LogLog).unwrap();
+    let late = standardise_net(
+        &curves,
+        &ICSS[0],
+        &[1e7],
+        Level::default(),
+        Transform::LogLog,
+    )
+    .unwrap();
     assert_eq!(late.survival, vec![None]);
 }
 
@@ -408,7 +416,7 @@ fn crude_probabilities_against_cmp_rel() {
             .unwrap();
         let expected =
             ExpectedHazard::from_table(&t, &data, &[&c.age0, &c.date0], &[&cols.sex]).unwrap();
-        let crude = crude_mortality(&data, &expected, 0.95).unwrap();
+        let crude = crude_mortality(&data, &expected, Level::default()).unwrap();
         for (got, want) in crude.iter().zip(refs) {
             assert_eq!(got.times, want.time);
             for k in 0..got.times.len() {

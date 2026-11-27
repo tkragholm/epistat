@@ -100,7 +100,8 @@ fn attributable_fraction_bits_are_recorded() {
         ("identity", IntervalScale::Identity),
         ("log", IntervalScale::LogComplement),
     ] {
-        let c = af_from_standardised(&s, &times, 0, 1, 0.95, scale).unwrap();
+        let c = af_from_standardised(&s, &times, 0, 1, epistat_survival::Level::default(), scale)
+            .unwrap();
         for (field, v) in [
             ("af", &c.af),
             ("se", &c.se),

@@ -62,6 +62,7 @@
 
 use std::collections::HashMap;
 
+use epistat_survival::Level;
 use epistat_survival::SurvData;
 use epistat_survival::survfit::{
     ConfLower, ConfType, HazardType, SurvfitOptions, SurvivalType, Variance, estimate,
@@ -555,7 +556,7 @@ fn parse_options(case: &Case, fit: &Fit) -> SurvfitOptions {
             "none" => ConfType::None,
             other => panic!("conf type {other}"),
         },
-        conf_level: fit.conf_int,
+        level: Level::confidence(fit.conf_int).unwrap(),
         conf_lower: match fit.conf_lower.as_str() {
             "usual" => ConfLower::Usual,
             "peto" => ConfLower::Peto,

@@ -111,6 +111,7 @@
 //!    standardized effects. J Stat Softw 2021;99(6):1-20.
 //!    doi:10.18637/jss.v099.i06
 
+use epistat_core::Level as ConfidenceLevel;
 use std::ops::Range;
 
 use epistat_linalg::MatRef;
@@ -166,8 +167,8 @@ pub struct StandardiseOptions {
     /// Whether to give standard errors and limits. It is an error for a
     /// covariance of a model that is not defined.
     pub std_err: bool,
-    /// The confidence level of the limits, in `(0, 1)`.
-    pub conf_level: f64,
+    /// The confidence level of the limits.
+    pub level: ConfidenceLevel,
     /// Whether the event-free survival of cause-specific models is the product
     /// limit, as `product.limit` of `predict.CauseSpecificCox`, or the
     /// exponential of minus the cumulative hazard. Not read for one Cox model.
@@ -182,7 +183,7 @@ impl Default for StandardiseOptions {
     fn default() -> Self {
         Self {
             std_err: false,
-            conf_level: 0.95,
+            level: ConfidenceLevel::default(),
             product_limit: true,
             influence: InfluenceForm::Exact,
         }
@@ -215,7 +216,7 @@ pub struct Standardised {
     /// `n_times` matrices of `n_levels` by `n_levels`, with `std_err`.
     pub covariance: Option<Vec<Option<f64>>>,
     /// The confidence level of the limits.
-    pub conf_level: f64,
+    pub level: ConfidenceLevel,
 }
 
 /// The risk difference and the risk ratio of two levels at every time.
@@ -299,7 +300,7 @@ impl Standardised {
         }
         let (difference_inference, ratio_inference) = match &self.covariance {
             Some(cov) => {
-                let z = normal::quantile(1.0 - (1.0 - self.conf_level) / 2.0);
+                let z = normal::quantile(self.level.upper_probability());
                 let mut d_se = Vec::with_capacity(t);
                 let mut r_se = Vec::with_capacity(t);
                 for k in 0..t {
@@ -371,7 +372,7 @@ fn inference(estimate: &[Option<f64>], se: &[Option<f64>], null: f64, z: f64) ->
 ///
 /// An input error for no level, a level that does not match the design, a
 /// value that is not finite, a time that is not finite, a coefficient that is
-/// `None`, a risk score that is not finite, a `conf_level` outside `(0, 1)`, no
+/// `None`, a risk score that is not finite, no
 /// row of positive weight, and with `std_err` for a covariance that is not
 /// defined.
 pub fn standardise_cox<'a>(
@@ -606,9 +607,6 @@ fn run(
     times: &[f64],
     opts: &StandardiseOptions,
 ) -> Result<Standardised> {
-    if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-        return Err(Error::invalid("conf_level: must be in (0, 1)"));
-    }
     refuse_non_finite(times, "times")?;
     let data = &models[0].data;
     for (m, model) in models.iter().enumerate() {
@@ -735,7 +733,7 @@ fn run(
     }
     let (lower, upper) = match &std_err {
         Some(se) => {
-            let z = normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
+            let z = normal::quantile(opts.level.upper_probability());
             let lo = risk
                 .iter()
                 .zip(se)
@@ -760,7 +758,7 @@ fn run(
         lower,
         upper,
         covariance,
-        conf_level: opts.conf_level,
+        level: opts.level,
     })
 }
 

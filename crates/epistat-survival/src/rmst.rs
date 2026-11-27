@@ -109,6 +109,7 @@
 //!    time with the subject's baseline covariates in survival analysis,
 //!    Biostatistics 15: 222-233.
 
+use epistat_core::Level;
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::sandwich::sandwich;
 use epistat_linalg::{Attempt, Mat, MatRef, weighted_gram};
@@ -137,8 +138,8 @@ pub struct RmstOptions {
     /// How near-equal times are treated. The default is `survival`'s rule,
     /// see [`TimeFix`].
     pub timefix: TimeFix,
-    /// The confidence level, in `(0, 1)`, `1 - alpha` of `rmst2`.
-    pub conf_level: f64,
+    /// The confidence level, `1 - alpha` of `rmst2`.
+    pub level: Level,
 }
 
 impl RmstOptions {
@@ -149,7 +150,7 @@ impl RmstOptions {
         Self {
             tau,
             timefix: TimeFix::default(),
-            conf_level: 0.95,
+            level: Level::default(),
         }
     }
 }
@@ -215,7 +216,7 @@ pub struct Rmst2 {
     /// `RMTL1 / RMTL0`.
     pub loss_ratio: Contrast,
     /// The confidence level of the limits.
-    pub conf_level: f64,
+    pub level: Level,
     /// The number of rows given.
     pub n_rows: usize,
     /// The number of rows of positive weight, which are the rows used.
@@ -233,16 +234,9 @@ pub struct Rmst2 {
 /// An input error when `data` has more than one event code or no row of
 /// positive weight, a stratum column with other than two levels used, or a
 /// group with no row used, the tie rule fails (see
-/// [`SurvData::with_timefix`]), the confidence level is not in `(0, 1)`, or
-/// the horizon is not finite, is before the origin of the curves or is above
-/// the largest the data determine.
+/// [`SurvData::with_timefix`]), or the horizon is not finite, is before the
+/// origin of the curves or is above the largest the data determine.
 pub fn rmst2(data: &SurvData<'_>, opts: &RmstOptions) -> Result<Rmst2> {
-    if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-        return Err(Error::invalid(format!(
-            "the confidence level {} is not in (0, 1)",
-            opts.conf_level
-        )));
-    }
     if data.n_strata() != 2 {
         return Err(Error::invalid(format!(
             "rmst2 compares two groups, and the stratum column has {} levels",
@@ -251,7 +245,7 @@ pub fn rmst2(data: &SurvData<'_>, opts: &RmstOptions) -> Result<Rmst2> {
     }
     let (curve0, curve1, tau, tau_largest) = horizon(data, opts)?;
     let (curve0, curve1) = (&curve0, &curve1);
-    let z = epistat_stats::dist::normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
+    let z = epistat_stats::dist::normal::quantile(opts.level.upper_probability());
     let group0 = group_rmst(curve0, tau, z)?;
     let group1 = group_rmst(curve1, tau, z)?;
     let (v0, v1) = (group0.se * group0.se, group1.se * group1.se);
@@ -285,7 +279,7 @@ pub fn rmst2(data: &SurvData<'_>, opts: &RmstOptions) -> Result<Rmst2> {
         difference,
         ratio,
         loss_ratio,
-        conf_level: opts.conf_level,
+        level: opts.level,
         n_rows: data.n_rows(),
         n_used: data.n_used(),
     })
@@ -420,7 +414,7 @@ pub struct RmstRegression {
     /// The upper limit, on the same scale.
     pub upper: Vec<f64>,
     /// The confidence level of the limits.
-    pub conf_level: f64,
+    pub level: Level,
     /// The number of rows used.
     pub n_used: usize,
     /// The number of rows given.
@@ -477,12 +471,6 @@ pub fn rmst2_regression(
     effect: RmstEffect,
     opts: &RmstOptions,
 ) -> Result<RmstRegression> {
-    if !(opts.conf_level > 0.0 && opts.conf_level < 1.0) {
-        return Err(Error::invalid(format!(
-            "the confidence level {} is not in (0, 1)",
-            opts.conf_level
-        )));
-    }
     if data.n_strata() != 2 {
         return Err(Error::invalid(format!(
             "the arm is the stratum column, which must have two levels, and it has {}",
@@ -631,7 +619,7 @@ pub fn rmst2_regression(
     let a = weighted_gram(x.as_ref(), &a_weight)?;
     let covariance = sandwich(a.as_ref(), gamma.as_ref(), &Attempt::SYMMETRIC)?;
     let std_err: Vec<f64> = (0..p).map(|j| covariance[(j, j)].max(0.0).sqrt()).collect();
-    let z_value = epistat_stats::dist::normal::quantile(1.0 - (1.0 - opts.conf_level) / 2.0);
+    let z_value = epistat_stats::dist::normal::quantile(opts.level.upper_probability());
     let z: Vec<f64> = (0..p).map(|j| beta[j] / std_err[j]).collect();
     let p_value: Vec<f64> = z
         .iter()
@@ -657,7 +645,7 @@ pub fn rmst2_regression(
         std_err,
         z,
         p_value,
-        conf_level: opts.conf_level,
+        level: opts.level,
         n_used: data.n_used(),
         n_rows: n,
     })

@@ -20,7 +20,7 @@
 //! The rate of a log-linear prediction with contrast row `l` is
 //! `exp(l beta)`. [`Rates::ci_lin`] returns `l beta`, its standard error
 //! `sqrt(l V l')` with `V` the covariance of the fit, the limits
-//! `l beta -+ z se` with `z` the normal quantile of `1 - alpha / 2`, and the
+//! `l beta -+ z se` with `z` the normal quantile of the upper probability of the level, and the
 //! two-sided Wald p-value of `l beta = 0`, as `Epi::ci.lin`. [`Rates::ci_exp`]
 //! returns the exponentials of the estimate and the limits, as `Epi::ci.exp`:
 //! rates, or rate ratios for contrasts of differences, with the limits of
@@ -55,6 +55,7 @@
 //! 3. Clayton D, Hills M. Statistical Models in Epidemiology. Oxford 1993,
 //!    chapters 22 to 24.
 
+use epistat_core::Level;
 use epistat_glm::{Family, Fit, Glm, Link};
 use epistat_linalg::Mat;
 use epistat_stats::dist::normal;
@@ -217,21 +218,17 @@ pub fn fit_rates(
 
 impl Rates {
     /// The linear predictions `l beta` of the contrast rows, with standard
-    /// errors, `1 - alpha` limits and p-values, as `Epi::ci.lin`.
+    /// errors, limits at `level` and p-values, as `Epi::ci.lin`.
     ///
-    /// Each contrast has one weight per coefficient. `alpha` is R's usual
-    /// 0.05 in `ci.lin`.
+    /// Each contrast has one weight per coefficient. `level` mirrors the `alpha` of `ci.lin`.
     ///
     /// # Errors
     ///
     /// An input error when a contrast has the wrong length or a weight that
-    /// is not finite, or `alpha` is not in `(0, 1)`.
-    pub fn ci_lin(&self, contrasts: &[&[f64]], alpha: f64) -> Result<Vec<LinCi>> {
+    /// is not finite.
+    pub fn ci_lin(&self, contrasts: &[&[f64]], level: Level) -> Result<Vec<LinCi>> {
         let p = self.fit.coefficients.len();
-        if !(alpha > 0.0 && alpha < 1.0) {
-            return Err(Error::invalid("alpha must be in (0, 1)"));
-        }
-        let z = normal::quantile(1.0 - alpha / 2.0);
+        let z = normal::quantile(level.upper_probability());
         let mut out = Vec::with_capacity(contrasts.len());
         for (r, l) in contrasts.iter().enumerate() {
             if l.len() != p {
@@ -299,9 +296,9 @@ impl Rates {
     /// # Errors
     ///
     /// As [`ci_lin`](Self::ci_lin).
-    pub fn ci_exp(&self, contrasts: &[&[f64]], alpha: f64) -> Result<Vec<ExpCi>> {
+    pub fn ci_exp(&self, contrasts: &[&[f64]], level: Level) -> Result<Vec<ExpCi>> {
         Ok(self
-            .ci_lin(contrasts, alpha)?
+            .ci_lin(contrasts, level)?
             .into_iter()
             .map(|c| ExpCi {
                 estimate: c.estimate.map(f64::exp),

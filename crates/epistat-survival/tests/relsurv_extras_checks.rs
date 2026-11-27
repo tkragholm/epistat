@@ -58,11 +58,15 @@ fn the_new_estimators_on_threads() {
     let late_data = late.data(true);
     let late_expected = late.expected(&t, &late_data);
     assert_same_on_pools(&POOLS, || {
-        crude_mortality(&late_data, &late_expected, 0.95)
-            .unwrap()
-            .iter()
-            .flat_map(|c| [c.disease.clone(), c.disease_variance.clone()].concat())
-            .collect::<Vec<f64>>()
+        crude_mortality(
+            &late_data,
+            &late_expected,
+            epistat_survival::Level::default(),
+        )
+        .unwrap()
+        .iter()
+        .flat_map(|c| [c.disease.clone(), c.disease_variance.clone()].concat())
+        .collect::<Vec<f64>>()
     });
     let plain = late.data(false);
     let plain_expected = late.expected(&t, &plain);

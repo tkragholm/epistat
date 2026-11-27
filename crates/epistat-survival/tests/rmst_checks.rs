@@ -102,11 +102,6 @@ fn refusals() {
     assert!(rmst2(&ok, &RmstOptions::new(Tau::Fixed(7.5))).is_err());
     assert!(rmst2(&ok, &RmstOptions::new(Tau::Fixed(f64::NAN))).is_err());
     assert!(rmst2(&ok, &RmstOptions::new(Tau::Fixed(-1.0))).is_err());
-    for level in [0.0, 1.0, f64::NAN] {
-        let mut opts = RmstOptions::new(Tau::Largest);
-        opts.conf_level = level;
-        assert!(rmst2(&ok, &opts).is_err(), "level {level}");
-    }
     // One group, three groups, a group with only rows of weight 0, and two
     // event codes.
     let one = SurvData::builder(&stop, &status).build().unwrap();
