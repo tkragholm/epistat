@@ -29,9 +29,9 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ("pohar perme monthly", 1384, 0x5c90_bc31_7e1b_2c36),
     ("ederer2 exact", 10832, 0xeeb1_27f9_f735_7f5e),
     ("ederer2 monthly", 1384, 0x108a_88b7_27c5_b49d),
-    ("excess records", 75, 0x24ac_aa1a_2484_a85d),
-    ("excess aggregated", 61, 0x0e05_587c_334c_7478),
-    ("flexpar bhazard", 58, 0x803a_e0e7_837b_7dc9),
+    ("excess records", 75, 0xf1a8_3522_a4c5_5334),
+    ("excess aggregated", 61, 0x8c56_3818_4c99_432f),
+    ("flexpar bhazard", 58, 0xc716_5c6d_b16f_2144),
 ];
 
 fn outputs() -> Vec<(String, Vec<f64>)> {

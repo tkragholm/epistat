@@ -178,6 +178,6 @@ const EXPECTED: &[(&str, u64)] = &[
     ("fixed breslow entry weights strata", 0x474b_29b3_bc83_59aa),
     ("fixed efron entry weights strata", 0x2746_d7c1_be37_1f67),
     ("profile efron entry strata", 0x1e7e_1ed6_b4c2_a98e),
-    ("profile breslow", 0x0000_0000_0000_0000),
+    ("profile breslow", 0x8f01_41b4_a37a_d12f),
     ("em breslow", 0x3cc0_b0cf_ac3a_a56f),
 ];

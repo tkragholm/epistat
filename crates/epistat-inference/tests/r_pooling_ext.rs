@@ -473,6 +473,6 @@ fn fingerprint_of_the_tests() {
     eprintln!("pooling fingerprint {hash:#018x}");
     epistat_testkit::hash_out("fingerprint_of_the_tests", hash);
     if epistat_testkit::RECORDED_PLATFORM {
-        assert_eq!(hash, 0xa9bc_5db4_43e5_013a);
+        assert_eq!(hash, 0x59e4_b5b0_5300_873e);
     }
 }

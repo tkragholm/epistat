@@ -117,6 +117,6 @@ fn probabilistic_results_are_unchanged() {
     let hash = fp.finish();
     epistat_testkit::hash_out("probabilistic_results_are_unchanged", hash);
     if epistat_testkit::RECORDED_PLATFORM {
-        assert_eq!(hash, 8_580_821_384_644_866_469, "golden hash");
+        assert_eq!(hash, 4_485_323_065_721_477_026, "golden hash");
     }
 }

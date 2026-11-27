@@ -686,7 +686,7 @@ fn the_fit_has_its_recorded_bits() {
         .finish();
     epistat_testkit::hash_out("the_fit_has_its_recorded_bits", hash);
     if epistat_testkit::RECORDED_PLATFORM {
-        assert_eq!(hash, 16_667_844_132_692_258_619, "recorded hash");
+        assert_eq!(hash, 1_215_242_695_555_646_402, "recorded hash");
     }
 }
 

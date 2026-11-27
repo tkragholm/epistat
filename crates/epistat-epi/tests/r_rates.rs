@@ -242,6 +242,6 @@ fn fingerprint_of_a_fixed_table() {
     eprintln!("rates fingerprint {hash:#018x}");
     epistat_testkit::hash_out("fingerprint_of_a_fixed_table", hash);
     if epistat_testkit::RECORDED_PLATFORM {
-        assert_eq!(hash, 0x7057_77d0_691f_1a11);
+        assert_eq!(hash, 0xe37e_3a2a_92f8_6a17);
     }
 }

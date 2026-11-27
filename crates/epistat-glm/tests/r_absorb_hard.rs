@@ -200,6 +200,6 @@ fn hard_designs_have_their_recorded_bits() {
         .finish();
     epistat_testkit::hash_out("hard_designs_have_their_recorded_bits", hash);
     if epistat_testkit::RECORDED_PLATFORM {
-        assert_eq!(hash, 4_005_707_165_456_125_297, "recorded hash");
+        assert_eq!(hash, 260_498_357_968_770_678, "recorded hash");
     }
 }

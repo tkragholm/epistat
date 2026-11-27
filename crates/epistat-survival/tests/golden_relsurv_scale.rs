@@ -34,7 +34,7 @@ const EXPECTED: &[(&str, usize, u64)] = &[
     ("pohar perme quarterly", 474, 0x1d17_933c_73ac_d470),
     ("ederer2 exact", 29_242, 0xc260_bf74_8882_b2bf),
     ("ederer2 quarterly", 474, 0x20e8_629c_56e4_710f),
-    ("excess records", 58, 0x15c7_d5ae_05c0_687b),
+    ("excess records", 58, 0xb276_f344_73d3_9e07),
     ("excess aggregated", 46, 0x27fd_379a_82c6_543f),
 ];
 

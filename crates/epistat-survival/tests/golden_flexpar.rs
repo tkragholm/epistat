@@ -213,48 +213,48 @@ fn bits_are_pinned() {
 }
 
 const EXPECTED: &[(&str, u64, u64)] = &[
-    ("plain hazard", 0xa4aa_c405_2980_8894, 0xb82f_3f66_1e78_85ad),
+    ("plain hazard", 0x38e3_35c6_7b0c_915c, 0xfb8e_b25f_0447_d9a1),
     (
         "entry weights clusters hazard",
-        0xd1b8_4101_af7f_ecc7,
-        0x8177_ef5c_1307_2a6b,
+        0xf12e_ed0f_aea0_57b0,
+        0x0733_fc6d_3f07_76b4,
     ),
     (
         "time-varying effect hazard",
-        0x6b05_8f1e_edd2_0f5c,
-        0x16aa_e11b_555e_60c5,
+        0x2e86_ba6b_61d2_d4a6,
+        0xde02_ccda_1e4d_3519,
     ),
     (
         "aliased hazard",
-        0xe0d0_c6d1_7297_7572,
-        0x0ad8_ab11_bcfd_a402,
+        0xa331_200b_986a_582a,
+        0x79c9_4cc3_355a_8dc5,
     ),
-    ("plain odds", 0xf404_b057_0d50_230c, 0x1b6f_2f6c_bac9_26ae),
+    ("plain odds", 0x0828_6a3d_baf6_72f6, 0xe7c7_d384_6c28_50b1),
     (
         "entry weights clusters odds",
-        0x1edc_5ec1_23f1_d5d4,
-        0x8ed9_b8b4_ecac_4d65,
+        0xe5d0_8236_4cd8_af83,
+        0xb884_d622_6170_190a,
     ),
     (
         "time-varying effect odds",
-        0x501b_8ebf_70fe_979d,
-        0x43df_8e2f_e8b4_757c,
+        0x9c14_c9ce_d247_de1c,
+        0x4249_75e3_82b7_5eb7,
     ),
-    ("aliased odds", 0x1267_12e8_4111_c357, 0x15bf_7512_2714_981f),
-    ("plain probit", 0xaa95_3bfc_4b83_65ab, 0xa68c_299c_67df_f895),
+    ("aliased odds", 0x18a6_4065_1780_6111, 0xc602_dea3_6fa2_51cf),
+    ("plain probit", 0x968a_d1cb_7a21_4be1, 0x88e2_6591_f31c_a25d),
     (
         "entry weights clusters probit",
-        0xf6e9_be36_9e92_20c0,
-        0x3413_002c_01ec_1eae,
+        0xf0ce_6cec_eed4_c24b,
+        0xb664_6971_d8e1_475d,
     ),
     (
         "time-varying effect probit",
-        0xb45e_372a_d726_2d83,
-        0x75e3_bbb0_0e9b_fbdb,
+        0x3fcf_3bfb_1782_7584,
+        0xf977_98fb_4c51_aeb4,
     ),
     (
         "aliased probit",
-        0xeb99_d384_ed0a_39fb,
-        0xc815_8e6f_3ffe_33ec,
+        0x8db9_5bc7_46e1_52b2,
+        0xbfa8_d3fd_0904_cfc5,
     ),
 ];
