@@ -32,5 +32,8 @@ To check that a change keeps every hash on any target, run
 `scripts/hashes.sh before.txt` on the base commit and `scripts/hashes.sh
 after.txt` on the head, then `diff before.txt after.txt`. Each line is
 `<crate>/<test-file>/<case> <hash>`, and a line that differs is a hash that moved.
+The script builds only the tests that write hashes. Naming packages after the
+output file limits it to those packages, which is enough for a branch that
+can only affect them and the packages that depend on them.
 
 Licensed under either of MIT or Apache-2.0, at your option.
