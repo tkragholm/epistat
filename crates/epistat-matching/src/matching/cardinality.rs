@@ -596,7 +596,7 @@ pub fn match_cardinality(request: &CardinalityRequest<'_>) -> Result<Cardinality
     }
     if request.estimand == Estimand::Atm {
         return Err(Error::UnsupportedEstimand {
-            estimand: request.estimand,
+            estimand: request.estimand.into(),
             method: "cardinality matching",
         });
     }

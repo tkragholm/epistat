@@ -40,7 +40,12 @@ mod r_reference;
 use chrono::NaiveDate;
 use epistat_matching::Error;
 use epistat_matching::prelude::*;
-use epistat_matching::{RapidHashMap, match_full, match_optimal};
+use epistat_matching::{
+    DistanceCaliper, DistanceConfig, FullMatchConfig, MatchWeightMethod, MatchingCriteria,
+    OptimalRequest, PairDistanceMatrix,
+};
+use epistat_matching::{match_full, match_optimal};
+use rapidhash::RapidHashMap;
 
 use r_reference::{Versions, reference as load_reference};
 use serde::Deserialize;

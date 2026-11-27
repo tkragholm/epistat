@@ -19,11 +19,32 @@ mod common;
 
 use common::{Level, Person, cohort, records};
 use epistat_matching::Error;
+use epistat_matching::output::{MatchDataOptions, Units, get_matches, match_data};
 use epistat_matching::prelude::*;
+use epistat_matching::spec::{
+    AssignmentSpec, BinningSpec, CardinalitySpec, CemSpec, CemVariableSpec, CovarianceSpec,
+    CovariatesSpec, DiscardSpec, DistanceSpec, EstimatorSpec, FitFuncSpec, FullSpec, GeneticSpec,
+    K2kSpec, LambdaSpec, LinkSpec, LossSpec, MatchMethod, MatchMode, MissingSpec, NearestSpec,
+    OrderSpec, ScaleSpec, StdCaliperEach, StdCaliperSpec, SubclassSpec, TransformSpec,
+    VariableRatioSpec,
+};
 use epistat_matching::{
-    CardinalityLimits, CardinalityRequest, CbpsConfig, CbpsEstimand, CbpsMethod, GeneticFit,
-    GeneticMatchOptions, GeneticProblem, GeneticSearch, QuickMatchOptions, match_cardinality,
-    quick_match_subclasses,
+    BalanceRecord, BalanceReportOptions, BalanceWeights, CemBinning, CemVariable, CommonSupport,
+    CovariateEncodingConfig, CovariateValue, DeterministicSelection, DistanceCaliper,
+    DistanceConfig, ElasticNetCvConfig, Estimand, EuclideanPreparationConfig, EuclideanScale,
+    LambdaRule, LogisticRegressionConfig, MahalanobisPreparationConfig, MatchOrder,
+    MatchWeightMethod, MatchingCriteria, NearestBirthDateSelection, PairDistanceMatrix,
+    PropensityEstimator, PropensityLink, PropensityScoreConfig, PropensityScoreEstimate,
+    PropensityScoreOutputScale, Rounds, SpecOutput, SubclassificationConfig, UnitRole,
+    VariableRatio, balance_summary, cem_k2k_pairs, cem_strata, cem_subclasses,
+    estimate_propensity_and_match, exact_match_subclasses, match_weights_from_pairs,
+    pair_weights_from_pairs, prepare_euclidean_distance_config,
+    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
+    subclassify_by_propensity_score_map,
+};
+use epistat_matching::{
+    CardinalityLimits, CardinalityRequest, CbpsConfig, CbpsMethod, GeneticFit, GeneticMatchOptions,
+    GeneticProblem, GeneticSearch, QuickMatchOptions, match_cardinality, quick_match_subclasses,
 };
 use std::collections::BTreeMap;
 
@@ -433,7 +454,8 @@ fn spec_nearest_on_a_propensity_score_matches_the_typed_job() {
         )
         .caliper(DistanceCaliper::new(0.2).unwrap())
         .build();
-    let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config).unwrap();
+    let prepared =
+        prepare_propensity_distance_config(&anchors, &candidates, &config, None).unwrap();
     let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
         .with_ratio(MatchRatio::new(2).unwrap())
         .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
@@ -539,6 +561,7 @@ fn spec_nearest_with_mahvars_and_euclidean_match_the_typed_jobs() {
             .output_scale(PropensityScoreOutputScale::LinearPredictor)
             .caliper(DistanceCaliper::new(1.0).unwrap())
             .build(),
+        None,
     )
     .unwrap();
     let ranking = prepare_mahalanobis_distance_config(
@@ -666,6 +689,7 @@ fn spec_exact_and_subclass_match_the_functions_they_wrap() {
                     .build(),
             )
             .build(),
+        None,
     )
     .unwrap();
     let by_hand = subclassify_by_propensity_score_map(
@@ -729,6 +753,7 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
                     .build(),
             )
             .build(),
+        None,
     )
     .unwrap();
     let by_hand = quick_match_subclasses::<_, &str, _>(
@@ -756,12 +781,13 @@ fn spec_quick_gives_subclasses_and_weights_for_balance() {
         outcome.unit_weights(Estimand::Att).expect("weights"),
     );
     weights.validate().unwrap();
-    let report = balance_report_on_weights(
+    let report = balance_summary(
         &anchors,
         &candidates,
         &weights,
         &BalanceReportOptions::default(),
     )
+    .map(|summary| summary.report)
     .unwrap();
     assert!(!report.numeric.is_empty());
 
@@ -1423,6 +1449,7 @@ fn optimal_and_full_specs_equal_the_typed_calls() {
                     .build(),
             )
             .build(),
+        None,
     )
     .unwrap();
     let input = SpecInput::Standard {
@@ -1543,9 +1570,13 @@ fn spec_nearest_with_a_variable_ratio_matches_the_typed_job() {
         ..MatchSpec::default()
     };
     let by_spec = run_pairs(&spec, &anchors, &candidates);
-    let prepared =
-        prepare_propensity_distance_config(&anchors, &candidates, &propensity_config_by_hand(None))
-            .unwrap();
+    let prepared = prepare_propensity_distance_config(
+        &anchors,
+        &candidates,
+        &propensity_config_by_hand(None),
+        None,
+    )
+    .unwrap();
     let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
         .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
         .with_distance_config(prepared.distance_config)
@@ -1589,6 +1620,7 @@ fn spec_discard_matches_the_typed_job_with_common_support() {
                 &anchors,
                 &candidates,
                 &propensity_config_by_hand(None),
+                None,
             )
             .unwrap();
             let job = MatchJob::new_standard(&anchors, &candidates, 5)
@@ -1767,7 +1799,8 @@ fn spec_elastic_net_with_a_penalty_ratio_matches_the_typed_job() {
                     .build(),
             ))
             .build();
-        let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config).unwrap();
+        let prepared =
+            prepare_propensity_distance_config(&anchors, &candidates, &config, None).unwrap();
         let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
             .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
             .with_distance_config(prepared.distance_config)
@@ -1784,8 +1817,8 @@ fn spec_elastic_net_with_a_penalty_ratio_matches_the_typed_job() {
 fn spec_cbps_matches_the_typed_job() {
     let (anchors, candidates) = covariate_inputs();
     for (over, estimand, method, cbps_estimand) in [
-        (true, Estimand::Att, CbpsMethod::Over, CbpsEstimand::Att),
-        (false, Estimand::Ate, CbpsMethod::Exact, CbpsEstimand::Ate),
+        (true, Estimand::Att, CbpsMethod::Over, Estimand::Att),
+        (false, Estimand::Ate, CbpsMethod::Exact, Estimand::Ate),
     ] {
         let spec = MatchSpec {
             method: MatchMethod::Nearest,
@@ -1830,7 +1863,8 @@ fn spec_cbps_matches_the_typed_job() {
                     .build(),
             ))
             .build();
-        let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config).unwrap();
+        let prepared =
+            prepare_propensity_distance_config(&anchors, &candidates, &config, None).unwrap();
         let by_hand = MatchJob::new_standard(&anchors, &candidates, 5)
             .with_estimand(estimand)
             .with_birth_window(BirthDateWindowDays::new(wide_window()).unwrap())
@@ -1891,6 +1925,7 @@ fn spec_std_caliper_can_be_set_for_each_caliper() {
             &anchors,
             &candidates,
             &propensity_config_by_hand(Some(0.3)),
+            None,
         )
         .unwrap();
         MatchJob::new_standard(&anchors, &candidates, 5)
@@ -2350,6 +2385,7 @@ fn spec_genetic_equals_the_direct_search() {
                     .build(),
             )
             .build(),
+        None,
     )
     .unwrap();
     let ids: Vec<&str> = anchors
@@ -2605,12 +2641,13 @@ fn spec_genetic_feeds_effects_and_balance() {
 
     let weights = BalanceWeights::from_outcome(&outcome);
     weights.validate().unwrap();
-    let report = balance_report_on_weights(
+    let report = balance_summary(
         &anchors,
         &candidates,
         &weights,
         &BalanceReportOptions::default(),
     )
+    .map(|summary| summary.report)
     .unwrap();
     assert!(!report.numeric.is_empty());
 }
@@ -2898,12 +2935,13 @@ fn spec_cardinality_feeds_effects_and_balance() {
         Estimand::Att,
     );
     weights.validate().unwrap();
-    let report = balance_report_on_weights(
+    let report = balance_summary(
         &anchors,
         &candidates,
         &weights,
         &BalanceReportOptions::default(),
     )
+    .map(|summary| summary.report)
     .unwrap();
     assert!(!report.numeric.is_empty());
 }

@@ -99,45 +99,6 @@ use crate::kdtree::{KdTree, WeightedSquares, worth_a_tree};
 pub use balance::{BalanceMeasure, GeneticFit, GeneticLoss, LossRule};
 pub use search::{GeneticOutcome, GeneticSearch};
 
-/// A two-sample Kolmogorov-Smirnov test.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct KsTest {
-    /// The largest absolute difference of the empirical distribution
-    /// functions.
-    pub statistic: f64,
-    /// The p-value of the two-sided test.
-    pub p_value: f64,
-    /// Whether the p-value is exact, which it is when the product of the
-    /// sample sizes is below 10000, ties included. Otherwise it is
-    /// asymptotic.
-    pub exact: bool,
-}
-
-/// The two-sample Kolmogorov-Smirnov test of `x` against `y`, as `ks.test`
-/// does it: exact below a product of sample sizes of 10000, asymptotic from
-/// there, and with the exact distribution given the ties in the pooled
-/// sample. `None` when either sample is empty or a value is not finite.
-#[must_use]
-pub fn ks_two_sample(x: &[f64], y: &[f64]) -> Option<KsTest> {
-    if x.iter().chain(y).any(|v| !v.is_finite()) {
-        return None;
-    }
-    let (statistic, p_value, exact) = ks::ks_test(x, y)?;
-    Some(KsTest {
-        statistic,
-        p_value,
-        exact,
-    })
-}
-
-/// `1 - K(x)`, the upper tail of the Kolmogorov distribution at `x`, summed
-/// to rounding. The p-value of the asymptotic two-sample test is this at
-/// `sqrt(m n / (m + n))` times the statistic.
-#[must_use]
-pub fn ks_limit_upper(x: f64) -> f64 {
-    ks::kolmogorov_upper(x).clamp(0.0, 1.0)
-}
-
 /// The constraints and size of a match.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneticMatchOptions {

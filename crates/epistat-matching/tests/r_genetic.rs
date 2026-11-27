@@ -61,7 +61,6 @@ mod r_reference;
 
 use epistat_matching::{
     BalanceMeasure, GeneticFit, GeneticMatchOptions, GeneticProblem, GeneticSearch, LossRule,
-    ks_limit_upper, ks_two_sample,
 };
 use epistat_testkit::{POOLS, assert_same_on_pools, assert_within_standard_errors};
 use r_reference::{Versions, reference as load_reference};
@@ -422,7 +421,7 @@ fn kolmogorov_smirnov_equals_ks_test() {
     let mut worst_asymptotic: f64 = 0.0;
     let bound = r_limit_error_bound() + LOSS_BOUND;
     for (k, case) in reference.ks.iter().enumerate() {
-        let test = ks_two_sample(&case.x, &case.y).unwrap();
+        let test = epistat_epi::balance::ks_test(&case.x, &case.y).unwrap();
         let gap = (test.p_value - case.p).abs();
         assert!(
             (test.statistic - case.d).abs() <= 1e-15,
@@ -466,7 +465,7 @@ fn r_asymptotic_p_value_is_off_below_one() {
     let mut worst_r: f64 = 0.0;
     for case in &reference.limit {
         // The crate: the series to rounding.
-        let ours = ks_limit_upper(case.x);
+        let ours = epistat_epi::balance::kolmogorov_upper(case.x).clamp(0.0, 1.0);
         assert!(
             (ours - case.series).abs() <= 1e-14,
             "x {}: {ours} against the series {}",

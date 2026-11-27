@@ -38,10 +38,13 @@ mod r_reference;
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
+use epistat_matching::spec::{
+    CovariatesSpec, DiscardSpec, DistanceSpec, GeneticSpec, LinkSpec, MatchMethod, ScaleSpec,
+    SubclassSpec,
+};
 use epistat_matching::{
-    BalanceRecord, CovariateValue, CovariatesSpec, DiscardSpec, DistanceSpec, FullMatchOutcome,
-    GeneticSpec, LinkSpec, MatchMethod, MatchSpec, ScaleSpec, SpecInput, SpecOutput, SubclassSpec,
-    TrimmedUnits, run_spec,
+    BalanceRecord, CovariateValue, Estimand, PropensityScoreEstimate, SpecOutput, SubclassedUnits,
+    SubclassificationOutcome, TrimmedUnits,
 };
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};
@@ -156,7 +159,7 @@ fn spec_of(run: &Run) -> MatchSpec {
         distance: DistanceSpec::Propensity {
             covariates: CovariatesSpec::default(),
             link: LinkSpec::Logit,
-            estimator: epistat_matching::EstimatorSpec::default(),
+            estimator: epistat_matching::spec::EstimatorSpec::default(),
             scale,
             sampling_weights: None,
             caliper: None,
@@ -445,7 +448,7 @@ fn check_weights(label: &str, run: &Run, got: &[f64]) {
     }
 }
 
-fn check_full(label: &str, run: &Run, data: &Data, outcome: &FullMatchOutcome, kept: &[usize]) {
+fn check_full(label: &str, run: &Run, data: &Data, outcome: &SubclassedUnits, kept: &[usize]) {
     let expected = run.subclass.as_ref().expect("subclass");
     let ours: BTreeMap<usize, usize> = outcome
         .assignments()

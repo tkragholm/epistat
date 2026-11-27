@@ -18,6 +18,7 @@ mod r_reference;
 use chrono::{Days, NaiveDate};
 use epistat_matching::DeterministicSelection;
 use epistat_matching::prelude::*;
+use epistat_matching::{CommonSupport, DefaultRiskSetPolicy, DistanceConfig, RiskSetPolicy};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;

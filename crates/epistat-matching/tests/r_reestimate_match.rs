@@ -18,7 +18,9 @@
 mod r_reference;
 
 use chrono::NaiveDate;
-use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, CovariateValue, DistanceCaliper, MatchingCriteria, PropensityScoreConfig,
+};
 use epistat_matching::{CommonSupport, NearestSelection, estimate_propensity_and_match};
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};

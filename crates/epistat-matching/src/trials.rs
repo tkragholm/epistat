@@ -56,7 +56,7 @@
 //!
 //! By default every person has the same date for the same period, and the
 //! sets of a trial have that date as their index date. With
-//! [`PeriodDates::PerPerson`] (through [`match_trials_with`]) the periods are a
+//! [`PeriodDates::PerPerson`] (through [`match_trials`]) the periods are a
 //! time scale of each person's own, such as months since diagnosis, and each
 //! person gives the calendar date of each of their periods. The index date of a
 //! set is then the date of its initiator's period: the controls are at risk,
@@ -69,7 +69,7 @@
 //! trial starts. The matching reads such a key before the record's own, so the
 //! job's exact matches name the keys of both alike.
 //!
-//! With shared dates and no period strata, [`match_trials_with`] is
+//! With shared dates and no period strata, [`match_trials`] is
 //! [`match_trials`].
 //!
 //! The output gives, for each trial, the sets, the start of the follow-up of
@@ -776,7 +776,7 @@ impl PeriodStrata {
     }
 }
 
-/// What [`match_trials_with`] adds to the options: how the dates of the
+/// What [`match_trials`] adds to the options: how the dates of the
 /// periods are given, and strata that change between periods.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TrialMatching<'a> {
@@ -937,32 +937,15 @@ impl<'p, R: MatchingRecord> TrialPool<'p, R> {
 ///
 /// Trials without an initiator in the pool are left out of the output.
 ///
+/// `matching` gives how the dates of the periods are given and strata that
+/// change between periods (see the module documentation);
+/// [`TrialMatching::default`] is shared dates and the record's strata alone.
+///
 /// # Errors
 ///
 /// A [`Error`] when the panel is not valid or `run` fails. When `run`
 /// fails for several trials, the error is that of the earliest of them.
 pub fn match_trials<R, F>(
-    panel: &[TrialPerson<R>],
-    options: &TrialOptions,
-    run: F,
-) -> Result<TrialOutcome, Error>
-where
-    R: MatchingRecord + Sync,
-    F: Fn(&TrialPool<'_, R>) -> Result<MatchOutcome, Error> + Sync,
-{
-    match_trials_with(panel, options, &TrialMatching::default(), run)
-}
-
-/// [`match_trials`] with the dates and strata of `matching`: dates of each
-/// person's own, with the index date of a set from its initiator, and strata
-/// that change between periods (see the module documentation).
-///
-/// # Errors
-///
-/// As [`match_trials`], and a [`Error`] for a person whose dates do
-/// not increase under [`PeriodDates::PerPerson`] or period strata without a
-/// value for every row of the panel.
-pub fn match_trials_with<R, F>(
     panel: &[TrialPerson<R>],
     options: &TrialOptions,
     matching: &TrialMatching<'_>,
@@ -1373,9 +1356,12 @@ mod tests {
         // The expansion reads no date; matching needs one date per period.
         assert!(expand_trials(&[a.clone(), d.clone()], &TrialOptions::default()).is_ok());
         assert!(matches!(
-            match_trials(&[a, d], &TrialOptions::default(), |pool| {
-                pool.job(1).run()
-            }),
+            match_trials(
+                &[a, d],
+                &TrialOptions::default(),
+                &TrialMatching::default(),
+                |pool| { pool.job(1).run() }
+            ),
             Err(Error::InconsistentDate { period: 0 })
         ));
     }
@@ -1481,8 +1467,10 @@ mod tests {
                 assert_eq!(format!("{ordered:?}"), reference, "seed {seed}");
                 let parallel = || {
                     let outcome =
-                        match_trials(&people, &options, |pool| Ok(job_on(pool, true, ratio)))
-                            .expect("valid");
+                        match_trials(&people, &options, &TrialMatching::default(), |pool| {
+                            Ok(job_on(pool, true, ratio))
+                        })
+                        .expect("valid");
                     format!("{:?}", outcome.trials)
                 };
                 assert_eq!(parallel(), reference, "seed {seed}");
@@ -1499,8 +1487,10 @@ mod tests {
     fn matched_rows_are_the_expanded_rows_of_the_members() {
         let people = panel(7, 600);
         let options = TrialOptions::default();
-        let matched =
-            match_trials(&people, &options, |pool| Ok(job_on(pool, true, 2))).expect("valid");
+        let matched = match_trials(&people, &options, &TrialMatching::default(), |pool| {
+            Ok(job_on(pool, true, 2))
+        })
+        .expect("valid");
         let members: usize = matched.trials.iter().map(|t| t.members.len()).sum();
         assert!(members > 100, "{members} members");
         for censor_at_deviation in [true, false] {
@@ -1543,13 +1533,18 @@ mod tests {
     #[test]
     fn the_earliest_failing_trial_is_reported() {
         let people = panel(4, 500);
-        let failed = match_trials(&people, &TrialOptions::default(), |pool| {
-            if pool.period() >= 2 {
-                Err(Error::option("test", pool.period().to_string()))
-            } else {
-                Ok(job_on(pool, true, 1))
-            }
-        });
+        let failed = match_trials(
+            &people,
+            &TrialOptions::default(),
+            &TrialMatching::default(),
+            |pool| {
+                if pool.period() >= 2 {
+                    Err(Error::option("test", pool.period().to_string()))
+                } else {
+                    Ok(job_on(pool, true, 1))
+                }
+            },
+        );
         let Err(Error::Trial { period, source }) = failed else {
             panic!("a trial fails");
         };

@@ -202,8 +202,6 @@ mod matching;
 pub mod multigroup;
 pub mod output;
 mod overlap;
-#[cfg(feature = "reporting")]
-pub mod reporting;
 mod role_transition;
 pub mod sensitivity;
 mod sorting;
@@ -216,24 +214,23 @@ pub mod test_utils;
 #[cfg(any(test, feature = "test-utils"))]
 pub use test_utils::{date, record, test_outcome};
 
-pub use rapidhash::RapidHashMap;
-
 pub use cohort::{Cohort, CohortBuilder, CohortRow};
 
 pub use balance::{
-    BalanceWeights, balance_improvement, balance_report_on_weights, balance_summary,
+    BalanceWeights, balance_diagnostics, balance_improvement, balance_report, balance_summary,
+    balance_threshold_summary,
 };
-pub use balance::{
-    CategoricalCovariateSpec, NumericCovariateSpec, ProjectedBalanceRow, balance_diagnostics,
-    balance_report, balance_report_with_options, balance_threshold_summary,
-    build_projected_balance_rows, categorical_max_abs_diff, smd_numeric_from_values,
-};
+#[expect(
+    deprecated,
+    reason = "the released path of the effective sample size, kept for one release"
+)]
+pub use matching::effective_sample_size;
+pub use matching::exact_match_subclasses;
 pub use matching::{
-    Assignment, CaliperConstraint, CbpsConfig, CbpsEstimand, CbpsFit, CbpsMethod, Chained,
-    Constraint, ConstraintContext, ConstraintGroup, CovariateEncodingConfig, CovariateMatrix,
+    Assignment, CbpsConfig, CbpsFit, CbpsMethod, CovariateEncodingConfig, CovariateMatrix,
     CovariateRecord, CrossValidation, DateDistance, DeterministicSelection, DiscardedUnits,
     DistanceChannel, DistanceConfig, DistanceMetric, ElasticNetCvConfig, ElasticNetLogisticConfig,
-    EuclideanDistancePreparation, EuclideanPreparationConfig, EuclideanScale, ExactMatchConstraint,
+    EuclideanDistancePreparation, EuclideanPreparationConfig, EuclideanScale,
     IdMapEuclideanDistance, IdMapMahalanobisDistance, IdMapPropensityScoreDistance, LambdaRule,
     LogisticRegressionConfig, MahalanobisCovarianceStrategy, MahalanobisDistance,
     MahalanobisDistancePreparation, MahalanobisPreparationConfig, MahalanobisTransform, MatchJob,
@@ -244,15 +241,13 @@ pub use matching::{
     PropensityScoreEstimate, PropensityScoreOutputScale, RandomSelection, ReconstructedEpisode,
     ReconstructedMatchedPair, ReconstructedMatchingOptions, ReconstructedMatchingOutput,
     ReconstructedMatchingTier, ResidentAtIndexRecord, RoleIndexedRecord, Rounds, ScoreTable,
-    SelectionStrategy, StandardMatchRequest, StrataExactConstraint, SubclassReferenceGroup,
-    SubclassSummary, SubclassedUnits, SubclassificationConfig, SubclassificationOutcome, UnitRole,
-    UnitWeightRow, UnitWeightSet, UnitWeightTable, UsedControlsVec, VariableRatio, VectorTable,
-    cross_validation_folds, effective_sample_size, estimate_propensity_and_match, match_standard,
-    match_standard_with_discard, match_weights_from_pairs, pair_weights_from_pairs,
+    SelectionStrategy, SubclassReferenceGroup, SubclassSummary, SubclassedUnits,
+    SubclassificationConfig, SubclassificationOutcome, UnitRole, UnitWeightRow, UnitWeightSet,
+    UnitWeightTable, VariableRatio, VectorTable, cross_validation_folds,
+    estimate_propensity_and_match, match_weights_from_pairs, pair_weights_from_pairs,
     prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
-    prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
-    reconstruct_case_control_pairs, subclassify_by_propensity_score_map,
-    subclassify_with_set_aside_scores,
+    prepare_propensity_distance_config, reconstruct_case_control_pairs,
+    subclassify_by_propensity_score_map, subclassify_with_set_aside_scores,
 };
 pub use matching::{
     BalanceCategory, BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, match_fine_balance,
@@ -260,59 +255,42 @@ pub use matching::{
 pub use matching::{
     BalanceMeasure, CardinalityLimits, CardinalityOutcome, CardinalityRequest, GeneticFit,
     GeneticLoss, GeneticMatchOptions, GeneticMatches, GeneticOutcome, GeneticProblem,
-    GeneticSearch, KsTest, LossRule, StratumReport, ks_limit_upper, ks_two_sample,
-    match_cardinality, pair_units,
+    GeneticSearch, LossRule, StratumReport, match_cardinality, pair_units,
 };
 pub use matching::{
     CemBinning, CemKind, CemRule, CemStrata, CemVariable, cem_k2k_pairs, cem_strata, cem_subclasses,
 };
-pub use matching::{ExactMatchOutcome, exact_match_subclasses};
 pub use matching::{
-    FullMatchConfig, FullMatchOutcome, OptimalRequest, QuickMatchOptions, QuickMatchOutcome,
-    Retain, SeedMethod, match_full, match_optimal, quick_clusters, quick_match_subclasses,
+    FullMatchConfig, OptimalRequest, QuickMatchOptions, Retain, SeedMethod, match_full,
+    match_optimal, quick_clusters, quick_match_subclasses,
 };
-pub use role_transition::{
-    AtRiskSpan, DefaultAtRiskRule, DefaultRiskSetPolicy, RiskSetPolicy, TransitionMatchRequest,
-    match_transition,
-};
+pub use role_transition::{AtRiskSpan, DefaultAtRiskRule, DefaultRiskSetPolicy, RiskSetPolicy};
 pub use role_transition::{
     ExposedPerson, ExposureDensityControl, ExposureDensityOutcome, exposure_density_sets,
-    match_exposure_density,
 };
 pub use trials::{
     ControlReuse, ExpandedRow, PanelColumns, PeriodDates, PeriodStrata, TrialColumns,
     TrialMatching, TrialMember, TrialOptions, TrialOutcome, TrialPeriod, TrialPerson, TrialPool,
     TrialRecord, TrialResult, TrialView, expand_trial_columns, expand_trials, match_trials,
-    match_trials_with, matched_trial_columns, trial_seed,
+    matched_trial_columns, trial_seed,
 };
 pub use types::{
-    AgeLimitYears, AnchorRecord, BalanceDiagnostics, BalanceRecord, BalanceRecordBuilder,
-    BalanceReport, BalanceReportOptions, BalanceThresholdSummary, BalanceThresholds, BaseRecord,
-    BirthDateWindowDays, CandidateRecord, CategoricalBalance, CategoricalLevelBalance,
-    CommonSupport, CommonSupportFailureReason, ConstraintReason, ControlIdx, CovariateRef,
-    CovariateValue, DistanceCaliper, DistanceCaliperReason, Estimand, EstimandDriftReason,
-    ExclusionReason, InvalidCriteriaReason, MatchDiagnostics, MatchOutcome, MatchRatio,
-    MatchedPair, MatchingCriteria, NumericBalance, NumericBalanceThresholdCheck,
-    NumericBalanceTransform, RoleTransitionOptions, RoleTransitionRecord,
-    SupplementalBalanceCovariates, TrimmedUnits, UniqueValueId, ValidatedMatchingCriteria,
+    AgeLimitYears, BalanceDiagnostics, BalanceRecord, BalanceRecordBuilder, BalanceReport,
+    BalanceReportOptions, BalanceThresholdSummary, BalanceThresholds, BaseRecord,
+    BirthDateWindowDays, CategoricalBalance, CategoricalLevelBalance, CommonSupport,
+    CommonSupportFailureReason, ConstraintReason, ControlIdx, CovariateRef, CovariateValue,
+    DistanceCaliper, DistanceCaliperReason, Estimand, EstimandDriftReason, ExclusionReason,
+    InvalidCriteriaReason, MatchDiagnostics, MatchOutcome, MatchRatio, MatchedPair,
+    MatchingCriteria, NumericBalance, NumericBalanceThresholdCheck, NumericBalanceTransform,
+    RoleTransitionOptions, RoleTransitionRecord, SupplementalBalanceCovariates, TrimmedUnits,
+    UniqueValueId, ValidatedMatchingCriteria,
 };
 pub use types::{
     BalanceImprovement, BalanceSummary, GroupSampleSizes, LevelImprovement, NumericImprovement,
     PairDistance, SampleSizeTable,
 };
 
-pub use output::{
-    LongMatches, MatchData, MatchDataOptions, MatchMatrix, Units, get_matches,
-    get_matches_from_pairs, match_data, match_data_from_weights, match_matrix,
-};
-pub use spec::{
-    AssignmentSpec, BinRuleSpec, BinningSpec, CardinalityMatch, CardinalitySpec, CemSpec,
-    CemVariableSpec, CovarianceSpec, CovariatesSpec, DiscardSpec, DistanceSpec, EstimatorSpec,
-    FitFuncSpec, FullSpec, GeneticSpec, K2kSpec, LambdaSpec, LinkSpec, LossSpec, MatchMethod,
-    MatchMode, MatchSpec, MissingSpec, NearestSpec, OrderSpec, QuickSpec, ReferenceSpec, ScaleSpec,
-    SpecInput, SpecOutput, StdCaliperEach, StdCaliperSpec, SubclassSpec, TransformSpec,
-    VariableRatioSpec, run_spec,
-};
+pub use spec::{MatchSpec, SpecInput, SpecOutput, run_spec};
 
 /// The two eCDF distance statistics of `case_values` against `control_values`, for benchmarks. `None` when either slice is empty.
 #[cfg(feature = "bench-internals")]
@@ -334,90 +312,16 @@ pub fn benchmark_eqq_distance_stats(
     balance::benchmark_eqq_distance_stats(case_values, control_values)
 }
 
-/// Common imports for consumers of this crate.
+/// The names a first matching job needs: the builder, the record types, the
+/// typed options of a risk-set job, the outcome and the error, and the spec
+/// with its runner for options read at run time.
+///
+/// Everything else is imported from the crate root or from its modules
+/// (`constraints`, `output`, `spec`, `effects`, `sensitivity`).
 pub mod prelude {
-    pub use crate::Error;
-    pub use crate::constraints::{AntiExact, GenderMatch};
-    pub use crate::matching::{
-        Assignment, DeterministicSelection, ExactMatchOutcome, FullMatchConfig, FullMatchOutcome,
-        MatchOrder, NearestBirthDateSelection, NearestSelection, OptimalRequest, RandomSelection,
-        Retain, Rounds, SelectionStrategy, exact_match_subclasses, match_full, match_optimal,
-    };
     pub use crate::{
-        AgeLimitYears, AnchorRecord, AssignmentSpec, AtRiskSpan, BalanceDiagnostics, BalanceRecord,
-        BalanceRecordBuilder, BalanceReport, BalanceReportOptions, BalanceThresholdSummary,
-        BalanceThresholds, BaseRecord, BirthDateWindowDays, CaliperConstraint, CandidateRecord,
-        CardinalityMatch, CardinalitySpec, CategoricalBalance, CategoricalCovariateSpec,
-        CategoricalLevelBalance, Chained, CommonSupport, CommonSupportFailureReason, Constraint,
-        ConstraintContext, ConstraintGroup, ConstraintReason, ControlIdx, CovarianceSpec,
-        CovariateEncodingConfig, CovariateMatrix, CovariateRecord, CovariateRef, CovariateValue,
-        CovariatesSpec, CrossValidation, DateDistance, DefaultRiskSetPolicy, DistanceCaliper,
-        DistanceCaliperReason, DistanceChannel, DistanceConfig, DistanceMetric, DistanceSpec,
-        ElasticNetCvConfig, ElasticNetLogisticConfig, Estimand, EstimandDriftReason, EstimatorSpec,
-        EuclideanDistancePreparation, EuclideanPreparationConfig, EuclideanScale,
-        ExactMatchConstraint, ExclusionReason, FitFuncSpec, FullSpec, GeneticSpec,
-        IdMapEuclideanDistance, IdMapMahalanobisDistance, IdMapPropensityScoreDistance,
-        InvalidCriteriaReason, LambdaRule, LambdaSpec, LinkSpec, LogisticRegressionConfig,
-        LongMatches, LossSpec, MahalanobisCovarianceStrategy, MahalanobisDistance,
-        MahalanobisDistancePreparation, MahalanobisPreparationConfig, MahalanobisTransform,
-        MatchData, MatchDataOptions, MatchDiagnostics, MatchJob, MatchMatrix, MatchMethod,
-        MatchMode, MatchOutcome, MatchRatio, MatchSpec, MatchWeightMethod, MatchedPair,
-        MatchingCriteria, MatchingRecord, MissingSpec, MissingValuePolicy, NearestSpec,
-        NumericBalance, NumericBalanceThresholdCheck, NumericBalanceTransform,
-        NumericCovariateSpec, OrderSpec, PairWeight, PairWeightRow, PairWeightSet, PairWeightTable,
-        ProjectedBalanceRow, PropensityDistancePreparation, PropensityEstimator, PropensityLink,
-        PropensityMatchedOutcome, PropensityScoreConfig, PropensityScoreDistance,
-        PropensityScoreEstimate, PropensityScoreOutputScale, ReconstructedEpisode,
-        ReconstructedMatchedPair, ReconstructedMatchingOptions, ReconstructedMatchingOutput,
-        ReconstructedMatchingTier, ReferenceSpec, ResidentAtIndexRecord, RiskSetPolicy,
-        RoleIndexedRecord, RoleTransitionOptions, RoleTransitionRecord, ScaleSpec, ScoreTable,
-        SpecInput, SpecOutput, StandardMatchRequest, StrataExactConstraint, SubclassReferenceGroup,
-        SubclassSpec, SubclassSummary, SubclassificationConfig, SubclassificationOutcome,
-        SupplementalBalanceCovariates, TransformSpec, TransitionMatchRequest, TrimmedUnits,
-        UniqueValueId, UnitRole, UnitWeightRow, UnitWeightSet, UnitWeightTable, Units,
-        ValidatedMatchingCriteria, VectorTable, balance_diagnostics, balance_report,
-        balance_report_with_options, balance_threshold_summary, build_projected_balance_rows,
-        categorical_max_abs_diff, cross_validation_folds, effective_sample_size,
-        estimate_propensity_and_match, get_matches, get_matches_from_pairs, match_data,
-        match_data_from_weights, match_matrix, match_standard, match_standard_with_discard,
-        match_transition, match_weights_from_pairs, pair_weights_from_pairs,
-        prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
-        prepare_propensity_distance_config, prepare_propensity_distance_config_with_discard,
-        reconstruct_case_control_pairs, run_spec, smd_numeric_from_values,
-        subclassify_by_propensity_score_map, subclassify_with_set_aside_scores,
+        AgeLimitYears, BaseRecord, BirthDateWindowDays, Error, MatchJob, MatchOutcome, MatchRatio,
+        MatchSpec, MatchedPair, MatchingRecord, RoleIndexedRecord, RoleTransitionRecord, SpecInput,
+        run_spec,
     };
-    pub use crate::{
-        BalanceImprovement, BalanceSummary, BalanceWeights, GroupSampleSizes, LevelImprovement,
-        NumericImprovement, PairDistance, SampleSizeTable, balance_improvement,
-        balance_report_on_weights, balance_summary,
-    };
-    pub use crate::{
-        BinRuleSpec, BinningSpec, CemBinning, CemKind, CemRule, CemSpec, CemStrata, CemVariable,
-        CemVariableSpec, K2kSpec, MatrixDistance, PairDistanceMatrix, cem_k2k_pairs, cem_strata,
-        cem_subclasses,
-    };
-    pub use crate::{
-        DiscardSpec, FineBalance, QuickSpec, RapidHashMap, StdCaliperEach, StdCaliperSpec,
-        VariableRatio, VariableRatioSpec,
-    };
-
-    pub use crate::{
-        ExposedPerson, ExposureDensityControl, ExposureDensityOutcome, exposure_density_sets,
-        match_exposure_density,
-    };
-
-    pub use crate::{
-        ControlReuse, ExpandedRow, PeriodDates, PeriodStrata, TrialMatching, TrialMember,
-        TrialOptions, TrialOutcome, TrialPeriod, TrialPerson, TrialPool, TrialRecord, TrialResult,
-        TrialView, expand_trials, match_trials, match_trials_with, trial_seed,
-    };
-
-    /// The constraints that can be added to a [`MatchJob`].
-    pub mod constraints {
-        pub use crate::constraints::{
-            AntiExact, Caliper, DateWindow, GenderMatch, MissingPolicy, MustBeAlive,
-            MustBeResident, MustBeResidentInSpells, ResidenceSpell, caliper_on_field,
-            numeric_field_sd,
-        };
-    }
 }

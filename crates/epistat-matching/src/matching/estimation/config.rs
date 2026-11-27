@@ -1,6 +1,6 @@
 //! Configuration for covariate encoding, propensity estimation and Mahalanobis preparation.
 
-use crate::types::DistanceCaliper;
+use crate::types::{DistanceCaliper, Estimand};
 use rapidhash::RapidHashMap;
 
 /// Missing-value handling for in-crate covariate preprocessing.
@@ -206,19 +206,6 @@ pub struct ElasticNetCvConfig {
     pub probability_clip: f64,
 }
 
-/// The estimand whose balance conditions a covariate balancing propensity
-/// score satisfies.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CbpsEstimand {
-    /// The average treatment effect in the treated: the controls, weighted by
-    /// the odds of treatment, are balanced to the treated. MatchIt's default.
-    #[default]
-    Att,
-    /// The average treatment effect: both groups, weighted by the inverse of
-    /// the probability of their own treatment, are balanced to the sample.
-    Ate,
-}
-
 /// The estimator of a covariate balancing propensity score.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CbpsMethod {
@@ -252,7 +239,7 @@ pub enum CbpsMethod {
 pub struct CbpsConfig {
     /// The estimand.
     #[builder(default)]
-    pub estimand: CbpsEstimand,
+    pub estimand: Estimand,
     /// Over-identified or exact.
     #[builder(default)]
     pub method: CbpsMethod,
@@ -321,7 +308,7 @@ pub struct PropensityScoreConfig {
     pub sampling_weights: Option<RapidHashMap<String, f64>>,
     /// Refit the model on the units that common-support trimming keeps, as
     /// `matchit(reestimate = TRUE)` does. It needs a trimming policy, which
-    /// [`prepare_propensity_distance_config_with_discard`](super::prepare_propensity_distance_config_with_discard)
+    /// [`prepare_propensity_distance_config`](super::prepare_propensity_distance_config)
     /// and [`estimate_propensity_and_match`](super::estimate_propensity_and_match)
     /// take from the caller and the matching criteria.
     #[builder(default = false)]

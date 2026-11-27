@@ -101,11 +101,12 @@
     reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
 )]
 
-use super::config::{CbpsConfig, CbpsEstimand, CbpsMethod};
+use super::config::{CbpsConfig, CbpsMethod};
 use super::encoding::CovariateMatrix;
 use super::linalg::pseudo_inverse;
 use super::logistic::LogisticFit;
 use crate::Error;
+use crate::Estimand;
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::eigen::symmetric_eigen_jacobi;
 use epistat_linalg::{Mat, MatRef, matvec_into, weighted_gram, xtv};
@@ -270,8 +271,15 @@ struct Problem<'a> {
     s: Vec<f64>,
     n: f64,
     n_t: f64,
-    estimand: CbpsEstimand,
+    estimand: Target,
     k: usize,
+}
+
+/// The two estimands the CBPS package's estimator has.
+#[derive(Clone, Copy)]
+enum Target {
+    Att,
+    Ate,
 }
 
 type Dense = Vec<f64>;
@@ -294,10 +302,10 @@ impl Problem<'_> {
     fn balance_weights(&self, p: &[f64]) -> Vec<f64> {
         (0..p.len())
             .map(|i| match self.estimand {
-                CbpsEstimand::Att => {
+                Target::Att => {
                     self.n / self.n_t * (f64::from(u8::from(self.treated[i])) - p[i]) / (1.0 - p[i])
                 }
-                CbpsEstimand::Ate => 1.0 / (p[i] - 1.0 + f64::from(u8::from(self.treated[i]))),
+                Target::Ate => 1.0 / (p[i] - 1.0 + f64::from(u8::from(self.treated[i]))),
             })
             .collect()
     }
@@ -336,7 +344,7 @@ impl Problem<'_> {
         let k = self.k;
         let a = self.gram(|i| p[i] * (1.0 - p[i]));
         let (b, c) = match self.estimand {
-            CbpsEstimand::Att => {
+            Target::Att => {
                 let r = self.n / self.n_t;
                 let b = self.gram(|i| p[i]);
                 let c = self.gram(|i| p[i] / (1.0 - p[i]));
@@ -345,7 +353,7 @@ impl Problem<'_> {
                     c.iter().map(|x| x * r * r).collect::<Vec<_>>(),
                 )
             }
-            CbpsEstimand::Ate => (
+            Target::Ate => (
                 self.gram(|_| 1.0),
                 self.gram(|i| 1.0 / (p[i] * (1.0 - p[i]))),
             ),
@@ -371,7 +379,7 @@ impl Problem<'_> {
     /// The derivative of the balance block of `gbar`, `k x k`, symmetric.
     fn balance_derivative(&self, p: &[f64]) -> Dense {
         match self.estimand {
-            CbpsEstimand::Att => {
+            Target::Att => {
                 let r = self.n / self.n_t;
                 let g = self.gram(|i| {
                     if self.treated[i] {
@@ -382,7 +390,7 @@ impl Problem<'_> {
                 });
                 g.iter().map(|x| -r * x).collect()
             }
-            CbpsEstimand::Ate => {
+            Target::Ate => {
                 let t = |i: usize| self.is_treated(i);
                 let g = self.gram(|i| (t(i) - p[i]).powi(2) / (p[i] * (1.0 - p[i])));
                 g.iter().map(|x| -x).collect()
@@ -506,7 +514,16 @@ pub(super) fn fit_cbps(
         s,
         n: n_total,
         n_t,
-        estimand: config.estimand,
+        estimand: match config.estimand {
+            Estimand::Att => Target::Att,
+            Estimand::Ate => Target::Ate,
+            other => {
+                return Err(Error::UnsupportedEstimand {
+                    estimand: other.into(),
+                    method: "the covariate balancing propensity score",
+                });
+            }
+        },
         k,
     };
 

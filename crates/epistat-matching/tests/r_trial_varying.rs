@@ -1,4 +1,4 @@
-//! `match_trials_with` on a time scale of each person's own (per-person dates)
+//! `match_trials` on a time scale of each person's own (per-person dates)
 //! and with a stratum that changes between trials (period strata), checked
 //! against `Epi::ccwc`. The reference is `tests/data/trial_varying.json`,
 //! written by `tests/data/trial_varying.R`.
@@ -14,7 +14,11 @@ mod r_reference;
 
 use chrono::{Days, NaiveDate};
 use epistat_matching::Error;
+use epistat_matching::match_trials;
 use epistat_matching::prelude::*;
+use epistat_matching::{
+    PeriodDates, PeriodStrata, TrialMatching, TrialOptions, TrialPeriod, TrialPerson, trial_seed,
+};
 use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -100,7 +104,7 @@ fn sets(
     panel: &[TrialPerson<BaseRecord>],
     matching: &TrialMatching<'_>,
 ) -> Result<BTreeMap<String, Vec<String>>, Error> {
-    let outcome = match_trials_with(panel, &TrialOptions::default(), matching, |pool| {
+    let outcome = match_trials(panel, &TrialOptions::default(), matching, |pool| {
         Ok(pool
             .job(trial_seed(1, pool.period()))
             .with_ratio(MatchRatio::new(10_000).expect("a ratio"))

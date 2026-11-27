@@ -5,8 +5,10 @@
 #![allow(dead_code)]
 
 use chrono::{Months, NaiveDate, TimeDelta};
+use epistat_matching::ResidentAtIndexRecord;
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::prelude::*;
+use epistat_matching::{DefaultRiskSetPolicy, RiskSetPolicy};
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hasher};
 

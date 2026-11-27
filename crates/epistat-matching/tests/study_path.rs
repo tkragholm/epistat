@@ -17,6 +17,10 @@
 //! `STUDY_PATH_PRINT=1 cargo test --test study_path -- --nocapture`.
 #![cfg(all(target_os = "macos", target_arch = "aarch64"))]
 
+use epistat_matching::{
+    AtRiskSpan, DefaultRiskSetPolicy, MatchWeightMethod, RiskSetPolicy, match_weights_from_pairs,
+    pair_weights_from_pairs,
+};
 use std::collections::{HashMap, HashSet};
 
 use chrono::{Days, NaiveDate};

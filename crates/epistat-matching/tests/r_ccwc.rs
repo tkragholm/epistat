@@ -30,6 +30,7 @@ mod r_reference;
 use chrono::{Days, NaiveDate};
 use epistat_matching::DeterministicSelection;
 use epistat_matching::prelude::*;
+use epistat_matching::{DefaultRiskSetPolicy, RiskSetPolicy};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};

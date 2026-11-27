@@ -32,8 +32,8 @@
 //! `w_i` as prior weights.
 //!
 //! The estimand is an average over the rows of a target population, the
-//! treated rows for [`Target::Att`], the controls for [`Target::Atc`] and all
-//! rows for [`Target::Ate`]. With `x_i(a)` the design row of unit `i` with the
+//! treated rows for [`Estimand::Att`], the controls for [`Estimand::Atc`] and all
+//! rows for [`Estimand::Ate`]. With `x_i(a)` the design row of unit `i` with the
 //! treatment set to `a`, `g` the inverse link, and weights `w_i` over the
 //! target rows,
 //!
@@ -114,7 +114,7 @@
     reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
 )]
 
-use crate::Error;
+use crate::{Error, Estimand};
 use std::collections::HashMap;
 
 use epistat_core::{Interval, Level};
@@ -137,17 +137,6 @@ pub enum OutcomeModel {
     Logistic,
 }
 
-/// The rows the effect is averaged over.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Target {
-    /// The treated rows.
-    Att,
-    /// The control rows.
-    Atc,
-    /// All rows.
-    Ate,
-}
-
 /// What the cluster-robust variance clusters by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Clustering {
@@ -165,7 +154,7 @@ pub struct EffectSpec {
     /// The outcome model.
     pub model: OutcomeModel,
     /// The rows the effect is averaged over.
-    pub target: Target,
+    pub target: Estimand,
     /// Whether the model has the products of the treatment and the
     /// covariates.
     pub interactions: bool,
@@ -180,7 +169,7 @@ impl EffectSpec {
     pub const fn new(model: OutcomeModel) -> Self {
         Self {
             model,
-            target: Target::Att,
+            target: Estimand::Att,
             interactions: false,
             clustering: Clustering::Pair,
         }
@@ -595,11 +584,17 @@ struct Means {
 }
 
 fn means(sample: &MatchedSample, spec: &EffectSpec, beta: &[f64]) -> Result<Means, Error> {
+    if spec.target == Estimand::Atm {
+        return Err(Error::UnsupportedEstimand {
+            estimand: spec.target.into(),
+            method: "the effect estimate",
+        });
+    }
     let rows: Vec<usize> = (0..sample.len())
         .filter(|&i| match spec.target {
-            Target::Att => sample.treated[i],
-            Target::Atc => !sample.treated[i],
-            Target::Ate => true,
+            Estimand::Att => sample.treated[i],
+            Estimand::Atc => !sample.treated[i],
+            Estimand::Ate | Estimand::Atm => true,
         })
         .collect();
     let total: f64 = rows.iter().map(|&i| sample.weight[i]).sum();

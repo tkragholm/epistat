@@ -35,7 +35,14 @@ mod r_reference;
 
 use chrono::{Days, NaiveDate};
 use epistat_matching::Error;
+use epistat_matching::TrialMatching;
 use epistat_matching::prelude::*;
+use epistat_matching::spec::{MatchMethod, MatchMode};
+use epistat_matching::{
+    BalanceRecord, ControlReuse, SpecOutput, TrialOptions, TrialOutcome, TrialPeriod, TrialPerson,
+    TrialView, match_trials, trial_seed,
+};
+use epistat_matching::{ExpandedRow, expand_trials};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};
@@ -339,7 +346,7 @@ fn run(
     replacement: bool,
     seed: u64,
 ) -> TrialOutcome {
-    match_trials(panel, options, |pool| {
+    match_trials(panel, options, &TrialMatching::default(), |pool| {
         Ok(run_trial(
             reference,
             pool.records(),

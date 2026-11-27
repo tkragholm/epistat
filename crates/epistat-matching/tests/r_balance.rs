@@ -8,7 +8,7 @@
 //! report is computed on exactly those pairs, so the comparison does not depend
 //! on how pairs are selected.
 //!
-//! The pairs are given to `balance_report_with_options` as a `MatchOutcome`
+//! The pairs are given to `balance_report` as a `MatchOutcome`
 //! whose realised estimand is the one R used. The report derives the unit
 //! weights from it, and the weights are checked against R's. Fits with pairs
 //! are nearest-neighbour with replacement for the ATT and ATC, 1:2 without
@@ -37,6 +37,10 @@ mod r_reference;
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, BalanceReport, BalanceReportOptions, CovariateValue, Estimand, MatchDiagnostics,
+    NumericBalance, NumericBalanceTransform, SupplementalBalanceCovariates, balance_report,
+};
 use epistat_testkit::{Tolerance, load_json, na_f64, na_f64_vec};
 use r_reference::{Versions, assert_r_version};
 use serde::Deserialize;
@@ -397,7 +401,12 @@ fn balance_on_matchit_pairs_agrees_with_summary_matchit() {
         let sample = groups(&set.data, on, &[]);
         for fit in set.fits.iter().filter(|fit| !fit.pairs.is_empty()) {
             let outcome = outcome(&fit.pairs, estimand(&fit.estimand));
-            let report = balance_report(&sample.cases, &sample.controls, &outcome);
+            let report = balance_report(
+                &sample.cases,
+                &sample.controls,
+                &outcome,
+                &epistat_matching::BalanceReportOptions::default(),
+            );
             let label = format!("{set_name} {}", fit.name);
             compare_fit(
                 &label,
@@ -426,6 +435,7 @@ fn standardised_differences_before_matching_under_the_ate() {
             &sample.cases,
             &sample.controls,
             &outcome(&[], Estimand::Ate),
+            &epistat_matching::BalanceReportOptions::default(),
         );
         for row in &report.numeric {
             let r = &fit.standardised.all[&row.name];
@@ -575,7 +585,7 @@ fn squares_and_interactions_agree_with_matchit() {
         let options = BalanceReportOptions::builder()
             .numeric_transforms(NumericBalanceTransform::SquaresAndPairwiseInteractions)
             .build();
-        let report = balance_report_with_options(
+        let report = balance_report(
             &sample.cases,
             &sample.controls,
             &outcome(&fit.pairs, estimand(&fit.estimand)),
@@ -658,7 +668,7 @@ fn supplemental_covariates_agree_with_addlvariables() {
             let options = BalanceReportOptions::builder()
                 .supplemental_covariates(sample.supplemental.clone())
                 .build();
-            let report = balance_report_with_options(
+            let report = balance_report(
                 &sample.cases,
                 &sample.controls,
                 &outcome(&fit.pairs, estimand(&fit.estimand)),
@@ -700,6 +710,7 @@ fn covariates_without_variance_have_no_standardised_difference() {
         &sample.cases,
         &sample.controls,
         &outcome(&degenerate.pairs, Estimand::Att),
+        &epistat_matching::BalanceReportOptions::default(),
     );
     let row = |name: &str| report.numeric.iter().find(|row| row.name == name).unwrap();
     let r = |name: &str| &degenerate.standardised.all[name];

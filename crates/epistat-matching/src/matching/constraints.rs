@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 /// Compact used-control tracking backed by a flat `Vec<bool>`.
 ///
 /// Indexed by raw control index, so `contains` is one array lookup.
-pub struct UsedControlsVec {
+pub(crate) struct UsedControlsVec {
     bits: Vec<bool>,
     count: usize,
 }
@@ -59,12 +59,6 @@ impl UsedControlsVec {
     #[must_use]
     pub const fn len(&self) -> usize {
         self.count
-    }
-
-    /// Whether no control is marked as used.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.count == 0
     }
 }
 
@@ -510,22 +504,37 @@ impl_constraint_group_tuple!(C1: c1, C2: c2, C3: c3, C4: c4, C5: c5, C6: c6);
 impl_constraint_group_tuple!(C1: c1, C2: c2, C3: c3, C4: c4, C5: c5, C6: c6, C7: c7);
 impl_constraint_group_tuple!(C1: c1, C2: c2, C3: c3, C4: c4, C5: c5, C6: c6, C7: c7, C8: c8);
 
-/// The state of a match that a constraint may read: the criteria, the controls used so far and the strata values of the pair.
+/// The state of a match that a constraint may read: the criteria of the job
+/// and whether the control being tested was already taken by a case.
 pub struct ConstraintContext<'a> {
     /// The criteria of the job.
-    pub criteria: &'a MatchingCriteria,
+    pub(crate) criteria: &'a MatchingCriteria,
     /// The controls already taken by a case.
-    pub used_controls: &'a UsedControlsVec,
+    pub(crate) used_controls: &'a UsedControlsVec,
     /// The unique-key values already taken, as ids from `unique_interner`.
-    pub used_unique: &'a FxHashSet<UniqueValueId>,
+    pub(crate) used_unique: &'a FxHashSet<UniqueValueId>,
     /// The ids of the unique-key values.
-    pub unique_interner: &'a RapidHashMap<String, UniqueValueId>,
+    pub(crate) unique_interner: &'a RapidHashMap<String, UniqueValueId>,
     /// The position of the control being tested.
-    pub control_idx: ControlIdx,
+    pub(crate) control_idx: ControlIdx,
     /// The case's values of the required strata, in the order of the criteria, when they have been built.
-    pub case_strata_values: Option<&'a [Option<&'a str>]>,
+    pub(crate) case_strata_values: Option<&'a [Option<&'a str>]>,
     /// The control's values of the required strata, in the order of the criteria, when they have been built.
-    pub control_strata_values: Option<&'a [Option<&'a str>]>,
+    pub(crate) control_strata_values: Option<&'a [Option<&'a str>]>,
+}
+
+impl ConstraintContext<'_> {
+    /// The criteria of the job.
+    #[must_use]
+    pub const fn criteria(&self) -> &MatchingCriteria {
+        self.criteria
+    }
+
+    /// Whether the control being tested was already taken by a case.
+    #[must_use]
+    pub fn control_used(&self) -> bool {
+        self.used_controls.contains(self.control_idx)
+    }
 }
 
 pub struct ReplacementConstraint;
@@ -570,9 +579,6 @@ impl<R: MatchingRecord> Constraint<R> for ExactMatchConstraint {
         )
     }
 }
-
-/// The name `ExactMatchConstraint` goes by in code that speaks of strata.
-pub type StrataExactConstraint = ExactMatchConstraint;
 
 /// The birth-date window of the criteria, as a constraint, for a job whose
 /// distance is not the birth date. With no window it allows every pair.

@@ -30,11 +30,12 @@ mod r_reference;
 
 use chrono::NaiveDate;
 use epistat_matching::Error;
+use epistat_matching::Estimand;
 use epistat_matching::prelude::*;
+use epistat_matching::spec::{DistanceSpec, MatchMethod};
 use epistat_matching::{
-    BalanceRecord, CovariateValue, DistanceSpec, MatchMethod, MatchSpec, QuickMatchOptions,
-    QuickMatchOutcome, SeedMethod, SpecInput, SpecOutput, quick_clusters, quick_match_subclasses,
-    run_spec,
+    BalanceRecord, CovariateValue, MatchSpec, QuickMatchOptions, SeedMethod, SpecInput, SpecOutput,
+    SubclassedUnits, quick_clusters, quick_match_subclasses, run_spec,
 };
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};
@@ -401,7 +402,7 @@ fn close(got: f64, expected: f64) -> bool {
 fn check_against_matchit(
     data: &Dataset,
     run: &MatchItRun,
-    mut quick: impl FnMut(&Dataset, &MatchItRun) -> QuickMatchOutcome,
+    mut quick: impl FnMut(&Dataset, &MatchItRun) -> SubclassedUnits,
 ) {
     let label = format!(
         "{} {} {} caliper {:?}",
@@ -517,9 +518,9 @@ fn mahalanobis_spec_equals_matchit() {
         let mut spec = MatchSpec {
             method: MatchMethod::Quick,
             distance: DistanceSpec::Mahalanobis {
-                covariates: epistat_matching::CovariatesSpec::default(),
-                covariance: epistat_matching::CovarianceSpec::default(),
-                transform: epistat_matching::TransformSpec::default(),
+                covariates: epistat_matching::spec::CovariatesSpec::default(),
+                covariance: epistat_matching::spec::CovarianceSpec::default(),
+                transform: epistat_matching::spec::TransformSpec::default(),
                 caliper: None,
             },
             ..MatchSpec::default()

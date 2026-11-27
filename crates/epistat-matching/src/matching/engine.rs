@@ -136,7 +136,7 @@ pub struct MatchEngine<'a, R: MatchingRecord, S: SelectionStrategy<R>> {
 
 /// Unified request for standard anchor-to-candidate matching.
 #[derive(Clone, Copy)]
-pub struct StandardMatchRequest<'a, S, G: ?Sized> {
+pub(crate) struct StandardMatchRequest<'a, S, G: ?Sized> {
     /// The criteria of the job.
     pub criteria: &'a MatchingCriteria,
     /// How a case chooses among its eligible controls.
@@ -147,29 +147,6 @@ pub struct StandardMatchRequest<'a, S, G: ?Sized> {
     pub ratio_fallback: &'a [MatchRatio],
     /// The distance configuration, if any.
     pub distance_config: Option<&'a DistanceConfig>,
-}
-
-impl<'a, S, G: ?Sized> StandardMatchRequest<'a, S, G> {
-    /// A request with no fallback ratios and no distance configuration.
-    #[must_use]
-    pub const fn new(criteria: &'a MatchingCriteria, strategy: S, constraints: &'a G) -> Self {
-        Self {
-            criteria,
-            strategy,
-            constraints,
-            ratio_fallback: &[],
-            distance_config: None,
-        }
-    }
-
-    /// Sets the ratios to fall back on.
-    #[must_use]
-    pub const fn with_ratio_fallback(mut self, ratio_fallback: &'a [MatchRatio]) -> Self {
-        self.ratio_fallback = ratio_fallback;
-        self
-    }
-
-    crate::impl_with_distance_config!();
 }
 
 use rayon::prelude::*;
@@ -1018,7 +995,7 @@ pub struct DiscardedUnits {
 
 /// Run anchor/candidate matching with an explicit control selection strategy.
 #[must_use]
-pub fn match_standard<
+pub(crate) fn match_standard<
     R: MatchingRecord,
     S: SelectionStrategy<R> + Clone + Send + Sync,
     G: ConstraintGroup<R> + ?Sized,
@@ -1036,7 +1013,7 @@ pub fn match_standard<
 /// common-support policy is not applied again, and the distance need not be a
 /// propensity score. They are counted as trimmed in the diagnostics.
 #[must_use]
-pub fn match_standard_with_discard<
+pub(crate) fn match_standard_with_discard<
     R: MatchingRecord,
     S: SelectionStrategy<R> + Clone + Send + Sync,
     G: ConstraintGroup<R> + ?Sized,

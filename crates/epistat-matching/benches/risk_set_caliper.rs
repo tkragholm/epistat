@@ -13,6 +13,7 @@ mod common;
 
 use chrono::{Days, NaiveDate};
 use common::{Lcg, Person, Rec};
+use epistat_matching::RiskSetPolicy;
 use epistat_matching::constraints::{MissingPolicy, ResidenceSpell, caliper_on_field};
 use epistat_matching::prelude::*;
 use epistat_matching::{AtRiskSpan, DefaultRiskSetPolicy};

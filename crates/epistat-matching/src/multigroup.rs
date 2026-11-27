@@ -86,8 +86,9 @@ use crate::types::{
 };
 use crate::{
     BalanceReport, BalanceReportOptions, BalanceWeights, DistanceConfig, Estimand, MatchJob,
-    RapidHashMap, balance_report_on_weights,
+    balance_summary,
 };
+use rapidhash::RapidHashMap;
 
 /// How the generalised propensity score is fitted.
 #[derive(Debug, Clone)]
@@ -583,7 +584,7 @@ fn outcome_of(pairs: Vec<MatchedPair>, focal_total: usize) -> MatchOutcome {
 /// cohort.
 ///
 /// For each comparison, the report is that of
-/// [`balance_report_on_weights`] for the focal units and the units of the
+/// [`balance_summary`] for the focal units and the units of the
 /// other group inside the common support, with the matching weights of the
 /// pairs of the final cohort. A unit outside the cohort has weight 0.
 ///
@@ -615,7 +616,8 @@ pub fn balance_by_group<R: CovariateRecord>(
                 .map(|(r, _)| r)
                 .collect();
             let weights = BalanceWeights::from_outcome(&comparison.outcome);
-            balance_report_on_weights(&focal_records, &others, &weights, options)
+            balance_summary(&focal_records, &others, &weights, options)
+                .map(|summary| summary.report)
                 .map(|report| (comparison.group, report))
         })
         .collect()

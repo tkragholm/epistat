@@ -34,10 +34,12 @@ use chrono::NaiveDate;
 use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, RapidHashMap, match_fine_balance,
+    BalanceLevel, BalanceMode, FineBalance, FineBalanceOutcome, match_fine_balance,
 };
+use epistat_matching::{DistanceCaliper, DistanceConfig, MatchingCriteria, OptimalRequest};
 use epistat_testkit::load_json;
 use r_reference::Versions;
+use rapidhash::RapidHashMap;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 

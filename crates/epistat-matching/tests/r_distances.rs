@@ -42,8 +42,12 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+use epistat_matching::DistanceMetric;
 use epistat_matching::Error;
-use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, CovariateValue, MahalanobisCovarianceStrategy, MahalanobisPreparationConfig,
+    MahalanobisTransform, prepare_mahalanobis_distance_config,
+};
 use epistat_matching::{
     EuclideanPreparationConfig, EuclideanScale, IdMapEuclideanDistance, IdMapMahalanobisDistance,
     prepare_euclidean_distance_config,

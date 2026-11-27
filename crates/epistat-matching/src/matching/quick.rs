@@ -747,13 +747,6 @@ pub fn quick_clusters(
 // Units with identifiers
 // ---------------------------------------------------------------------------
 
-/// Result of generalised full matching.
-///
-/// Subclasses are numbered from 0 in the order of the first unit each holds,
-/// anchors first, then candidates, each in the order given. A unit that fits no
-/// subclass is dropped.
-pub type QuickMatchOutcome = SubclassedUnits;
-
 /// What one stratum of the units gave.
 enum StratumLabels {
     /// The stratum lacks one of the groups.
@@ -791,7 +784,7 @@ pub fn quick_match_subclasses<'c, R, V, F>(
     dimension: usize,
     exact: &[V],
     options: &QuickMatchOptions,
-) -> Result<QuickMatchOutcome, Error>
+) -> Result<SubclassedUnits, Error>
 where
     R: MatchingRecord,
     V: AsRef<str>,

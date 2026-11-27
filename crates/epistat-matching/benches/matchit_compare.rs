@@ -38,10 +38,22 @@ use epistat_matching::imputation::{
     CompleteDataDf, ImputationApproach, ImputedSet, estimate_pooled, match_imputed,
 };
 use epistat_matching::multigroup::{VectorMatchSpec, vector_match};
+use epistat_matching::output::{MatchDataOptions, Units, get_matches, match_data};
 use epistat_matching::prelude::*;
 use epistat_matching::sensitivity::{
     MScore, WilcoxonDistribution, hodges_lehmann_bounds, m_statistic_bounds, matched_sets,
     wilcoxon_bounds,
+};
+use epistat_matching::spec::{
+    BinningSpec, CardinalitySpec, CemSpec, CemVariableSpec, CovarianceSpec, CovariatesSpec,
+    DistanceSpec, EstimatorSpec, GeneticSpec, LinkSpec, MatchMethod, MatchMode, MissingSpec,
+    ScaleSpec, StdCaliperSpec, SubclassSpec, TransformSpec,
+};
+use epistat_matching::{
+    BalanceRecord, CovariateEncodingConfig, CovariateRecord, CovariateValue, ElasticNetCvConfig,
+    FineBalance, LogisticRegressionConfig, MatchingCriteria, NearestSelection, PropensityEstimator,
+    PropensityLink, PropensityScoreConfig, SpecOutput, TrialPeriod, TrialPerson, balance_report,
+    prepare_propensity_distance_config,
 };
 use epistat_matching::{Cohort, CohortRow};
 use std::fmt::Write as _;
@@ -881,7 +893,7 @@ fn run_fit<R: CovariateRecord>(
     config: &PropensityScoreConfig,
 ) -> Timed {
     let (times, prepared) = time_reps(reps, || {
-        prepare_propensity_distance_config(&input.anchors, &input.candidates, config)
+        prepare_propensity_distance_config(&input.anchors, &input.candidates, config, None)
             .unwrap_or_else(|e| panic!("fit: {e}"))
     });
     Timed {
@@ -896,7 +908,12 @@ fn run_balance<R: CovariateRecord>(input: &Inputs<R>, reps: usize) -> (Timed, St
     let outcome = nearest_pairs(input);
     let mut smd = String::new();
     let (times, report) = time_reps(reps, || {
-        balance_report(&input.anchors, &input.candidates, &outcome)
+        balance_report(
+            &input.anchors,
+            &input.candidates,
+            &outcome,
+            &epistat_matching::BalanceReportOptions::default(),
+        )
     });
     for row in &report.numeric {
         writeln!(

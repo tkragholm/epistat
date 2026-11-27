@@ -4,7 +4,12 @@
 
 use chrono::{Days, NaiveDate};
 use epistat_matching::DeterministicSelection;
+use epistat_matching::TrialMatching;
 use epistat_matching::prelude::*;
+use epistat_matching::{
+    CommonSupport, ControlReuse, DefaultRiskSetPolicy, DistanceConfig, RiskSetPolicy, TrialOptions,
+    TrialOutcome, TrialPeriod, TrialPerson, exposure_density_sets, match_trials, trial_seed,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 type Rec = RoleTransitionRecord<BaseRecord>;
@@ -359,7 +364,7 @@ fn run_trials(
     options: &TrialOptions,
     replacement: bool,
 ) -> TrialOutcome {
-    match_trials(panel, options, |pool| {
+    match_trials(panel, options, &TrialMatching::default(), |pool| {
         Ok(pool
             .job(trial_seed(1, pool.period()))
             .with_ratio(MatchRatio::new(1).unwrap())

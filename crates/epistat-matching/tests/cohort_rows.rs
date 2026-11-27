@@ -10,6 +10,16 @@
 //! and are run on several seeds. After every entry point the cohort must not
 //! have built the per-row maps, which would cost what owned records cost.
 
+use epistat_matching::output::{MatchDataOptions, Units, match_data};
+use epistat_matching::spec::{
+    BinningSpec, CemSpec, CemVariableSpec, CovarianceSpec, CovariatesSpec, DistanceSpec,
+    EstimatorSpec, LinkSpec, MatchMethod, MatchMode, MissingSpec, ScaleSpec, StdCaliperSpec,
+    SubclassSpec, TransformSpec,
+};
+use epistat_matching::{
+    BalanceRecord, BalanceReportOptions, BalanceWeights, CovariateValue, NumericBalanceTransform,
+    SpecOutput, balance_diagnostics, balance_report, balance_summary,
+};
 use std::collections::BTreeMap;
 
 use chrono::{Days, NaiveDate};
@@ -764,9 +774,8 @@ fn balance_and_effects_are_the_same_on_rows() {
             numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
             ..BalanceReportOptions::default()
         };
-        let on_owned = balance_report_with_options(&g.anchors, &g.candidates, &outcome, &options);
-        let on_rows =
-            balance_report_with_options(&g.anchor_rows, &g.candidate_rows, &outcome, &options);
+        let on_owned = balance_report(&g.anchors, &g.candidates, &outcome, &options);
+        let on_rows = balance_report(&g.anchor_rows, &g.candidate_rows, &outcome, &options);
         assert!(!on_owned.numeric.is_empty() && !on_owned.categorical.is_empty());
         assert_same(
             &format!("{on_owned:?}"),

@@ -30,6 +30,7 @@ use epistat_matching::multigroup::{
     match_within_clusters, vector_match,
 };
 use epistat_matching::prelude::*;
+use epistat_matching::{BalanceRecord, BalanceReportOptions, CovariateValue};
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;

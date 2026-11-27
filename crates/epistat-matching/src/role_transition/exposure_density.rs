@@ -18,14 +18,11 @@
 //! are drawn independently and one person may be a control in several of them.
 //! Without replacement each person is a control at most once.
 
-use super::{TransitionMatchRequest, match_transition};
 use crate::Error;
-use crate::matching::{ConstraintGroup, RoleIndexedRecord, SelectionStrategy};
+use crate::matching::RoleIndexedRecord;
 use crate::types::MatchOutcome;
 use chrono::NaiveDate;
 use rapidhash::RapidHashMap;
-
-use super::RiskSetPolicy;
 
 /// An exposed person and the date they became exposed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,25 +136,4 @@ pub fn exposure_density_sets<R: RoleIndexedRecord>(
         exposed,
         controls,
     })
-}
-
-/// Exposure density sampling of a cohort.
-///
-/// Runs risk-set matching with the exposure date as the transition date and
-/// returns the sets with their index dates and the controls' later exposure
-/// dates.
-///
-/// # Errors
-///
-/// As [`exposure_density_sets`].
-pub fn match_exposure_density<
-    R: RoleIndexedRecord,
-    S: SelectionStrategy<R> + Clone + Send + Sync,
-    G: ConstraintGroup<R> + ?Sized,
-    P: RiskSetPolicy<R>,
->(
-    cohort: &[R],
-    request: TransitionMatchRequest<'_, S, G, P>,
-) -> Result<ExposureDensityOutcome, Error> {
-    exposure_density_sets(cohort, match_transition(cohort, request))
 }

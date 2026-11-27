@@ -1980,6 +1980,11 @@ pub(crate) fn match_nearest<R: MatchingRecord, G: ConstraintGroup<R> + ?Sized>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::{
+        CovarianceSpec, CovariatesSpec, DistanceSpec, MatchMethod, MissingSpec, NearestSpec,
+        OrderSpec, TransformSpec,
+    };
+    use crate::{BalanceRecord, CovariateValue, SpecOutput};
 
     #[test]
     fn the_bitmap_availability_agrees_with_the_union_find_forests() {

@@ -71,7 +71,9 @@ use super::records::{CovariateRecord, MatchingRecord};
 use super::selection::SelectionStrategy;
 use crate::Error;
 use crate::overlap::{Overlap, finite_bounds};
-use crate::types::{CommonSupport, DistanceCaliper, MatchOutcome, MatchRatio, MatchingCriteria};
+use crate::types::{
+    CommonSupport, DistanceCaliper, Estimand, MatchOutcome, MatchRatio, MatchingCriteria,
+};
 use cbps::fit_cbps;
 use covariance::{covariance_matrix, rank_transform_columns, rescale_rank_covariance};
 use cross_validation::fit_elastic_net_cv;
@@ -293,24 +295,6 @@ pub struct PropensityMatchedOutcome {
     pub propensity: PropensityScoreEstimate,
 }
 
-/// Build propensity-score distance config directly from covariate records.
-///
-/// With `config.reestimate` set, use
-/// [`prepare_propensity_distance_config_with_discard`], which takes the
-/// trimming policy.
-///
-/// # Errors
-///
-/// Returns [`Error`] when preprocessing or model fitting fails, or
-/// when `config.reestimate` is set, since no trimming policy is given here.
-pub fn prepare_propensity_distance_config<R: CovariateRecord>(
-    anchors: &[R],
-    candidates: &[R],
-    config: &PropensityScoreConfig,
-) -> Result<PropensityDistancePreparation, Error> {
-    prepare_propensity_distance_config_with_discard(anchors, candidates, config, None)
-}
-
 /// The estimator's fit on a design, with prior weights.
 fn fit_estimator(
     matrix: &CovariateMatrix,
@@ -338,10 +322,10 @@ fn fit_estimator(
         PropensityEstimator::Cbps(cbps) => (
             fit_cbps(matrix, labels, weights, cbps)?,
             match (cbps.method, cbps.estimand) {
-                (CbpsMethod::Over, CbpsEstimand::Att) => "cbps_over_att",
-                (CbpsMethod::Over, CbpsEstimand::Ate) => "cbps_over_ate",
-                (CbpsMethod::Exact, CbpsEstimand::Att) => "cbps_exact_att",
-                (CbpsMethod::Exact, CbpsEstimand::Ate) => "cbps_exact_ate",
+                (CbpsMethod::Over, Estimand::Att) => "cbps_over_att",
+                (CbpsMethod::Over, _) => "cbps_over_ate",
+                (CbpsMethod::Exact, Estimand::Att) => "cbps_exact_att",
+                (CbpsMethod::Exact, _) => "cbps_exact_ate",
             },
         ),
     })
@@ -387,7 +371,7 @@ fn rows_outside_common_support(
 }
 
 /// Build propensity-score distance config from covariate records, with
-/// common-support trimming for `config.reestimate`.
+/// common-support trimming by `discard` for `config.reestimate`.
 ///
 /// The model is fitted on all units. When `config.reestimate` is set, the units
 /// that `discard` removes are found from those scores, on the scale of the
@@ -402,7 +386,7 @@ fn rows_outside_common_support(
 /// Returns [`Error`] when preprocessing or model fitting fails, when
 /// a sampling weight is missing or invalid, when `config.reestimate` is set
 /// without a `discard` policy, or when the two groups' scores do not overlap.
-pub fn prepare_propensity_distance_config_with_discard<R: CovariateRecord>(
+pub fn prepare_propensity_distance_config<R: CovariateRecord>(
     anchors: &[R],
     candidates: &[R],
     config: &PropensityScoreConfig,
@@ -705,7 +689,7 @@ pub fn estimate_propensity_and_match<
     extra_constraints: &G,
     propensity_config: &PropensityScoreConfig,
 ) -> Result<PropensityMatchedOutcome, Error> {
-    let prepared = prepare_propensity_distance_config_with_discard(
+    let prepared = prepare_propensity_distance_config(
         anchors,
         candidates,
         propensity_config,
@@ -778,6 +762,7 @@ mod tests {
             &anchors,
             &candidates,
             &PropensityScoreConfig::default(),
+            None,
         )
         .expect("propensity estimation should succeed");
         assert_eq!(prepared.estimate.estimator, "glm_logit");
@@ -818,6 +803,7 @@ mod tests {
             &anchors,
             &candidates,
             &PropensityScoreConfig::default(),
+            None,
         )
         .expect("glm propensity estimation should succeed");
         let elastic_net_prepared = prepare_propensity_distance_config(
@@ -831,6 +817,7 @@ mod tests {
                         .build(),
                 ))
                 .build(),
+            None,
         )
         .expect("elastic-net propensity estimation should succeed");
 
@@ -874,6 +861,7 @@ mod tests {
                 ))
                 .output_scale(PropensityScoreOutputScale::LinearPredictor)
                 .build(),
+            None,
         )
         .expect("elastic-net propensity estimation should succeed");
         assert_eq!(prepared.estimate.estimator, "elastic_net_logit");
@@ -905,6 +893,7 @@ mod tests {
                         .build(),
                 ))
                 .build(),
+            None,
         )
         .expect_err("invalid elastic-net configuration should fail");
         assert!(matches!(err, Error::InvalidElasticNet));
@@ -1128,7 +1117,7 @@ mod tests {
             )
             .build();
 
-        let err = prepare_propensity_distance_config(&[anchor], &[candidate], &config)
+        let err = prepare_propensity_distance_config(&[anchor], &[candidate], &config, None)
             .expect_err("missing values should fail");
         assert!(matches!(err, Error::MissingValues { .. }));
     }
@@ -1151,7 +1140,7 @@ mod tests {
             )
             .build();
 
-        let prepared = prepare_propensity_distance_config(&[anchor], &[candidate], &config)
+        let prepared = prepare_propensity_distance_config(&[anchor], &[candidate], &config, None)
             .expect("impute mode should succeed");
         assert_eq!(prepared.estimate.distance_scores.len(), 2);
     }
@@ -1196,6 +1185,7 @@ mod tests {
             &anchors,
             &candidates,
             &PropensityScoreConfig::default(),
+            None,
         )
         .expect("an aliased column is dropped, as in R");
         assert_eq!(prepared.estimate.aliased_columns, ["age_twice"]);
@@ -1231,6 +1221,7 @@ mod tests {
             &anchors,
             &candidates,
             &PropensityScoreConfig::default(),
+            None,
         )
         .expect("propensity estimation should succeed");
         assert_eq!(prepared.estimate.aliased_columns, Vec::<String>::new());
@@ -1256,6 +1247,7 @@ mod tests {
             &anchors,
             &candidates,
             &PropensityScoreConfig::default(),
+            None,
         )
         .expect("a separated fit is returned and flagged");
         assert!(prepared.estimate.fitted_at_boundary);
@@ -1264,7 +1256,7 @@ mod tests {
         let short = PropensityScoreConfig::builder()
             .logistic(LogisticRegressionConfig::builder().max_iter(1).build())
             .build();
-        let prepared = prepare_propensity_distance_config(&anchors, &candidates, &short)
+        let prepared = prepare_propensity_distance_config(&anchors, &candidates, &short, None)
             .expect("a short fit is returned");
         assert!(!prepared.estimate.converged);
         assert!(!prepared.estimate.fitted_at_boundary);
@@ -1278,12 +1270,12 @@ mod tests {
             LogisticRegressionConfig::builder().tolerance(0.0).build(),
         ] {
             let config = PropensityScoreConfig::builder().logistic(logistic).build();
-            let err = prepare_propensity_distance_config(&anchors, &candidates, &config)
+            let err = prepare_propensity_distance_config(&anchors, &candidates, &config, None)
                 .expect_err("invalid settings are refused");
             assert!(matches!(err, Error::InvalidModelControl));
         }
         let config = PropensityScoreConfig::builder().reestimate(true).build();
-        let err = prepare_propensity_distance_config(&anchors, &candidates, &config)
+        let err = prepare_propensity_distance_config(&anchors, &candidates, &config, None)
             .expect_err("reestimate needs a policy");
         assert!(matches!(err, Error::ReestimateWithoutDiscard));
     }
@@ -1331,7 +1323,7 @@ mod tests {
                 ElasticNetLogisticConfig::default(),
             ))
             .build();
-        let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config)
+        let prepared = prepare_propensity_distance_config(&anchors, &candidates, &config, None)
             .expect("elastic net fit should succeed");
         assert_eq!(prepared.estimate.aliased_columns, Vec::<String>::new());
     }

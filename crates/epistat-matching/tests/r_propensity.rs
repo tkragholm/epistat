@@ -25,7 +25,11 @@ mod r_reference;
 
 use chrono::NaiveDate;
 use epistat_matching::Error;
-use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, CommonSupport, CovariateValue, LogisticRegressionConfig,
+    PropensityDistancePreparation, PropensityLink, PropensityScoreConfig,
+    PropensityScoreOutputScale, prepare_propensity_distance_config,
+};
 
 use r_reference::{Versions, reference as load_reference, unit_id as id};
 use serde::Deserialize;
@@ -144,7 +148,7 @@ fn fit_ours(fit: &RFit, options: &Options<'_>) -> PropensityDistancePreparation 
             .map(|(idx, w)| (id(idx), *w))
             .collect()
     });
-    prepare_propensity_distance_config_with_discard(&anchors, &candidates, &config, options.discard)
+    prepare_propensity_distance_config(&anchors, &candidates, &config, options.discard)
         .expect("the fit succeeds")
 }
 
@@ -363,7 +367,7 @@ fn invalid_sampling_weights_are_errors() {
             ),
             ..PropensityScoreConfig::default()
         };
-        let err = prepare_propensity_distance_config(&anchors, &candidates, &config)
+        let err = prepare_propensity_distance_config(&anchors, &candidates, &config, None)
             .expect_err("an invalid weight is refused");
         assert!(
             matches!(err, Error::InvalidSamplingWeight { ref id } if id == "u7"),

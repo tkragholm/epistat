@@ -14,7 +14,11 @@
 
 mod common;
 
+use epistat_matching::CovariateRecord;
 use epistat_matching::Error;
+use epistat_matching::{
+    BalanceRecord, MatchWeightMethod, match_weights_from_pairs, pair_weights_from_pairs,
+};
 use std::sync::Arc;
 
 use arrow_array::types::{Int8Type, UInt16Type};

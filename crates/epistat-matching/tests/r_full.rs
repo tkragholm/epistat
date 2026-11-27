@@ -19,7 +19,7 @@
 //! * Where the partition is unique (four perturbations of every distance by
 //!   1e-5 standard deviations give the same partition), the subclasses as sets
 //!   of units, and MatchIt's weights against the crate's weights rescaled by
-//!   [`FullMatchOutcome::match_data`].
+//!   [`SubclassedUnits::match_data`].
 //! * Where MatchIt finds no match, the crate reports an error.
 //!
 //! Weights in the file carry 17 digits and the crate's are ratios of small
@@ -29,8 +29,14 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::match_full;
+use epistat_matching::output::Units;
 use epistat_matching::prelude::*;
-use epistat_matching::{RapidHashMap, match_full};
+use epistat_matching::{
+    DistanceCaliper, DistanceConfig, Estimand, FullMatchConfig, MatchingCriteria, OptimalRequest,
+    Retain,
+};
+use rapidhash::RapidHashMap;
 
 use r_reference::{Versions, reference as load_reference};
 use serde::Deserialize;

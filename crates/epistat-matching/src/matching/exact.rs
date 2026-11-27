@@ -56,12 +56,6 @@ pub struct SubclassedUnits {
     pub trimmed: crate::TrimmedUnits,
 }
 
-/// Result of exact matching into strata, and of coarsened exact matching.
-///
-/// Subclasses are numbered from 0 in the order in which their stratum first
-/// appears among the anchors.
-pub type ExactMatchOutcome = SubclassedUnits;
-
 impl SubclassedUnits {
     /// Number of units, kept or dropped.
     #[must_use]
@@ -208,7 +202,7 @@ pub fn exact_match_subclasses<R: MatchingRecord, V: AsRef<str>>(
     anchors: &[R],
     candidates: &[R],
     variables: &[V],
-) -> Result<ExactMatchOutcome, Error> {
+) -> Result<SubclassedUnits, Error> {
     if variables.is_empty() {
         return Err(Error::NoVariables);
     }
@@ -278,7 +272,7 @@ pub(crate) fn subclasses_of_strata<R: MatchingRecord>(
     candidates: &[R],
     numbers: &[u32],
     strata: usize,
-) -> Result<ExactMatchOutcome, Error> {
+) -> Result<SubclassedUnits, Error> {
     let mut anchor_counts = vec![0_usize; strata];
     let mut candidate_counts = vec![0_usize; strata];
     let (anchor_numbers, candidate_numbers) = numbers.split_at(anchors.len());
@@ -579,13 +573,13 @@ mod tests {
         record
     }
 
-    fn map(out: &ExactMatchOutcome) -> HashMap<String, usize> {
+    fn map(out: &SubclassedUnits) -> HashMap<String, usize> {
         out.assignments()
             .map(|(id, subclass)| (id.to_owned(), subclass))
             .collect()
     }
 
-    fn weight(out: &ExactMatchOutcome, estimand: Estimand, id: &str) -> f64 {
+    fn weight(out: &SubclassedUnits, estimand: Estimand, id: &str) -> f64 {
         let position = out.ids.iter().position(|x| x == id).expect("unit");
         out.weight(estimand, position).expect("kept unit")
     }

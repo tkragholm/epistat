@@ -8,6 +8,7 @@
 
 use epistat_matching::prelude::*;
 use epistat_matching::{BaseRecord, ScoreTable};
+use epistat_matching::{DistanceConfig, MatchOrder};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 use rapidhash::RapidHashMap;
 

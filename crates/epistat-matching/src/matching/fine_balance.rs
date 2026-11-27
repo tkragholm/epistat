@@ -2195,9 +2195,10 @@ fn balance_table(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RapidHashMap;
     use crate::prelude::*;
+    use crate::{DistanceCaliper, DistanceConfig, MatchingCriteria};
     use chrono::NaiveDate;
+    use rapidhash::RapidHashMap;
 
     thread_local! {
         static ALWAYS_REPAIR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };

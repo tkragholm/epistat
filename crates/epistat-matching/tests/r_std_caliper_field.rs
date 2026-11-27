@@ -15,6 +15,11 @@
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
+use epistat_matching::spec::{
+    AssignmentSpec, CovariatesSpec, DiscardSpec, DistanceSpec, EstimatorSpec, LinkSpec,
+    MatchMethod, MissingSpec, NearestSpec, OrderSpec, ScaleSpec, StdCaliperEach, StdCaliperSpec,
+};
+use epistat_matching::{BalanceRecord, CovariateValue, SpecOutput};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 use std::collections::BTreeMap;

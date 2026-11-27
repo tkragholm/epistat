@@ -1,9 +1,15 @@
-use chrono::{Months, NaiveDate};
-use epistat_matching::{
+//! Properties of the matchers on random cohorts: no self-matches, no control
+//! used twice without replacement, and the same pairs from equal requests.
+
+use crate::constraints::Constraint;
+use crate::matching::{StandardMatchRequest, match_standard};
+use crate::role_transition::{TransitionMatchRequest, match_transition_ordered};
+use crate::{
     AgeLimitYears, BaseRecord, DefaultRiskSetPolicy, DeterministicSelection, MatchRatio,
     MatchingCriteria, MatchingRecord, RandomSelection, RoleTransitionOptions, RoleTransitionRecord,
-    StandardMatchRequest, TransitionMatchRequest, date, match_standard, match_transition,
+    date,
 };
+use chrono::{Months, NaiveDate};
 use std::collections::{HashMap, HashSet};
 
 fn base_record(id: &str, day_offset: i64) -> BaseRecord {
@@ -45,7 +51,7 @@ fn property_no_self_match_and_no_reuse_without_replacement() {
         let unique_controls = outcome
             .pairs
             .iter()
-            .map(epistat_matching::MatchedPair::comparator_id)
+            .map(crate::MatchedPair::comparator_id)
             .collect::<HashSet<_>>();
         assert_eq!(unique_controls.len(), outcome.pairs.len());
         assert_eq!(outcome.used_comparators(), outcome.pairs.len());
@@ -99,7 +105,7 @@ fn property_role_transition_respects_age_threshold() {
             })
             .collect::<HashSet<_>>();
 
-        let outcome = match_transition(
+        let outcome = match_transition_ordered(
             &cohort,
             TransitionMatchRequest {
                 criteria: &criteria,
@@ -109,6 +115,7 @@ fn property_role_transition_respects_age_threshold() {
                 distance_config: None,
                 risk_set_policy: &DefaultRiskSetPolicy,
             },
+            None,
         );
 
         for pair in &outcome.pairs {
@@ -217,8 +224,7 @@ fn criteria_builder_validates() {
 /// rather than from code. Both entry points are pinned.
 #[test]
 fn requests_accept_an_owned_list_of_boxed_constraints() {
-    use epistat_matching::Constraint;
-    use epistat_matching::constraints::caliper_on_field;
+    use crate::constraints::caliper_on_field;
 
     fn rules_from_config<R: MatchingRecord + 'static>(
         config: &[(&str, f64)],
@@ -255,7 +261,13 @@ fn requests_accept_an_owned_list_of_boxed_constraints() {
     let outcome = match_standard(
         &anchors,
         &candidates,
-        StandardMatchRequest::new(&criteria, DeterministicSelection, &constraints),
+        StandardMatchRequest {
+            criteria: &criteria,
+            strategy: DeterministicSelection,
+            constraints: &constraints,
+            ratio_fallback: &[],
+            distance_config: None,
+        },
     );
     assert_eq!(outcome.pairs.len(), 1);
     assert_eq!(outcome.pairs[0].control_id, "near");
@@ -268,9 +280,17 @@ fn requests_accept_an_owned_list_of_boxed_constraints() {
     ];
     let options = RoleTransitionOptions::default();
     let constraints = rules_from_config::<RoleTransitionRecord<BaseRecord>>(&config);
-    let outcome = match_transition(
+    let outcome = match_transition_ordered(
         &records,
-        TransitionMatchRequest::new(&criteria, &options, DeterministicSelection, &constraints),
+        TransitionMatchRequest {
+            criteria: &criteria,
+            options: &options,
+            strategy: DeterministicSelection,
+            constraints: &constraints,
+            distance_config: None,
+            risk_set_policy: &DefaultRiskSetPolicy,
+        },
+        None,
     );
     assert_eq!(outcome.pairs.len(), 1);
     assert_eq!(outcome.pairs[0].control_id, "near");

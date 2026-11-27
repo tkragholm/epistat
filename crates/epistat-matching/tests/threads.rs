@@ -14,10 +14,22 @@ mod common;
 use chrono::NaiveDate;
 use common::{Level, cohort, records, two_pass};
 use epistat_matching::prelude::*;
+use epistat_matching::spec::MatchMode;
 use epistat_matching::{
-    CbpsConfig, CbpsEstimand, CbpsMethod, DeterministicSelection, NearestBirthDateSelection,
-    ReconstructedEpisode, ReconstructedMatchingOptions, SubclassificationConfig,
-    balance_report_with_options, estimate_propensity_and_match, prepare_euclidean_distance_config,
+    BalanceRecord, BalanceReportOptions, ControlReuse, CovariateEncodingConfig, CovariateValue,
+    DistanceCaliper, DistanceConfig, ElasticNetCvConfig, ElasticNetLogisticConfig, Estimand,
+    EuclideanPreparationConfig, EuclideanScale, LogisticRegressionConfig,
+    MahalanobisCovarianceStrategy, MahalanobisPreparationConfig, MahalanobisTransform, MatchOrder,
+    MatchWeightMethod, MatchingCriteria, MissingValuePolicy, NumericBalanceTransform,
+    PairDistanceMatrix, PropensityEstimator, PropensityLink, PropensityScoreConfig,
+    PropensityScoreEstimate, PropensityScoreOutputScale, SpecOutput, SupplementalBalanceCovariates,
+    TrialOptions, TrialPeriod, TrialPerson, balance_diagnostics, match_weights_from_pairs,
+    pair_weights_from_pairs,
+};
+use epistat_matching::{
+    CbpsConfig, CbpsMethod, DeterministicSelection, NearestBirthDateSelection,
+    ReconstructedEpisode, ReconstructedMatchingOptions, SubclassificationConfig, balance_report,
+    estimate_propensity_and_match, prepare_euclidean_distance_config,
     prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
     reconstruct_case_control_pairs, subclassify_by_propensity_score_map,
 };
@@ -477,13 +489,31 @@ fn run_with_balance_and_balance_reports() {
                 .with_exact_matches(["sex", "region"])
         };
         let (outcome, report) = job()
-            .run_with_balance(&cases, &controls)
+            .run()
+            .map(|outcome| {
+                let report = balance_report(
+                    &cases,
+                    &controls,
+                    &outcome,
+                    &BalanceReportOptions::default(),
+                );
+                (outcome, report)
+            })
             .expect("a valid job");
         d.outcome(&outcome);
         d.debug(&report);
         let (outcome, report) = job()
             .with_strategy(NearestBirthDateSelection)
-            .run_with_balance(&cases, &controls)
+            .run()
+            .map(|outcome| {
+                let report = balance_report(
+                    &cases,
+                    &controls,
+                    &outcome,
+                    &BalanceReportOptions::default(),
+                );
+                (outcome, report)
+            })
             .expect("a valid job");
         d.outcome(&outcome);
         d.debug(&report);
@@ -501,7 +531,7 @@ fn run_with_balance_and_balance_reports() {
                         SupplementalBalanceCovariates::default()
                     })
                     .build();
-                let report = balance_report_with_options(&cases, &controls, &first, &options);
+                let report = balance_report(&cases, &controls, &first, &options);
                 assert!(!report.numeric.is_empty(), "no output, test is vacuous");
                 d.debug(&report);
             }
@@ -553,7 +583,16 @@ fn transition_run_with_balance() {
             .with_age_limit(AgeLimitYears::new(6).unwrap())
             .with_exact_matches(["sex", "municipality"])
             .with_alive_check()
-            .run_with_balance(&cases, &controls)
+            .run()
+            .map(|outcome| {
+                let report = balance_report(
+                    &cases,
+                    &controls,
+                    &outcome,
+                    &BalanceReportOptions::default(),
+                );
+                (outcome, report)
+            })
             .expect("a valid job");
         assert!(!out.pairs.is_empty(), "no output, test is vacuous");
         let mut d = Digest::default();
@@ -610,7 +649,7 @@ fn propensity_estimation_and_matching() {
             "cbps_exact_ate",
             PropensityEstimator::Cbps(
                 CbpsConfig::builder()
-                    .estimand(CbpsEstimand::Ate)
+                    .estimand(Estimand::Ate)
                     .method(CbpsMethod::Exact)
                     .build(),
             ),
@@ -645,7 +684,8 @@ fn propensity_estimation_and_matching() {
             assert_same_on_pools(&POOLS, || {
                 let mut d = Digest::default();
                 let prepared =
-                    prepare_propensity_distance_config(&anchors, &candidates, &config).unwrap();
+                    prepare_propensity_distance_config(&anchors, &candidates, &config, None)
+                        .unwrap();
                 d.estimate(&prepared.estimate);
                 let matched = estimate_propensity_and_match(
                     &anchors,
@@ -902,6 +942,7 @@ fn subclassification() {
                     .build(),
             )
             .build(),
+        None,
     )
     .unwrap();
     let scores: HashMap<String, f64> = prepared
@@ -997,7 +1038,8 @@ fn reconstructed_pairs() {
 #[test]
 fn nearest_matching_in_every_order() {
     use epistat_matching::constraints::caliper_on_field;
-    use epistat_matching::{Assignment, MatchOrder, RapidHashMap, VariableRatio};
+    use epistat_matching::{Assignment, MatchOrder, VariableRatio};
+    use rapidhash::RapidHashMap;
     let (mut anchors, mut candidates) = base_pair(300, 1_200, 21);
     let mut rng = common::Lcg::new(77);
     let mut scores: RapidHashMap<String, f64> = RapidHashMap::default();
@@ -1327,9 +1369,8 @@ fn generalised_full_matching() {
 /// join the strata in order, so the result is the same in every pool.
 #[test]
 fn optimal_and_full_matching() {
-    use epistat_matching::{
-        FullMatchConfig, OptimalRequest, RapidHashMap, match_full, match_optimal,
-    };
+    use epistat_matching::{FullMatchConfig, OptimalRequest, match_full, match_optimal};
+    use rapidhash::RapidHashMap;
 
     let mut state = 0x2545_f491_4f6c_dd1d_u64;
     let mut draw = move || {
@@ -1392,7 +1433,8 @@ fn optimal_and_full_matching() {
 /// network, so the result is the same in every pool.
 #[test]
 fn fine_balance_matching() {
-    use epistat_matching::{FineBalance, OptimalRequest, RapidHashMap, match_fine_balance};
+    use epistat_matching::{FineBalance, OptimalRequest, match_fine_balance};
+    use rapidhash::RapidHashMap;
 
     let mut state = 0x1f83_d9ab_fb41_bd6b_u64;
     let mut draw = move || {

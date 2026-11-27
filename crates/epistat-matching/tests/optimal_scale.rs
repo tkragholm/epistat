@@ -6,7 +6,9 @@
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
-use epistat_matching::{FullMatchConfig, OptimalRequest, RapidHashMap, match_full, match_optimal};
+use epistat_matching::{DistanceCaliper, DistanceConfig, MatchingCriteria};
+use epistat_matching::{FullMatchConfig, OptimalRequest, match_full, match_optimal};
+use rapidhash::RapidHashMap;
 use std::time::Instant;
 
 #[test]

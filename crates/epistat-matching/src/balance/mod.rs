@@ -1,19 +1,11 @@
 mod diagnostics;
 mod input;
-mod projected;
 mod report;
 mod stats;
 
 pub use diagnostics::balance_diagnostics;
 pub use input::BalanceWeights;
-pub use projected::{
-    CategoricalCovariateSpec, NumericCovariateSpec, ProjectedBalanceRow,
-    build_projected_balance_rows, categorical_max_abs_diff, smd_numeric_from_values,
-};
-pub use report::{
-    balance_improvement, balance_report, balance_report_on_weights, balance_report_with_options,
-    balance_summary, balance_threshold_summary,
-};
+pub use report::{balance_improvement, balance_report, balance_summary, balance_threshold_summary};
 
 #[cfg(feature = "bench-internals")]
 #[must_use]

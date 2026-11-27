@@ -4,8 +4,8 @@
 //! The estimator matches every unit of the target group on the covariates,
 //! with replacement, to the `M` nearest units of the other treatment group,
 //! and averages the differences in outcome. It estimates the average effect
-//! in the treated ([`Target::Att`]), the controls ([`Target::Atc`]) or
-//! everyone ([`Target::Ate`]). Its variance is not the variance of a mean of
+//! in the treated ([`Estimand::Att`]), the controls ([`Estimand::Atc`]) or
+//! everyone ([`Estimand::Ate`]). Its variance is not the variance of a mean of
 //! independent differences, since a unit used as a match for several others
 //! enters several differences. Abadie and Imbens \[1\] give a variance that
 //! allows for it. This module is a separate estimator from
@@ -117,7 +117,8 @@ use crate::Error;
 use epistat_linalg::{Attempt, Factor, Mat, Method, solve, weighted_gram, weighted_xtz};
 use rayon::prelude::*;
 
-use crate::effects::{Target, UnitData};
+use crate::Estimand;
+use crate::effects::UnitData;
 use crate::kdtree::{Euclidean, KdTree, worth_a_tree};
 
 /// The distance the matches are found with.
@@ -135,7 +136,7 @@ pub enum DistanceWeight {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AbadieImbensSpec {
     /// The group the effect is for.
-    pub target: Target,
+    pub target: Estimand,
     /// The number of matches per unit, `M` in `Match`.
     pub matches: usize,
     /// Whether to correct the outcome of a match for the covariate
@@ -157,7 +158,7 @@ impl AbadieImbensSpec {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            target: Target::Att,
+            target: Estimand::Att,
             matches: 1,
             bias_adjust: false,
             var_calc: 0,
@@ -343,15 +344,15 @@ impl<'a> Estimator<'a> {
         let n_treated = data.treated.iter().filter(|t| **t).count();
         let n_control = n - n_treated;
         let role: Vec<bool> = match spec.target {
-            Target::Atc => data.treated.iter().map(|t| !t).collect(),
+            Estimand::Atc => data.treated.iter().map(|t| !t).collect(),
             _ => data.treated.clone(),
         };
-        let (n_role, n_other) = if matches!(spec.target, Target::Atc) {
+        let (n_role, n_other) = if matches!(spec.target, Estimand::Atc) {
             (n_control, n_treated)
         } else {
             (n_treated, n_control)
         };
-        let available = if matches!(spec.target, Target::Ate) {
+        let available = if matches!(spec.target, Estimand::Ate) {
             n_role.min(n_other)
         } else {
             n_other
@@ -439,7 +440,7 @@ impl<'a> Estimator<'a> {
 
     fn run(&self) -> Result<AbadieImbensEstimate, Error> {
         let n = self.data.len();
-        let all = matches!(self.spec.target, Target::Ate);
+        let all = matches!(self.spec.target, Estimand::Ate);
         let role_units: Vec<usize> = (0..n).filter(|&i| self.role[i]).collect();
         let other_units: Vec<usize> = (0..n).filter(|&i| !self.role[i]).collect();
         let anchor_units: Vec<usize> = if all {
@@ -576,7 +577,7 @@ impl<'a> Estimator<'a> {
         let v_cond = v_pop.max(v_sample) - v_sample;
 
         let se_standard = (row_square(&raw_rows, est_raw) / n2).sqrt();
-        let sign = if matches!(self.spec.target, Target::Atc) {
+        let sign = if matches!(self.spec.target, Estimand::Atc) {
             -1.0
         } else {
             1.0
@@ -790,7 +791,7 @@ mod tests {
         // control, so the effect is 1 - 0 = 1), 2 matches 0 (1 - 3 = -2) and
         // 9 matches 10 (6 - 4 = 2). The mean is 1/3.
         let spec = AbadieImbensSpec {
-            target: Target::Atc,
+            target: Estimand::Atc,
             ..AbadieImbensSpec::new()
         };
         let e = abadie_imbens(&tiny(), &spec).unwrap();
@@ -819,7 +820,7 @@ mod tests {
             .map(|i| (next() % 100) as f64 / 10.0 + covariates[0][i])
             .collect();
         let data = AbadieImbensData::new(treated, outcome, covariates).unwrap();
-        for target in [Target::Att, Target::Atc, Target::Ate] {
+        for target in [Estimand::Att, Estimand::Atc, Estimand::Ate] {
             for (matches, var_calc, bias_adjust, weight) in [
                 (1, 0, false, DistanceWeight::Diagonal),
                 (3, 2, true, DistanceWeight::Diagonal),

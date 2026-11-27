@@ -182,7 +182,7 @@ impl<R: RoleIndexedRecord> RiskSetPolicy<R> for DefaultRiskSetPolicy {
 
 /// Unified request for role-transition matching.
 #[derive(Clone, Copy)]
-pub struct TransitionMatchRequest<'a, S, G: ?Sized, P> {
+pub(crate) struct TransitionMatchRequest<'a, S, G: ?Sized, P> {
     /// The criteria of the job.
     pub criteria: &'a MatchingCriteria,
     /// The options that define a transition.
@@ -197,47 +197,7 @@ pub struct TransitionMatchRequest<'a, S, G: ?Sized, P> {
     pub risk_set_policy: &'a P,
 }
 
-impl<'a, S, G: ?Sized> TransitionMatchRequest<'a, S, G, DefaultRiskSetPolicy> {
-    /// A request that uses the default risk-set policy and no distance configuration.
-    #[must_use]
-    pub const fn new(
-        criteria: &'a MatchingCriteria,
-        options: &'a RoleTransitionOptions,
-        strategy: S,
-        constraints: &'a G,
-    ) -> Self {
-        Self {
-            criteria,
-            options,
-            strategy,
-            constraints,
-            distance_config: None,
-            risk_set_policy: &DefaultRiskSetPolicy,
-        }
-    }
-}
-
-impl<'a, S, G: ?Sized, P> TransitionMatchRequest<'a, S, G, P> {
-    crate::impl_with_distance_config!();
-
-    /// The same request with another risk-set policy.
-    #[must_use]
-    pub fn with_risk_set_policy<P2>(
-        self,
-        risk_set_policy: &'a P2,
-    ) -> TransitionMatchRequest<'a, S, G, P2> {
-        TransitionMatchRequest {
-            criteria: self.criteria,
-            options: self.options,
-            strategy: self.strategy,
-            constraints: self.constraints,
-            distance_config: self.distance_config,
-            risk_set_policy,
-        }
-    }
-}
-
-/// Risk-set matching with role transitions using neutral terminology.
+/// Risk-set matching with role transitions.
 ///
 /// With `common_support` set in the criteria the scores of the distance
 /// configuration decide the trimming: a case whose score is strictly outside
@@ -259,21 +219,9 @@ impl<'a, S, G: ?Sized, P> TransitionMatchRequest<'a, S, G, P> {
 /// case's window. Any other job scans the candidates of each case's stratum
 /// and birth window, in time proportional to the cases times the candidates
 /// per case. Both give the same pairs and diagnostics.
-#[must_use]
-pub fn match_transition<
-    R: RoleIndexedRecord,
-    S: SelectionStrategy<R> + Clone + Send + Sync,
-    G: ConstraintGroup<R> + ?Sized,
-    P: RiskSetPolicy<R>,
->(
-    cohort: &[R],
-    request: TransitionMatchRequest<'_, S, G, P>,
-) -> MatchOutcome {
-    match_transition_ordered(cohort, request, None)
-}
-
-/// [`match_transition`] with the order of the cohort's ids, when the caller
-/// has it. An order of another length is not used.
+///
+/// With `order`, the order of the cohort's ids when the caller has it, the
+/// ids are not sorted again. An order of another length is not used.
 pub(crate) fn match_transition_ordered<
     R: RoleIndexedRecord,
     S: SelectionStrategy<R> + Clone + Send + Sync,
@@ -1327,7 +1275,7 @@ mod tests {
         G: ConstraintGroup<R> + ?Sized,
         P: RiskSetPolicy<R>,
     {
-        match_transition(
+        match_transition_ordered(
             cohort,
             TransitionMatchRequest {
                 criteria,
@@ -1337,6 +1285,7 @@ mod tests {
                 distance_config,
                 risk_set_policy,
             },
+            None,
         )
     }
 

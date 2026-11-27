@@ -13,7 +13,10 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
-use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, CovariateValue, ElasticNetLogisticConfig, PropensityEstimator,
+    PropensityScoreConfig, prepare_propensity_distance_config,
+};
 use r_reference::{covariate_unit, reference as load_reference, split_by_group};
 use serde::Deserialize;
 
@@ -73,6 +76,7 @@ fn fit_with(design: &Design, config: ElasticNetLogisticConfig) -> Fitted {
         &PropensityScoreConfig::builder()
             .estimator(PropensityEstimator::ElasticNetLogit(config))
             .build(),
+        None,
     )
     .expect("elastic net fit succeeds");
     let names = &prepared.estimate.column_names;

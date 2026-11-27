@@ -35,9 +35,10 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+use epistat_matching::Estimand;
 use epistat_matching::UnitRole;
 use epistat_matching::effects::{
-    Clustering, EffectSpec, MatchedSample, OutcomeModel, Target, UnitData, estimate_effects,
+    Clustering, EffectSpec, MatchedSample, OutcomeModel, UnitData, estimate_effects,
 };
 use epistat_matching::output::{LongMatches, MatchData};
 
@@ -144,11 +145,11 @@ fn sample(case: &Case, units: &UnitData) -> MatchedSample {
     }
 }
 
-fn target(estimand: &str) -> Target {
+fn target(estimand: &str) -> Estimand {
     match estimand {
-        "ATT" => Target::Att,
-        "ATC" => Target::Atc,
-        "ATE" => Target::Ate,
+        "ATT" => Estimand::Att,
+        "ATC" => Estimand::Atc,
+        "ATE" => Estimand::Ate,
         other => panic!("estimand {other}"),
     }
 }

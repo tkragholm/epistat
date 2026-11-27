@@ -127,12 +127,6 @@ impl BaseRecord {
     }
 }
 
-/// Neutral alias for an index/anchor group record.
-pub type AnchorRecord = BaseRecord;
-
-/// Neutral alias for candidate comparison records.
-pub type CandidateRecord = BaseRecord;
-
 /// Generic record carrying covariates for balance reporting.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BalanceRecord {

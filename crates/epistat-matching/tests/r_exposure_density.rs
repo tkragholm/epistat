@@ -27,9 +27,10 @@
 mod r_reference;
 
 use chrono::{Days, NaiveDate};
-use epistat_matching::DeterministicSelection;
 use epistat_matching::Error;
 use epistat_matching::prelude::*;
+use epistat_matching::spec::{MatchMethod, MatchMode};
+use epistat_matching::{BalanceRecord, ExposureDensityOutcome, SpecOutput, exposure_density_sets};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
 use r_reference::{Versions, assert_r_version, reference as load_reference};
@@ -317,32 +318,6 @@ fn spec_mode_matches_the_job() {
     assert_eq!(from_spec.outcome.pairs, by_hand.outcome.pairs);
     assert_eq!(from_spec.controls, by_hand.controls);
     assert_eq!(from_spec.exposed, by_hand.exposed);
-
-    // The function on a request gives the sets of the job's pairs.
-    let criteria = MatchingCriteria::builder()
-        .match_ratio(2)
-        .birth_date_window_days(30_000)
-        .required_strata(vec!["sex".to_string(), "area".to_string()])
-        .allow_replacement(true)
-        .build();
-    let options = RoleTransitionOptions {
-        transition_age_limit_years: AgeLimitYears::new(reference.age_limit_years)
-            .expect("positive"),
-        ratio_fallback: Vec::new(),
-    };
-    let request = TransitionMatchRequest::new(&criteria, &options, DeterministicSelection, &());
-    let direct = match_exposure_density(&recs, request).expect("unique ids");
-    let job = MatchJob::new_transition(&recs, 0)
-        .with_ratio(ratio(2))
-        .with_birth_window(window())
-        .with_age_limit(AgeLimitYears::new(reference.age_limit_years).expect("positive"))
-        .with_exact_matches(["sex", "area"])
-        .with_replacement(true)
-        .with_strategy(DeterministicSelection)
-        .run()
-        .expect("a valid job");
-    assert_eq!(direct.outcome.pairs, job.pairs);
-    assert_ne!(direct.controls.len(), 0);
 }
 
 /// A cohort with two units of one id has pairs that name no single unit.

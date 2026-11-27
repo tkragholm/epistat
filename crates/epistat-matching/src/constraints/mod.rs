@@ -1,11 +1,20 @@
-//! Constraints a case and a control must satisfy to be matched, built from
-//! field names and values: equal sex, a birth-date window, a caliper on a
-//! numeric field, being alive or resident on the index date, and the
-//! exclusion of pairs that share a value.
+//! Constraints a case and a control must satisfy to be matched.
+//!
+//! [`Constraint`] is one rule on a pair and [`ConstraintGroup`] a list of
+//! them, as a tuple, an array, a `Vec` or [`Chained`] groups. The rules here
+//! are built from field names and values: equal sex, a birth-date window, a
+//! caliper on a numeric field, being alive or resident on the index date, and
+//! the exclusion of pairs that share a value. [`ExactMatchConstraint`] and
+//! [`CaliperConstraint`] are the rules a job adds for its exact matches and its
+//! distance caliper.
 
 use crate::matching::{
-    CachedSlot, Constraint, ConstraintContext, FieldValueSource, MatchingRecord, RefusesFromDate,
-    ResidenceSpellSource, RoleIndexedRecord, SlotCache, StatusRule, StatusRuleKind, caliper_allows,
+    CachedSlot, FieldValueSource, MatchingRecord, RefusesFromDate, ResidenceSpellSource,
+    RoleIndexedRecord, SlotCache, StatusRule, StatusRuleKind, caliper_allows,
+};
+pub use crate::matching::{
+    CaliperConstraint, Chained, Constraint, ConstraintContext, ConstraintGroup,
+    ExactMatchConstraint,
 };
 use chrono::NaiveDate;
 use std::marker::PhantomData;

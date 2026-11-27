@@ -7,6 +7,12 @@ use chrono::NaiveDate;
 use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{
+    BalanceRecord, ElasticNetLogisticConfig, Estimand, MahalanobisPreparationConfig,
+    PropensityEstimator, PropensityScoreConfig, SubclassificationConfig, cross_validation_folds,
+    prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
+    subclassify_by_propensity_score_map,
+};
+use epistat_matching::{
     GeneticFit, GeneticMatchOptions, GeneticProblem, GeneticSearch, QuickMatchOptions,
     quick_match_subclasses,
 };
@@ -73,7 +79,7 @@ fn elastic_net_rejects_alpha_above_one_and_negative_lambda() {
                     .build(),
             ))
             .build();
-        let r = prepare_propensity_distance_config(&a, &c, &cfg);
+        let r = prepare_propensity_distance_config(&a, &c, &cfg, None);
         assert!(r.is_err(), "alpha {alpha}, lambda {lambda} accepted");
     }
 }
@@ -82,8 +88,8 @@ fn elastic_net_rejects_alpha_above_one_and_negative_lambda() {
 #[test]
 fn a_small_scale_covariate_is_not_dropped_silently() {
     let (a, c) = balance_records(40, |i| 1e-13 * ((i % 5) as f64));
-    let est =
-        prepare_propensity_distance_config(&a, &c, &PropensityScoreConfig::default()).unwrap();
+    let est = prepare_propensity_distance_config(&a, &c, &PropensityScoreConfig::default(), None)
+        .unwrap();
     assert!(
         est.estimate.column_names.iter().any(|n| n == "x"),
         "column x (range 4e-13, not constant) was dropped; columns: {:?}",
@@ -102,8 +108,8 @@ fn an_exactly_constant_covariate_is_dropped_and_reported() {
     };
     let a: Vec<_> = (0..20).filter(|i| i % 2 == 0).map(mk).collect();
     let c: Vec<_> = (0..20).filter(|i| i % 2 == 1).map(mk).collect();
-    let est =
-        prepare_propensity_distance_config(&a, &c, &PropensityScoreConfig::default()).unwrap();
+    let est = prepare_propensity_distance_config(&a, &c, &PropensityScoreConfig::default(), None)
+        .unwrap();
     assert_eq!(est.estimate.dropped_columns, vec!["flat".to_string()]);
     assert!(est.estimate.column_names.iter().any(|n| n == "x"));
 }

@@ -18,7 +18,11 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
-use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, CovariateValue, ElasticNetCvConfig, LambdaRule, PropensityDistancePreparation,
+    PropensityEstimator, PropensityScoreConfig, cross_validation_folds,
+    prepare_propensity_distance_config,
+};
 use epistat_testkit::load_json;
 use r_reference::{Versions, covariate_unit, split_by_group, unit_id as id};
 use serde::{Deserialize, Serialize};
@@ -116,7 +120,7 @@ fn fit_case(case: &Case, rule: LambdaRule) -> PropensityDistancePreparation {
         }),
         ..PropensityScoreConfig::default()
     };
-    prepare_propensity_distance_config(&anchors, &candidates, &config)
+    prepare_propensity_distance_config(&anchors, &candidates, &config, None)
         .expect("cross-validation succeeds")
 }
 

@@ -16,10 +16,11 @@
 use chrono::NaiveDate;
 use epistat_matching::{
     BalanceRecord, BalanceReportOptions, BalanceSummary, BalanceWeights, Cohort, CohortRow,
-    CovariateValue, Estimand, MatchedPair, NumericBalanceTransform, RapidHashMap,
-    SupplementalBalanceCovariates, UnitWeightSet, balance_summary,
+    CovariateValue, Estimand, MatchedPair, NumericBalanceTransform, SupplementalBalanceCovariates,
+    UnitWeightSet, balance_summary,
 };
 use epistat_testkit::{Fingerprint, SplitMix64, on_threads};
+use rapidhash::RapidHashMap;
 use std::collections::HashMap;
 
 const REGIONS: [&str; 4] = ["north", "south", "east", "west"];

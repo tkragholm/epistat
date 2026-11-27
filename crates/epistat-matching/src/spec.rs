@@ -32,22 +32,22 @@ mod wiring;
 pub use wiring::{CardinalityMatch, CardinalitySpec, FitFuncSpec, GeneticSpec, LossSpec};
 
 use crate::Error;
+use crate::TrialMatching;
 use crate::constraints::{AntiExact, GenderMatch, MustBeAlive, MustBeResident, caliper_on_field};
 use crate::matching::{
-    Assignment, CbpsConfig, CbpsEstimand, CbpsMethod, CemBinning, CemRule, CemVariable, Chained,
+    Assignment, CbpsConfig, CbpsMethod, CemBinning, CemRule, CemVariable, Chained,
     CovariateEncodingConfig, CovariateRecord, DeterministicSelection, DistanceConfig,
     ElasticNetCvConfig, ElasticNetLogisticConfig, EuclideanPreparationConfig, EuclideanScale,
-    ExactMatchOutcome, FineBalance, FullMatchConfig, FullMatchOutcome, GeneticOutcome, LambdaRule,
-    LogisticRegressionConfig, MahalanobisCovarianceStrategy, MahalanobisPreparationConfig,
-    MahalanobisTransform, MatchJob, MatchOrder, MatchingRecord, MissingValuePolicy,
-    NearestBirthDateSelection, NearestSelection, OptimalRequest, PairDistanceMatrix,
-    PropensityEstimator, PropensityLink, PropensityScoreConfig, PropensityScoreEstimate,
-    PropensityScoreOutputScale, QuickMatchOptions, QuickMatchOutcome, RandomSelection, Retain,
-    RoleIndexedRecord, Rounds, ScoreTable, SeedMethod, SelectionStrategy, SubclassReferenceGroup,
-    SubclassificationConfig, SubclassificationOutcome, VariableRatio, apply_transposed,
-    cem_k2k_pairs, cem_strata, cem_subclasses, estimate_propensity_and_match,
-    exact_match_subclasses, match_fine_balance, match_full, match_optimal,
-    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+    FineBalance, FullMatchConfig, GeneticOutcome, LambdaRule, LogisticRegressionConfig,
+    MahalanobisCovarianceStrategy, MahalanobisPreparationConfig, MahalanobisTransform, MatchJob,
+    MatchOrder, MatchingRecord, MissingValuePolicy, NearestBirthDateSelection, NearestSelection,
+    OptimalRequest, PairDistanceMatrix, PropensityEstimator, PropensityLink, PropensityScoreConfig,
+    PropensityScoreEstimate, PropensityScoreOutputScale, QuickMatchOptions, RandomSelection,
+    Retain, RoleIndexedRecord, Rounds, ScoreTable, SeedMethod, SelectionStrategy,
+    SubclassReferenceGroup, SubclassedUnits, SubclassificationConfig, SubclassificationOutcome,
+    VariableRatio, apply_transposed, cem_k2k_pairs, cem_strata, cem_subclasses,
+    estimate_propensity_and_match, exact_match_subclasses, match_fine_balance, match_full,
+    match_optimal, prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
     prepare_propensity_distance_config, quick_match_subclasses,
     subclassify_by_propensity_score_map,
 };
@@ -959,11 +959,11 @@ pub enum SpecOutput {
     Trials(Box<TrialOutcome>),
     /// Strata with weights, from the exact method and from coarsened exact
     /// matching without k:k pairing.
-    Exact(Box<ExactMatchOutcome>),
+    Exact(Box<SubclassedUnits>),
     /// Subclasses with weights, from the quick method.
-    Quick(Box<QuickMatchOutcome>),
+    Quick(Box<SubclassedUnits>),
     /// Subclasses with the weights of each estimand, from the full method.
-    Full(Box<FullMatchOutcome>),
+    Full(Box<SubclassedUnits>),
     /// The pairs of genetic matching and the search that found their weights.
     /// The pairs are those of [`SpecOutput::Pairs`], so the outputs and
     /// balance functions that take a [`MatchOutcome`] take them.
@@ -1627,8 +1627,8 @@ fn propensity_config(
         EstimatorSpec::Cbps { over } => PropensityEstimator::Cbps(
             CbpsConfig::builder()
                 .estimand(match estimand {
-                    Estimand::Att => CbpsEstimand::Att,
-                    Estimand::Ate => CbpsEstimand::Ate,
+                    Estimand::Att => Estimand::Att,
+                    Estimand::Ate => Estimand::Ate,
                     Estimand::Atc | Estimand::Atm => {
                         return Err(Error::option(
                             "estimand",
@@ -1731,7 +1731,7 @@ fn build_distance<R: CovariateRecord>(
         },
         DistanceSpec::Propensity { .. } => {
             let config = propensity_config(spec, estimand, seed, caliper, false)?;
-            let prepared = prepare_propensity_distance_config(anchors, candidates, &config)?;
+            let prepared = prepare_propensity_distance_config(anchors, candidates, &config, None)?;
             BuiltDistance {
                 config: Some(prepared.distance_config),
                 propensity: Some(prepared.estimate),
@@ -1821,7 +1821,7 @@ fn run_quick<R: MatchingRecord>(
     candidates: &[R],
     exact: &[String],
     options: &QuickMatchOptions,
-) -> Result<QuickMatchOutcome, Error> {
+) -> Result<SubclassedUnits, Error> {
     let outcome = match config {
         DistanceConfig::PropensityScoreMap { scores, .. } => quick_match_subclasses(
             anchors,
@@ -2659,7 +2659,7 @@ fn run_trials<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     panel: &[TrialPerson<R>],
 ) -> Result<SpecOutput, Error> {
-    let outcome = match_trials(panel, &spec.trials, |pool| {
+    let outcome = match_trials(panel, &spec.trials, &TrialMatching::default(), |pool| {
         let in_trial = MatchSpec {
             seed: trial_seed(spec.seed, pool.period()),
             mode: MatchMode::RiskSet,

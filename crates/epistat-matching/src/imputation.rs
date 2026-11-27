@@ -158,9 +158,14 @@ where
             let estimates = in_set_order(
                 sets.par_iter()
                     .map(|set| {
-                        prepare_propensity_distance_config(set.anchors, set.candidates, config)
-                            .map(|prepared| prepared.estimate)
-                            .map_err(Error::from)
+                        prepare_propensity_distance_config(
+                            set.anchors,
+                            set.candidates,
+                            config,
+                            None,
+                        )
+                        .map(|prepared| prepared.estimate)
+                        .map_err(Error::from)
                     })
                     .collect(),
             )?;

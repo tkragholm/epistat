@@ -14,6 +14,9 @@ use chrono::NaiveDate;
 use common::{Level, Person, Rec, cohort, records, two_pass};
 use epistat_matching::prelude::*;
 use epistat_matching::{DeterministicSelection, NearestBirthDateSelection};
+use epistat_matching::{
+    MatchDiagnostics, MatchWeightMethod, match_weights_from_pairs, pair_weights_from_pairs,
+};
 use std::collections::HashMap;
 
 fn fnv(text: &str) -> u64 {

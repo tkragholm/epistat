@@ -22,8 +22,12 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_matching::DeterministicSelection;
 use epistat_matching::prelude::*;
-use epistat_matching::{DeterministicSelection, RapidHashMap};
+use epistat_matching::{
+    CommonSupport, CommonSupportFailureReason, DistanceConfig, ExclusionReason,
+};
+use rapidhash::RapidHashMap;
 
 use r_reference::{Versions, reference as load_reference, unit_id as id};
 use serde::Deserialize;
@@ -62,7 +66,7 @@ struct Run {
     kept_candidates: BTreeSet<usize>,
 }
 
-fn run(case: &Case, policy: Option<CommonSupport>) -> Run {
+fn job(case: &Case, policy: Option<CommonSupport>) -> Result<MatchOutcome, Error> {
     let birth = NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
     let mut anchors = Vec::new();
     let mut candidates = Vec::new();
@@ -76,15 +80,18 @@ fn run(case: &Case, policy: Option<CommonSupport>) -> Run {
             candidates.push(record);
         }
     }
-    let mut criteria = MatchingCriteria::builder()
-        .match_ratio(candidates.len())
-        .allow_replacement(true)
-        .build();
-    criteria.common_support = policy;
     let config = DistanceConfig::propensity_score_map(scores, None);
-    let request = StandardMatchRequest::new(&criteria, DeterministicSelection, &())
-        .with_distance_config(&config);
-    let outcome = match_standard(&anchors, &candidates, request);
+    MatchJob::new_standard(&anchors, &candidates, 0)
+        .with_ratio(MatchRatio::new(candidates.len()).expect("candidates"))
+        .with_replacement(true)
+        .with_common_support(policy)
+        .with_distance_config(config)
+        .with_strategy(DeterministicSelection)
+        .run()
+}
+
+fn run(case: &Case, policy: Option<CommonSupport>) -> Run {
+    let outcome = job(case, policy).expect("a valid job");
     let index_of = |text: &str| text[1..].parse::<usize>().expect("unit id");
     let kept_anchors = outcome
         .pairs
@@ -282,21 +289,9 @@ fn no_overlap_is_reported() {
         CommonSupport::Control,
         CommonSupport::Both,
     ] {
-        let got = run(case, Some(policy));
-        assert!(
-            got.outcome.pairs.is_empty(),
-            "{policy:?} {:?}",
-            got.outcome.pairs
-        );
         assert_eq!(
-            got.outcome
-                .diagnostics
-                .exclusion_counts
-                .get(&ExclusionReason::CommonSupportFailure(
-                    CommonSupportFailureReason::NoOverlap
-                ))
-                .copied(),
-            Some(1),
+            job(case, Some(policy)).unwrap_err(),
+            Error::CommonSupport(CommonSupportFailureReason::NoOverlap),
             "{policy:?}"
         );
     }
@@ -308,19 +303,12 @@ fn policy_without_scores_is_refused() {
     let birth = NaiveDate::from_ymd_opt(2010, 1, 1).expect("valid date");
     let anchors = vec![BaseRecord::new("a", birth)];
     let candidates = vec![BaseRecord::new("c", birth)];
-    let mut criteria = MatchingCriteria::builder().build();
-    criteria.common_support = Some(CommonSupport::Both);
-    let request = StandardMatchRequest::new(&criteria, DeterministicSelection, &());
-    let outcome = match_standard(&anchors, &candidates, request);
-    assert!(outcome.pairs.is_empty(), "{:?}", outcome.pairs);
+    let outcome = MatchJob::new_standard(&anchors, &candidates, 0)
+        .with_common_support(Some(CommonSupport::Both))
+        .with_strategy(DeterministicSelection)
+        .run();
     assert_eq!(
-        outcome
-            .diagnostics
-            .exclusion_counts
-            .get(&ExclusionReason::CommonSupportFailure(
-                CommonSupportFailureReason::RequiresPropensityScoreMap
-            ))
-            .copied(),
-        Some(1)
+        outcome.unwrap_err(),
+        Error::CommonSupport(CommonSupportFailureReason::RequiresPropensityScoreMap)
     );
 }

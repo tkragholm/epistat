@@ -9,7 +9,9 @@
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
-use epistat_matching::{FineBalance, RapidHashMap, match_fine_balance};
+use epistat_matching::{DistanceConfig, MatchingCriteria, OptimalRequest};
+use epistat_matching::{FineBalance, match_fine_balance};
+use rapidhash::RapidHashMap;
 
 struct Rng(u64);
 

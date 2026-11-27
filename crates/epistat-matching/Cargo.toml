@@ -22,7 +22,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 # Build records from Apache Arrow arrays, see `epistat_matching::arrow`.
 arrow = ["dep:arrow-array"]
 default = []
-reporting = []
 bench-internals = []
 # Small fixtures for tests and benchmarks: `date`, `record` and `test_outcome`.
 test-utils = []
@@ -49,10 +48,6 @@ rayon = "1.11.0"
 rustc-hash = "2"
 serde = { version = "1.0.228", features = ["derive"] }
 thiserror = "2"
-
-[[test]]
-name = "invariants"
-required-features = ["test-utils"]
 
 [dev-dependencies]
 epistat-survival = { path = "../epistat-survival" }

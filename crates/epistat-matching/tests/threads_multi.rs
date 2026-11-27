@@ -11,7 +11,11 @@ use epistat_matching::imputation::{
     CompleteDataDf, ImputationApproach, ImputedSet, estimate_pooled, match_imputed,
 };
 use epistat_matching::multigroup::{VectorMatchSpec, vector_match};
-use epistat_matching::prelude::*;
+use epistat_matching::output::MatchDataOptions;
+use epistat_matching::{
+    BalanceRecord, CovariateValue, MatchingCriteria, NearestSelection, PropensityScoreConfig,
+    estimate_propensity_and_match,
+};
 use epistat_testkit::{POOLS, assert_same_on_pools, load_json};
 use std::collections::BTreeMap;
 

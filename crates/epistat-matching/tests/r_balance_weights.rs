@@ -45,6 +45,11 @@ mod r_reference;
 
 use chrono::NaiveDate;
 use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, BalanceReport, BalanceReportOptions, BalanceSummary, BalanceWeights,
+    CategoricalBalance, CovariateValue, Estimand, MatchDiagnostics, NumericBalance,
+    NumericBalanceTransform, SampleSizeTable, balance_improvement, balance_summary,
+};
 use epistat_testkit::{Tolerance, load_json, na_f64, na_f64_vec};
 use r_reference::{Versions, assert_r_version};
 use serde::Deserialize;

@@ -33,7 +33,10 @@ use epistat_matching::effects::{Clustering, EffectEstimates, EffectSpec, Outcome
 use epistat_matching::imputation::{
     CompleteDataDf, ImputationApproach, ImputedSet, estimate_pooled, match_imputed, pool_effects,
 };
-use epistat_matching::prelude::*;
+use epistat_matching::output::MatchDataOptions;
+use epistat_matching::{
+    BalanceRecord, CovariateValue, MatchingCriteria, NearestSelection, PropensityScoreConfig,
+};
 
 use r_reference::{
     Versions, assert_r_version, covariate_unit, reference as load_reference, split_by_group,

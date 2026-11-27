@@ -51,7 +51,7 @@ use super::codes::{combine_codes, first_appearance_codes, first_missing};
 use super::distance::DistanceConfig;
 use super::distance::DistanceMetric;
 use super::engine::{build_outcome, finalize_estimand_diagnostics};
-use super::exact::{ExactMatchOutcome, subclasses_of_strata, unit_at};
+use super::exact::{SubclassedUnits, subclasses_of_strata, unit_at};
 use super::nearest::MatchOrder;
 use super::records::MatchingRecord;
 use crate::Error;
@@ -339,7 +339,7 @@ pub fn cem_subclasses<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
     variables: &[CemVariable],
-) -> Result<ExactMatchOutcome, Error> {
+) -> Result<SubclassedUnits, Error> {
     coarsen(anchors, candidates, variables).map(|(_, outcome)| outcome)
 }
 
@@ -347,7 +347,7 @@ fn coarsen<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
     variables: &[CemVariable],
-) -> Result<(CemStrata, ExactMatchOutcome), Error> {
+) -> Result<(CemStrata, SubclassedUnits), Error> {
     if variables.is_empty() {
         return Err(Error::NoVariables);
     }

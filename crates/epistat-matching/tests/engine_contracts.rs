@@ -2,8 +2,10 @@
 //! distance, typed exclusion reasons, control counts and fallback ratios.
 
 use chrono::NaiveDate;
+use epistat_matching::MatchOrder;
 use epistat_matching::prelude::*;
-use epistat_matching::{MatchOrder, RapidHashMap};
+use epistat_matching::{Assignment, DistanceConfig, ExclusionReason, InvalidCriteriaReason};
+use rapidhash::RapidHashMap;
 use std::collections::HashSet;
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {

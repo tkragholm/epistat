@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 use chrono::NaiveDate;
-use epistat_matching::prelude::*;
+use epistat_matching::{BalanceRecord, CovariateValue};
 use epistat_testkit::load_json;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;

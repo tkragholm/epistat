@@ -28,6 +28,9 @@ use chrono::NaiveDate;
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::prelude::*;
 use epistat_matching::{
+    BalanceRecord, CovariateValue, DistanceCaliper, DistanceConfig, Estimand, InvalidCriteriaReason,
+};
+use epistat_matching::{
     EuclideanPreparationConfig, EuclideanScale, MahalanobisCovarianceStrategy,
     MahalanobisPreparationConfig, MahalanobisTransform, MatchOrder,
     prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,

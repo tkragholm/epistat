@@ -1003,13 +1003,6 @@ pub(super) fn pair_outcome<R: MatchingRecord>(
     build_outcome(pairs, matched_anchors, anchors.len(), used, diagnostics)
 }
 
-/// Subclasses of an optimal full match, by unit position, with the weights of
-/// each estimand derived from the subclasses, see [`SubclassedUnits`].
-///
-/// Subclasses are numbered from 0 in the order of their first anchor in the
-/// anchor slice.
-pub type FullMatchOutcome = SubclassedUnits;
-
 /// Optimal full matching: subclasses of one anchor with several candidates or
 /// one candidate with several anchors that minimise the sum of the distances
 /// of the matched pairs, within the limits of `config`, as
@@ -1018,8 +1011,8 @@ pub type FullMatchOutcome = SubclassedUnits;
 /// The anchors are the focal group. The limits count candidates per anchor, so
 /// a match for the effect in the controls is made with the controls as anchors.
 /// A unit with no admissible pair is in no subclass. The weights are the
-/// subclass weights of [`FullMatchOutcome`], before MatchIt's rescaling, which
-/// [`FullMatchOutcome::match_data`] applies on request.
+/// subclass weights of [`SubclassedUnits`], before MatchIt's rescaling, which
+/// [`SubclassedUnits::match_data`] applies on request.
 ///
 /// A caliper, an exact stratum or a constraint removes pairs from the problem.
 /// `matchit(method = "full")` also takes calipers, but only when `min.controls`
@@ -1035,7 +1028,7 @@ pub fn match_full<R, G>(
     candidates: &[R],
     request: &OptimalRequest<'_, G>,
     config: &FullMatchConfig,
-) -> Result<FullMatchOutcome, Error>
+) -> Result<SubclassedUnits, Error>
 where
     R: MatchingRecord,
     G: ConstraintGroup<R> + ?Sized,

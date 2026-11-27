@@ -633,25 +633,6 @@ where
             self.mode.id_order,
         ))
     }
-
-    /// Execute role-transition matching and compute balance diagnostics in one call.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::run`].
-    pub fn run_with_balance<B: crate::CovariateRecord>(
-        self,
-        cases: &[B],
-        controls: &[B],
-    ) -> Result<(MatchOutcome, crate::types::BalanceReport), Error>
-    where
-        S: SelectionStrategy<R> + Clone + Send + Sync,
-        P: RiskSetPolicy<R> + Send + Sync,
-    {
-        let outcome = self.run()?;
-        let report = crate::balance_report(cases, controls, &outcome);
-        Ok((outcome, report))
-    }
 }
 
 impl<R: MatchingRecord, S, G, P> MatchJob<StandardMode<'_, R>, R, S, G, P>
@@ -712,24 +693,6 @@ where
                 distance_config: self.mode.distance_config.as_ref(),
             },
         ))
-    }
-
-    /// Execute standard matching and compute balance diagnostics in one call.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::run`].
-    pub fn run_with_balance<B: crate::CovariateRecord>(
-        self,
-        cases: &[B],
-        controls: &[B],
-    ) -> Result<(MatchOutcome, crate::types::BalanceReport), Error>
-    where
-        S: SelectionStrategy<R> + Clone + Send + Sync,
-    {
-        let outcome = self.run()?;
-        let report = crate::balance_report(cases, controls, &outcome);
-        Ok((outcome, report))
     }
 }
 

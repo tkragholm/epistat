@@ -618,10 +618,10 @@ pub enum Error {
     #[error("the outcome {0} is not 0 or 1")]
     NotBinary(f64),
     /// The method does not estimate the estimand asked for.
-    #[error("{method} does not estimate the {estimand:?}")]
+    #[error("{method} does not estimate the {estimand}")]
     UnsupportedEstimand {
         /// The estimand asked for.
-        estimand: crate::types::Estimand,
+        estimand: epistat_core::Estimand,
         /// The method.
         method: &'static str,
     },

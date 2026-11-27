@@ -3,6 +3,9 @@
 
 use epistat_core::{Classify, ErrorKind};
 use epistat_matching::prelude::*;
+use epistat_matching::{
+    BalanceRecord, BalanceReportOptions, BalanceWeights, CovariateValue, Estimand, balance_summary,
+};
 use epistat_stats::weighted::effective_sample_size;
 use std::collections::HashMap;
 
