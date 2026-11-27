@@ -157,7 +157,7 @@ pub use event_dependent::{
 pub use sample_size::{SampleSizeSpec, sample_size};
 pub use semiparametric::{SemiparametricPieces, semiparametric_pieces};
 
-use epistat_linalg::{Mat, MatRef};
+use epistat_linalg::{Mat, MatRef, congruence};
 
 use crate::error::{Error, Result};
 use crate::ldl;
@@ -615,7 +615,7 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
     result.standard_errors = diagonal_roots(&result.covariance, n_cols);
     if opts.robust {
         let meat = blocked(data, x, &cols, &persons, &beta, true).meat;
-        let sandwich = sandwich(&inverse, &meat, p);
+        let sandwich = sandwich(&inverse, &meat, p)?;
         let mut full = vec![None; n_cols * n_cols];
         for (a, &ca) in cols.iter().enumerate() {
             for (b, &cb) in cols.iter().enumerate() {
@@ -751,29 +751,13 @@ fn newton_step(sums: &Sums, p: usize, tolerance: f64) -> Result<Vec<f64>> {
     Ok(step)
 }
 
-fn sandwich(inverse: &[f64], meat: &[f64], p: usize) -> Vec<f64> {
-    let mut half = vec![0.0; p * p];
-    for i in 0..p {
-        for j in 0..p {
-            let mut s = 0.0;
-            for k in 0..p {
-                s += inverse[i * p + k] * meat[k * p + j];
-            }
-            half[i * p + j] = s;
-        }
-    }
-    let mut out = vec![0.0; p * p];
-    for i in 0..p {
-        for j in 0..=i {
-            let mut s = 0.0;
-            for k in 0..p {
-                s += half[i * p + k] * inverse[k * p + j];
-            }
-            out[i * p + j] = s;
-            out[j * p + i] = s;
-        }
-    }
-    out
+/// The sandwich `H M H'` of the inverse information `H` and the meat `M`,
+/// both row-major `p x p`, as linalg's `congruence` forms it.
+fn sandwich(inverse: &[f64], meat: &[f64], p: usize) -> Result<Vec<f64>> {
+    let h = Mat::from_fn(p, p, |i, j| inverse[i * p + j]);
+    let m = Mat::from_fn(p, p, |i, j| meat[i * p + j]);
+    let out = congruence(h.as_ref(), m.as_ref())?;
+    Ok((0..p * p).map(|k| out[(k / p, k % p)]).collect())
 }
 
 /// A risk window: the times from `from` to `to` after an exposure date, as
@@ -1185,12 +1169,12 @@ fn day_of(t: f64) -> i64 {
     reason = "day counts are far below 2^53 and seasons are few"
 )]
 fn season_boundaries(cal: &Calendar<'_>, origin: f64, start: f64, end: f64) -> Vec<(f64, u32)> {
-    let first_year = crate::crossover::civil_from_days(day_of(origin + start)).0 - 1;
-    let last_year = crate::crossover::civil_from_days(day_of(origin + end)).0;
+    let first_year = epistat_core::day::to_civil(day_of(origin + start)).0 - 1;
+    let last_year = epistat_core::day::to_civil(day_of(origin + end)).0;
     let mut out = Vec::new();
     for year in first_year..=last_year {
         for (s, start_day) in cal.season_starts.iter().enumerate() {
-            let day = crate::crossover::days_from_civil(
+            let day = epistat_core::day::from_civil(
                 year,
                 i64::from(start_day.month),
                 i64::from(start_day.day),
@@ -1439,11 +1423,11 @@ mod tests {
     fn seasons_and_calendar_periods_cut_on_the_calendar() {
         // Time is age in days from a birth on 2000-01-01, day 10_957. Seasons
         // start on 1 March and 1 September; a calendar cut on 2001-01-01.
-        let birth = crate::crossover::days_from_civil(2000, 1, 1) as f64;
-        let march = crate::crossover::days_from_civil(2000, 3, 1) as f64 - birth;
-        let september = crate::crossover::days_from_civil(2000, 9, 1) as f64 - birth;
-        let new_year = crate::crossover::days_from_civil(2001, 1, 1) as f64;
-        let march_next = crate::crossover::days_from_civil(2001, 3, 1) as f64 - birth;
+        let birth = epistat_core::day::from_civil(2000, 1, 1) as f64;
+        let march = epistat_core::day::from_civil(2000, 3, 1) as f64 - birth;
+        let september = epistat_core::day::from_civil(2000, 9, 1) as f64 - birth;
+        let new_year = epistat_core::day::from_civil(2001, 1, 1) as f64;
+        let march_next = epistat_core::day::from_civil(2001, 3, 1) as f64 - birth;
         let spec = PieceSpec {
             start: &[10.0],
             end: &[500.0],
