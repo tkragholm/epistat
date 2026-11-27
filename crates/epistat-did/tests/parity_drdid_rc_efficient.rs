@@ -4,7 +4,9 @@
 
 use epistat_testkit::load_json;
 
-use epistat_did::{DrDidConfig, DrDidRepeatedObservation, estimate_drdid_repeated_efficient};
+use epistat_did::TwoPeriodData;
+use epistat_did::two_period::{self, Estimator, NuisanceOptions, TwoPeriod, TwoPeriodOptions};
+use epistat_linalg::MatRef;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -20,20 +22,25 @@ struct Cell {
     lpop: Vec<f64>,
 }
 
-fn rows(cell: &Cell) -> Vec<DrDidRepeatedObservation> {
-    (0..cell.y.len())
-        .map(|i| DrDidRepeatedObservation {
-            treated: cell.d[i] > 0.5,
-            post_period: cell.post[i] > 0.5,
-            outcome: cell.y[i],
-            weight: 1.0,
-            // The intercept is NOT passed here. Unlike `estimate_drdid_panel`,
-            // whose covariates are a finished design matrix, the repeated
-            // estimators prepend one themselves (`feature_count = covariates + 1`).
-            // R was given cbind(1, lpop) to match.
-            covariates: vec![cell.lpop[i]],
-        })
-        .collect()
+/// The cell's fit by `estimator`; the estimator adds the intercept, and R
+/// was given `cbind(1, lpop)` to match.
+fn fit(cell: &Cell, estimator: Estimator, ridge: f64) -> TwoPeriod {
+    let treated: Vec<bool> = cell.d.iter().map(|&v| v > 0.5).collect();
+    let post: Vec<bool> = cell.post.iter().map(|&v| v > 0.5).collect();
+    let data = TwoPeriodData::repeated_cross_section(&treated, &post, &cell.y)
+        .covariates(MatRef::from_column_major_slice(&cell.lpop, cell.y.len(), 1))
+        .build()
+        .expect("data");
+    let options = TwoPeriodOptions {
+        estimator,
+        nuisance: NuisanceOptions {
+            ridge,
+            ..NuisanceOptions::default()
+        },
+        ..TwoPeriodOptions::default()
+    };
+    two_period::estimate(&data, &options)
+        .unwrap_or_else(|e| panic!("cell ({}, {}): {e}", cell.group, cell.time))
 }
 
 #[test]
@@ -46,16 +53,11 @@ fn locally_efficient_rc_matches_drdid_rc() {
     let mut worst_influence = 0.0_f64;
 
     for cell in &cells {
-        let fit = estimate_drdid_repeated_efficient(
-            &rows(cell),
-            DrDidConfig::builder().ridge(0.0).build(),
-        )
-        .unwrap_or_else(|e| panic!("cell ({}, {}): {e}", cell.group, cell.time));
-
-        worst_att = worst_att.max((fit.att - cell.att).abs());
-        worst_se = worst_se.max((fit.se - cell.se).abs());
-        assert_eq!(fit.influence_function.len(), cell.inffunc.len());
-        for (ours, theirs) in fit.influence_function.iter().zip(&cell.inffunc) {
+        let fit = fit(cell, Estimator::DoublyRobust, 0.0);
+        worst_att = worst_att.max((fit.estimate.estimate - cell.att).abs());
+        worst_se = worst_se.max((fit.estimate.se.expect("se") - cell.se).abs());
+        assert_eq!(fit.influence.n_units(), cell.inffunc.len());
+        for (ours, theirs) in fit.influence.column(0).iter().zip(&cell.inffunc) {
             worst_influence = worst_influence.max((ours - theirs).abs());
         }
     }
@@ -80,21 +82,23 @@ fn the_two_rc_estimators_differ_only_in_precision() {
 
     let mut differed = 0_usize;
     for cell in &cells {
-        let observations = rows(cell);
-        let config = DrDidConfig::builder().build();
-        let efficient = estimate_drdid_repeated_efficient(&observations, config).expect("eff");
-        let traditional = epistat_did::estimate_drdid_repeated_cross_section(&observations, config)
-            .expect("trad");
+        let ridge = NuisanceOptions::default().ridge;
+        let efficient = fit(cell, Estimator::DoublyRobust, ridge);
+        let traditional = fit(cell, Estimator::TraditionalDoublyRobust, ridge);
+        let (efficient_se, traditional_se) = (
+            efficient.estimate.se.expect("se"),
+            traditional.estimate.se.expect("se"),
+        );
 
         assert!(
-            (efficient.att - traditional.att).abs() < 1e-8,
+            (efficient.estimate.estimate - traditional.estimate.estimate).abs() < 1e-8,
             "({}, {}) point estimates should agree: {} vs {}",
             cell.group,
             cell.time,
-            efficient.att,
-            traditional.att
+            efficient.estimate.estimate,
+            traditional.estimate.estimate
         );
-        if (efficient.se - traditional.se).abs() / traditional.se > 1e-3 {
+        if (efficient_se - traditional_se).abs() / traditional_se > 1e-3 {
             differed += 1;
         }
     }

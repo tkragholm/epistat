@@ -22,9 +22,9 @@
 //! outcome, and a column that is a combination of kept ones gives the same
 //! fitted values without it. R's `did` returns `NA` for the cell instead.
 //!
-//! [`independent_design_columns`] applies the same rule for a caller, either
-//! per arm, as the panel estimator does, or on the pooled rows, which is a
-//! weaker test. A column that passes the pooled test can still fail within one
+//! [`crate::two_period::nuisance::independent_columns`] applies the same rule
+//! for a caller, either per arm, as the panel estimator does, or on the pooled
+//! rows, which is a weaker test. A column that passes the pooled test can still fail within one
 //! arm, and the estimator then drops it as well.
 
 use epistat_linalg::MatRef;
@@ -34,8 +34,9 @@ use epistat_core::InputError;
 use epistat_linalg::Error as LinalgError;
 
 /// The rows on which a design column has to be identified to be kept.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DesignPruning<'a> {
+pub(crate) enum DesignPruning<'a> {
     /// Within each arm separately, `treated` giving each row's arm. This is
     /// the rule the panel estimator applies to every fit.
     PerArm {
@@ -47,14 +48,14 @@ pub enum DesignPruning<'a> {
 }
 
 /// A design reduced to the columns every group can identify.
-pub(super) struct PrunedDesign {
-    pub design_flat: Vec<f64>,
-    pub feature_count: usize,
+pub(crate) struct PrunedDesign {
+    pub(crate) design_flat: Vec<f64>,
+    pub(crate) feature_count: usize,
     /// How many of the caller's columns were dropped. Zero on a full-rank
     /// design, where `design_flat` is the input unchanged.
-    pub dropped: usize,
+    pub(crate) dropped: usize,
     /// One flag per input column, true where the column was kept.
-    pub kept: Vec<bool>,
+    pub(crate) kept: Vec<bool>,
 }
 
 /// The relative residual below which a column counts as dependent: the share
@@ -83,7 +84,8 @@ pub(super) const DEPENDENCE_TOLERANCE: f64 = 1e-8;
 /// [`DrDidError::InconsistentCovariateCount`] when `design_flat`, `weights` or
 /// the arm flags do not match the row count, and [`DrDidError::InvalidConfig`]
 /// for a `feature_count` of zero or a negative or non-finite `tolerance`.
-pub fn independent_design_columns(
+#[cfg(test)]
+pub(crate) fn independent_design_columns(
     design_flat: &[f64],
     feature_count: usize,
     weights: &[f64],
@@ -127,7 +129,7 @@ pub fn independent_design_columns(
 ///
 /// `group` labels each row; `weights` are the rows' sampling weights. The
 /// intercept is always kept.
-pub(super) fn prune_design(
+pub(crate) fn prune_design(
     design_flat: &[f64],
     feature_count: usize,
     group: &[usize],

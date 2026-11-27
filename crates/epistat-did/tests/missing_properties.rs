@@ -2,18 +2,33 @@
 //! the complete-data case against the panel DR-DiD estimator, clusters,
 //! cross-fitting, the simulation design of the paper, and the errors.
 
+use epistat_did::two_period::{self, Estimator, NuisanceOptions, TwoPeriodOptions, nuisance};
 use epistat_did::{
-    DrDidConfig, DrDidObservation, MissingAssumption, MissingConfig, MissingError, MissingFolds,
-    MissingModels, MissingPreData, MissingPredictions, PanelFlatInput, att_missing_pre,
-    att_missing_pre_from_predictions, estimate_drdid_panel, fit_drdid_panel_nuisance,
+    MissingAssumption, MissingConfig, MissingError, MissingFolds, MissingModels, MissingPreData,
+    MissingPredictions, TwoPeriodData, att_missing_pre, att_missing_pre_from_predictions,
     missing_cross_fit_folds,
 };
 use epistat_inference::Clusters;
 use epistat_linalg::Mat;
+use epistat_linalg::MatRef;
 use epistat_rng::Stream;
 use epistat_testkit::assert_same_on_threads;
 
 const U: f64 = f64::EPSILON / 2.0;
+
+/// The panel doubly robust ATT of `data`.
+fn dr_panel(data: &TwoPeriodData<'_>, nuisance: NuisanceOptions) -> (f64, Vec<f64>) {
+    let fit = two_period::estimate(
+        data,
+        &TwoPeriodOptions {
+            estimator: Estimator::DoublyRobust,
+            nuisance,
+            ..TwoPeriodOptions::default()
+        },
+    )
+    .unwrap();
+    (fit.estimate.estimate, fit.influence.column(0).to_vec())
+}
 
 fn expit(x: f64) -> f64 {
     1.0 / (1.0 + (-x).exp())
@@ -231,32 +246,16 @@ fn complete_data_with_a_saturated_covariate_is_the_panel_dr_estimate() {
     for i in 0..n {
         design.extend_from_slice(&[1.0, d.dummies[(i, 0)], d.dummies[(i, 1)]]);
     }
-    let config = DrDidConfig {
+    let nuisance_options = NuisanceOptions {
         ridge: 0.0,
-        ..DrDidConfig::default()
+        ..NuisanceOptions::default()
     };
-    let rows: Vec<DrDidObservation> = (0..n)
-        .map(|i| {
-            DrDidObservation::builder()
-                .treated(d.treated[i])
-                .delta_outcome(delta[i])
-                .covariates(design[3 * i..3 * i + 3].to_vec())
-                .build()
-        })
-        .collect();
-    let dr = estimate_drdid_panel(&rows, config).unwrap();
-    let ones = vec![1.0; n];
-    let fit = fit_drdid_panel_nuisance(
-        PanelFlatInput {
-            treated: &d.treated,
-            delta_outcome: &delta,
-            weight: &ones,
-            design_matrix_flat: &design,
-            feature_count: 3,
-        },
-        config,
-    )
-    .unwrap();
+    let data = TwoPeriodData::panel(&d.treated, &delta)
+        .design(MatRef::from_row_major_slice(&design, n, 3))
+        .build()
+        .unwrap();
+    let (dr, dr_influence) = dr_panel(&data, nuisance_options);
+    let fit = nuisance::fit(&data, &nuisance_options).unwrap();
     // Its errors, from its own nuisance fit. With weights constant within a
     // stratum and saturated models, the estimation terms of its influence
     // function reduce to multiples of `C`, the weighted mean of the control
@@ -294,11 +293,7 @@ fn complete_data_with_a_saturated_covariate_is_the_panel_dr_estimate() {
         })
         .collect();
     let theta_dr_bound = dm_dr_max + 2.0 * c_mean.abs() + rounding;
-    assert!(
-        (dr.att - theta).abs() <= theta_dr_bound,
-        "{} vs {theta}",
-        dr.att
-    );
+    assert!((dr - theta).abs() <= theta_dr_bound, "{dr} vs {theta}");
     for i in 0..n {
         let c = d.stratum[i];
         let p = fit.propensity_scores[i];
@@ -312,9 +307,9 @@ fn complete_data_with_a_saturated_covariate_is_the_panel_dr_estimate() {
         } + ps
             + rounding;
         assert!(
-            (dr.influence_function[i] - phi[i]).abs() <= bound,
+            (dr_influence[i] - phi[i]).abs() <= bound,
             "unit {i}: {} vs {}, bound {bound:e}",
-            dr.influence_function[i],
+            dr_influence[i],
             phi[i]
         );
     }
@@ -344,25 +339,13 @@ fn complete_data_is_the_panel_dr_estimate_with_unnormalised_control_weights() {
         design.push(1.0);
         design.extend((0..4).map(|j| sim.z[(i, j)]));
     }
+    let data = TwoPeriodData::panel(&sim.treated, &delta)
+        .design(MatRef::from_row_major_slice(&design, n, 5))
+        .build()
+        .unwrap();
+    let fit = nuisance::fit(&data, &NuisanceOptions::default()).unwrap();
+    let (dr, _) = dr_panel(&data, NuisanceOptions::default());
     let ones = vec![1.0; n];
-    let input = PanelFlatInput {
-        treated: &sim.treated,
-        delta_outcome: &delta,
-        weight: &ones,
-        design_matrix_flat: &design,
-        feature_count: 5,
-    };
-    let config = DrDidConfig::default();
-    let fit = fit_drdid_panel_nuisance(input, config).unwrap();
-    let rows: Vec<DrDidObservation> = (0..n)
-        .map(|i| DrDidObservation {
-            treated: sim.treated[i],
-            delta_outcome: delta[i],
-            weight: 1.0,
-            covariates: design[5 * i..5 * (i + 1)].to_vec(),
-        })
-        .collect();
-    let dr = estimate_drdid_panel(&rows, config).unwrap();
     assert!(
         fit.propensity_scores.iter().all(|&p| p < 0.995),
         "no trimming"
@@ -408,9 +391,9 @@ fn complete_data_is_the_panel_dr_estimate_with_unnormalised_control_weights() {
         .map(|i| resid[i].abs() * (1.0 + w[i]) + delta[i].abs() + sim.y1[i].abs())
         .fold(0.0, f64::max);
     let bound = 16.0 * n as f64 * U * size * n as f64 / n1;
-    let expected = dr.att + c * (1.0 - w_sum / n1);
+    let expected = dr + c * (1.0 - w_sum / n1);
     assert!(
-        (mine.att - dr.att).abs() > 1e3 * bound,
+        (mine.att - dr).abs() > 1e3 * bound,
         "the weightings differ here"
     );
     assert!(

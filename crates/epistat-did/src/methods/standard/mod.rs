@@ -1,8 +1,9 @@
-use crate::inference::{normal_interval, validate_confidence_level};
-use crate::types::{
-    CellSummary, DidCell, DidConfig, DidError, DidEstimate, DidInputSummary, PanelObservation,
-    TimePeriod, TreatmentGroup,
-};
+//! The canonical 2x2 difference in means, behind
+//! [`two_period::two_by_two`](crate::two_period::two_by_two).
+
+use crate::error::Error;
+use crate::inference::normal_interval;
+use crate::types::{CellSummary, DidCell, DidInputSummary, TimePeriod, TreatmentGroup};
 
 #[derive(Debug, Clone, Copy, Default)]
 struct CellStats {
@@ -22,11 +23,12 @@ impl CellStats {
         self.outcome_sq_w = (weight * outcome).mul_add(outcome, self.outcome_sq_w);
     }
 
-    fn validate_non_empty(self, cell: DidCell) -> Result<Self, DidError> {
+    fn validate_non_empty(self, cell: DidCell) -> Result<Self, Error> {
         if self.weight > 0.0 {
             Ok(self)
         } else {
-            Err(DidError::EmptyCell { cell })
+            let (treated, post) = cell.flags();
+            Err(Error::EmptyCell { treated, post })
         }
     }
 
@@ -56,34 +58,25 @@ impl CellStats {
     }
 }
 
-/// Summarize panel input into canonical 2x2 diagnostics.
-///
-/// # Errors
-///
-/// Returns [`DidError`] when any panel cell is empty or invalid weights are supplied.
-pub fn summarize_two_by_two(
-    observations: &[PanelObservation],
-) -> Result<DidInputSummary, DidError> {
+/// The four cells of a repeated cross-section: rows `(treated, post,
+/// outcome, weight)`, validated by the caller.
+pub(crate) fn summarize_two_by_two(
+    rows: impl Iterator<Item = (bool, bool, f64, f64)>,
+) -> Result<DidInputSummary, Error> {
     let mut treated_pre = CellStats::default();
     let mut treated_post = CellStats::default();
     let mut control_pre = CellStats::default();
     let mut control_post = CellStats::default();
 
-    for row in observations {
-        if !row.weight.is_finite() || row.weight <= 0.0 {
-            return Err(DidError::InvalidWeight { value: row.weight });
-        }
-        if !row.outcome.is_finite() {
-            return Err(DidError::InvalidOutcome { value: row.outcome });
-        }
+    for (treated, post, outcome, weight) in rows {
         match DidCell::from_parts(
-            TreatmentGroup::from_bool(row.treated),
-            TimePeriod::from_bool(row.post_period),
+            TreatmentGroup::from_bool(treated),
+            TimePeriod::from_bool(post),
         ) {
-            DidCell::TreatedPre => treated_pre.add(row.weight, row.outcome),
-            DidCell::TreatedPost => treated_post.add(row.weight, row.outcome),
-            DidCell::ControlPre => control_pre.add(row.weight, row.outcome),
-            DidCell::ControlPost => control_post.add(row.weight, row.outcome),
+            DidCell::TreatedPre => treated_pre.add(weight, outcome),
+            DidCell::TreatedPost => treated_post.add(weight, outcome),
+            DidCell::ControlPre => control_pre.add(weight, outcome),
+            DidCell::ControlPost => control_post.add(weight, outcome),
         }
     }
 
@@ -100,34 +93,12 @@ pub fn summarize_two_by_two(
     })
 }
 
-/// Estimate ATT for a canonical 2x2 `DiD` setup.
-///
-/// # Errors
-///
-/// Returns [`DidError`] when any panel cell is empty or when invalid weights/config are supplied.
-pub fn estimate_att_two_by_two(
-    observations: &[PanelObservation],
-    config: DidConfig,
-) -> Result<DidEstimate, DidError> {
-    let summary = summarize_two_by_two(observations)?;
-    estimate_att_from_summary(summary, config)
-}
-
-/// Estimate ATT from pre-computed 2x2 input diagnostics.
-///
-/// # Errors
-///
-/// Returns [`DidError`] when confidence-level configuration is invalid.
-pub fn estimate_att_from_summary(
+/// The 2x2 ATT of the four cells, with its standard error and the normal
+/// interval at `confidence_level`.
+pub(crate) fn estimate_att_from_summary(
     summary: DidInputSummary,
-    config: DidConfig,
-) -> Result<DidEstimate, DidError> {
-    if !validate_confidence_level(config.confidence_level) {
-        return Err(DidError::InvalidConfidenceLevel {
-            value: config.confidence_level,
-        });
-    }
-
+    confidence_level: f64,
+) -> (f64, f64, (f64, f64)) {
     let att = (summary.treated_post.mean_outcome - summary.treated_pre.mean_outcome)
         - (summary.control_post.mean_outcome - summary.control_pre.mean_outcome);
     let se = ((summary.treated_pre.variance / summary.treated_pre.effective_n)
@@ -135,12 +106,5 @@ pub fn estimate_att_from_summary(
         + (summary.control_pre.variance / summary.control_pre.effective_n)
         + (summary.control_post.variance / summary.control_post.effective_n))
         .sqrt();
-
-    let (ci_low, ci_high) = normal_interval(att, se, config.confidence_level);
-    Ok(DidEstimate {
-        att,
-        se,
-        ci_low,
-        ci_high,
-    })
+    (att, se, normal_interval(att, se, confidence_level))
 }

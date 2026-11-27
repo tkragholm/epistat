@@ -12,7 +12,6 @@
 //!   Applications*.
 //! - Sant'Anna, P. H. C. and Xu, L. (2026). `DiD_CC`.
 
-use epistat_linalg::SolveLstsq;
 use epistat_linalg::{Mat, MatRef};
 use std::collections::HashMap;
 
@@ -445,9 +444,11 @@ fn solve_local_qr_lstsq(
         weighted_design_flat[row * local_param_count + col]
     });
     let weighted_outcome_mat = Mat::from_fn(row_count, 1, |row, _| weighted_outcome[row]);
-    let solution = weighted_design
-        .col_piv_qr()
-        .solve_lstsq(&weighted_outcome_mat);
+    let solution = epistat_linalg::solve::least_squares(
+        weighted_design.as_ref(),
+        weighted_outcome_mat.as_ref(),
+    )
+    .map_err(|_| "local linear system cannot be solved")?;
 
     let mut out = vec![0.0; local_param_count];
     for row in 0..local_param_count {

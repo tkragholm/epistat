@@ -38,11 +38,9 @@ use epistat_did::att_gt::{
     self, Aggte, AggteOptions, AggteType, AggteWeights, AttGt, AttGtOptions, BasePeriod,
     ComparisonGroup, FitFailure, NuisanceOptions, SkipReason, UnbalancedPanel,
 };
-use epistat_did::{
-    DesignPruning, DrDidConfig, DrDidObservation, PanelFlatInput, StaggeredPanel, did_cluster_sums,
-    estimate_drdid_panel, fit_drdid_panel_nuisance, fit_drdid_panel_propensity_coefficients,
-    independent_design_columns,
-};
+use epistat_did::two_period::nuisance::{self, Pruning};
+use epistat_did::two_period::{self, Estimator, TwoPeriodOptions};
+use epistat_did::{StaggeredPanel, TwoPeriodData, did_cluster_sums};
 use epistat_inference::Clusters;
 use epistat_linalg::MatRef;
 use epistat_testkit::{Fingerprint, SplitMix64};
@@ -464,16 +462,16 @@ fn aggregations(out: &mut Vec<(&'static str, u64)>, fitted: &AttGt, clustered: &
     out.push(("cluster_sums", h.finish()));
 }
 
-fn drdid_config() -> DrDidConfig {
-    DrDidConfig {
-        confidence_level: CONFIDENCE,
+/// Study I's nuisance settings: propensity clip 1e-6, ridge 1e-8, 200
+/// iterations to 1e-8, and the legacy repeated cross-section computation,
+/// which the panel ignores.
+fn nuisance_options() -> NuisanceOptions {
+    NuisanceOptions {
         propensity_clip: 1e-6,
         ridge: 1e-8,
-        max_iter: 200,
-        tol: 1e-8,
-        bootstrap_reps: 1,
+        max_iterations: 200,
+        tolerance: 1e-8,
         legacy_repeated_cross_section: true,
-        ..DrDidConfig::default()
     }
 }
 
@@ -503,64 +501,62 @@ fn pairwise(out: &mut Vec<(&'static str, u64)>, rows: &[Row]) {
                 ));
             }
         }
-        let observations: Vec<DrDidObservation> = frame
-            .iter()
-            .map(
-                |&(treated, delta_outcome, weight, covariates, _)| DrDidObservation {
-                    treated,
-                    delta_outcome,
-                    weight,
-                    covariates: covariates.to_vec(),
-                },
-            )
+        let treated: Vec<bool> = frame.iter().map(|row| row.0).collect();
+        let delta: Vec<f64> = frame.iter().map(|row| row.1).collect();
+        let weight: Vec<f64> = frame.iter().map(|row| row.2).collect();
+        let n = frame.len();
+        // Column-major, three columns.
+        let covariates: Vec<f64> = (0..3)
+            .flat_map(|j| frame.iter().map(move |row| row.3[j]))
             .collect();
-        let fitted = estimate_drdid_panel(
-            &observations,
-            DrDidConfig {
-                bootstrap_seed: 20_260_819,
-                ..drdid_config()
+        let covariates = MatRef::from_column_major_slice(&covariates, n, 3);
+
+        // The kernels' two-period call passes the covariates as the finished
+        // design, without an intercept.
+        let data = TwoPeriodData::panel(&treated, &delta)
+            .weights(&weight)
+            .design(covariates)
+            .build()
+            .expect("two-period data");
+        let fitted = two_period::estimate(
+            &data,
+            &TwoPeriodOptions {
+                estimator: Estimator::DoublyRobust,
+                nuisance: nuisance_options(),
+                level: Level::confidence(CONFIDENCE).expect("level"),
+                bootstrap: Some(Bootstrap::new(1, 20_260_819)),
             },
         )
         .expect("two-period estimate");
-        h_att.f(fitted.att);
-        h_att.f(fitted.se);
-        h_att.f(fitted.ci_low);
-        h_att.f(fitted.ci_high);
-        h_att.word(fitted.treated_n as u64);
-        h_att.word(fitted.control_n as u64);
+        let estimate = fitted.estimate;
+        h_att.f(estimate.estimate);
+        h_att.o(estimate.se);
+        h_att.o(estimate.lower());
+        h_att.o(estimate.upper());
+        h_att.word(fitted.n_treated as u64);
+        h_att.word(fitted.n_control as u64);
         h_att.f(fitted.total_weight);
-        h_att.fs(&fitted.influence_function);
-        h_att.word(fitted.design_columns_dropped as u64);
+        h_att.fs(fitted.influence.column(0));
+        h_att.word(fitted.columns_dropped as u64);
         let families: Vec<u32> = frame.iter().map(|row| row.4).collect();
         h_att.fs(&did_cluster_sums(
-            &fitted.influence_function,
+            fitted.influence.column(0),
             &Clusters::from_labels(&families),
         )
         .expect("sums"));
 
-        // `kernels::did::nuisance`: the design with an intercept, row-major.
-        let treated: Vec<bool> = frame.iter().map(|row| row.0).collect();
-        let delta: Vec<f64> = frame.iter().map(|row| row.1).collect();
-        let weight: Vec<f64> = frame.iter().map(|row| row.2).collect();
-        let design: Vec<f64> = frame
-            .iter()
-            .flat_map(|row| [1.0, row.3[0], row.3[1], row.3[2]])
-            .collect();
-        let nuisance_config = DrDidConfig {
-            propensity_clip: 1e-6,
-            ridge: 1e-8,
-            max_iter: 200,
-            tol: 1e-8,
-            ..DrDidConfig::default()
+        // `kernels::did::nuisance`: the covariates, with the intercept the
+        // estimators add.
+        let nuisance_settings = NuisanceOptions {
+            legacy_repeated_cross_section: false,
+            ..nuisance_options()
         };
-        let input = || PanelFlatInput {
-            treated: &treated,
-            delta_outcome: &delta,
-            weight: &weight,
-            design_matrix_flat: &design,
-            feature_count: 4,
-        };
-        let fit = fit_drdid_panel_nuisance(input(), nuisance_config).expect("nuisance");
+        let data = TwoPeriodData::panel(&treated, &delta)
+            .weights(&weight)
+            .covariates(covariates)
+            .build()
+            .expect("two-period data");
+        let fit = nuisance::fit(&data, &nuisance_settings).expect("nuisance");
         fit.kept_columns
             .iter()
             .for_each(|&kept| h_nuisance.word(u64::from(kept)));
@@ -572,15 +568,14 @@ fn pairwise(out: &mut Vec<(&'static str, u64)>, rows: &[Row]) {
         h_nuisance.fs(&fit.outcome_predictions);
         h_nuisance.word(fit.iterations as u64);
         h_nuisance.word(u64::from(fit.converged));
-        let zeros = vec![0.0; treated.len()];
-        let propensity = fit_drdid_panel_propensity_coefficients(
-            PanelFlatInput {
-                delta_outcome: &zeros,
-                ..input()
-            },
-            nuisance_config,
-        )
-        .expect("propensity");
+        let zeros = vec![0.0; n];
+        let zero_change = TwoPeriodData::panel(&treated, &zeros)
+            .weights(&weight)
+            .covariates(covariates)
+            .build()
+            .expect("two-period data");
+        let propensity =
+            nuisance::propensity(&zero_change, &nuisance_settings).expect("propensity");
         propensity
             .kept_columns
             .iter()
@@ -588,8 +583,7 @@ fn pairwise(out: &mut Vec<(&'static str, u64)>, rows: &[Row]) {
         h_nuisance.fs(&propensity.coefficients);
         h_nuisance.word(propensity.iterations as u64);
         h_nuisance.word(u64::from(propensity.converged));
-        let kept = independent_design_columns(&design, 4, &weight, DesignPruning::Pooled, 1e-8)
-            .expect("columns");
+        let kept = nuisance::independent_columns(&data, Pruning::Pooled, 1e-8).expect("columns");
         for kept in kept {
             h_nuisance.word(u64::from(kept));
         }

@@ -17,11 +17,10 @@
 //! the same bound applies to it relative to its own size; it is checked
 //! against `1e-9`.
 
-use epistat_did::{
-    DrDidConfig, DrDidObservation, DrDidRepeatedObservation, estimate_drdid_repeated_cross_section,
-    estimate_ipw_did_panel, estimate_ipw_did_repeated_cross_section, estimate_or_did_panel,
-    estimate_or_did_repeated_cross_section,
-};
+use epistat_core::Bootstrap;
+use epistat_did::TwoPeriodData;
+use epistat_did::two_period::{self, Estimator, NuisanceOptions, TwoPeriod, TwoPeriodOptions};
+use epistat_linalg::MatRef;
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -66,26 +65,33 @@ struct Reference {
 const ESTIMATE_TOLERANCE: f64 = 1e-10;
 const INFLUENCE_TOLERANCE: f64 = 1e-9;
 
-fn config() -> DrDidConfig {
-    DrDidConfig::builder().ridge(0.0).build()
+fn options(estimator: Estimator) -> TwoPeriodOptions {
+    TwoPeriodOptions {
+        estimator,
+        nuisance: NuisanceOptions {
+            ridge: 0.0,
+            ..NuisanceOptions::default()
+        },
+        ..TwoPeriodOptions::default()
+    }
 }
 
-fn check(label: &str, fit: &epistat_did::DrDidEstimate, reference: &Fit) {
+fn check(label: &str, fit: &TwoPeriod, reference: &Fit) {
+    let (att, se) = (fit.estimate.estimate, fit.estimate.se.expect("se"));
     assert!(
-        (fit.att - reference.att).abs() < ESTIMATE_TOLERANCE,
-        "{label} att {} vs R {}",
-        fit.att,
+        (att - reference.att).abs() < ESTIMATE_TOLERANCE,
+        "{label} att {att} vs R {}",
         reference.att
     );
     assert!(
-        (fit.se - reference.se).abs() < ESTIMATE_TOLERANCE,
-        "{label} se {} vs R {}",
-        fit.se,
+        (se - reference.se).abs() < ESTIMATE_TOLERANCE,
+        "{label} se {se} vs R {}",
         reference.se
     );
-    assert_eq!(fit.influence_function.len(), reference.inffunc.len());
+    assert_eq!(fit.influence.n_units(), reference.inffunc.len());
     let worst = fit
-        .influence_function
+        .influence
+        .column(0)
         .iter()
         .zip(&reference.inffunc)
         .map(|(ours, theirs)| (ours - theirs).abs())
@@ -96,56 +102,63 @@ fn check(label: &str, fit: &epistat_did::DrDidEstimate, reference: &Fit) {
     );
 }
 
-fn panel_rows(panel: &Panel) -> Vec<DrDidObservation> {
-    (0..panel.d.len())
-        .map(|i| DrDidObservation {
-            treated: panel.d[i] > 0.5,
-            delta_outcome: panel.y1[i] - panel.y0[i],
-            weight: panel.w[i],
-            covariates: vec![1.0, panel.x1[i], panel.x2[i]],
-        })
-        .collect()
+/// The panel with the covariates `x1` and `x2`; the estimator adds the
+/// intercept.
+fn panel(panel: &Panel, options: &TwoPeriodOptions) -> TwoPeriod {
+    let treated: Vec<bool> = panel.d.iter().map(|&v| v > 0.5).collect();
+    let change: Vec<f64> = panel.y1.iter().zip(&panel.y0).map(|(a, b)| a - b).collect();
+    let x: Vec<f64> = panel.x1.iter().chain(&panel.x2).copied().collect();
+    let data = TwoPeriodData::panel(&treated, &change)
+        .weights(&panel.w)
+        .covariates(MatRef::from_column_major_slice(&x, change.len(), 2))
+        .build()
+        .expect("data");
+    two_period::estimate(&data, options).expect("fit")
 }
 
-fn repeated_rows(rc: &Repeated) -> Vec<DrDidRepeatedObservation> {
-    (0..rc.d.len())
-        .map(|i| DrDidRepeatedObservation {
-            treated: rc.d[i] > 0.5,
-            post_period: rc.post[i] > 0.5,
-            outcome: rc.y[i],
-            weight: rc.w[i],
-            covariates: vec![rc.x1[i], rc.x2[i]],
-        })
-        .collect()
+fn repeated(rc: &Repeated, options: &TwoPeriodOptions) -> TwoPeriod {
+    let treated: Vec<bool> = rc.d.iter().map(|&v| v > 0.5).collect();
+    let post: Vec<bool> = rc.post.iter().map(|&v| v > 0.5).collect();
+    let x: Vec<f64> = rc.x1.iter().chain(&rc.x2).copied().collect();
+    let data = TwoPeriodData::repeated_cross_section(&treated, &post, &rc.y)
+        .weights(&rc.w)
+        .covariates(MatRef::from_column_major_slice(&x, rc.y.len(), 2))
+        .build()
+        .expect("data");
+    two_period::estimate(&data, options).expect("fit")
 }
 
 #[test]
 fn panel_ipw_matches_std_ipw_did_panel() {
     let reference: Reference = load_json("tests/data/ipw_or_two_period_ref.json");
-    let fit = estimate_ipw_did_panel(&panel_rows(&reference.panel), config()).expect("fit");
+    let fit = panel(
+        &reference.panel,
+        &options(Estimator::InverseProbabilityWeighting),
+    );
     check("panel ipw", &fit, &reference.panel.ipw);
 }
 
 #[test]
 fn panel_or_matches_reg_did_panel() {
     let reference: Reference = load_json("tests/data/ipw_or_two_period_ref.json");
-    let fit = estimate_or_did_panel(&panel_rows(&reference.panel), config()).expect("fit");
+    let fit = panel(&reference.panel, &options(Estimator::OutcomeRegression));
     check("panel reg", &fit, &reference.panel.reg);
 }
 
 #[test]
 fn repeated_ipw_matches_std_ipw_did_rc() {
     let reference: Reference = load_json("tests/data/ipw_or_two_period_ref.json");
-    let fit = estimate_ipw_did_repeated_cross_section(&repeated_rows(&reference.rc), config())
-        .expect("fit");
+    let fit = repeated(
+        &reference.rc,
+        &options(Estimator::InverseProbabilityWeighting),
+    );
     check("rc ipw", &fit, &reference.rc.ipw);
 }
 
 #[test]
 fn repeated_or_matches_reg_did_rc() {
     let reference: Reference = load_json("tests/data/ipw_or_two_period_ref.json");
-    let fit = estimate_or_did_repeated_cross_section(&repeated_rows(&reference.rc), config())
-        .expect("fit");
+    let fit = repeated(&reference.rc, &options(Estimator::OutcomeRegression));
     check("rc reg", &fit, &reference.rc.reg);
 }
 
@@ -153,20 +166,23 @@ fn repeated_or_matches_reg_did_rc() {
 #[test]
 fn the_interval_is_analytic_by_default() {
     let reference: Reference = load_json("tests/data/ipw_or_two_period_ref.json");
-    let fit = estimate_ipw_did_panel(&panel_rows(&reference.panel), config()).expect("fit");
+    let fit = panel(
+        &reference.panel,
+        &options(Estimator::InverseProbabilityWeighting),
+    );
+    let (att, se) = (fit.estimate.estimate, fit.estimate.se.expect("se"));
     let z = 1.959_963_984_540_054;
-    assert!((fit.ci_low - (fit.att - z * fit.se)).abs() < 1e-12);
-    assert!((fit.ci_high - (fit.att + z * fit.se)).abs() < 1e-12);
-    let boot = estimate_ipw_did_panel(
-        &panel_rows(&reference.panel),
-        DrDidConfig::builder()
-            .ridge(0.0)
-            .bootstrap_reps(199)
-            .build(),
-    )
-    .expect("fit");
-    assert_eq!(boot.att.to_bits(), fit.att.to_bits());
-    assert_ne!(boot.ci_low.to_bits(), fit.ci_low.to_bits());
+    assert!((fit.estimate.lower().expect("lower") - (att - z * se)).abs() < 1e-12);
+    assert!((fit.estimate.upper().expect("upper") - (att + z * se)).abs() < 1e-12);
+    let boot = panel(
+        &reference.panel,
+        &TwoPeriodOptions {
+            bootstrap: Some(Bootstrap::new(199, 17_431)),
+            ..options(Estimator::InverseProbabilityWeighting)
+        },
+    );
+    assert_eq!(boot.estimate.estimate.to_bits(), att.to_bits());
+    assert_ne!(boot.estimate.lower(), fit.estimate.lower());
 }
 
 /// The traditional doubly robust estimator with sampling weights,
@@ -174,8 +190,7 @@ fn the_interval_is_analytic_by_default() {
 #[test]
 fn repeated_dr_matches_drdid_rc1_with_weights() {
     let reference: Reference = load_json("tests/data/ipw_or_two_period_ref.json");
-    let fit = estimate_drdid_repeated_cross_section(&repeated_rows(&reference.rc), config())
-        .expect("fit");
+    let fit = repeated(&reference.rc, &options(Estimator::TraditionalDoublyRobust));
     check("rc dr1", &fit, &reference.rc.dr1);
 }
 
@@ -185,14 +200,8 @@ fn repeated_dr_matches_drdid_rc1_with_weights() {
 #[test]
 fn the_legacy_repeated_dr_is_kept_as_an_option() {
     let reference: Reference = load_json("tests/data/ipw_or_two_period_ref.json");
-    let rows = repeated_rows(&reference.rc);
-    let legacy = estimate_drdid_repeated_cross_section(
-        &rows,
-        DrDidConfig::builder()
-            .ridge(0.0)
-            .legacy_repeated_cross_section(true)
-            .build(),
-    )
-    .expect("fit");
-    assert!((legacy.att - reference.rc.dr1.att).abs() > 1e-6);
+    let mut legacy = options(Estimator::TraditionalDoublyRobust);
+    legacy.nuisance.legacy_repeated_cross_section = true;
+    let fit = repeated(&reference.rc, &legacy);
+    assert!((fit.estimate.estimate - reference.rc.dr1.att).abs() > 1e-6);
 }

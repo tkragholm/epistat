@@ -4,12 +4,11 @@
 )]
 
 use epistat_did::att_gt;
-use epistat_did::{
-    DidCcConfig, DrDidConfig, DrDidObservation, DrDidRepeatedObservation, StaggeredPanel,
-    TripleDidObservation, estimate_did_cc_robust, estimate_did_cc_stationary, estimate_dr_ddd,
-    estimate_drdid_panel, test_did_cc_stationarity,
-};
-use epistat_linalg::Mat;
+use epistat_did::did_cc::{self, Assumption, DidCcOptions};
+use epistat_did::triple_did::{self, TripleDidData, TripleDidOptions};
+use epistat_did::two_period::{self, TwoPeriodOptions};
+use epistat_did::{StaggeredPanel, TwoPeriodData};
+use epistat_linalg::{Mat, MatRef};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -29,36 +28,57 @@ fn parity_drdid_panel_lalonde() {
     let reference: DrDidRef = load_json("tests/data/drdid_panel_ref.json");
 
     let n = reference.treat.len();
-    let mut observations = Vec::with_capacity(n);
-    for i in 0..n {
-        observations.push(DrDidObservation {
-            treated: reference.treat[i] == 1,
-            delta_outcome: reference.y1[i] - reference.y0[i],
-            covariates: reference.covariates[i].clone(),
-            weight: 1.0,
-        });
-    }
-
-    let config = DrDidConfig::default();
-    let result = estimate_drdid_panel(&observations, config).expect("estimate");
-    let worst_influence = result
-        .influence_function
+    let treated: Vec<bool> = reference.treat.iter().map(|&t| t == 1).collect();
+    let change: Vec<f64> = reference
+        .y1
+        .iter()
+        .zip(&reference.y0)
+        .map(|(post, pre)| post - pre)
+        .collect();
+    // The reference's design carries the intercept in its first column; the
+    // estimator adds its own.
+    assert!(
+        reference
+            .covariates
+            .iter()
+            .all(|row| row[0].to_bits() == 1.0_f64.to_bits())
+    );
+    let k = reference.covariates[0].len() - 1;
+    let x: Vec<f64> = (1..=k)
+        .flat_map(|j| reference.covariates.iter().map(move |row| row[j]))
+        .collect();
+    let data = TwoPeriodData::panel(&treated, &change)
+        .covariates(MatRef::from_column_major_slice(&x, n, k))
+        .build()
+        .expect("data");
+    let fit = two_period::estimate(
+        &data,
+        &TwoPeriodOptions {
+            estimator: two_period::Estimator::DoublyRobust,
+            ..TwoPeriodOptions::default()
+        },
+    )
+    .expect("estimate");
+    let (att, se) = (fit.estimate.estimate, fit.estimate.se.expect("se"));
+    let worst_influence = fit
+        .influence
+        .column(0)
         .iter()
         .zip(&reference.influence)
         .map(|(ours, theirs)| (ours - theirs).abs())
         .fold(0.0_f64, f64::max);
     println!(
         "DRDID panel: att {:e}, se {:e}, influence {worst_influence:e}",
-        (result.att - reference.att).abs(),
-        (result.se - reference.se).abs()
+        (att - reference.att).abs(),
+        (se - reference.se).abs()
     );
     // The outcomes are earnings in dollars, so the ATT is about 2,300, its
     // standard error about 1,850 and the influence values up to about 4e5.
     // Both sides stop the propensity score's iteration at a convergence
     // tolerance, which leaves differences of about 1e-10 relative; the bounds
     // allow a hundred times that on each scale.
-    assert!((result.att - reference.att).abs() < 1e-6);
-    assert!((result.se - reference.se).abs() < 1e-6);
+    assert!((att - reference.att).abs() < 1e-6);
+    assert!((se - reference.se).abs() < 1e-6);
     assert!(worst_influence < 1e-3);
 }
 
@@ -150,32 +170,30 @@ struct TripleDidRef {
 fn parity_triple_did_panel() {
     let reference: TripleDidRef = load_json("tests/data/triple_did_ref.json");
 
-    // Reconstruct delta outcomes from 2-period panel
-    let mut obs = Vec::new();
-    let n = reference.data.len();
-    for i in (0..n).step_by(2) {
-        let row_pre = &reference.data[i];
-        let row_post = &reference.data[i + 1];
+    // The outcome changes of the two-period panel.
+    let (mut group, mut partition, mut change, mut x1, mut x2) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for pair in reference.data.chunks(2) {
+        let (row_pre, row_post) = (&pair[0], &pair[1]);
         assert_eq!(row_pre.id, row_post.id);
-
-        obs.push(TripleDidObservation {
-            treated: row_post.treat == 1,
-            group_s: row_post.treat == 1,
-            partition_q: row_post.partition == 1,
-            delta_outcome: row_post.outcome - row_pre.outcome,
-            weight: 1.0,
-            covariates: vec![1.0, row_post.x1, row_post.x2],
-        });
+        group.push(row_post.treat == 1);
+        partition.push(row_post.partition == 1);
+        change.push(row_post.outcome - row_pre.outcome);
+        x1.push(row_post.x1);
+        x2.push(row_post.x2);
     }
-
-    let config = DrDidConfig::default();
-    let result = estimate_dr_ddd(&obs, config).expect("ddd");
-
+    let x: Vec<f64> = x1.into_iter().chain(x2).collect();
+    let data = TripleDidData::builder(&group, &partition, &change)
+        .covariates(MatRef::from_column_major_slice(&x, change.len(), 2))
+        .build()
+        .expect("data");
+    let result = triple_did::estimate(&data, &TripleDidOptions::default()).expect("ddd");
+    let att = result.estimate.estimate;
     println!(
-        "R Triple-DiD ATT: {}, Rust Triple-DiD ATT: {}",
-        reference.att, result.att_ddd
+        "R Triple-DiD ATT: {}, Rust Triple-DiD ATT: {att}",
+        reference.att
     );
-    assert!((result.att_ddd - reference.att).abs() < 1e-6);
+    assert!((att - reference.att).abs() < 1e-6);
 }
 
 #[derive(Deserialize)]
@@ -255,36 +273,44 @@ fn did_cc_scaffold_fixture_schema_loads() {
     );
 }
 
-fn did_cc_rows(rows: &[DidCcScaffoldRow]) -> Vec<DrDidRepeatedObservation> {
-    rows.iter()
-        .map(|row| DrDidRepeatedObservation {
-            treated: row.treated,
-            post_period: row.post_period,
-            outcome: row.outcome,
-            weight: 1.0,
-            covariates: row.covariates.clone(),
-        })
-        .collect()
-}
-
 #[test]
 fn parity_did_cc_authored_reference_fixture() {
     let fixture: DidCcScaffoldFixture = load_json("tests/data/did_cc_ref_scaffold.json");
 
     for design in [&fixture.aligned_constant_effect, &fixture.composition_shift] {
-        let rows = did_cc_rows(&design.rows);
-        let robust = estimate_did_cc_robust(&rows, DidCcConfig::default()).expect("robust did_cc");
-        let stationary =
-            estimate_did_cc_stationary(&rows, DidCcConfig::default()).expect("stationary did_cc");
-        let hausman =
-            test_did_cc_stationarity(&rows, DidCcConfig::default()).expect("hausman did_cc");
+        let rows = &design.rows;
+        let treated: Vec<bool> = rows.iter().map(|row| row.treated).collect();
+        let post: Vec<bool> = rows.iter().map(|row| row.post_period).collect();
+        let outcome: Vec<f64> = rows.iter().map(|row| row.outcome).collect();
+        let k = rows[0].covariates.len();
+        let x: Vec<f64> = (0..k)
+            .flat_map(|j| rows.iter().map(move |row| row.covariates[j]))
+            .collect();
+        let data = TwoPeriodData::repeated_cross_section(&treated, &post, &outcome)
+            .covariates(MatRef::from_column_major_slice(&x, rows.len(), k))
+            .build()
+            .expect("data");
+        let estimate = |assumption| {
+            did_cc::estimate(
+                &data,
+                &DidCcOptions {
+                    assumption,
+                    ..DidCcOptions::default()
+                },
+            )
+            .expect("did_cc")
+            .estimate
+        };
+        let robust = estimate(Assumption::Robust);
+        let stationary = estimate(Assumption::Stationary);
+        let hausman = did_cc::test(&data, &DidCcOptions::default()).expect("hausman did_cc");
 
-        assert!((robust.att - design.robust.att).abs() < 1e-6);
-        assert!((robust.se - design.robust.se).abs() < 1e-6);
-        assert!((stationary.att - design.stationary.att).abs() < 1e-6);
-        assert!((stationary.se - design.stationary.se).abs() < 1e-6);
+        assert!((robust.estimate - design.robust.att).abs() < 1e-6);
+        assert!((robust.se.expect("se") - design.robust.se).abs() < 1e-6);
+        assert!((stationary.estimate - design.stationary.att).abs() < 1e-6);
+        assert!((stationary.se.expect("se") - design.stationary.se).abs() < 1e-6);
         assert!((hausman.difference - design.hausman.difference).abs() < 1e-6);
-        assert!((hausman.difference_se - design.hausman.difference_se).abs() < 1e-6);
+        assert!((hausman.se - design.hausman.difference_se).abs() < 1e-6);
         assert!((hausman.statistic - design.hausman.statistic).abs() < 1e-6);
         assert!((hausman.p_value - design.hausman.p_value).abs() < 1e-6);
     }

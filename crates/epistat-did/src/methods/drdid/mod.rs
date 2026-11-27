@@ -15,7 +15,7 @@ pub mod panel;
 pub mod repeated;
 pub mod repeated_efficient;
 
-pub use design::{DesignPruning, independent_design_columns};
+pub(crate) use design::prune_design;
 
 use crate::inference::{multiplier_bootstrap_ci, normal_interval};
 use crate::types::DrDidConfig;
@@ -36,6 +36,6 @@ pub(crate) fn confidence_interval(
     if config.bootstrap_reps == 0 {
         normal_interval(att, se, config.confidence_level)
     } else {
-        multiplier_bootstrap_ci(att, influence, config.inference(), config.bootstrap())
+        multiplier_bootstrap_ci(att, influence, config.confidence_level, config.bootstrap())
     }
 }

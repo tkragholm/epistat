@@ -14,4 +14,5 @@ pub mod sunab;
 pub mod synthdid;
 pub mod triple_did;
 pub mod twfe;
+pub mod two_period;
 pub mod two_stage;

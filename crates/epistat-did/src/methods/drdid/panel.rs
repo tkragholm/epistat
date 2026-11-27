@@ -1,4 +1,3 @@
-use epistat_linalg::SolveLstsq;
 use epistat_linalg::{Mat, MatRef};
 use epistat_linalg::{weighted_gram as linalg_weighted_gram, weighted_xtz};
 
@@ -46,7 +45,7 @@ use crate::util::usize_to_f64;
 /// # Errors
 ///
 /// Returns [`DrDidError`] when inputs/configuration are invalid or nuisance models cannot be fit.
-pub fn estimate_drdid_panel(
+pub(crate) fn estimate_drdid_panel(
     observations: &[DrDidObservation],
     config: DrDidConfig,
 ) -> Result<DrDidEstimate, DrDidError> {
@@ -67,17 +66,17 @@ pub fn estimate_drdid_panel(
 /// `DrDidObservation::covariates` in [`estimate_drdid_panel`], which is a
 /// finished design.
 #[derive(Debug, Clone, Copy)]
-pub struct PanelFlatInput<'a> {
+pub(crate) struct PanelFlatInput<'a> {
     /// One per row.
-    pub treated: &'a [bool],
+    pub(crate) treated: &'a [bool],
     /// Follow-up outcome minus baseline outcome, one per row.
-    pub delta_outcome: &'a [f64],
+    pub(crate) delta_outcome: &'a [f64],
     /// Sampling weight, one per row. Must be finite and positive.
-    pub weight: &'a [f64],
+    pub(crate) weight: &'a [f64],
     /// Row-major, `treated.len() * feature_count`.
-    pub design_matrix_flat: &'a [f64],
+    pub(crate) design_matrix_flat: &'a [f64],
     /// Columns per row, at least one.
-    pub feature_count: usize,
+    pub(crate) feature_count: usize,
 }
 
 /// The panel DR estimator on a design that is already flat.
@@ -89,7 +88,7 @@ pub struct PanelFlatInput<'a> {
 /// # Errors
 /// As [`estimate_drdid_panel`], plus [`DrDidError::InconsistentCovariateCount`]
 /// if `design_matrix_flat` is not `rows * feature_count` long.
-pub fn estimate_drdid_panel_flat(
+pub(crate) fn estimate_drdid_panel_flat(
     input: PanelFlatInput<'_>,
     config: DrDidConfig,
 ) -> Result<DrDidEstimate, DrDidError> {
@@ -115,10 +114,10 @@ pub fn estimate_drdid_panel_flat(
 /// if `design_matrix_flat` is not `rows * feature_count` long, and
 /// [`DrDidError::SingularSystem`] when
 /// an information matrix cannot be inverted for the standard errors.
-pub fn fit_drdid_panel_nuisance(
+pub(crate) fn fit_drdid_panel_nuisance(
     input: PanelFlatInput<'_>,
     config: DrDidConfig,
-) -> Result<PanelNuisanceFit, DrDidError> {
+) -> Result<NuisanceFit, DrDidError> {
     validate_drdid_config(config)?;
     if input.treated.is_empty() {
         return Err(DrDidError::EmptyInput);
@@ -127,7 +126,7 @@ pub fn fit_drdid_panel_nuisance(
     let fits = fit_panel_nuisance_models(&prepared, config)?;
     let propensity_se = propensity_model_standard_errors(&prepared, &fits)?;
     let outcome_se = outcome_hc0_standard_errors(&prepared, &fits)?;
-    Ok(PanelNuisanceFit {
+    Ok(NuisanceFit {
         kept_columns: prepared.kept_columns,
         propensity_coefficients: fits.propensity.coefficients,
         propensity_se,
@@ -153,10 +152,10 @@ pub fn fit_drdid_panel_nuisance(
 /// As [`estimate_drdid_panel`], plus [`DrDidError::InconsistentCovariateCount`]
 /// if `design_matrix_flat` is not `rows * feature_count` long, and the errors
 /// of the propensity iterations.
-pub fn fit_drdid_panel_propensity_coefficients(
+pub(crate) fn fit_drdid_panel_propensity_coefficients(
     input: PanelFlatInput<'_>,
     config: DrDidConfig,
-) -> Result<PanelPropensityCoefficients, DrDidError> {
+) -> Result<Propensity, DrDidError> {
     validate_drdid_config(config)?;
     if input.treated.is_empty() {
         return Err(DrDidError::EmptyInput);
@@ -175,7 +174,7 @@ pub fn fit_drdid_panel_propensity_coefficients(
             tol: config.tol,
         },
     )?;
-    Ok(PanelPropensityCoefficients {
+    Ok(Propensity {
         kept_columns: prepared.kept_columns,
         coefficients: propensity.coefficients,
         iterations: propensity.iterations,
@@ -183,11 +182,13 @@ pub fn fit_drdid_panel_propensity_coefficients(
     })
 }
 
-/// The result of [`fit_drdid_panel_propensity_coefficients`]; the fields are
-/// those of [`PanelNuisanceFit`] by the names `kept_columns`,
+/// The propensity score of the panel doubly robust estimator; see
+/// [`propensity`](crate::two_period::nuisance::propensity). The fields are
+/// those of [`NuisanceFit`] by the names `kept_columns`,
 /// `propensity_coefficients`, `iterations` and `converged`.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
-pub struct PanelPropensityCoefficients {
+pub struct Propensity {
     /// One flag per column of the caller's design, true where the fit kept it.
     pub kept_columns: Vec<bool>,
     /// Propensity score coefficients, over the kept columns.
@@ -195,17 +196,20 @@ pub struct PanelPropensityCoefficients {
     /// Newton steps the propensity score took, counting the last.
     pub iterations: usize,
     /// Whether the iterations stopped at the maximum of the likelihood, as
-    /// [`PanelNuisanceFit::converged`].
+    /// [`NuisanceFit::converged`].
     pub converged: bool,
 }
 
-/// The two nuisance models of one panel DR fit; see [`fit_drdid_panel_nuisance`].
+/// The two nuisance models of one panel doubly robust fit; see
+/// [`fit`](crate::two_period::nuisance::fit).
 ///
-/// The coefficient vectors cover the kept columns only, in the input's order.
+/// The coefficient vectors cover the kept columns only, in the design's order.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
-pub struct PanelNuisanceFit {
-    /// One flag per column of the caller's design, true where the fit kept it.
-    /// See [`crate::independent_design_columns`], whose per-arm rule this is.
+pub struct NuisanceFit {
+    /// One flag per column of the estimators' design, true where the fit kept
+    /// it, by the per-arm rule of
+    /// [`independent_columns`](crate::two_period::nuisance::independent_columns).
     pub kept_columns: Vec<bool>,
     /// Propensity score coefficients.
     pub propensity_coefficients: Vec<f64>,
@@ -215,9 +219,9 @@ pub struct PanelNuisanceFit {
     /// Newton steps the propensity score took, counting the last.
     pub iterations: usize,
     /// Whether the iterations stopped at the maximum of the likelihood: on a
-    /// step within `config.tol`, or where no step along the last direction
+    /// step within `tolerance`, or where no step along the last direction
     /// raised the likelihood, on a Newton decrement within a relative
-    /// `config.tol` of it. False when the iteration budget ran out, or when the
+    /// `tolerance` of it. False when the iteration budget ran out, or when the
     /// line search failed with more of the likelihood still to gain.
     pub converged: bool,
     /// The fitted propensity score of every row, capped at
@@ -359,7 +363,7 @@ struct PanelPreparedData {
     design_matrix_flat: Vec<f64>,
 }
 
-struct PanelNuisanceFits {
+struct NuisanceFits {
     normalized_weights: Vec<f64>,
     propensity: LogisticIrlsFit,
     propensity_scores: Vec<f64>,
@@ -459,7 +463,7 @@ fn prepare_panel_data(observations: &[DrDidObservation]) -> Result<PanelPrepared
 fn fit_panel_nuisance_models(
     prepared: &PanelPreparedData,
     config: DrDidConfig,
-) -> Result<PanelNuisanceFits, DrDidError> {
+) -> Result<NuisanceFits, DrDidError> {
     let normalized_weights = normalize_weights_to_n(&prepared.sampling_weights)?;
     let observation_count = prepared.treated_indicator.len();
     let propensity = fit_logistic_irls(
@@ -511,7 +515,7 @@ fn fit_panel_nuisance_models(
         &beta_outcome,
     );
 
-    Ok(PanelNuisanceFits {
+    Ok(NuisanceFits {
         normalized_weights,
         propensity,
         propensity_scores,
@@ -524,7 +528,7 @@ fn fit_panel_nuisance_models(
 /// diagonal of `(X' diag(w p (1 - p)) X)^-1` over every row.
 fn propensity_model_standard_errors(
     prepared: &PanelPreparedData,
-    fits: &PanelNuisanceFits,
+    fits: &NuisanceFits,
 ) -> Result<Vec<f64>, DrDidError> {
     let information = weighted_gram(prepared, |row| {
         let p = fits.propensity_scores[row];
@@ -541,7 +545,7 @@ fn propensity_model_standard_errors(
 /// `r` the residual.
 fn outcome_hc0_standard_errors(
     prepared: &PanelPreparedData,
-    fits: &PanelNuisanceFits,
+    fits: &NuisanceFits,
 ) -> Result<Vec<f64>, DrDidError> {
     let comparator = |row: usize| prepared.treated_indicator[row] < 0.5;
     let bread = weighted_gram(prepared, |row| {
@@ -910,7 +914,11 @@ pub(super) fn fit_weighted_linear(
             let weighted_outcome = Mat::from_fn(observation_count, 1, |row, _| {
                 normalized_weights[row].sqrt() * outcome[row]
             });
-            let solution = weighted_design.col_piv_qr().solve_lstsq(&weighted_outcome);
+            let solution = epistat_linalg::solve::least_squares(
+                weighted_design.as_ref(),
+                weighted_outcome.as_ref(),
+            )
+            .map_err(|_| DrDidError::SingularSystem)?;
             let mut out = vec![0.0; feature_count];
             for feature_index in 0..feature_count {
                 let value = solution[(feature_index, 0)];
@@ -1063,7 +1071,7 @@ mod tests {
     /// The ATT from a nuisance fit, comparators at or above `trim` given no
     /// weight.
     fn att_from(
-        fit: &PanelNuisanceFit,
+        fit: &NuisanceFit,
         treated: &[bool],
         delta: &[f64],
         weight: &[f64],
@@ -1360,13 +1368,13 @@ mod tests {
         let ci_a = crate::inference::multiplier_bootstrap_ci(
             1.0,
             &influence,
-            config.inference(),
+            config.confidence_level,
             config.bootstrap(),
         );
         let ci_b = crate::inference::multiplier_bootstrap_ci(
             1.0,
             &influence,
-            config.inference(),
+            config.confidence_level,
             config.bootstrap(),
         );
         assert_eq!(ci_a, ci_b);

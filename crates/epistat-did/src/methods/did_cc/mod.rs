@@ -1,12 +1,39 @@
-//! Difference-in-Differences with compositional changes (`DiD_CC`).
+//! Difference-in-differences with compositional changes in repeated
+//! cross-sections, after Sant'Anna and Xu \[1\].
 //!
-//! This module implements a pragmatic semiparametric working-model version of
-//! Sant'Anna and Xu (2026) for the canonical two-period repeated
-//! cross-section design. The robust estimator uses four cell-specific outcome
-//! regressions and a generalized propensity score over the `(D, T)` cells,
-//! while the stationarity estimator uses the Sant'Anna-Zhao style pooled
-//! treated weighting rule. A Hausman-style comparison test reports whether the
-//! stationarity restriction materially shifts the ATT target.
+//! [`estimate`] takes a repeated cross-section [`TwoPeriodData`] and
+//! [`DidCcOptions`] and returns a [`DidCc`]; [`test()`] compares the two
+//! estimators with a Hausman test.
+//!
+//! # Algorithm
+//!
+//! This is a working-model version of the estimator for the canonical
+//! two-period design. The composition-robust estimator
+//! ([`Assumption::Robust`]) combines four outcome regressions, one per arm and
+//! period, fitted by local linear regression with the ridge of
+//! [`NuisanceOptions::ridge`], with a generalised propensity score over the
+//! four (arm, period) cells, a multinomial logit of the cell on the design.
+//! The estimator under stationarity ([`Assumption::Stationary`]) uses the
+//! Sant'Anna-Zhao weighting with a pooled propensity score of the arm. Each
+//! estimate fits only the propensity model it uses. When that logit cannot
+//! be fitted on the covariates the estimate is an error, unless
+//! [`DidCcOptions::propensity_fallback`] is set: then the logit is fitted on
+//! the intercept alone, and failing that the shares are used, and
+//! [`DidCc::propensity_fallbacks`] says which fallback each model took. With
+//! [`DidCcOptions::cross_fitting`] each row's nuisance values come from the
+//! models fitted on the other folds, the folds drawn within each cell.
+//!
+//! The influence function is the centred score, the standard error
+//! `sqrt(mean(psi^2) / n)`, and the interval normal or, with
+//! [`DidCcOptions::bootstrap`], the multiplier bootstrap percentile interval.
+//! The Hausman statistic is `(theta_s - theta_r)^2 / se^2`, with `se` from
+//! the difference of the two influence functions, against a chi-square
+//! distribution with one degree of freedom.
+//!
+//! # References
+//!
+//! 1. Sant'Anna PHC, Xu Q. Difference-in-differences with compositional
+//!    changes. Working paper, 2023.
 
 use epistat_linalg::{Mat, MatRef};
 use epistat_rng::Stream;
@@ -27,6 +54,284 @@ use crate::types::{
     DidCcConfig, DidCcError, DidCcEstimate, DidCcHausmanTest, DidCell, DrDidRepeatedObservation,
     TimePeriod, TreatmentGroup,
 };
+
+use epistat_core::{Bootstrap, Estimate, InputError, Level};
+use epistat_inference::Influence;
+
+use crate::error::Error;
+use crate::methods::two_period::{
+    Design, NuisanceOptions, TwoPeriodData, domain, repeated_rows, row_influence,
+};
+
+/// The identifying assumption of the estimate.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Assumption {
+    /// Robust to changes in the composition of the sample between the
+    /// periods.
+    #[default]
+    Robust,
+    /// The covariates' distribution is stationary between the periods.
+    Stationary,
+}
+
+/// The folds of cross-fitting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CrossFitting {
+    /// The number of folds, at least 2.
+    pub folds: usize,
+    /// The seed of the assignment of rows to folds, drawn within each cell.
+    pub seed: u64,
+}
+
+/// The fallback a propensity model took when its logit could not be fitted
+/// on the covariates.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Fallback {
+    /// The logit on the intercept alone, which gives every row the same
+    /// score.
+    InterceptOnly,
+    /// The shares, when the logit on the intercept alone could not be fitted
+    /// either: for the generalised propensity score of
+    /// [`Assumption::Robust`], each cell's share of the weight, clipped below
+    /// at the propensity clip and renormalised; for the pooled score of
+    /// [`Assumption::Stationary`], the unweighted share of treated rows,
+    /// clipped to `[clip, 1 - clip]`.
+    Shares,
+}
+
+/// A propensity model that took a fallback.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PropensityFallback {
+    /// The cross-fitting fold whose held-out rows the model predicts, `None`
+    /// for the model fitted on every row.
+    pub fold: Option<usize>,
+    /// The fallback it took.
+    pub fallback: Fallback,
+}
+
+/// The options of [`estimate`] and [`test()`].
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct DidCcOptions {
+    /// The identifying assumption of [`estimate`]; [`test()`] forms both.
+    pub assumption: Assumption,
+    /// The nuisance models: the clip of the propensity scores, the ridge of
+    /// the outcome regressions and the iterations of the logits. The legacy
+    /// switch is not read.
+    pub nuisance: NuisanceOptions,
+    /// The confidence level of the intervals.
+    pub level: Level,
+    /// A multiplier bootstrap for the intervals: the percentile interval of
+    /// Rademacher draws of the influence function. `None`, the default, gives
+    /// normal intervals.
+    pub bootstrap: Option<Bootstrap>,
+    /// Cross-fitting of the nuisance models; `None`, the default, fits them
+    /// on every row.
+    pub cross_fitting: Option<CrossFitting>,
+    /// Whether a propensity logit that cannot be fitted on the covariates
+    /// falls back to the logit on the intercept alone and, failing that, to
+    /// the shares of [`Fallback::Shares`], each use reported in
+    /// [`DidCc::propensity_fallbacks`]. Off, the default, such a fit is
+    /// [`Error::PropensityFit`].
+    pub propensity_fallback: bool,
+}
+
+/// An ATT under compositional changes.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct DidCc {
+    /// The assumption it was formed under.
+    pub assumption: Assumption,
+    /// The ATT with its standard error, interval and normal p-value.
+    pub estimate: Estimate,
+    /// Treated rows in the post period.
+    pub n_treated_post: usize,
+    /// Treated rows in the pre period.
+    pub n_treated_pre: usize,
+    /// Comparison rows in the post period.
+    pub n_control_post: usize,
+    /// Comparison rows in the pre period.
+    pub n_control_pre: usize,
+    /// The sum of the prior weights.
+    pub total_weight: f64,
+    /// The influence function, one value per row, under
+    /// [`epistat_inference::ClusterRule::NoSmallSample`].
+    pub influence: Influence,
+    /// The propensity models behind the estimate that took a fallback, in
+    /// fold order: empty when every model was fitted on the covariates, as
+    /// it always is without [`DidCcOptions::propensity_fallback`].
+    pub propensity_fallbacks: Vec<PropensityFallback>,
+}
+
+/// The Hausman comparison of the robust and the stationary estimates.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct DidCcTest {
+    /// The composition-robust estimate.
+    pub robust: DidCc,
+    /// The estimate under stationarity.
+    pub stationary: DidCc,
+    /// The stationary estimate minus the robust one.
+    pub difference: f64,
+    /// The standard error of the difference, from the difference of the two
+    /// influence functions.
+    pub se: f64,
+    /// `(difference / se)^2`.
+    pub statistic: f64,
+    /// The p-value of the statistic against a chi-square distribution with
+    /// one degree of freedom; a small value rejects stationarity.
+    pub p_value: f64,
+}
+
+/// The ATT of the repeated cross-section `data` under `options.assumption`.
+///
+/// # Errors
+///
+/// [`Error::Input`] for a nuisance option outside its domain, a bootstrap
+/// without replicates or fewer than two folds; [`Error::Unsupported`] for a
+/// panel or clusters; [`Error::NoTreated`] or [`Error::NoComparison`] for an
+/// arm without rows in a period; [`Error::CrossFitCell`] for a cell with
+/// fewer rows than folds; [`Error::PropensityFit`] for a propensity logit
+/// that cannot be fitted on the covariates without
+/// [`DidCcOptions::propensity_fallback`]; and [`Error::Singular`] for an
+/// outcome regression that cannot be solved.
+pub fn estimate(data: &TwoPeriodData<'_>, options: &DidCcOptions) -> Result<DidCc, Error> {
+    let (rows, config) = prepare(data, options)?;
+    let fit = match options.assumption {
+        Assumption::Robust => robust(&rows, config),
+        Assumption::Stationary => stationary(&rows, config),
+    }
+    .map_err(Error::from)?;
+    result(options.assumption, fit, options.level)
+}
+
+/// The Hausman test of stationarity: both estimates of [`estimate`] and the
+/// test of their difference. `options.assumption` is not read.
+///
+/// # Errors
+///
+/// As [`estimate`], and [`Error::DegenerateVariance`] when the difference
+/// has no positive variance.
+pub fn test(data: &TwoPeriodData<'_>, options: &DidCcOptions) -> Result<DidCcTest, Error> {
+    let (rows, config) = prepare(data, options)?;
+    let fit = hausman(&rows, config).map_err(Error::from)?;
+    Ok(DidCcTest {
+        robust: result(Assumption::Robust, fit.robust, options.level)?,
+        stationary: result(Assumption::Stationary, fit.stationary, options.level)?,
+        difference: fit.difference,
+        se: fit.difference_se,
+        statistic: fit.statistic,
+        p_value: fit.p_value,
+    })
+}
+
+fn prepare(
+    data: &TwoPeriodData<'_>,
+    options: &DidCcOptions,
+) -> Result<(Vec<DrDidRepeatedObservation>, DidCcConfig), Error> {
+    options.nuisance.validate()?;
+    let Design::RepeatedCrossSection { post, outcome } = data.design() else {
+        return Err(Error::Unsupported {
+            what: "the compositional-change estimator on a panel",
+        });
+    };
+    if data.clusters().is_some() {
+        return Err(Error::Unsupported {
+            what: "clusters in the compositional-change estimator",
+        });
+    }
+    if let Some(bootstrap) = options.bootstrap
+        && bootstrap.replicates == 0
+    {
+        return Err(domain("bootstrap replicates", 0.0, "[1, inf)"));
+    }
+    if let Some(cross) = options.cross_fitting
+        && cross.folds < 2
+    {
+        return Err(InputError::Domain {
+            what: "cross-fitting folds",
+            value: crate::util::usize_to_f64(cross.folds),
+            domain: "[2, inf)",
+        }
+        .into());
+    }
+    let config = DidCcConfig {
+        drdid: options.nuisance.config(options.level, options.bootstrap),
+        bootstrap_confidence_intervals: options.bootstrap.is_some(),
+        cross_fit_folds: options.cross_fitting.map_or(1, |cross| cross.folds),
+        cross_fit_seed: options.cross_fitting.map_or(0, |cross| cross.seed),
+        propensity_fallback: options.propensity_fallback,
+    };
+    Ok((repeated_rows(data, post, outcome), config))
+}
+
+fn result(assumption: Assumption, fit: DidCcEstimate, level: Level) -> Result<DidCc, Error> {
+    Ok(DidCc {
+        assumption,
+        estimate: crate::inference::estimate_from(
+            fit.att,
+            fit.se,
+            (fit.ci_low, fit.ci_high),
+            level,
+        ),
+        n_treated_post: fit.treated_post_n,
+        n_treated_pre: fit.treated_pre_n,
+        n_control_post: fit.control_post_n,
+        n_control_pre: fit.control_pre_n,
+        total_weight: fit.total_weight,
+        influence: row_influence(fit.influence_function)?,
+        propensity_fallbacks: fit.propensity_fallbacks,
+    })
+}
+
+impl From<DidCcError> for Error {
+    fn from(error: DidCcError) -> Self {
+        match error {
+            DidCcError::EmptyInput => InputError::Empty { what: "rows" }.into(),
+            DidCcError::NoTreated => Self::NoTreated,
+            DidCcError::NoControl => Self::NoComparison,
+            DidCcError::MissingCell { cell } => {
+                let (treated, post) = cell.flags();
+                Self::EmptyCell { treated, post }
+            }
+            DidCcError::InvalidWeight { value } => domain("weights", value, "(0, inf)"),
+            DidCcError::InvalidOutcome { .. } => InputError::NotFinite {
+                what: "outcome",
+                row: 0,
+            }
+            .into(),
+            DidCcError::InvalidCovariate { .. } => InputError::NotFinite {
+                what: "covariates",
+                row: 0,
+            }
+            .into(),
+            DidCcError::InconsistentCovariateCount { expected, actual } => InputError::Length {
+                what: "covariates",
+                expected,
+                found: actual,
+            }
+            .into(),
+            DidCcError::InvalidConfidenceLevel | DidCcError::InvalidCrossFitFolds => {
+                Self::Unsupported {
+                    what: "the compositional-change options",
+                }
+            }
+            DidCcError::InvalidConfig(_) => Self::Singular,
+            DidCcError::InsufficientCellForCrossFit { folds, cell } => {
+                let (treated, post) = cell.flags();
+                Self::CrossFitCell {
+                    folds,
+                    treated,
+                    post,
+                }
+            }
+            DidCcError::DegenerateHausmanVariance => Self::DegenerateVariance,
+            DidCcError::PropensityFit { fold } => Self::PropensityFit { fold },
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct DidCcPreparedData {
@@ -56,47 +361,37 @@ struct OutcomePredictions {
 struct DidCcNuisance {
     normalized_weights: Vec<f64>,
     outcome_predictions: OutcomePredictions,
+    /// Empty unless the robust estimate is formed.
     generalized_propensity: Vec<[f64; 4]>,
+    /// Empty unless the stationary estimate is formed.
     pooled_treated_propensity: Vec<f64>,
+    generalized_fallbacks: Vec<PropensityFallback>,
+    pooled_fallbacks: Vec<PropensityFallback>,
 }
 
-type CrossFitNuisance = (OutcomePredictions, Vec<[f64; 4]>, Vec<f64>);
-
-/// Read access to the fields of a `DiD_CC` observation.
-pub trait DidCcObservationView {
-    /// Whether the observation is in the treated group.
-    fn treated(&self) -> bool;
-    /// Whether the observation is from the post-treatment period.
-    fn post_period(&self) -> bool;
-    /// Observed outcome value.
-    fn outcome(&self) -> f64;
-    /// Sampling weight.
-    fn weight(&self) -> f64;
-    /// Covariate values.
-    fn covariates(&self) -> &[f64];
+/// The propensity models a call needs: the generalised score of the robust
+/// estimate, the pooled score of the stationary one, or both for the test.
+#[derive(Debug, Clone, Copy)]
+struct Models {
+    generalized: bool,
+    pooled: bool,
 }
 
-impl DidCcObservationView for DrDidRepeatedObservation {
-    fn treated(&self) -> bool {
-        self.treated
-    }
+const ROBUST: Models = Models {
+    generalized: true,
+    pooled: false,
+};
+const STATIONARY: Models = Models {
+    generalized: false,
+    pooled: true,
+};
+const BOTH: Models = Models {
+    generalized: true,
+    pooled: true,
+};
 
-    fn post_period(&self) -> bool {
-        self.post_period
-    }
-
-    fn outcome(&self) -> f64 {
-        self.outcome
-    }
-
-    fn weight(&self) -> f64 {
-        self.weight
-    }
-
-    fn covariates(&self) -> &[f64] {
-        &self.covariates
-    }
-}
+/// A fitted propensity model: its scores and the fallback it took, if any.
+type Fitted<T> = (Vec<T>, Option<Fallback>);
 
 struct OutcomeCellScratch {
     subset_design: Mat<f64>,
@@ -122,87 +417,33 @@ struct OutcomeTrainData<'a> {
     design: MatRef<'a, f64>,
 }
 
-/// Estimate the ATT using the composition-robust `DiD_CC` EIF-style score.
-///
-/// # Errors
-/// Returns [`DidCcError`] when inputs/configuration are invalid or nuisance
-/// working models cannot be fit.
-pub fn estimate_did_cc_robust(
+fn robust(
     observations: &[DrDidRepeatedObservation],
-    config: DidCcConfig,
-) -> Result<DidCcEstimate, DidCcError> {
-    estimate_did_cc_robust_from_views(observations, config)
-}
-
-/// Estimate the ATT using the composition-robust `DiD_CC` EIF-style score from
-/// borrowed row views.
-///
-/// # Errors
-/// Returns [`DidCcError`] when inputs/configuration are invalid or nuisance
-/// working models cannot be fit.
-pub fn estimate_did_cc_robust_from_views<T: DidCcObservationView>(
-    observations: &[T],
     config: DidCcConfig,
 ) -> Result<DidCcEstimate, DidCcError> {
     validate_did_cc_config(config)?;
     let prepared = prepare_did_cc_data(observations)?;
-    let nuisance = fit_did_cc_nuisance(&prepared, config)?;
+    let nuisance = fit_did_cc_nuisance(&prepared, config, ROBUST)?;
     Ok(build_robust_estimate(&prepared, &nuisance, config))
 }
 
-/// Estimate the ATT using the stationarity-imposing Sant'Anna-Zhao style score.
-///
-/// # Errors
-/// Returns [`DidCcError`] when inputs/configuration are invalid or nuisance
-/// working models cannot be fit.
-pub fn estimate_did_cc_stationary(
+fn stationary(
     observations: &[DrDidRepeatedObservation],
-    config: DidCcConfig,
-) -> Result<DidCcEstimate, DidCcError> {
-    estimate_did_cc_stationary_from_views(observations, config)
-}
-
-/// Estimate the ATT using the stationarity-imposing Sant'Anna-Zhao style score
-/// from borrowed row views.
-///
-/// # Errors
-/// Returns [`DidCcError`] when inputs/configuration are invalid or nuisance
-/// working models cannot be fit.
-pub fn estimate_did_cc_stationary_from_views<T: DidCcObservationView>(
-    observations: &[T],
     config: DidCcConfig,
 ) -> Result<DidCcEstimate, DidCcError> {
     validate_did_cc_config(config)?;
     let prepared = prepare_did_cc_data(observations)?;
-    let nuisance = fit_did_cc_nuisance(&prepared, config)?;
+    let nuisance = fit_did_cc_nuisance(&prepared, config, STATIONARY)?;
     Ok(build_stationary_estimate(&prepared, &nuisance, config))
 }
 
-/// Compare the robust and stationarity-based ATT estimators with a Hausman-type test.
-///
-/// # Errors
-/// Returns [`DidCcError`] when either estimator cannot be formed or the
-/// difference variance is degenerate.
-pub fn test_did_cc_stationarity(
+fn hausman(
     observations: &[DrDidRepeatedObservation],
-    config: DidCcConfig,
-) -> Result<DidCcHausmanTest, DidCcError> {
-    test_did_cc_stationarity_from_views(observations, config)
-}
-
-/// Compare the robust and stationarity-based ATT estimators with a Hausman-type
-/// test using borrowed row views.
-///
-/// # Errors
-/// Returns [`DidCcError`] when either estimator cannot be formed or the
-/// difference variance is degenerate.
-pub fn test_did_cc_stationarity_from_views<T: DidCcObservationView>(
-    observations: &[T],
     config: DidCcConfig,
 ) -> Result<DidCcHausmanTest, DidCcError> {
     validate_did_cc_config(config)?;
     let prepared = prepare_did_cc_data(observations)?;
-    let nuisance = fit_did_cc_nuisance(&prepared, config)?;
+    let nuisance = fit_did_cc_nuisance(&prepared, config, BOTH)?;
     let robust = build_robust_estimate(&prepared, &nuisance, config);
     let stationary = build_stationary_estimate(&prepared, &nuisance, config);
 
@@ -222,16 +463,12 @@ pub fn test_did_cc_stationarity_from_views<T: DidCcObservationView>(
         difference_se,
         statistic,
         p_value,
-        reject_null: p_value < config.hausman_alpha,
     })
 }
 
 fn validate_did_cc_config(config: DidCcConfig) -> Result<(), DidCcError> {
     if !validate_confidence_level(config.drdid.confidence_level) {
         return Err(DidCcError::InvalidConfidenceLevel);
-    }
-    if !validate_confidence_level(config.hausman_alpha) {
-        return Err(DidCcError::InvalidHausmanAlpha);
     }
     if config.cross_fit_folds == 0 {
         return Err(DidCcError::InvalidCrossFitFolds);
@@ -244,13 +481,13 @@ fn validate_did_cc_config(config: DidCcConfig) -> Result<(), DidCcError> {
     Ok(())
 }
 
-fn prepare_did_cc_data<T: DidCcObservationView>(
-    observations: &[T],
+fn prepare_did_cc_data(
+    observations: &[DrDidRepeatedObservation],
 ) -> Result<DidCcPreparedData, DidCcError> {
     if observations.is_empty() {
         return Err(DidCcError::EmptyInput);
     }
-    let covariate_count = observations.first().map_or(0, |row| row.covariates().len());
+    let covariate_count = observations.first().map_or(0, |row| row.covariates.len());
     let feature_count = covariate_count + 1;
     let observation_count = observations.len();
 
@@ -268,18 +505,18 @@ fn prepare_did_cc_data<T: DidCcObservationView>(
     let mut design_matrix_flat = Vec::with_capacity(observation_count * feature_count);
 
     for row in observations {
-        let covariates = row.covariates();
+        let covariates = &row.covariates;
         if covariates.len() != covariate_count {
             return Err(DidCcError::InconsistentCovariateCount {
                 expected: covariate_count,
                 actual: covariates.len(),
             });
         }
-        let outcome = row.outcome();
+        let outcome = row.outcome;
         if !outcome.is_finite() {
             return Err(DidCcError::InvalidOutcome { value: outcome });
         }
-        let weight = row.weight();
+        let weight = row.weight;
         if !weight.is_finite() || weight <= 0.0 {
             return Err(DidCcError::InvalidWeight { value: weight });
         }
@@ -289,15 +526,15 @@ fn prepare_did_cc_data<T: DidCcObservationView>(
             }
         }
 
-        match (row.treated(), row.post_period()) {
+        match (row.treated, row.post_period) {
             (true, true) => treated_post_n += 1,
             (true, false) => treated_pre_n += 1,
             (false, true) => control_post_n += 1,
             (false, false) => control_pre_n += 1,
         }
 
-        let treated_value = if row.treated() { 1.0 } else { 0.0 };
-        let post_value = if row.post_period() { 1.0 } else { 0.0 };
+        let treated_value = if row.treated { 1.0 } else { 0.0 };
+        let post_value = if row.post_period { 1.0 } else { 0.0 };
         treated.push(treated_value);
         post_period.push(post_value);
         class_labels.push(class_index_raw(treated_value, post_value));
@@ -334,71 +571,83 @@ fn prepare_did_cc_data<T: DidCcObservationView>(
 fn fit_did_cc_nuisance(
     prepared: &DidCcPreparedData,
     config: DidCcConfig,
+    models: Models,
 ) -> Result<DidCcNuisance, DidCcError> {
     let normalized_weights = normalize_weights_to_n(&prepared.sampling_weights)
         .map_err(|_| DidCcError::InvalidWeight { value: 0.0 })?;
+    if config.cross_fit_folds > 1 {
+        return fit_cross_fitted_nuisance(prepared, normalized_weights, config, models);
+    }
     let design_matrix = design_matrix_view(prepared);
-    let (outcome_predictions, generalized_propensity, pooled_treated_propensity) =
-        if config.cross_fit_folds <= 1 {
-            let cell_indices = collect_cell_indices(&prepared.class_labels);
-            (
-                fit_outcome_predictions(
-                    &prepared.outcomes,
-                    &prepared.sampling_weights,
-                    &cell_indices,
-                    design_matrix,
-                    design_matrix,
-                    config.drdid.ridge,
-                )?,
-                fit_generalized_propensity(
-                    &prepared.class_labels,
-                    &prepared.sampling_weights,
-                    design_matrix,
-                    design_matrix,
-                    config.drdid,
-                )?,
-                fit_pooled_treated_propensity(
-                    &prepared.treated,
-                    design_matrix,
-                    design_matrix,
-                    config.drdid,
-                )?,
-            )
-        } else {
-            let nuisance = fit_cross_fitted_nuisance(
-                prepared,
-                design_matrix,
-                config.cross_fit_folds,
-                config.cross_fit_seed,
-                config.drdid,
-            )?;
-            (nuisance.0, nuisance.1, nuisance.2)
-        };
-
+    let cell_indices = collect_cell_indices(&prepared.class_labels);
+    let outcome_predictions = fit_outcome_predictions(
+        &prepared.outcomes,
+        &prepared.sampling_weights,
+        &cell_indices,
+        design_matrix,
+        design_matrix,
+        config.drdid.ridge,
+    )?;
+    let (generalized_propensity, generalized) = if models.generalized {
+        fit_generalized_propensity(
+            &prepared.class_labels,
+            &prepared.sampling_weights,
+            design_matrix,
+            design_matrix,
+            config,
+            None,
+        )?
+    } else {
+        (Vec::new(), None)
+    };
+    let (pooled_treated_propensity, pooled) = if models.pooled {
+        fit_pooled_treated_propensity(
+            &prepared.treated,
+            design_matrix,
+            design_matrix,
+            config,
+            None,
+        )?
+    } else {
+        (Vec::new(), None)
+    };
+    let used = |fallback: Option<Fallback>| {
+        fallback
+            .map(|fallback| PropensityFallback {
+                fold: None,
+                fallback,
+            })
+            .into_iter()
+            .collect()
+    };
     Ok(DidCcNuisance {
         normalized_weights,
         outcome_predictions,
         generalized_propensity,
         pooled_treated_propensity,
+        generalized_fallbacks: used(generalized),
+        pooled_fallbacks: used(pooled),
     })
 }
 
 fn fit_cross_fitted_nuisance(
     prepared: &DidCcPreparedData,
-    _full_design_matrix: MatRef<'_, f64>,
-    folds: usize,
-    seed: u64,
-    drdid_config: crate::types::DrDidConfig,
-) -> Result<CrossFitNuisance, DidCcError> {
-    let assignment = assign_cross_fit_folds(prepared, folds, seed)?;
+    normalized_weights: Vec<f64>,
+    config: DidCcConfig,
+    models: Models,
+) -> Result<DidCcNuisance, DidCcError> {
+    let folds = config.cross_fit_folds;
+    let assignment = assign_cross_fit_folds(prepared, folds, config.cross_fit_seed)?;
     let fold_indices = collect_fold_indices(&assignment, folds);
     let row_count = prepared.outcomes.len();
     let mut m11 = vec![0.0; row_count];
     let mut m10 = vec![0.0; row_count];
     let mut m01 = vec![0.0; row_count];
     let mut m00 = vec![0.0; row_count];
-    let mut generalized_propensity = vec![[0.0; 4]; row_count];
-    let mut pooled_treated_propensity = vec![0.0; row_count];
+    let mut generalized_propensity = vec![[0.0; 4]; if models.generalized { row_count } else { 0 }];
+    let mut pooled_treated_propensity = vec![0.0; if models.pooled { row_count } else { 0 }];
+    let mut generalized_fallbacks = Vec::new();
+    let mut pooled_fallbacks = Vec::new();
     let mut train_outcomes = Vec::with_capacity(row_count);
     let mut train_weights = Vec::with_capacity(row_count);
     let mut train_class_labels = Vec::with_capacity(row_count);
@@ -457,37 +706,57 @@ fn fit_cross_fitted_nuisance(
             &train_cell_indices,
             train_design.as_ref(),
             test_design.as_ref(),
-            drdid_config.ridge,
+            config.drdid.ridge,
         )?;
-        let fold_generalized = fit_generalized_propensity(
-            &train_class_labels,
-            &train_weights,
-            train_design.as_ref(),
-            test_design.as_ref(),
-            drdid_config,
-        )?;
-        let fold_pooled = fit_pooled_treated_propensity(
-            &train_treated,
-            train_design.as_ref(),
-            test_design.as_ref(),
-            drdid_config,
-        )?;
-
         for (local_idx, global_idx) in test_indices.iter().enumerate() {
             m11[*global_idx] = fold_outcomes.m11[local_idx];
             m10[*global_idx] = fold_outcomes.m10[local_idx];
             m01[*global_idx] = fold_outcomes.m01[local_idx];
             m00[*global_idx] = fold_outcomes.m00[local_idx];
-            generalized_propensity[*global_idx] = fold_generalized[local_idx];
-            pooled_treated_propensity[*global_idx] = fold_pooled[local_idx];
+        }
+        if models.generalized {
+            let (scores, fallback) = fit_generalized_propensity(
+                &train_class_labels,
+                &train_weights,
+                train_design.as_ref(),
+                test_design.as_ref(),
+                config,
+                Some(fold),
+            )?;
+            for (local_idx, global_idx) in test_indices.iter().enumerate() {
+                generalized_propensity[*global_idx] = scores[local_idx];
+            }
+            generalized_fallbacks.extend(fallback.map(|fallback| PropensityFallback {
+                fold: Some(fold),
+                fallback,
+            }));
+        }
+        if models.pooled {
+            let (scores, fallback) = fit_pooled_treated_propensity(
+                &train_treated,
+                train_design.as_ref(),
+                test_design.as_ref(),
+                config,
+                Some(fold),
+            )?;
+            for (local_idx, global_idx) in test_indices.iter().enumerate() {
+                pooled_treated_propensity[*global_idx] = scores[local_idx];
+            }
+            pooled_fallbacks.extend(fallback.map(|fallback| PropensityFallback {
+                fold: Some(fold),
+                fallback,
+            }));
         }
     }
 
-    Ok((
-        OutcomePredictions { m11, m10, m01, m00 },
+    Ok(DidCcNuisance {
+        normalized_weights,
+        outcome_predictions: OutcomePredictions { m11, m10, m01, m00 },
         generalized_propensity,
         pooled_treated_propensity,
-    ))
+        generalized_fallbacks,
+        pooled_fallbacks,
+    })
 }
 
 fn assign_cross_fit_folds(
@@ -666,22 +935,31 @@ fn fit_cell_outcome(
         .map_err(|err| DidCcError::InvalidConfig(err.to_string()))
 }
 
+/// The generalised propensity score of the four cells, from the multinomial
+/// logit on the design, or with `config.propensity_fallback` from the logit
+/// on the intercept alone or the cell shares when that fit fails.
 fn fit_generalized_propensity(
     class_labels: &[usize],
     sampling_weights: &[f64],
     train_design: epistat_linalg::MatRef<'_, f64>,
     query_design: epistat_linalg::MatRef<'_, f64>,
-    config: crate::types::DrDidConfig,
-) -> Result<Vec<[f64; 4]>, DidCcError> {
-    let estimator = MultinomialSoftmaxPS::new(propensity_cfg(config)?, config.ridge);
+    config: DidCcConfig,
+    fold: Option<usize>,
+) -> Result<Fitted<[f64; 4]>, DidCcError> {
+    let drdid = config.drdid;
+    let estimator = MultinomialSoftmaxPS::new(propensity_cfg(drdid)?, drdid.ridge);
     if let Ok(params) = estimator.fit_multinomial(train_design, class_labels, sampling_weights, 4) {
-        return Ok(
+        return Ok((
             crate::estimators::propensity::common::softmax_scores_fixed4(
                 query_design,
                 params.beta.as_ref(),
-                config.propensity_clip,
+                drdid.propensity_clip,
             ),
-        );
+            None,
+        ));
+    }
+    if !config.propensity_fallback {
+        return Err(DidCcError::PropensityFit { fold });
     }
 
     if train_design.ncols() > 1 {
@@ -690,60 +968,78 @@ fn fit_generalized_propensity(
             estimator.fit_multinomial(intercept_only.as_ref(), class_labels, sampling_weights, 4)
         {
             let query_intercept_only = Mat::<f64>::ones(query_design.nrows(), 1);
-            return Ok(
+            return Ok((
                 crate::estimators::propensity::common::softmax_scores_fixed4(
                     query_intercept_only.as_ref(),
                     params.beta.as_ref(),
-                    config.propensity_clip,
+                    drdid.propensity_clip,
                 ),
-            );
+                Some(Fallback::InterceptOnly),
+            ));
         }
     }
 
-    Ok(empirical_generalized_propensity(
-        class_labels,
-        sampling_weights,
-        query_design.nrows(),
-        config.propensity_clip,
+    Ok((
+        empirical_generalized_propensity(
+            class_labels,
+            sampling_weights,
+            query_design.nrows(),
+            drdid.propensity_clip,
+        ),
+        Some(Fallback::Shares),
     ))
 }
 
+/// The pooled propensity score of the treated arm, from the logit on the
+/// design, or with `config.propensity_fallback` from the logit on the
+/// intercept alone or the share of treated rows when that fit fails.
 fn fit_pooled_treated_propensity(
     treated: &[f64],
     train_design: epistat_linalg::MatRef<'_, f64>,
     query_design: epistat_linalg::MatRef<'_, f64>,
-    config: crate::types::DrDidConfig,
-) -> Result<Vec<f64>, DidCcError> {
+    config: DidCcConfig,
+    fold: Option<usize>,
+) -> Result<Fitted<f64>, DidCcError> {
+    let drdid = config.drdid;
+    let clip = |score: f64| score.clamp(drdid.propensity_clip, 1.0 - drdid.propensity_clip);
     let target = MatRef::from_column_major_slice(treated, treated.len(), 1);
-    let estimator = LogisticPS::new(propensity_cfg(config)?);
+    let estimator = LogisticPS::new(propensity_cfg(drdid)?);
     if let Ok(params) = estimator.fit(train_design, target) {
-        return Ok(crate::estimators::propensity::common::logistic_scores(
-            query_design,
-            params.beta.as_ref(),
-        )
-        .into_iter()
-        .map(|score| score.clamp(config.propensity_clip, 1.0 - config.propensity_clip))
-        .collect());
+        return Ok((
+            crate::estimators::propensity::common::logistic_scores(
+                query_design,
+                params.beta.as_ref(),
+            )
+            .into_iter()
+            .map(clip)
+            .collect(),
+            None,
+        ));
+    }
+    if !config.propensity_fallback {
+        return Err(DidCcError::PropensityFit { fold });
     }
 
     if train_design.ncols() > 1 {
         let intercept_only = Mat::<f64>::ones(train_design.nrows(), 1);
         if let Ok(params) = estimator.fit(intercept_only.as_ref(), target) {
             let query_intercept_only = Mat::<f64>::ones(query_design.nrows(), 1);
-            return Ok(crate::estimators::propensity::common::logistic_scores(
-                query_intercept_only.as_ref(),
-                params.beta.as_ref(),
-            )
-            .into_iter()
-            .map(|score| score.clamp(config.propensity_clip, 1.0 - config.propensity_clip))
-            .collect());
+            return Ok((
+                crate::estimators::propensity::common::logistic_scores(
+                    query_intercept_only.as_ref(),
+                    params.beta.as_ref(),
+                )
+                .into_iter()
+                .map(clip)
+                .collect(),
+                Some(Fallback::InterceptOnly),
+            ));
         }
     }
 
-    Ok(empirical_pooled_treated_propensity(
-        treated,
-        query_design.nrows(),
-        config.propensity_clip,
+    Ok((
+        empirical_pooled_treated_propensity(treated, query_design.nrows(), drdid.propensity_clip),
+        Some(Fallback::Shares),
     ))
 }
 
@@ -816,7 +1112,12 @@ fn build_robust_estimate(
             )
         })
         .collect::<Vec<_>>();
-    build_did_cc_estimate(prepared, config, &scores)
+    build_did_cc_estimate(
+        prepared,
+        config,
+        &scores,
+        nuisance.generalized_fallbacks.clone(),
+    )
 }
 
 fn build_stationary_estimate(
@@ -828,13 +1129,14 @@ fn build_stationary_estimate(
     let scores = (0..prepared.outcomes.len())
         .map(|idx| stationary_score(prepared, nuisance, idx, &weights))
         .collect::<Vec<_>>();
-    build_did_cc_estimate(prepared, config, &scores)
+    build_did_cc_estimate(prepared, config, &scores, nuisance.pooled_fallbacks.clone())
 }
 
 fn build_did_cc_estimate(
     prepared: &DidCcPreparedData,
     config: DidCcConfig,
     scores: &[f64],
+    propensity_fallbacks: Vec<PropensityFallback>,
 ) -> DidCcEstimate {
     let n = crate::util::usize_to_f64(scores.len());
     let att = scores.iter().sum::<f64>() / n;
@@ -844,7 +1146,7 @@ fn build_did_cc_estimate(
         multiplier_bootstrap_ci(
             att,
             &influence_function,
-            config.drdid.inference(),
+            config.drdid.confidence_level,
             config.drdid.bootstrap(),
         )
     } else {
@@ -862,6 +1164,7 @@ fn build_did_cc_estimate(
         control_pre_n: prepared.control_pre_n,
         total_weight: prepared.total_weight,
         influence_function,
+        propensity_fallbacks,
     }
 }
 
@@ -1057,9 +1360,9 @@ mod tests {
             }
         }
 
-        let robust = estimate_did_cc_robust(&rows, DidCcConfig::default()).unwrap();
-        let stationary = estimate_did_cc_stationary(&rows, DidCcConfig::default()).unwrap();
-        let test = test_did_cc_stationarity(&rows, DidCcConfig::default()).unwrap();
+        let robust = robust(&rows, DidCcConfig::default()).unwrap();
+        let stationary = stationary(&rows, DidCcConfig::default()).unwrap();
+        let test = hausman(&rows, DidCcConfig::default()).unwrap();
 
         assert!((robust.att - 2.0).abs() < 1e-6);
         assert!((stationary.att - 2.0).abs() < 1e-6);
@@ -1091,13 +1394,13 @@ mod tests {
             ));
         }
 
-        let robust = estimate_did_cc_robust(&rows, DidCcConfig::default()).unwrap();
-        let stationary = estimate_did_cc_stationary(&rows, DidCcConfig::default()).unwrap();
-        let test = test_did_cc_stationarity(&rows, DidCcConfig::default()).unwrap();
+        let robust = robust(&rows, DidCcConfig::default()).unwrap();
+        let stationary = stationary(&rows, DidCcConfig::default()).unwrap();
+        let test = hausman(&rows, DidCcConfig::default()).unwrap();
 
         assert!(robust.att > stationary.att + 0.5);
         assert!(test.difference.abs() > 0.5);
-        assert!(test.reject_null);
+        assert!(test.p_value < 0.05);
     }
 
     #[test]
@@ -1113,14 +1416,16 @@ mod tests {
 
         let prepared = prepare_did_cc_data(&rows).unwrap();
         let design_matrix = design_matrix_view(&prepared);
-        let probabilities = fit_generalized_propensity(
+        let (probabilities, fallback) = fit_generalized_propensity(
             &prepared.class_labels,
             &prepared.sampling_weights,
             design_matrix,
             design_matrix,
-            crate::types::DrDidConfig::default(),
+            DidCcConfig::default(),
+            None,
         )
         .unwrap();
+        assert_eq!(fallback, None);
 
         assert_eq!(probabilities.len(), rows.len());
         for probability in probabilities {
@@ -1146,8 +1451,8 @@ mod tests {
             }
         }
 
-        let no_split = estimate_did_cc_robust(&rows, DidCcConfig::default()).unwrap();
-        let cross_fit = estimate_did_cc_robust(
+        let no_split = robust(&rows, DidCcConfig::default()).unwrap();
+        let cross_fit = robust(
             &rows,
             DidCcConfig {
                 drdid: crate::types::DrDidConfig {
@@ -1176,7 +1481,7 @@ mod tests {
             row(false, false, 0.0, 1.0),
         ];
 
-        let err = estimate_did_cc_robust(
+        let err = robust(
             &rows,
             DidCcConfig {
                 cross_fit_folds: 2,
@@ -1250,7 +1555,7 @@ mod tests {
 
         for draw in 0..draws {
             let rows = simulate_did_cc_sample(&mut rng, 80, false);
-            let estimate = estimate_did_cc_robust(
+            let estimate = robust(
                 &rows,
                 DidCcConfig {
                     drdid: crate::types::DrDidConfig {
@@ -1263,7 +1568,7 @@ mod tests {
                     bootstrap_confidence_intervals: true,
                     cross_fit_folds: 4,
                     cross_fit_seed: 91,
-                    ..DidCcConfig::default()
+                    propensity_fallback: false,
                 },
             )
             .expect("cross-fit estimate");
@@ -1311,16 +1616,15 @@ mod tests {
                 bootstrap_confidence_intervals: true,
                 cross_fit_folds: 4,
                 cross_fit_seed: 17,
-                ..DidCcConfig::default()
+                propensity_fallback: false,
             };
-            let robust = estimate_did_cc_robust(&rows, config).expect("robust estimate");
-            let stationary =
-                estimate_did_cc_stationary(&rows, config).expect("stationary estimate");
-            let hausman = test_did_cc_stationarity(&rows, config).expect("hausman");
+            let robust = robust(&rows, config).expect("robust estimate");
+            let stationary = stationary(&rows, config).expect("stationary estimate");
+            let hausman = hausman(&rows, config).expect("hausman");
 
             robust_abs_error += (robust.att - target_att).abs();
             stationary_abs_error += (stationary.att - target_att).abs();
-            hausman_rejections += usize::from(hausman.reject_null);
+            hausman_rejections += usize::from(hausman.p_value < 0.05);
         }
 
         let mean_robust_abs_error = robust_abs_error / crate::util::usize_to_f64(draws);
@@ -1338,7 +1642,7 @@ mod tests {
     #[test]
     fn did_cc_can_skip_bootstrap_confidence_intervals() {
         let rows = simulate_did_cc_sample(&mut Stream::seeded(24_0312), 40, false);
-        let estimate = estimate_did_cc_robust(
+        let estimate = robust(
             &rows,
             DidCcConfig {
                 drdid: crate::types::DrDidConfig {
@@ -1350,7 +1654,7 @@ mod tests {
                 bootstrap_confidence_intervals: false,
                 cross_fit_folds: 4,
                 cross_fit_seed: 33,
-                ..DidCcConfig::default()
+                propensity_fallback: false,
             },
         )
         .expect("estimate without bootstrap ci");
@@ -1359,5 +1663,70 @@ mod tests {
         assert!(estimate.ci_low.is_finite());
         assert!(estimate.ci_high.is_finite());
         assert!(estimate.ci_low <= estimate.att && estimate.att <= estimate.ci_high);
+    }
+
+    const NONE: [PropensityFallback; 0] = [];
+
+    /// A pooled logit stopped after one iteration cannot converge, and
+    /// neither can the logit on the intercept alone.
+    fn one_iteration(propensity_fallback: bool, cross_fit_folds: usize) -> DidCcConfig {
+        DidCcConfig {
+            drdid: crate::types::DrDidConfig {
+                max_iter: 1,
+                ..crate::types::DrDidConfig::default()
+            },
+            cross_fit_folds,
+            cross_fit_seed: 5,
+            propensity_fallback,
+            ..DidCcConfig::default()
+        }
+    }
+
+    #[test]
+    fn a_failed_propensity_logit_is_an_error_without_the_fallback() {
+        let rows = simulate_did_cc_sample(&mut Stream::seeded(24_0313), 40, false);
+        assert_eq!(
+            stationary(&rows, one_iteration(false, 1)),
+            Err(DidCcError::PropensityFit { fold: None })
+        );
+        assert_eq!(
+            hausman(&rows, one_iteration(false, 1)).map(|_| ()),
+            Err(DidCcError::PropensityFit { fold: None })
+        );
+        assert_eq!(
+            stationary(&rows, one_iteration(false, 3)),
+            Err(DidCcError::PropensityFit { fold: Some(0) })
+        );
+        assert_eq!(
+            Error::from(DidCcError::PropensityFit { fold: Some(0) }),
+            Error::PropensityFit { fold: Some(0) }
+        );
+    }
+
+    #[test]
+    fn the_fallback_is_reported_where_it_was_taken() {
+        let rows = simulate_did_cc_sample(&mut Stream::seeded(24_0313), 40, false);
+        let shares = |fold| PropensityFallback {
+            fold,
+            fallback: Fallback::Shares,
+        };
+        let estimate = stationary(&rows, one_iteration(true, 1)).expect("fallback");
+        assert_eq!(estimate.propensity_fallbacks, [shares(None)]);
+        let fitted = stationary(&rows, DidCcConfig::default()).expect("fit");
+        assert_eq!(fitted.propensity_fallbacks, NONE);
+
+        let crossed = stationary(&rows, one_iteration(true, 3)).expect("fallback");
+        assert_eq!(
+            crossed.propensity_fallbacks,
+            [shares(Some(0)), shares(Some(1)), shares(Some(2))]
+        );
+
+        // The robust estimate fits only the generalised score, whose
+        // optimiser takes at least 25 iterations and converges here.
+        let robust = robust(&rows, one_iteration(false, 1)).expect("robust");
+        assert_eq!(robust.propensity_fallbacks, NONE);
+        let test = hausman(&rows, one_iteration(true, 1)).expect("test");
+        assert_eq!(test.robust.propensity_fallbacks, NONE);
+        assert_eq!(test.stationary.propensity_fallbacks, [shares(None)]);
     }
 }

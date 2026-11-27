@@ -64,7 +64,8 @@
 //! The weights of the controls are `pi / (1 - pi)` divided by the number
 //! treated, as in the paper's equations 12 and 13; they are not normalised
 //! to sum to one as in `DRDID::drdid_panel`, so with complete data the
-//! estimate differs from [`estimate_drdid_panel`](crate::estimate_drdid_panel)'s
+//! estimate differs from the panel doubly robust
+//! [`two_period::estimate`](crate::two_period::estimate)'s
 //! by the factor `sum (1 - A) pi / (1 - pi) / sum A` on the control term,
 //! which tends to 1 when the propensity model is right.
 //!
