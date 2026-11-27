@@ -32,7 +32,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::RegisterError;
+use crate::Error;
 
 /// An annual price index keyed by year.
 #[derive(Debug, Clone, Default)]
@@ -80,15 +80,15 @@ impl CpiTable {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::MissingReferenceYear`] or [`RegisterError::MissingYears`]
+    /// [`Error::MissingReferenceYear`] or [`Error::MissingYears`]
     /// when either year is not in the table.
-    pub fn adjustment_factor(&self, year: i32, reference_year: i32) -> Result<f64, RegisterError> {
+    pub fn adjustment_factor(&self, year: i32, reference_year: i32) -> Result<f64, Error> {
         let reference = self
             .index(reference_year)
-            .ok_or(RegisterError::MissingReferenceYear(reference_year))?;
+            .ok_or(Error::MissingReferenceYear(reference_year))?;
         let current = self
             .index(year)
-            .ok_or_else(|| RegisterError::MissingYears(vec![year]))?;
+            .ok_or_else(|| Error::MissingYears(vec![year]))?;
         Ok(reference / current)
     }
 
@@ -97,12 +97,7 @@ impl CpiTable {
     /// # Errors
     ///
     /// As [`Self::adjustment_factor`].
-    pub fn deflate(
-        &self,
-        nominal: f64,
-        year: i32,
-        reference_year: i32,
-    ) -> Result<f64, RegisterError> {
+    pub fn deflate(&self, nominal: f64, year: i32, reference_year: i32) -> Result<f64, Error> {
         Ok(nominal * self.adjustment_factor(year, reference_year)?)
     }
 
@@ -110,21 +105,21 @@ impl CpiTable {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::MissingYears`] listing every uncovered year, so the
+    /// [`Error::MissingYears`] listing every uncovered year, so the
     /// caller sees the full gap at once, or
-    /// [`RegisterError::MissingReferenceYear`] if the reference year itself is
+    /// [`Error::MissingReferenceYear`] if the reference year itself is
     /// absent.
     pub fn deflate_series(
         &self,
         costs: &[(f64, i32)],
         reference_year: i32,
-    ) -> Result<Vec<f64>, RegisterError> {
+    ) -> Result<Vec<f64>, Error> {
         let reference = self
             .index(reference_year)
-            .ok_or(RegisterError::MissingReferenceYear(reference_year))?;
+            .ok_or(Error::MissingReferenceYear(reference_year))?;
         let missing = self.missing_years(costs.iter().map(|&(_, year)| year));
         if !missing.is_empty() {
-            return Err(RegisterError::MissingYears(missing));
+            return Err(Error::MissingYears(missing));
         }
         Ok(costs
             .iter()
@@ -318,13 +313,13 @@ mod tests {
     fn deflate_series_reports_all_missing_years_sorted() {
         let costs = [(10.0, 2030), (20.0, 2015), (30.0, 1899), (40.0, 2030)];
         let err = table().deflate_series(&costs, 2023).unwrap_err();
-        assert_eq!(err, RegisterError::MissingYears(vec![1899, 2030]));
+        assert_eq!(err, Error::MissingYears(vec![1899, 2030]));
     }
 
     #[test]
     fn missing_reference_year_is_distinct_error() {
         let err = table().deflate(10.0, 2015, 1899).unwrap_err();
-        assert_eq!(err, RegisterError::MissingReferenceYear(1899));
+        assert_eq!(err, Error::MissingReferenceYear(1899));
     }
 
     #[test]
@@ -335,7 +330,7 @@ mod tests {
             "Missing CPI adjustment factors for years: 1899, 2030"
         );
         assert_eq!(
-            RegisterError::MissingReferenceYear(1899).to_string(),
+            Error::MissingReferenceYear(1899).to_string(),
             "Reference price year 1899 is missing from the CPI table."
         );
     }

@@ -277,8 +277,8 @@ fn main() {
                 exposure_periods(&dispensings, &supply).expect("exposure")
             });
             lines.push("episodes", periods.len() as f64);
-            lines.push("sum_start", periods.start.iter().map(|&s| s as f64).sum());
-            lines.push("sum_end", periods.end.iter().sum());
+            lines.push("sum_start", periods.start().iter().map(|&s| s as f64).sum());
+            lines.push("sum_end", periods.end().iter().sum());
             times
         }
         other => panic!("unknown method {other}"),

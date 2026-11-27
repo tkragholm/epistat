@@ -3,24 +3,13 @@
 //!
 //! Dates are counts of days since 1970-01-01, negative before it, in the
 //! proleptic Gregorian calendar. The conversions to and from year, month and
-//! day are the algorithms of Hinnant \[1\], which are exact over the whole
-//! range of `i64` that the intermediate products allow.
+//! day, and the addition of whole years and months, are those of
+//! [`epistat_core::day`], re-exported here under this crate's names:
+//! [`days_from_civil`] is `from_civil`, [`civil_from_days`] is `to_civil` and
+//! [`year_from_days`] is `year_of`. The algorithm and its reference are in
+//! that module.
 //!
 //! # Algorithm
-//!
-//! A Gregorian era is 400 years, or 146 097 days. Dates are counted from
-//! 1 March, so that the leap day is the last day of the year. With `y` the
-//! year, shifted back by one for January and February, the era `e = floor(y /
-//! 400)`, the year of the era `yoe = y - 400 e`, and the day of the shifted
-//! year `doy = (153 m' + 2) / 5 + d - 1`, where `m' = m - 3` for `m > 2` and
-//! `m + 9` otherwise,
-//!
-//! ```text
-//! doe  = 365 yoe + yoe/4 - yoe/100 + doy        day of the era, 0 to 146 096
-//! days = 146 097 e + doe - 719 468              719 468 days from 0000-03-01 to 1970-01-01
-//! ```
-//!
-//! with integer division. [`civil_from_days`] inverts it.
 //!
 //! The interval `[start, end]` has both days included. Its share of calendar
 //! year `y`, optionally clipped below at a floor day, is
@@ -53,86 +42,10 @@
 //! - A floor after the end clips every overlap to zero.
 //! - A year that does not fit an `i32` is reported as `i32::MAX`.
 //!
-//! # References
-//!
-//! 1. Hinnant H. chrono-Compatible Low-Level Date Algorithms.
-//!    howardhinnant.github.io/date_algorithms.html
 
-/// Days from 1970-01-01 to the proleptic Gregorian date `(y, m, d)`, with the
-/// month from 1 to 12 and the day from 1.
-#[must_use]
-pub fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = (if y >= 0 { y } else { y - 399 }) / 400;
-    let yoe = y - era * 400; // [0, 399]
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1; // [0, 365]
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
-    era * 146_097 + doe - 719_468
-}
-
-/// The proleptic Gregorian `(year, month, day)` of a day count from 1970-01-01.
-#[must_use]
-pub fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
-    let doe = z - era * 146_097; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
-/// The calendar year of a day count from 1970-01-01.
-#[must_use]
-pub fn year_from_days(z: i64) -> i64 {
-    civil_from_days(z).0
-}
-
-/// The day `years` calendar years after `day`, on the same month and day.
-///
-/// A 29 February that has no counterpart in the target year goes to 1 March
-/// or to 28 February, as `leap` says, the two conventions of
-/// [`crate::age::age_in_years`]. A negative `years` goes back. The result is
-/// the day on which a person born on `day` has completed `years` years under
-/// [`crate::AgeRule::CivilYears`] with the same `leap`.
-#[must_use]
-pub fn add_years(day: i64, years: i64, leap: crate::LeapBirthday) -> i64 {
-    let (y, m, d) = civil_from_days(day);
-    let target = y + years;
-    if m == 2 && d == 29 && !is_leap_year(target) {
-        return match leap {
-            crate::LeapBirthday::March1 => days_from_civil(target, 3, 1),
-            crate::LeapBirthday::February28 => days_from_civil(target, 2, 28),
-        };
-    }
-    days_from_civil(target, m, d)
-}
-
-/// The day `months` calendar months after `day`, on the same day of the month
-/// or on the last day of the target month when it is shorter. A negative
-/// `months` goes back.
-#[must_use]
-pub fn add_months(day: i64, months: i64) -> i64 {
-    let (y, m, d) = civil_from_days(day);
-    let index = y * 12 + (m - 1) + months;
-    let (ty, tm) = (index.div_euclid(12), index.rem_euclid(12) + 1);
-    days_from_civil(ty, tm, d.min(days_in_month(ty, tm)))
-}
-
-const fn is_leap_year(year: i64) -> bool {
-    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
-}
-
-const fn days_in_month(year: i64, month: i64) -> i64 {
-    match month {
-        2 => 28 + is_leap_year(year) as i64,
-        4 | 6 | 9 | 11 => 30,
-        _ => 31,
-    }
-}
+pub use epistat_core::day::year_of as year_from_days;
+pub use epistat_core::day::{add_months, add_years};
+pub use epistat_core::day::{from_civil as days_from_civil, to_civil as civil_from_days};
 
 /// Days from 1960-01-01, the SAS date epoch, to 1970-01-01: 3 653.
 pub const SAS_EPOCH_OFFSET_DAYS: i64 = 3_653;

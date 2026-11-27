@@ -11,7 +11,8 @@
 //! - [`person_time`] converts between day counts and civil dates, with the
 //!   SAS epoch of 1960 beside the Unix epoch, and splits an
 //!   interval of days across the calendar years it spans, with the length of
-//!   each year for prorating an annual value.
+//!   each year for prorating an annual value. The civil-date arithmetic is
+//!   that of [`epistat_core::day`].
 //! - [`spans`] merges intervals that overlap, or lie within a grace of each
 //!   other, in one sweep over rows sorted by key and start.
 //! - [`relations`] finds the connected components of rows that share a code in
@@ -52,6 +53,26 @@
 //! component numbers are `u32`, and a function that takes more rows than that
 //! refuses them. Every function returns results that depend only on its
 //! inputs, never on a thread count or hash order.
+//!
+//! # Paths
+//!
+//! Thirty names are reachable at the root and in the module that defines
+//! them. The module path is the canonical one, the path the documentation of
+//! the item and the other modules use. The root path is a shorthand for the
+//! names most callers need and is kept.
+//!
+//! | at the root | canonical path |
+//! |---|---|
+//! | [`Error`], [`RegisterError`] | `error` (private module, named at the root only) |
+//! | [`CpiTable`], `DENMARK_ANNUAL_CPI` | [`cpi`] |
+//! | [`AgeRule`], [`LeapBirthday`], [`age_in_years`], [`birthday_on_age`] | [`age`] |
+//! | [`Icd10Chapter`], [`NormalizedDiagnosis`], [`UnknownChapter`], [`icd10_chapter_label`], [`normalize_diagnosis_code`] | [`icd10`] |
+//! | [`SAS_EPOCH_OFFSET_DAYS`], [`SAS_EPOCH_OFFSET_SECONDS`], [`YearOverlap`], [`add_months`], [`add_years`], [`calendar_year_overlaps`], [`civil_from_days`], [`civil_from_days_sas`], [`civil_from_sas_seconds`], [`days_from_civil`], [`days_from_civil_sas`], [`sas_days_to_unix`], [`sas_seconds_to_unix`], [`unix_days_to_sas`], [`unix_seconds_to_sas`], [`year_from_days`] | [`person_time`] |
+//! | [`connected_components`] | [`relations`] |
+//! | [`MergedSpans`], [`merge_sorted_spans`] | [`spans`] |
+//!
+//! The date arithmetic in [`person_time`] is defined in [`epistat_core::day`],
+//! which names the conversions `from_civil`, `to_civil` and `year_of`.
 #![warn(missing_docs)]
 
 pub mod age;
@@ -76,7 +97,12 @@ pub use age::{AgeRule, LeapBirthday, age_in_years, birthday_on_age};
 pub use cpi::CpiTable;
 #[cfg(feature = "denmark")]
 pub use cpi::DENMARK_ANNUAL_CPI;
-pub use error::RegisterError;
+pub use error::Error;
+
+/// The name of the error before it was shared with the other crates' naming.
+#[deprecated(since = "0.2.0", note = "use `epistat_register::Error`")]
+pub type RegisterError = Error;
+
 pub use icd10::{
     Icd10Chapter, NormalizedDiagnosis, UnknownChapter, icd10_chapter_label,
     normalize_diagnosis_code,

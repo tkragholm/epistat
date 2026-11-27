@@ -41,18 +41,9 @@
 //! - A reference date before the birth date gives [`None`].
 //! - On the birth date the age is 0 under both rules.
 
-use crate::person_time::civil_from_days;
+use epistat_core::day::{is_leap_year, to_civil as civil_from_days};
 
-/// Where the birthday of a person born on 29 February falls in a year that is
-/// not a leap year.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum LeapBirthday {
-    /// On 1 March: the year is completed when the month and day compare as
-    /// not earlier than the birth month and day.
-    March1,
-    /// On 28 February.
-    February28,
-}
+pub use epistat_core::day::LeapBirthday;
 
 /// The rule for counting whole years of age.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -115,7 +106,7 @@ fn civil_years(birth: i64, at: i64, leap: LeapBirthday) -> i64 {
     let anniversary = if leap == LeapBirthday::February28
         && birth_month == 2
         && birth_dom == 29
-        && !is_leap(year)
+        && !is_leap_year(year)
     {
         (2, 28)
     } else {
@@ -123,10 +114,6 @@ fn civil_years(birth: i64, at: i64, leap: LeapBirthday) -> i64 {
     };
     let passed = (month, dom) >= anniversary;
     year - birth_year - i64::from(!passed)
-}
-
-const fn is_leap(year: i64) -> bool {
-    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 #[cfg(test)]
@@ -206,7 +193,7 @@ mod tests {
                 age_in_years(birth, at, FEB28),
             );
             let year = civil_from_days(at).0;
-            if (month, dom) == (2, 28) && !is_leap(year) {
+            if (month, dom) == (2, 28) && !is_leap_year(year) {
                 assert_eq!(f.unwrap(), m.unwrap() + 1);
             } else {
                 assert_eq!(m, f);
@@ -249,10 +236,11 @@ mod tests {
         let mut age = 0;
         loop {
             let year = birth.0 + age + 1;
-            let birthday = if birth.1 == 2 && birth.2 == 29 && !is_leap(year) {
+            let birthday = if birth.1 == 2 && birth.2 == 29 && !is_leap_year(year) {
                 match leap {
                     LeapBirthday::March1 => (year, 3, 1),
                     LeapBirthday::February28 => (year, 2, 28),
+                    _ => unreachable!("the rules the tests cover"),
                 }
             } else {
                 (year, birth.1, birth.2)

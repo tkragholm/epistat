@@ -55,8 +55,9 @@
 //! [`AgeRule::DaysOver365_25`] scale, where R's day scales are exact, and the
 //! labels with `Epi::timeBand` on the same pieces.
 
-use crate::RegisterError;
+use crate::Error;
 use crate::age::{AgeRule, birthday_on_age};
+use crate::error::{csr, length, row_count};
 use crate::person_time::{days_from_civil, year_from_days};
 
 /// A source of cut instants for [`split_at`].
@@ -108,11 +109,11 @@ pub struct Split {
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when the columns differ in length, an interval
+/// [`Error::Input`] when the columns differ in length, an interval
 /// ends before it starts, there are more rows than a `u32` holds, a cut
 /// column does not have one entry per row, or an age has no birthday that
 /// fits in an `i64`.
-pub fn split_at(start: &[i64], end: &[i64], cuts: &[Cuts<'_>]) -> Result<Split, RegisterError> {
+pub fn split_at(start: &[i64], end: &[i64], cuts: &[Cuts<'_>]) -> Result<Split, Error> {
     let mut out = Split::default();
     split_at_into(start, end, cuts, |row, s, e| {
         out.source_row.push(row);
@@ -135,20 +136,15 @@ pub fn split_at_into(
     end: &[i64],
     cuts: &[Cuts<'_>],
     mut emit: impl FnMut(u32, i64, i64),
-) -> Result<(), RegisterError> {
+) -> Result<(), Error> {
     let n = start.len();
-    if end.len() != n {
-        return Err(RegisterError::input(
-            "start and end must have one entry per row",
-        ));
-    }
-    let n32 = u32::try_from(n)
-        .map_err(|_| RegisterError::input(format!("{n} rows is more than split_at takes")))?;
+    length("end", n, end.len())?;
+    let n32 = row_count("start", n)?;
     for cut in cuts {
         check_cut(cut, n)?;
     }
     if let Some(row) = (0..n).find(|&r| end[r] < start[r]) {
-        return Err(RegisterError::input(format!(
+        return Err(Error::invalid(format!(
             "row {row} has an end before its start"
         )));
     }
@@ -201,16 +197,13 @@ pub fn split_at_into(
 ///
 /// # Errors
 ///
-/// [`RegisterError::Input`] when a cut source does not have one entry per
+/// [`Error::Input`] when a cut source does not have one entry per
 /// source row of the split, a piece names a row beyond it, or an age has no
 /// birthday that fits in an `i64`.
-pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>, RegisterError> {
+pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>, Error> {
     let pieces = split.start.len();
-    if split.source_row.len() != pieces || split.end.len() != pieces {
-        return Err(RegisterError::input(
-            "the split must have one source row, start and end per piece",
-        ));
-    }
+    length("source_row", pieces, split.source_row.len())?;
+    length("end", pieces, split.end.len())?;
     let latest = |values: &mut dyn Iterator<Item = (i64, i64)>, day: i64| {
         values
             .filter(|&(at, _)| at <= day)
@@ -227,28 +220,22 @@ pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>,
     for cut in cuts {
         match *cut {
             Cuts::AgeYears { birth, .. } if birth.len() < rows_needed => {
-                return Err(RegisterError::input(
+                return Err(Error::invalid(
                     "a piece names a row beyond the birth column",
                 ));
             }
             Cuts::TimeSinceEntry { entry, .. } if entry.len() < rows_needed => {
-                return Err(RegisterError::input(
+                return Err(Error::invalid(
                     "a piece names a row beyond the entry column",
                 ));
             }
             Cuts::PerRow { offsets, .. } if offsets.len() < rows_needed + 1 => {
-                return Err(RegisterError::input(
-                    "a piece names a row beyond the cut offsets",
-                ));
+                return Err(Error::invalid("a piece names a row beyond the cut offsets"));
             }
             _ => {}
         }
-        if let Cuts::PerRow { offsets, at } = *cut
-            && (offsets.first() != Some(&0)
-                || offsets.last() != Some(&at.len())
-                || offsets.windows(2).any(|w| w[0] > w[1]))
-        {
-            return Err(RegisterError::input("the cut offsets are not a CSR layout"));
+        if let Cuts::PerRow { offsets, at } = *cut {
+            csr("cut offsets", offsets, at.len())?;
         }
         let mut column = Vec::with_capacity(pieces);
         for i in 0..pieces {
@@ -259,7 +246,7 @@ pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>,
                     let mut reached = None;
                     for &age in ages {
                         let at = birthday_on_age(birth[row], age, rule).ok_or_else(|| {
-                            RegisterError::input(format!(
+                            Error::invalid(format!(
                                 "row {row}: the birthday at age {age} does not fit in an i64"
                             ))
                         })?;
@@ -288,35 +275,20 @@ pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>,
     Ok(out)
 }
 
-fn check_cut(cut: &Cuts<'_>, n: usize) -> Result<(), RegisterError> {
-    let bad = match *cut {
-        Cuts::CalendarYears | Cuts::CalendarPeriods(_) => false,
-        Cuts::AgeYears { birth, .. } => birth.len() != n,
-        Cuts::TimeSinceEntry { entry, .. } => entry.len() != n,
+fn check_cut(cut: &Cuts<'_>, n: usize) -> Result<(), Error> {
+    match *cut {
+        Cuts::CalendarYears | Cuts::CalendarPeriods(_) => Ok(()),
+        Cuts::AgeYears { birth, .. } => length("birth", n, birth.len()),
+        Cuts::TimeSinceEntry { entry, .. } => length("entry", n, entry.len()),
         Cuts::PerRow { offsets, at } => {
-            offsets.len() != n + 1
-                || offsets.first() != Some(&0)
-                || offsets.last() != Some(&at.len())
-                || offsets.windows(2).any(|w| w[0] > w[1])
+            length("cut offsets", n + 1, offsets.len())?;
+            csr("cut offsets", offsets, at.len())
         }
-    };
-    if bad {
-        Err(RegisterError::input(
-            "a cut source does not have one entry per row, or its offsets are not a CSR layout",
-        ))
-    } else {
-        Ok(())
     }
 }
 
 /// Appends the cuts of one source that lie strictly inside `(s, e)`.
-fn gather(
-    cut: &Cuts<'_>,
-    row: usize,
-    s: i64,
-    e: i64,
-    at: &mut Vec<i64>,
-) -> Result<(), RegisterError> {
+fn gather(cut: &Cuts<'_>, row: usize, s: i64, e: i64, at: &mut Vec<i64>) -> Result<(), Error> {
     let mut keep = |c: i64| {
         if c > s && c < e {
             at.push(c);
@@ -331,7 +303,7 @@ fn gather(
         Cuts::AgeYears { birth, ages, rule } => {
             for &age in ages {
                 let day = birthday_on_age(birth[row], age, rule).ok_or_else(|| {
-                    RegisterError::input(format!(
+                    Error::invalid(format!(
                         "row {row}: the birthday at age {age} does not fit in an i64"
                     ))
                 })?;

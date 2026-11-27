@@ -56,7 +56,9 @@ fn periods_of(
 }
 
 fn spans(p: &Periods) -> Vec<(i64, i64)> {
-    (0..p.len()).map(|i| (p.start[i], p.end_day(i))).collect()
+    (0..p.len())
+        .map(|i| (p.start[i], p.end_day(i).unwrap()))
+        .collect()
 }
 
 fn simple(rows: &[(i64, f64)]) -> Vec<(i64, i64)> {
@@ -538,7 +540,7 @@ fn a_fractional_end_rounds_up_to_the_first_day_without_supply() {
     };
     let p = periods_of(&[(0, 49.0)], a, DoseRule::Default, Stock::Discard, &[]);
     assert!((p.end[0] - 4.9).abs() < 1e-12);
-    assert_eq!((p.end_day(0), p.last_day(0)), (5, 4));
+    assert_eq!((p.end_day(0), p.last_day(0)), (Some(5), Some(4)));
     let q = PointTable {
         person: &[0, 0],
         group: &[0, 0],

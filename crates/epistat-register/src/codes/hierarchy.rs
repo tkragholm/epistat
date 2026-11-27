@@ -7,7 +7,7 @@
 //! copyright, so [`CodeHierarchy`] takes the table from the caller.
 
 use super::{CodeMap, CodeSet};
-use crate::RegisterError;
+use crate::Error;
 
 /// A level of an ICD-10 code that is a prefix of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -47,20 +47,20 @@ impl CodeHierarchy {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when a specification does not parse, a label is
+    /// [`Error::Input`] when a specification does not parse, a label is
     /// used twice, or two entries share a code.
-    pub fn from_ranges(ranges: &[(&str, &str)]) -> Result<Self, RegisterError> {
+    pub fn from_ranges(ranges: &[(&str, &str)]) -> Result<Self, Error> {
         let mut labels: Vec<String> = Vec::with_capacity(ranges.len());
         let mut sets: Vec<CodeSet> = Vec::with_capacity(ranges.len());
         for &(label, spec) in ranges {
             if labels.iter().any(|l| l == label) {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "the hierarchy uses the label {label:?} twice"
                 )));
             }
             let set = CodeSet::parse(spec)?;
             if let Some(k) = sets.iter().position(|s| !s.intersection(&set).is_empty()) {
-                return Err(RegisterError::input(format!(
+                return Err(Error::invalid(format!(
                     "the entries {:?} and {label:?} share a code",
                     labels[k]
                 )));
@@ -91,8 +91,8 @@ impl CodeHierarchy {
     ///
     /// # Errors
     ///
-    /// [`RegisterError::Input`] when the hierarchy has more than 64 entries.
-    pub fn classify(&self, distinct_codes: &[&str]) -> Result<Vec<Option<u32>>, RegisterError> {
+    /// [`Error::Input`] when the hierarchy has more than 64 entries.
+    pub fn classify(&self, distinct_codes: &[&str]) -> Result<Vec<Option<u32>>, Error> {
         let map = CodeMap::new(
             self.labels
                 .iter()

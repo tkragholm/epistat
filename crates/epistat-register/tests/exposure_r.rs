@@ -120,11 +120,11 @@ fn observed_and_fixed_rules_give_the_episodes_of_adherer() {
         let p = exposure_periods(&d, &s).unwrap();
         let label = format!("{} rule, gap {}", e.rule, e.gap);
         assert_eq!(p.len(), e.id.len(), "{label}: number of episodes");
-        assert_eq!(p.person, e.id, "{label}");
-        assert_eq!(p.start, e.start, "{label}");
-        assert_close(&p.end, &e.end, Tolerance::exact());
+        assert_eq!(p.person(), e.id, "{label}");
+        assert_eq!(p.start(), e.start, "{label}");
+        assert_close(p.end(), &e.end, Tolerance::exact());
         // The ends are whole days, so the first day without supply is the end.
-        let whole: Vec<f64> = (0..p.len()).map(|i| p.end_day(i) as f64).collect();
+        let whole: Vec<f64> = (0..p.len()).map(|i| p.end_day(i).unwrap() as f64).collect();
         assert_close(&whole, &e.end, Tolerance::exact());
     }
 }
