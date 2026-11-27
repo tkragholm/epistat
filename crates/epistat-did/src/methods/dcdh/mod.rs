@@ -75,12 +75,11 @@
 //!   coefficients specific to each period. The switchers' cohorts use the
 //!   indicator of having switched times the direction of the switch, and
 //!   the normalisation and the average total effect the treatment itself.
-//! - [`DcdhResult::normalized_weights`] and [`DcdhResult::avg_time_periods`]
-//!   describe the switchers' treatment changes. [`dcdh_design`],
-//!   [`dcdh_first_switch_dates`], [`estimate_dcdh_heterogeneity`],
-//!   [`estimate_dcdh_by`], [`estimate_dcdh_by_path`] and
-//!   [`estimate_dcdh_bootstrap`] are the package's `design`,
-//!   `date_first_switch`, `predict_het`, `by`, `by_path` and `bootstrap`.
+//! - [`Dcdh::normalized_weights`] and [`Dcdh::avg_time_periods`]
+//!   describe the switchers' treatment changes. [`design`],
+//!   [`first_switch_dates`], [`heterogeneity`], [`by`] and [`by_path`] are
+//!   the package's `design`, `date_first_switch`, `predict_het`, `by` and
+//!   `by_path`, and [`DcdhOptions::bootstrap`] its `bootstrap`.
 //!
 //! # Variance
 //!
@@ -99,7 +98,15 @@
 //! over the clusters `c` (the groups without clustering), without centring.
 //! The covariance of two estimates is the same sum of products, which gives
 //! the joint tests that all effects, or all placebos, are zero and that the
-//! effects are equal. The intervals are `estimate +- z se`.
+//! effects are equal. The intervals are `estimate +- z se`, with
+//! `z = qnorm(0.5 ci_level + 0.5)`, and the p-values `2 Phi(-|estimate / se|)`.
+//!
+//! [`Dcdh::influence`] holds `psi_g = G U^var_{g,l}`, normalised like the
+//! estimate, on the per-unit scale of [`epistat_inference::Influence`]
+//! under [`ClusterRule::NoSmallSample`]. [`Influence::variance`] centres the
+//! cluster sums and the package does not, so the two agree when the values
+//! sum to zero. Without clusters the reported variance is the centred one
+//! plus `(sum_g psi_g)^2 / G^3`.
 //!
 //! # The package's versions, and where this departs from them
 //!
@@ -214,52 +221,36 @@
 mod bootstrap;
 mod controls;
 mod core;
+mod data;
 mod design;
 mod het;
 mod panel;
 mod subsets;
 mod summaries;
 
-pub use self::bootstrap::{DcdhBootstrap, DcdhBootstrapEstimate, estimate_dcdh_bootstrap};
+pub use self::bootstrap::{DcdhBootstrap, DcdhBootstrapTerm};
+pub use self::data::{SwitchingPanel, SwitchingPanelBuilder};
 pub use self::design::{
-    DcdhDesign, DcdhPath, DcdhSwitchDate, DcdhSwitchDates, dcdh_design, dcdh_first_switch_dates,
+    DcdhDesign, DcdhPath, DcdhSwitchDate, DcdhSwitchDates, design, first_switch_dates,
 };
-pub use self::het::{DcdhHeterogeneity, estimate_dcdh_heterogeneity};
-pub use self::subsets::{DcdhPathResult, DcdhSubgroup, estimate_dcdh_by, estimate_dcdh_by_path};
+pub use self::het::{DcdhHeterogeneity, heterogeneity};
+pub use self::subsets::{DcdhPathResult, DcdhSubgroup, by, by_path};
 
+use epistat_core::{Bootstrap, Covariance, Estimate, InputError, Interval, Level};
+use epistat_inference::{ClusterRule, Influence};
 use epistat_linalg::Mat;
+use epistat_stats::dist::normal;
 
-use crate::inference::{validate_confidence_level, z_score_for_confidence};
+use crate::error::Error;
+use crate::methods::fe_output;
 
 use self::controls::Controls;
 use self::core::{DirectionTerms, Options, Terms, direction};
 use self::panel::{Panel, prepare};
 use self::summaries::{lag_weights, time_periods};
 
-/// One cell of the panel: a group in a period.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DcdhObservation {
-    /// Group (unit) identifier.
-    pub group: i64,
-    /// Period. Periods are ranked, so only their order matters.
-    pub time: i64,
-    /// Outcome, `None` where missing.
-    pub outcome: Option<f64>,
-    /// Treatment, `None` where missing.
-    pub treatment: Option<f64>,
-    /// Sampling weight, finite and not negative; 1 for none.
-    pub weight: f64,
-    /// Control variables, the same number in every row.
-    pub controls: Vec<f64>,
-    /// Stratum within which comparisons are made, as `trends_nonparam`.
-    /// Constant within a group; 0 for none.
-    pub stratum: i64,
-    /// Cluster, constant within a group. `None` in every row to cluster by
-    /// group.
-    pub cluster: Option<i64>,
-}
-
 /// Which switchers enter the effects.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DcdhSwitchers {
     /// Switchers in and out (`switchers = ""`).
@@ -272,6 +263,7 @@ pub enum DcdhSwitchers {
 }
 
 /// The test that effects are equal (`effects_equal`).
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DcdhEffectsEqual {
     /// No test.
@@ -288,32 +280,35 @@ pub enum DcdhEffectsEqual {
     },
 }
 
-/// Options of [`estimate_dcdh`], named after `did_multiplegt_dyn`'s.
+/// The options of [`estimate`], named after `did_multiplegt_dyn`'s
+/// arguments, with the package's defaults.
 #[expect(
     clippy::struct_excessive_bools,
     reason = "the options are the R function's logical arguments"
 )]
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DcdhConfig {
-    /// Number of effects requested, at least 1.
+pub struct DcdhOptions {
+    /// The number of effects requested (`effects`), at least 1; by default 1.
     pub effects: usize,
-    /// Number of placebos requested, at most `effects`.
+    /// The number of placebos requested (`placebo`), at most `effects`; by
+    /// default 0.
     pub placebo: usize,
-    /// Normalised effects.
+    /// Normalised effects (`normalized`).
     pub normalized: bool,
-    /// Which switchers to use.
+    /// Which switchers to use (`switchers`).
     pub switchers: DcdhSwitchers,
-    /// Only never-switchers as controls.
+    /// Only never-switchers as controls (`only_never_switchers`).
     pub only_never_switchers: bool,
-    /// Keep groups whose treatment goes both above and below its baseline.
+    /// Keep groups whose treatment goes both above and below its baseline
+    /// (`dont_drop_larger_lower`).
     pub dont_drop_larger_lower: bool,
     /// Drop a group's outcomes from its first missing treatment, when that
-    /// is before its first switch.
+    /// is before its first switch (`drop_if_d_miss_before_first_switch`).
     pub drop_if_d_miss_before_first_switch: bool,
-    /// The equality test.
+    /// The equality test (`effects_equal`).
     pub effects_equal: DcdhEffectsEqual,
-    /// Confidence level of the intervals, in (0, 1).
-    pub confidence_level: f64,
+    /// The level of the intervals (`ci_level`); by default 95%.
+    pub level: Level,
     /// Group-specific linear trends (`trends_lin`): effect `l` is the sum of
     /// effects `1..=l` on the outcome's first difference, each over the
     /// switchers for which all of them can be estimated. There is no
@@ -333,11 +328,15 @@ pub struct DcdhConfig {
     /// (`less_conservative_se`; `more_granular_demeaning` of 2.4.0 sets the
     /// same option).
     pub less_conservative_se: bool,
-    /// Compute [`DcdhResult::avg_time_periods`].
+    /// Compute [`Dcdh::avg_time_periods`].
     pub avg_time_periods: bool,
+    /// The bootstrap of [`Dcdh::bootstrap`] (`bootstrap`), at least two
+    /// replicates; `None` for the analytic inference alone, the default.
+    /// [`design`], [`first_switch_dates`] and [`heterogeneity`] ignore it.
+    pub bootstrap: Option<Bootstrap>,
 }
 
-impl Default for DcdhConfig {
+impl Default for DcdhOptions {
     fn default() -> Self {
         Self {
             effects: 1,
@@ -348,29 +347,29 @@ impl Default for DcdhConfig {
             dont_drop_larger_lower: false,
             drop_if_d_miss_before_first_switch: false,
             effects_equal: DcdhEffectsEqual::No,
-            confidence_level: 0.95,
+            level: Level::default(),
             trends_lin: false,
             continuous: None,
             same_switchers: false,
             same_switchers_pl: false,
             less_conservative_se: false,
             avg_time_periods: false,
+            bootstrap: None,
         }
     }
 }
 
 /// One estimate: an effect, a placebo or the average total effect, with the
 /// columns of the package's results.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
-pub struct DcdhEstimate {
+pub struct DcdhTerm {
     /// `l` for effect `l`, `-l` for placebo `l`, 0 for the average.
     pub relative_period: i64,
-    /// The estimate; `None` when it has no switcher or no control.
-    pub estimate: Option<f64>,
-    /// Its standard error.
-    pub se: Option<f64>,
-    /// Its normal interval.
-    pub ci: Option<(f64, f64)>,
+    /// The estimate with its analytic standard error, its normal interval at
+    /// the options' level and its normal p-value; `None` when it has no
+    /// switcher or no control.
+    pub estimate: Option<Estimate>,
     /// Cells used ("N").
     pub n_cells: usize,
     /// Switchers used ("Switchers").
@@ -379,23 +378,19 @@ pub struct DcdhEstimate {
     pub n_cells_weighted: f64,
     /// Weighted switchers ("Switchers.w").
     pub n_switchers_weighted: f64,
-    /// The influence function: one value per group of
-    /// [`DcdhResult::groups`], scaled so that the variance is
-    /// `sum_c (sum_{g in c} psi_g)^2 / G^2` over clusters `c`. Normalised
-    /// like the estimate. `None` with the standard error.
-    pub influence: Option<Vec<f64>>,
 }
 
-/// The result of [`estimate_dcdh`].
+/// The result of [`estimate`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
-pub struct DcdhResult {
+pub struct Dcdh {
     /// Effects `1..=L`, where `L` is the number requested or fewer when the
     /// data allow fewer.
-    pub effects: Vec<DcdhEstimate>,
+    pub effects: Vec<DcdhTerm>,
     /// Placebos `1..=L_pl`.
-    pub placebos: Vec<DcdhEstimate>,
+    pub placebos: Vec<DcdhTerm>,
     /// The average total effect.
-    pub average_total_effect: DcdhEstimate,
+    pub average_total_effect: DcdhTerm,
     /// Upper-tail probability of the Wald test that all effects are zero,
     /// with at least two effects that are all estimated.
     pub p_joint_effects: Option<f64>,
@@ -403,9 +398,9 @@ pub struct DcdhResult {
     pub p_joint_placebos: Option<f64>,
     /// The test that the effects are equal, when requested.
     pub p_equal_effects: Option<f64>,
-    /// Covariance of the effects then the placebos, row-major, NaN where an
+    /// The covariance of the effects then the placebos, `None` where an
     /// estimate has no standard error.
-    pub covariance: Vec<f64>,
+    pub covariance: Covariance,
     /// With `normalized`, the denominator of each effect.
     pub normalization: Vec<Option<f64>>,
     /// With `normalized`, the denominator of each placebo.
@@ -418,21 +413,50 @@ pub struct DcdhResult {
     /// entry `k` of row `l - 1` is the weight of lag `k`, for `k < l`.
     /// `None` for an effect without a normalisation.
     pub normalized_weights: Vec<Option<Vec<f64>>>,
-    /// With [`DcdhConfig::avg_time_periods`], the average number of periods
+    /// With [`DcdhOptions::avg_time_periods`], the average number of periods
     /// over which a dose of treatment affects the outcome.
     pub avg_time_periods: Option<DcdhAvgTimePeriods>,
-    /// `G`, the number of groups that divides every estimate.
-    pub n_groups: usize,
-    /// The groups indexing the influence functions, increasing.
-    pub groups: Vec<i64>,
-    /// The cluster of each of those groups, when clustered.
-    pub clusters: Option<Vec<i64>>,
+    /// `G`, the number of units that divides every estimate.
+    pub n_units: usize,
+    /// The codes of those units, increasing: every unit left after the
+    /// baseline rule, including those without rows in the estimation.
+    pub units: Vec<u32>,
+    /// The cluster code of each of those units, when clustered.
+    pub clusters: Option<Vec<u32>>,
+    /// The influence functions of the estimates with a standard error, one
+    /// column each in the order of the effects, the placebos and the
+    /// average total effect, one value per unit of [`Dcdh::units`] (0 for a
+    /// unit without rows in the estimation), normalised like the estimate;
+    /// `None` when no estimate has a standard error. The columns are under
+    /// [`ClusterRule::NoSmallSample`]; see the module documentation for how
+    /// [`Influence::variance`] relates to the reported standard errors.
+    /// [`Dcdh::influence_of`] finds the column of an estimate.
+    pub influence: Option<Influence>,
+    /// With [`DcdhOptions::bootstrap`], the bootstrap standard errors.
+    pub bootstrap: Option<DcdhBootstrap>,
+}
+
+impl Dcdh {
+    /// The influence function of estimate `j`, counting the effects, then
+    /// the placebos, then the average total effect; `None` for an estimate
+    /// without a standard error or one out of range.
+    #[must_use]
+    pub fn influence_of(&self, j: usize) -> Option<&[f64]> {
+        let defined = self
+            .effects
+            .iter()
+            .chain(&self.placebos)
+            .chain(std::iter::once(&self.average_total_effect))
+            .map(|t| t.estimate.is_some_and(|e| e.se.is_some()));
+        fe_output::column_of(self.influence.as_ref(), defined, j)
+    }
 }
 
 /// The `avg_time_periods` output: over the switchers' changes in treatment
 /// at `F_g + k`, the mean of `M_g - k`, the number of periods from `F_g + k`
 /// to the last effect the switcher contributes to, weighted by the size of
 /// the change.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DcdhAvgTimePeriods {
     /// The weighted mean, `None` when no switcher changes treatment.
@@ -445,72 +469,6 @@ pub struct DcdhAvgTimePeriods {
     pub switchers: Vec<f64>,
 }
 
-/// Errors from [`estimate_dcdh`].
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum DcdhError {
-    /// No observations.
-    #[error("no observations")]
-    Empty,
-    /// An invalid option.
-    #[error("invalid option: {0}")]
-    InvalidConfig(&'static str),
-    /// An invalid row.
-    #[error("row {row}: {reason}")]
-    InvalidRow {
-        /// Index of the row.
-        row: usize,
-        /// What is wrong.
-        reason: &'static str,
-    },
-    /// Two rows for one group and period.
-    #[error("group {group} has two rows in period {time}")]
-    DuplicateCell {
-        /// The group.
-        group: i64,
-        /// The period.
-        time: i64,
-    },
-    /// The stratum changes within a group.
-    #[error("the stratum of group {group} is not constant")]
-    VaryingStratum {
-        /// The group.
-        group: i64,
-    },
-    /// The cluster changes within a group.
-    #[error("the cluster of group {group} is not constant")]
-    ClusterNotNested {
-        /// The group.
-        group: i64,
-    },
-    /// After the sample rules no period has both switchers and controls
-    /// (Design Restriction 1 of the paper fails).
-    #[error("no treatment effect can be estimated")]
-    NoEffect,
-    /// After the sample rules a period inside the panel has no rows.
-    #[error("a period inside the panel has no rows after the sample rules")]
-    EmptyPeriod,
-    /// A covariate of `predict_het` changes within a group.
-    #[error("a covariate of group {group} is not constant")]
-    VaryingCovariate {
-        /// The group.
-        group: i64,
-    },
-    /// The subgroup variable of `by` changes within a group.
-    #[error("the subgroup of group {group} is not constant")]
-    VaryingSubgroup {
-        /// The group.
-        group: i64,
-    },
-    /// The controls cannot be used for a baseline treatment.
-    #[error("controls at baseline treatment {baseline}: {reason}")]
-    Controls {
-        /// The baseline treatment.
-        baseline: f64,
-        /// What is wrong.
-        reason: &'static str,
-    },
-}
-
 /// One estimate assembled from the two directions.
 struct Combined {
     estimate: Option<f64>,
@@ -520,6 +478,30 @@ struct Combined {
     n_switchers_dw: f64,
     count: Vec<f64>,
     delta: Option<f64>,
+}
+
+/// The standard normal quantile of the package's intervals,
+/// `qnorm(1 - (1 - ci_level) / 2)` written as `0.5 ci_level + 0.5`.
+fn z_of(level: Level) -> f64 {
+    normal::quantile(0.5 * level.confidence_value() + 0.5)
+}
+
+/// `value` with the standard error `se`, the interval `value -/+ z se` at
+/// `level` and the normal p-value; the standard error, and with it the
+/// interval and the p-value, `None` unless finite.
+fn normal_estimate(value: f64, se: Option<f64>, z: f64, level: Level) -> Estimate {
+    let se = se.filter(|s| s.is_finite());
+    let point = Estimate::point(value).with_se(se);
+    let Some(s) = se else {
+        return point;
+    };
+    point
+        .with_interval(Some(Interval::new(
+            Some(value - z * s),
+            Some(value + z * s),
+            level,
+        )))
+        .with_p_value((s > 0.0).then(|| 2.0 * normal::cdf(-(value / s).abs())))
 }
 
 fn live(t: Option<&Terms>) -> Option<&Terms> {
@@ -555,7 +537,7 @@ fn combine(
     panel: &Panel,
     plus: Option<&Terms>,
     minus: Option<&Terms>,
-    config: &DcdhConfig,
+    options: &DcdhOptions,
 ) -> Combined {
     let gn = panel.n_grid_groups();
     let cells = gn * panel.nt;
@@ -578,11 +560,11 @@ fn combine(
         let cm = m.map_or(0.0, |t| t.count[c]);
         *slot = if cp > cm { cp } else { cm };
     }
-    let delta = config
+    let delta = options
         .normalized
         .then(|| a * p.map_or(0.0, |t| t.delta_norm) + b * m.map_or(0.0, |t| t.delta_norm));
     let mut estimate = total / panel.n_groups;
-    let ok = estimable(config.switchers, n1, n0);
+    let ok = estimable(options.switchers, n1, n0);
     if let Some(d) = delta {
         estimate /= d;
         for v in &mut psi {
@@ -685,8 +667,9 @@ fn equality_test(estimates: &[Option<f64>], sums: &[Option<Vec<f64>>]) -> Option
 /// The `did_multiplegt_dyn` estimator of de Chaisemartin and
 /// D'Haultfoeuille: event-study effects of the first treatment change for
 /// treatments that switch on and off or take several values, their
-/// placebos, the average total effect and the package's analytic inference.
-/// See the module documentation for the estimator and the variance.
+/// placebos, the average total effect and the package's analytic inference,
+/// with the bootstrap of [`DcdhOptions::bootstrap`] beside it. See the
+/// module documentation for the estimator and the variance.
 ///
 /// The sample rules are the package's: groups whose treatment goes both
 /// above and below the baseline lose their rows from the period when both
@@ -696,58 +679,75 @@ fn equality_test(estimates: &[Option<f64>], sums: &[Option<Vec<f64>>]) -> Option
 /// conventions.
 ///
 /// # Errors
-/// [`DcdhError`] for invalid input or options, or when no effect can be
-/// estimated.
+///
+/// [`Error::Input`] for options outside their domain,
+/// [`Error::Unsupported`] for options that do not combine,
+/// [`Error::NoEffect`] when no effect can be estimated,
+/// [`Error::EmptyPeriod`] for a period that loses all its rows, and
+/// [`Error::Controls`] for controls that cannot be used.
 ///
 /// # Panics
+///
 /// Only when a number of periods or effects does not fit in `i64`.
-pub fn estimate_dcdh(
-    observations: &[DcdhObservation],
-    config: &DcdhConfig,
-) -> Result<DcdhResult, DcdhError> {
-    validate(config)?;
-    let panel = prepare(observations, config)?;
+pub fn estimate(data: &SwitchingPanel<'_>, options: &DcdhOptions) -> Result<Dcdh, Error> {
+    validate(options)?;
+    let mut result = analytic(data, options)?;
+    if let Some(draws) = options.bootstrap {
+        result.bootstrap = Some(bootstrap::run(data, options, &result, draws));
+    }
+    Ok(result)
+}
+
+/// The estimates with the analytic inference alone.
+fn analytic(data: &SwitchingPanel<'_>, options: &DcdhOptions) -> Result<Dcdh, Error> {
+    let panel = prepare(data, options)?;
     let controls = if panel.controls.is_empty() {
         None
     } else {
         Some(Controls::new(&panel)?)
     };
-    let counts = counts(&panel, config)?;
-    let (inn, out) = directions(&panel, controls.as_ref(), config, &counts);
-    Ok(assemble(
-        observations,
-        &panel,
-        config,
-        &counts,
-        inn.as_ref(),
-        out.as_ref(),
-    ))
+    let counts = counts(&panel, options)?;
+    let (inn, out) = directions(&panel, controls.as_ref(), options, &counts);
+    assemble(data, &panel, options, &counts, inn.as_ref(), out.as_ref())
 }
 
-fn validate(config: &DcdhConfig) -> Result<(), DcdhError> {
-    if config.effects == 0 {
-        return Err(DcdhError::InvalidConfig("effects must be at least 1"));
+fn domain(what: &'static str, value: f64, domain: &'static str) -> Error {
+    InputError::Domain {
+        what,
+        value,
+        domain,
     }
-    if !validate_confidence_level(config.confidence_level) {
-        return Err(DcdhError::InvalidConfig(
-            "confidence_level must be in (0, 1)",
-        ));
+    .into()
+}
+
+fn validate(options: &DcdhOptions) -> Result<(), Error> {
+    if options.effects == 0 {
+        return Err(domain("effects", 0.0, "1 or more"));
     }
-    if let DcdhEffectsEqual::Range { first, last } = config.effects_equal
+    if let DcdhEffectsEqual::Range { first, last } = options.effects_equal
         && (first < 1 || last <= first)
     {
-        return Err(DcdhError::InvalidConfig(
-            "effects_equal needs 1 <= first < last",
+        return Err(domain(
+            "effects_equal",
+            first as f64,
+            "a range first..=last with 1 <= first < last",
         ));
     }
-    if config.same_switchers_pl && !config.same_switchers {
-        return Err(DcdhError::InvalidConfig(
-            "same_switchers_pl needs same_switchers",
-        ));
+    if options.same_switchers_pl && !options.same_switchers {
+        return Err(Error::Unsupported {
+            what: "same_switchers_pl without same_switchers",
+        });
     }
-    if config.continuous == Some(0) {
-        return Err(DcdhError::InvalidConfig(
-            "the polynomial order of continuous must be at least 1",
+    if options.continuous == Some(0) {
+        return Err(domain("continuous", 0.0, "1 or more"));
+    }
+    if let Some(draws) = options.bootstrap
+        && draws.replicates < 2
+    {
+        return Err(domain(
+            "bootstrap replicates",
+            draws.replicates as f64,
+            "2 or more",
         ));
     }
     Ok(())
@@ -764,14 +764,14 @@ struct Counts {
     out_placebos: usize,
 }
 
-fn counts(panel: &Panel, config: &DcdhConfig) -> Result<Counts, DcdhError> {
+fn counts(panel: &Panel, options: &DcdhOptions) -> Result<Counts, Error> {
     let gn = panel.n_grid_groups();
     let max_of = |inc: f64, f: &dyn Fn(usize) -> Option<i64>| {
         (0..gn).filter(|&g| panel.s_g[g] == inc).filter_map(f).max()
     };
     // With `trends_lin` the panel starts in the second period, which leaves
     // one placebo fewer.
-    let shift = i64::from(config.trends_lin);
+    let shift = i64::from(options.trends_lin);
     let in_effects = max_of(1.0, &|g| Some(panel.l_g[g])).unwrap_or(0).max(0);
     let out_effects = max_of(0.0, &|g| Some(panel.l_g[g])).unwrap_or(0).max(0);
     let pin = (max_of(1.0, &|g| panel.l_g_placebo[g]).unwrap_or(0).max(0) - shift).max(0);
@@ -783,18 +783,18 @@ fn counts(panel: &Panel, config: &DcdhConfig) -> Result<Counts, DcdhError> {
         to_usize(pin),
         to_usize(pout),
     );
-    let (avail, avail_pl) = match config.switchers {
+    let (avail, avail_pl) = match options.switchers {
         DcdhSwitchers::Both => (in_effects.max(out_effects), in_placebos.max(out_placebos)),
         DcdhSwitchers::In => (in_effects, in_placebos),
         DcdhSwitchers::Out => (out_effects, out_placebos),
     };
     if avail == 0 {
-        return Err(DcdhError::NoEffect);
+        return Err(Error::NoEffect);
     }
-    let l = avail.min(config.effects);
+    let l = avail.min(options.effects);
     Ok(Counts {
         l,
-        l_pl: avail_pl.min(config.placebo).min(config.effects),
+        l_pl: avail_pl.min(options.placebo).min(options.effects),
         in_effects,
         out_effects,
         in_placebos,
@@ -806,37 +806,37 @@ fn counts(panel: &Panel, config: &DcdhConfig) -> Result<Counts, DcdhError> {
 fn directions(
     panel: &Panel,
     controls: Option<&Controls>,
-    config: &DcdhConfig,
+    options: &DcdhOptions,
     k: &Counts,
 ) -> (Option<DirectionTerms>, Option<DirectionTerms>) {
-    let (run_in, run_out) = match config.switchers {
+    let (run_in, run_out) = match options.switchers {
         DcdhSwitchers::Both => (true, true),
         DcdhSwitchers::In => (true, false),
         DcdhSwitchers::Out => (false, true),
     };
-    let options = |ss: Option<usize>, ss_pl: Option<usize>| Options {
-        only_never_switchers: config.only_never_switchers,
-        normalized: config.normalized,
+    let pass = |ss: Option<usize>, ss_pl: Option<usize>| Options {
+        only_never_switchers: options.only_never_switchers,
+        normalized: options.normalized,
         same_switchers: ss,
         same_switchers_pl: ss_pl,
-        less_conservative_se: config.less_conservative_se,
-        trends_lin: config.trends_lin,
+        less_conservative_se: options.less_conservative_se,
+        trends_lin: options.trends_lin,
     };
     let (l, l_pl) = (k.l, k.l_pl);
     let run = |go: bool, inc: f64, lmax: usize, lpmax: usize| -> Option<DirectionTerms> {
         if !go || lmax == 0 {
             return None;
         }
-        if !config.trends_lin {
-            let ss = config.same_switchers.then_some(l);
-            let ss_pl = (config.same_switchers_pl && l_pl > 0).then_some(l_pl);
+        if !options.trends_lin {
+            let ss = options.same_switchers.then_some(l);
+            let ss_pl = (options.same_switchers_pl && l_pl > 0).then_some(l_pl);
             return Some(direction(
                 panel,
                 controls,
                 inc,
                 lmax.min(l),
                 l_pl.min(lpmax),
-                &options(ss, ss_pl),
+                &pass(ss, ss_pl),
             ));
         }
         // `trends_lin`: effect `i` comes from a pass with `i` effects over the
@@ -844,12 +844,12 @@ fn directions(
         // effects and `i` placebos over those that allow all of both.
         let mut effects = Vec::new();
         for i in 1..=lmax.min(l) {
-            let mut d = direction(panel, controls, inc, i, 0, &options(Some(i), None));
+            let mut d = direction(panel, controls, inc, i, 0, &pass(Some(i), None));
             effects.push(d.effects.pop().expect("effect i"));
         }
         let mut placebos = Vec::new();
         for i in 1..=lpmax.min(l_pl) {
-            let mut d = direction(panel, controls, inc, i, i, &options(Some(i), Some(i)));
+            let mut d = direction(panel, controls, inc, i, i, &pass(Some(i), Some(i)));
             placebos.push(d.placebos.pop().expect("placebo i"));
         }
         Some(DirectionTerms {
@@ -868,48 +868,54 @@ fn directions(
     )
 }
 
+/// An estimate with its cluster sums, its influence function over the
+/// counted units and its cell counts.
+type Finished = (DcdhTerm, Option<Vec<f64>>, Option<Vec<f64>>, Vec<f64>);
+
 /// The results from the terms of the two directions.
 #[expect(
     clippy::too_many_lines,
     reason = "the results block of did_multiplegt_main, in its order"
 )]
 fn assemble(
-    observations: &[DcdhObservation],
+    data: &SwitchingPanel<'_>,
     panel: &Panel,
-    config: &DcdhConfig,
+    options: &DcdhOptions,
     k: &Counts,
     inn: Option<&DirectionTerms>,
     out: Option<&DirectionTerms>,
-) -> DcdhResult {
+) -> Result<Dcdh, Error> {
     let gn = panel.n_grid_groups();
     let (l, l_pl) = (k.l, k.l_pl);
-    let z = z_score_for_confidence(config.confidence_level);
-    let finish = |c: Combined, period: i64| -> (DcdhEstimate, Option<Vec<f64>>, Vec<f64>) {
+    let z = z_of(options.level);
+    // Each estimate with its cluster sums and its influence function over
+    // the counted units, both `None` without a standard error.
+    let finish = |c: Combined, period: i64| -> Finished {
         let sums = c.psi.as_ref().map(|p| cluster_sums(panel, p));
         let se = sums.as_ref().map(|s| sum_sq(s).sqrt());
         let n_cells = c.count.iter().filter(|&&v| v > 0.0).count();
         let n_cells_weighted: f64 = c.count.iter().sum();
-        let ci = c.estimate.zip(se).map(|(e, s)| (e - z * s, e + z * s));
-        let influence = c.psi.as_ref().map(|p| expand(panel, p));
+        let estimate = c.estimate.map(|e| normal_estimate(e, se, z, options.level));
+        let defined = estimate.is_some_and(|e| e.se.is_some());
+        let influence = c.psi.as_ref().filter(|_| defined).map(|p| expand(panel, p));
         (
-            DcdhEstimate {
+            DcdhTerm {
                 relative_period: period,
-                estimate: c.estimate,
-                se: c.estimate.and(se),
-                ci,
+                estimate,
                 n_cells,
                 n_switchers: c.n_switchers_dw,
                 n_cells_weighted,
                 n_switchers_weighted: c.n_switchers,
-                influence: c.estimate.and(influence),
             },
             c.estimate.and(sums),
+            influence,
             c.count,
         )
     };
 
     let mut effects = Vec::with_capacity(l);
     let mut effect_sums = Vec::with_capacity(l);
+    let mut influences = Vec::with_capacity(l + l_pl + 1);
     let mut normalization = Vec::new();
     let mut max_count = vec![0.0; gn * panel.nt];
     let mut switchers_total = (0.0, 0.0);
@@ -918,14 +924,14 @@ fn assemble(
             panel,
             inn.and_then(|d| d.effects.get(i)),
             out.and_then(|d| d.effects.get(i)),
-            config,
+            options,
         );
-        if config.normalized {
+        if options.normalized {
             normalization.push(c.delta);
         }
         switchers_total.0 += c.n_switchers_dw;
         switchers_total.1 += c.n_switchers;
-        let (e, s, count) = finish(c, i64::try_from(i + 1).expect("index"));
+        let (e, s, psi, count) = finish(c, i64::try_from(i + 1).expect("index"));
         for (m, v) in max_count.iter_mut().zip(&count) {
             if *v > *m {
                 *m = *v;
@@ -933,6 +939,7 @@ fn assemble(
         }
         effects.push(e);
         effect_sums.push(s);
+        influences.push(psi);
     }
     let mut placebos = Vec::with_capacity(l_pl);
     let mut placebo_sums = Vec::with_capacity(l_pl);
@@ -942,19 +949,20 @@ fn assemble(
             panel,
             inn.and_then(|d| d.placebos.get(i)),
             out.and_then(|d| d.placebos.get(i)),
-            config,
+            options,
         );
-        if config.normalized {
+        if options.normalized {
             placebo_normalization.push(c.delta);
         }
-        let (e, s, _) = finish(c, -i64::try_from(i + 1).expect("index"));
+        let (e, s, psi, _) = finish(c, -i64::try_from(i + 1).expect("index"));
         placebos.push(e);
         placebo_sums.push(s);
+        influences.push(psi);
     }
 
     // The average total effect.
     let (sp, sm) = (side(inn), side(out));
-    let w_plus = match config.switchers {
+    let w_plus = match options.switchers {
         DcdhSwitchers::In => 1.0,
         DcdhSwitchers::Out => 0.0,
         DcdhSwitchers::Both => {
@@ -975,14 +983,14 @@ fn assemble(
     }
     let ate = total / panel.n_groups;
     let ate_ok = estimable(
-        config.switchers,
+        options.switchers,
         sp.map_or(0.0, |s| s.1),
         sm.map_or(0.0, |s| s.1),
     ) && ate.is_finite();
-    let (average_total_effect, ate_sums, _) = finish(
+    let (average_total_effect, _, ate_psi, _) = finish(
         Combined {
-            estimate: (ate.is_finite() && !config.trends_lin).then_some(ate),
-            psi: (ate_ok && !config.trends_lin).then_some(psi),
+            estimate: (ate.is_finite() && !options.trends_lin).then_some(ate),
+            psi: (ate_ok && !options.trends_lin).then_some(psi),
             n_switchers: switchers_total.1,
             n_switchers_dw: switchers_total.0,
             count: max_count,
@@ -990,11 +998,15 @@ fn assemble(
         },
         0,
     );
-    let _ = ate_sums;
+    influences.push(ate_psi);
 
     // Tests.
-    let est = |v: &[DcdhEstimate]| v.iter().map(|e| e.estimate).collect::<Vec<_>>();
-    let deltas_ok = !config.normalized
+    let est = |v: &[DcdhTerm]| {
+        v.iter()
+            .map(|e| e.estimate.map(|e| e.estimate))
+            .collect::<Vec<_>>()
+    };
+    let deltas_ok = !options.normalized
         || normalization
             .iter()
             .all(|d| d.is_some_and(|d| d != 0.0 && d.is_finite()));
@@ -1004,7 +1016,7 @@ fn assemble(
         None
     };
     let p_joint_placebos = joint_test(&est(&placebos), &placebo_sums);
-    let p_equal_effects = match config.effects_equal {
+    let p_equal_effects = match options.effects_equal {
         DcdhEffectsEqual::No => None,
         DcdhEffectsEqual::All => equality_test(&est(&effects), &effect_sums),
         DcdhEffectsEqual::Range { first, last } => {
@@ -1022,46 +1034,78 @@ fn assemble(
 
     let all_sums: Vec<&Option<Vec<f64>>> = effect_sums.iter().chain(&placebo_sums).collect();
     let k = all_sums.len();
-    let mut covariance = vec![f64::NAN; k * k];
+    let mut covariance = vec![None; k * k];
     for (a, sa) in all_sums.iter().enumerate() {
         for (b, sb) in all_sums.iter().enumerate() {
             if let (Some(x), Some(y)) = (sa, sb) {
-                covariance[a * k + b] = dot(x, y);
+                covariance[a * k + b] = Some(dot(x, y)).filter(|v| v.is_finite());
             }
         }
     }
 
-    let delta_d_avg_total = if config.trends_lin {
+    let delta_d_avg_total = if options.trends_lin {
         None
     } else {
         delta_d_avg(panel, inn, out, l)
     };
-    let normalized_weights = if config.normalized {
+    let normalized_weights = if options.normalized {
         lag_weights(panel, inn, out, &normalization, &effects)
     } else {
         Vec::new()
     };
-    let avg_time_periods = config
+    let avg_time_periods = options
         .avg_time_periods
-        .then(|| time_periods(panel, l, config));
+        .then(|| time_periods(panel, l, options));
+    let units: Vec<u32> = panel
+        .counted_ids
+        .iter()
+        .map(|&g| u32::try_from(g).expect("a unit code"))
+        .collect();
+    let columns: Vec<Vec<f64>> = influences.into_iter().flatten().collect();
+    let influence = if columns.is_empty() {
+        None
+    } else {
+        let n_columns = columns.len();
+        Some(Influence::new(
+            columns.concat(),
+            units.clone(),
+            n_columns,
+            ClusterRule::NoSmallSample,
+        )?)
+    };
 
-    DcdhResult {
+    Ok(Dcdh {
         effects,
         placebos,
         average_total_effect,
         p_joint_effects,
         p_joint_placebos,
         p_equal_effects,
-        covariance,
+        covariance: Covariance::new(k, covariance)?,
         normalization,
         placebo_normalization,
         delta_d_avg_total,
         normalized_weights,
         avg_time_periods,
-        n_groups: panel.counted_ids.len(),
-        groups: panel.counted_ids.clone(),
-        clusters: counted_clusters(observations, panel),
-    }
+        n_units: units.len(),
+        clusters: counted_clusters(data, &units),
+        units,
+        influence,
+        bootstrap: None,
+    })
+}
+
+/// The cluster code of each of `units`, when the panel is clustered.
+fn counted_clusters(data: &SwitchingPanel<'_>, units: &[u32]) -> Option<Vec<u32>> {
+    let clusters = data.clusters()?;
+    let unit = data.unit();
+    units
+        .iter()
+        .map(|u| {
+            let row = unit.partition_point(|v| v < u);
+            clusters.get(row).copied()
+        })
+        .collect()
 }
 
 /// A per-grid-group vector over all counted groups, 0 for a group without
@@ -1076,15 +1120,6 @@ fn expand(panel: &Panel, psi: &[f64]) -> Vec<f64> {
         out[j] = psi[g];
     }
     out
-}
-
-fn counted_clusters(observations: &[DcdhObservation], panel: &Panel) -> Option<Vec<i64>> {
-    panel.cluster.as_ref()?;
-    let map: std::collections::HashMap<i64, i64> = observations
-        .iter()
-        .filter_map(|o| o.cluster.map(|c| (o.group, c)))
-        .collect();
-    Some(panel.counted_ids.iter().map(|g| map[g]).collect())
 }
 
 /// `delta_D_avg_total`: over the switchers' cells `F_g - 1 + j`, the mean of

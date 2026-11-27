@@ -43,7 +43,9 @@
 //!   comparisons as `bacondecomp::bacon`: [`bacon::decompose`].
 //! - Event-study effects for treatments that switch on and off or take
 //!   several values, as `DIDmultiplegtDYN` of de Chaisemartin and
-//!   D'Haultfoeuille \[8\]: [`estimate_dcdh`].
+//!   D'Haultfoeuille \[8\]: [`dcdh::estimate`] on a [`SwitchingPanel`],
+//!   whose treatment need not be absorbing and whose outcomes and
+//!   treatments may be missing.
 //! - Synthetic difference-in-differences \[9\], synthetic control and the
 //!   plain difference-in-differences beside them, as R's `synthdid` computes
 //!   them: [`estimate_synthdid`] with [`SynthDidConfig`], standard errors by
@@ -251,12 +253,11 @@ pub use methods::att_gt::{
 pub use methods::bacon;
 pub use methods::bacon::{BaconComparison, BaconDecomposition, BaconKind, BaconWithin};
 pub use methods::continuous::sieve::estimate_acrt_sieve;
+pub use methods::dcdh;
 pub use methods::dcdh::{
-    DcdhAvgTimePeriods, DcdhBootstrap, DcdhBootstrapEstimate, DcdhConfig, DcdhDesign,
-    DcdhEffectsEqual, DcdhError, DcdhEstimate, DcdhHeterogeneity, DcdhObservation, DcdhPath,
-    DcdhPathResult, DcdhResult, DcdhSubgroup, DcdhSwitchDate, DcdhSwitchDates, DcdhSwitchers,
-    dcdh_design, dcdh_first_switch_dates, estimate_dcdh, estimate_dcdh_bootstrap, estimate_dcdh_by,
-    estimate_dcdh_by_path, estimate_dcdh_heterogeneity,
+    Dcdh, DcdhAvgTimePeriods, DcdhBootstrap, DcdhBootstrapTerm, DcdhDesign, DcdhEffectsEqual,
+    DcdhHeterogeneity, DcdhOptions, DcdhPath, DcdhPathResult, DcdhSubgroup, DcdhSwitchDate,
+    DcdhSwitchDates, DcdhSwitchers, DcdhTerm, SwitchingPanel, SwitchingPanelBuilder,
 };
 pub use methods::did_cc::{
     estimate_did_cc_robust, estimate_did_cc_stationary, test_did_cc_stationarity,

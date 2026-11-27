@@ -4,8 +4,8 @@
 
 use epistat_linalg::{Attempt, Mat, Method, inverse, solve};
 
-use super::DcdhError;
 use super::panel::{NA, Panel};
+use crate::error::Error;
 
 pub(super) struct Controls {
     k: usize,
@@ -50,7 +50,7 @@ impl Controls {
         clippy::too_many_lines,
         reason = "the controls block of did_multiplegt_main, in its order"
     )]
-    pub fn new(panel: &Panel) -> Result<Self, DcdhError> {
+    pub fn new(panel: &Panel) -> Result<Self, Error> {
         let k = panel.controls.len();
         let user_k = k - panel.generated.len();
         let nt = panel.nt;
@@ -114,7 +114,7 @@ impl Controls {
             dates.sort_unstable();
             dates.dedup();
             if dates.len() <= 1 {
-                return Err(DcdhError::Controls {
+                return Err(Error::Controls {
                     baseline: value,
                     reason: "its groups share one first-switch date",
                 });
@@ -123,7 +123,7 @@ impl Controls {
                 .filter(|&c| mask[c] && panel.level[c / nt] == l)
                 .collect();
             if rows.is_empty() {
-                return Err(DcdhError::Controls {
+                return Err(Error::Controls {
                     baseline: value,
                     reason: "no not-yet switcher has the controls' first differences",
                 });
@@ -157,7 +157,7 @@ impl Controls {
                 .map(|i| m[act[i / ka] * k + act[i % ka]])
                 .collect();
             let v_act: Vec<f64> = act.iter().map(|&j| v[j]).collect();
-            let collinear = || DcdhError::Controls {
+            let collinear = || Error::Controls {
                 baseline: value,
                 reason: "the controls are collinear among its not-yet switchers",
             };
@@ -252,7 +252,7 @@ impl Controls {
             let b_act: Vec<f64> = act_b.iter().map(|&j| b[j]).collect();
             let mut beta = vec![0.0; k];
             if kb > 0 {
-                let solved = solve_spd(&a_act, &b_act, kb).ok_or(DcdhError::Controls {
+                let solved = solve_spd(&a_act, &b_act, kb).ok_or(Error::Controls {
                     baseline: value,
                     reason: "the controls are collinear in the regression with period effects",
                 })?;

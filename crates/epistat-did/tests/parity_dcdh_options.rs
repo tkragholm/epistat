@@ -1,4 +1,4 @@
-//! The options of `estimate_dcdh` and the functions around it checked
+//! The options of `dcdh::estimate` and the functions around it checked
 //! against `DIDmultiplegtDYN::did_multiplegt_dyn` 2.2.0 on simulated panels:
 //! `trends_lin` (absorbing and on-off treatments, weighted and clustered,
 //! with controls, `trends_nonparam`, normalised), `same_switchers` and
@@ -36,14 +36,15 @@
     reason = "numbers of switchers are whole numbers, compared exactly"
 )]
 
-use epistat_did::{
-    DcdhConfig, DcdhEstimate, DcdhObservation, DcdhResult, DcdhSwitchers, dcdh_design,
-    dcdh_first_switch_dates, estimate_dcdh, estimate_dcdh_bootstrap, estimate_dcdh_by,
-    estimate_dcdh_by_path, estimate_dcdh_heterogeneity,
-};
+#[path = "common/switching.rs"]
+mod switching;
+
+use epistat_core::Bootstrap;
+use epistat_did::{Dcdh, DcdhOptions, DcdhSwitchers, DcdhTerm, SwitchingPanel, dcdh};
 use epistat_linalg::{Attempt, Mat, Method, solve};
 use epistat_testkit::load_json;
 use serde::Deserialize;
+use switching::{Columns, Row};
 
 const EPS: f64 = f64::EPSILON;
 
@@ -228,9 +229,9 @@ fn load() -> Reference {
     r
 }
 
-fn observations(args: &Args, d: &Data) -> Vec<DcdhObservation> {
+fn observations(args: &Args, d: &Data) -> Vec<Row> {
     (0..d.g.len())
-        .map(|i| DcdhObservation {
+        .map(|i| Row {
             group: d.g[i],
             time: d.t[i],
             outcome: d.y[i],
@@ -258,8 +259,8 @@ fn observations(args: &Args, d: &Data) -> Vec<DcdhObservation> {
         .collect()
 }
 
-fn config(args: &Args) -> DcdhConfig {
-    DcdhConfig {
+fn config(args: &Args) -> DcdhOptions {
+    DcdhOptions {
         effects: args.effects,
         placebo: args.placebo,
         normalized: args.normalized,
@@ -274,7 +275,7 @@ fn config(args: &Args) -> DcdhConfig {
         less_conservative_se: args.less_conservative_se,
         continuous: args.continuous,
         avg_time_periods: true,
-        ..DcdhConfig::default()
+        ..DcdhOptions::default()
     }
 }
 
@@ -296,22 +297,32 @@ fn close(what: &str, got: f64, want: f64, scale: f64, tol: f64) {
 /// Switchers.w.
 /// With `trends_lin`, R's unweighted number of switchers is that of the
 /// last pass that touches the estimate, not of the pass that gives it (see
-/// the module documentation of `estimate_dcdh`), so it is not compared.
-fn check_row(what: &str, e: &DcdhEstimate, row: &[Option<f64>], tol: f64, dw: bool) {
+/// the module documentation of `dcdh`), so it is not compared.
+fn check_row(what: &str, e: &DcdhTerm, row: &[Option<f64>], tol: f64, dw: bool) {
     let scale = row[0].map_or(1.0, f64::abs).max(row[1].unwrap_or(0.0));
     match row[0] {
         None => assert!(e.estimate.is_none(), "{what}: R has no estimate"),
         Some(want) => close(
             &format!("{what} estimate"),
-            e.estimate.expect("estimate"),
+            e.estimate.expect("estimate").estimate,
             want,
             scale,
             tol,
         ),
     }
     if let Some(want) = row[1] {
-        close(&format!("{what} se"), e.se.expect("se"), want, scale, tol);
-        let (lo, hi) = e.ci.expect("ci");
+        let estimate = e.estimate.expect("estimate");
+        close(
+            &format!("{what} se"),
+            estimate.se.expect("se"),
+            want,
+            scale,
+            tol,
+        );
+        let (lo, hi) = (
+            estimate.lower().expect("lower"),
+            estimate.upper().expect("upper"),
+        );
         close(
             &format!("{what} lower"),
             lo,
@@ -348,7 +359,7 @@ fn check_row(what: &str, e: &DcdhEstimate, row: &[Option<f64>], tol: f64, dw: bo
     );
 }
 
-fn check_results(name: &str, r: &DcdhResult, want: &Results, trends_lin: bool, tol: f64) {
+fn check_results(name: &str, r: &Dcdh, want: &Results, trends_lin: bool, tol: f64) {
     let effects = want.effects.as_ref().expect("R's effects");
     assert_eq!(r.effects.len(), effects.len(), "{name}: effects");
     for (i, (e, row)) in r.effects.iter().zip(effects).enumerate() {
@@ -395,18 +406,22 @@ fn check_results(name: &str, r: &DcdhResult, want: &Results, trends_lin: bool, t
     let k = r.effects.len() + r.placebos.len();
     let cov = |rows: std::ops::Range<usize>| -> Vec<Vec<f64>> {
         rows.clone()
-            .map(|a| rows.clone().map(|b| r.covariance[a * k + b]).collect())
+            .map(|a| {
+                rows.clone()
+                    .map(|b| r.covariance.get(a, b).expect("covariance"))
+                    .collect()
+            })
             .collect()
     };
     let b_eff: Vec<f64> = r
         .effects
         .iter()
-        .map(|e| e.estimate.unwrap_or(0.0))
+        .map(|e| e.estimate.map_or(0.0, |e| e.estimate))
         .collect();
     let b_pl: Vec<f64> = r
         .placebos
         .iter()
-        .map(|e| e.estimate.unwrap_or(0.0))
+        .map(|e| e.estimate.map_or(0.0, |e| e.estimate))
         .collect();
     for (got, want, b, v, what) in [
         (
@@ -491,7 +506,7 @@ fn p_tolerance(b: &[f64], v: &[Vec<f64>], tol: f64) -> f64 {
 #[expect(clippy::too_many_arguments, reason = "the pieces of one comparison")]
 fn check_terms(
     what: &str,
-    e: &DcdhEstimate,
+    psi: Option<&[f64]>,
     want: &[Option<f64>],
     ids: &[i64],
     groups: &[i64],
@@ -499,7 +514,7 @@ fn check_terms(
     delta: f64,
     tol: f64,
 ) {
-    let Some(psi) = &e.influence else {
+    let Some(psi) = psi else {
         assert!(want.iter().all(|v| v.is_none_or(|v| v == 0.0)), "{what}");
         return;
     };
@@ -553,28 +568,33 @@ fn options_match_did_multiplegt_dyn() {
             continue;
         }
         let obs = observations(&case.args, &case.data);
+        let columns = Columns::new(&obs);
+        let panel = columns.panel();
         let tol = case_tol(case, obs.len());
         let cfg = config(&case.args);
         let name = &case.name;
-        let r = estimate_dcdh(&obs, &cfg).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let r = dcdh::estimate(&panel, &cfg).unwrap_or_else(|e| panic!("{name}: {e}"));
         check_results(name, &r, &case.results, case.args.trends_lin, tol);
 
         let vt = &case.var_terms;
-        let cl = r.clusters.as_ref();
-        for (i, e) in r.effects.iter().enumerate() {
+        let groups = columns.labels(&r.units);
+        let clusters = r.clusters.as_ref().map(|c| columns.cluster_labels(c));
+        let cl = clusters.as_ref();
+        let l = r.effects.len();
+        for i in 0..l {
             let delta = r.normalization.get(i).copied().flatten().unwrap_or(1.0);
             check_terms(
                 &format!("{name} effect {}", i + 1),
-                e,
+                r.influence_of(i),
                 &vt.effects[i],
                 &vt.ids,
-                &r.groups,
+                &groups,
                 cl,
                 delta,
                 tol,
             );
         }
-        for (i, e) in r.placebos.iter().enumerate() {
+        for i in 0..r.placebos.len() {
             let delta = r
                 .placebo_normalization
                 .get(i)
@@ -583,10 +603,10 @@ fn options_match_did_multiplegt_dyn() {
                 .unwrap_or(1.0);
             check_terms(
                 &format!("{name} placebo {}", i + 1),
-                e,
+                r.influence_of(l + i),
                 &vt.placebos[i],
                 &vt.ids,
-                &r.groups,
+                &groups,
                 cl,
                 delta,
                 tol,
@@ -595,10 +615,10 @@ fn options_match_did_multiplegt_dyn() {
         if !case.args.trends_lin {
             check_terms(
                 &format!("{name} average"),
-                &r.average_total_effect,
+                r.influence_of(l + r.placebos.len()),
                 &vt.average,
                 &vt.ids,
-                &r.groups,
+                &groups,
                 cl,
                 1.0,
                 tol,
@@ -663,16 +683,16 @@ fn options_match_did_multiplegt_dyn() {
             }
         }
         if let Some(want) = &case.design_100 {
-            check_design(name, &obs, &cfg, 1.0, want, tol);
+            check_design(name, &panel, &cfg, 1.0, want, tol);
         }
         if let Some(want) = &case.design_50 {
-            check_design(name, &obs, &cfg, 0.5, want, tol);
+            check_design(name, &panel, &cfg, 0.5, want, tol);
         }
         if let Some(want) = &case.first_switch {
-            check_dates(name, &obs, &cfg, false, want);
+            check_dates(name, &panel, &cfg, false, want);
         }
         if let Some(want) = &case.first_switch_by_baseline {
-            check_dates(name, &obs, &cfg, true, want);
+            check_dates(name, &panel, &cfg, true, want);
         }
     }
     eprintln!(
@@ -686,13 +706,13 @@ fn options_match_did_multiplegt_dyn() {
 /// lexicographically here, so both sides are compared in the second order.
 fn check_design(
     name: &str,
-    obs: &[DcdhObservation],
-    cfg: &DcdhConfig,
+    panel: &SwitchingPanel<'_>,
+    cfg: &DcdhOptions,
     p: f64,
     want: &Design,
     tol: f64,
 ) {
-    let got = dcdh_design(obs, cfg, p).expect("design");
+    let got = dcdh::design(panel, cfg, p).expect("design");
     assert_eq!(
         got.effects as f64, want.constants[0],
         "{name}: design effects"
@@ -745,18 +765,18 @@ fn check_design(
 
 fn check_dates(
     name: &str,
-    obs: &[DcdhObservation],
-    cfg: &DcdhConfig,
+    panel: &SwitchingPanel<'_>,
+    cfg: &DcdhOptions,
     by_baseline: bool,
     want: &[SwitchTable],
 ) {
-    let got = dcdh_first_switch_dates(obs, cfg, by_baseline).expect("dates");
+    let got = dcdh::first_switch_dates(panel, cfg, by_baseline).expect("dates");
     assert_eq!(got.len(), want.len(), "{name}: first-switch tables");
     for (g, w) in got.iter().zip(want) {
         assert_eq!(g.baseline, w.baseline, "{name}: baseline");
         assert_eq!(g.dates.len(), w.times.len(), "{name}: dates");
         for (i, d) in g.dates.iter().enumerate() {
-            assert_eq!(d.time as f64, w.times[i], "{name}: date");
+            assert_eq!(d.period as f64, w.times[i], "{name}: date");
             assert_eq!(d.n_groups as f64, w.n[i], "{name}: switchers at a date");
             close(
                 &format!("{name} date share"),
@@ -802,7 +822,8 @@ fn heterogeneity_matches_predict_het() {
                 .collect()
         });
         let cfg = config(&case.args);
-        let got = estimate_dcdh_heterogeneity(&obs, &cfg, &x, selected.as_deref())
+        let columns = Columns::new(&obs).with_het(&x);
+        let got = dcdh::heterogeneity(&columns.panel(), &cfg, selected.as_deref())
             .unwrap_or_else(|e| panic!("{name}: {e}"));
         let want = case.predict_het.as_ref().expect("R's table");
         assert_eq!(got.len(), want.len(), "{name}: rows");
@@ -827,27 +848,45 @@ fn heterogeneity_matches_predict_het() {
             let scale = w.estimate.abs().max(w.se);
             close(
                 &format!("{what} estimate"),
-                g.estimate,
+                g.estimate.estimate,
                 w.estimate,
                 scale,
                 tol,
             );
-            close(&format!("{what} se"), g.se, w.se, scale, tol);
+            close(
+                &format!("{what} se"),
+                g.estimate.se.expect("se"),
+                w.se,
+                scale,
+                tol,
+            );
             close(
                 &format!("{what} t"),
-                g.t,
+                g.t.expect("t"),
                 w.t,
                 w.t.abs().max(1.0),
                 2.0 * tol,
             );
-            close(&format!("{what} lb"), g.ci.0, w.lb, scale, tol);
-            close(&format!("{what} ub"), g.ci.1, w.ub, scale, tol);
+            close(
+                &format!("{what} lb"),
+                g.estimate.lower().expect("lb"),
+                w.lb,
+                scale,
+                tol,
+            );
+            close(
+                &format!("{what} ub"),
+                g.estimate.upper().expect("ub"),
+                w.ub,
+                scale,
+                tol,
+            );
             assert_eq!(g.n as f64, w.n, "{what}: N");
             let p_tol = f64::midpoint(2.0, kv) * tol;
+            let p = g.p_joint.expect("p");
             assert!(
-                (g.p_joint - w.p_f).abs() <= p_tol + 4.0 * EPS,
-                "{what}: p {} against R's {} (bound {p_tol:e})",
-                g.p_joint,
+                (p - w.p_f).abs() <= p_tol + 4.0 * EPS,
+                "{what}: p {p} against R's {} (bound {p_tol:e})",
                 w.p_f
             );
         }
@@ -870,16 +909,21 @@ fn subgroups_match_by_and_by_path() {
         let results = case.by_results.as_ref().expect("results");
         if case.args.by.is_some() {
             let by = case.data.sub.as_ref().expect("sub");
-            let got = estimate_dcdh_by(&obs, &cfg, by).expect("by");
+            let columns = Columns::new(&obs).with_subgroups(by);
+            let got = dcdh::by(&columns.panel(), &cfg).expect("by");
+            let labels = columns.subgroups_of.as_ref().expect("subgroups");
             assert_eq!(got.len(), levels.len(), "{name}: levels");
             for ((g, level), want) in got.iter().zip(levels).zip(results) {
-                assert_eq!(g.level.to_string(), *level, "{name}: level");
+                let label = labels.label(g.level).expect("level");
+                assert_eq!(label.to_string(), *level, "{name}: level");
                 let r = g.result.as_ref().expect("estimates");
                 check_results(&format!("{name} {level}"), r, want, false, tol);
             }
         } else {
             let k = case.args.by_path.expect("by_path");
-            let got = estimate_dcdh_by_path(&obs, &cfg, usize::try_from(k).ok()).expect("by_path");
+            let columns = Columns::new(&obs);
+            let got =
+                dcdh::by_path(&columns.panel(), &cfg, usize::try_from(k).ok()).expect("by_path");
             assert_eq!(got.len(), levels.len(), "{name}: paths");
             for (level, want) in levels.iter().zip(results) {
                 let path: Vec<f64> = level
@@ -905,24 +949,24 @@ fn bootstrap_matches_did_multiplegt_dyn() {
         let obs = observations(&case.args, &case.data);
         let cfg = config(&case.args);
         let tol = 16.0 * obs.len() as f64 * EPS;
-        let unit = |o: &DcdhObservation| o.cluster.unwrap_or(o.group);
+        let unit = |o: &Row| o.cluster.unwrap_or(o.group);
         let l = case.args.effects;
         // R's draws, replicate by replicate.
         let mut columns: Vec<Vec<f64>> = vec![Vec::new(); l];
         for (j, (draw, want)) in case.draws.iter().zip(&case.replicates).enumerate() {
-            let rows: Vec<DcdhObservation> = obs
+            let rows: Vec<Row> = obs
                 .iter()
                 .filter_map(|o| {
                     let u = case.units.binary_search(&unit(o)).expect("unit");
-                    (draw[u] > 0).then(|| DcdhObservation {
+                    (draw[u] > 0).then(|| Row {
                         weight: o.weight * f64::from(draw[u]),
                         ..o.clone()
                     })
                 })
                 .collect();
-            let r = estimate_dcdh(&rows, &cfg).expect("replicate");
+            let r = dcdh::estimate(&Columns::new(&rows).panel(), &cfg).expect("replicate");
             for (i, w) in want.effects.values().iter().enumerate() {
-                let got = r.effects[i].estimate.expect("effect");
+                let got = r.effects[i].estimate.expect("effect").estimate;
                 let w = w.expect("R's effect");
                 close(
                     &format!("{name} replicate {j} effect {}", i + 1),
@@ -935,7 +979,7 @@ fn bootstrap_matches_did_multiplegt_dyn() {
             }
             for (i, w) in want.placebos.iter().flat_map(OneOrMany::values).enumerate() {
                 let w = w.expect("R's placebo");
-                let got = r.placebos[i].estimate.expect("placebo");
+                let got = r.placebos[i].estimate.expect("placebo").estimate;
                 close(
                     &format!("{name} replicate {j} placebo {}", i + 1),
                     got,
@@ -945,7 +989,7 @@ fn bootstrap_matches_did_multiplegt_dyn() {
                 );
             }
             if let Some(w) = want.ate {
-                let got = r.average_total_effect.estimate.expect("average");
+                let got = r.average_total_effect.estimate.expect("average").estimate;
                 close(
                     &format!("{name} replicate {j} average"),
                     got,
@@ -973,7 +1017,19 @@ fn bootstrap_matches_did_multiplegt_dyn() {
         // sampling standard deviation of `s sqrt((kurtosis - 1) / (4 B))`
         // each, so they differ by more than four times
         // `s sqrt((kurtosis - 1) / (2 B))` with probability below 1e-4.
-        let own = estimate_dcdh_bootstrap(&obs, &cfg, case.reps, 20_251_125).expect("bootstrap");
+        let full = Columns::new(&obs);
+        let panel = full.panel();
+        let bootstrap = |replicates: usize, seed: u64| {
+            let options = DcdhOptions {
+                bootstrap: Some(Bootstrap::new(replicates, seed)),
+                ..cfg
+            };
+            dcdh::estimate(&panel, &options)
+                .expect("bootstrap")
+                .bootstrap
+                .expect("bootstrap")
+        };
+        let own = bootstrap(case.reps, 20_251_125);
         assert_eq!(own.draws.len(), case.reps);
         for (i, col) in columns.iter().enumerate() {
             let s = sd(col);
@@ -981,7 +1037,7 @@ fn bootstrap_matches_did_multiplegt_dyn() {
             let m4 = col.iter().map(|v| (v - mean).powi(4)).sum::<f64>() / col.len() as f64;
             let kurtosis = m4 / s.powi(4);
             let bound = 4.0 * s * ((kurtosis - 1.0) / (2.0 * case.reps as f64)).sqrt();
-            let got = own.effects[i].se.expect("se");
+            let got = own.effects[i].estimate.and_then(|e| e.se).expect("se");
             eprintln!(
                 "{name} effect {}: se {got} against {s} (bound {bound})",
                 i + 1
@@ -997,8 +1053,8 @@ fn bootstrap_matches_did_multiplegt_dyn() {
             .num_threads(1)
             .build()
             .expect("pool")
-            .install(|| estimate_dcdh_bootstrap(&obs, &cfg, 20, 7).expect("bootstrap"));
-        let many = estimate_dcdh_bootstrap(&obs, &cfg, 20, 7).expect("bootstrap");
+            .install(|| bootstrap(20, 7));
+        let many = bootstrap(20, 7);
         assert_eq!(one, many, "{name}: threads");
     }
 }

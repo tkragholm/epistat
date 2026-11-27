@@ -5,9 +5,12 @@
 use std::collections::BTreeMap;
 
 use super::panel::{Panel, ordered, prepare};
-use super::{DcdhConfig, DcdhError, DcdhObservation, counts, validate};
+use crate::error::Error;
 
-/// One treatment path of [`dcdh_design`].
+use super::{DcdhOptions, SwitchingPanel, counts, domain, validate};
+
+/// One treatment path of [`design`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DcdhPath {
     /// The treatments at `F_g - 1, F_g, ..., F_g - 1 + L`.
@@ -19,7 +22,8 @@ pub struct DcdhPath {
     pub share: f64,
 }
 
-/// The result of [`dcdh_design`].
+/// The result of [`design`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DcdhDesign {
     /// `L`, the number of effects estimated.
@@ -33,11 +37,12 @@ pub struct DcdhDesign {
     pub coverage: f64,
 }
 
-/// One date of [`dcdh_first_switch_dates`].
+/// One date of [`first_switch_dates`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DcdhSwitchDate {
     /// The period, as in the input.
-    pub time: i64,
+    pub period: i64,
     /// The number of switchers whose treatment first changes then.
     pub n_groups: usize,
     /// Their share of the switchers (of the baseline treatment).
@@ -46,6 +51,7 @@ pub struct DcdhSwitchDate {
 
 /// The first-switch dates of the switchers of one baseline treatment, or of
 /// all switchers.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct DcdhSwitchDates {
     /// The baseline treatment, `None` for all switchers together.
@@ -119,24 +125,26 @@ pub(super) fn ranked_paths(panel: &Panel, l: usize) -> (Vec<(DcdhPath, Vec<usize
 /// too, as in `did_multiplegt_dyn_design`.
 ///
 /// # Errors
-/// [`DcdhError`] as [`super::estimate_dcdh`], and for a `coverage` outside
-/// `(0, 1]`.
-pub fn dcdh_design(
-    observations: &[DcdhObservation],
-    config: &DcdhConfig,
+///
+/// The errors of [`estimate`](super::estimate), [`Error::Input`] for a
+/// `coverage` outside `(0, 1]`, and [`Error::Unsupported`] with
+/// `continuous`.
+pub fn design(
+    data: &SwitchingPanel<'_>,
+    options: &DcdhOptions,
     coverage: f64,
-) -> Result<DcdhDesign, DcdhError> {
-    validate(config)?;
+) -> Result<DcdhDesign, Error> {
+    validate(options)?;
     if !(coverage > 0.0 && coverage <= 1.0) {
-        return Err(DcdhError::InvalidConfig("coverage must be in (0, 1]"));
+        return Err(domain("coverage", coverage, "(0, 1]"));
     }
-    if config.continuous.is_some() {
-        return Err(DcdhError::InvalidConfig(
-            "the design cannot be combined with continuous",
-        ));
+    if options.continuous.is_some() {
+        return Err(Error::Unsupported {
+            what: "the design with continuous",
+        });
     }
-    let panel = prepare(observations, config)?;
-    let l = counts(&panel, config)?.l;
+    let panel = prepare(data, options)?;
+    let l = counts(&panel, options)?.l;
     let (ranked, n_switchers) = ranked_paths(&panel, l);
     let mut paths = Vec::new();
     let mut cumulative = 0.0;
@@ -162,17 +170,19 @@ pub fn dcdh_design(
 /// (`date_first_switch`), for all switchers or by baseline treatment.
 ///
 /// # Errors
-/// [`DcdhError`] as [`super::estimate_dcdh`].
+///
+/// The errors of [`estimate`](super::estimate).
 ///
 /// # Panics
+///
 /// Only when a number of periods does not fit in `usize`.
-pub fn dcdh_first_switch_dates(
-    observations: &[DcdhObservation],
-    config: &DcdhConfig,
+pub fn first_switch_dates(
+    data: &SwitchingPanel<'_>,
+    options: &DcdhOptions,
     by_baseline: bool,
-) -> Result<Vec<DcdhSwitchDates>, DcdhError> {
-    validate(config)?;
-    let panel = prepare(observations, config)?;
+) -> Result<Vec<DcdhSwitchDates>, Error> {
+    validate(options)?;
+    let panel = prepare(data, options)?;
     let never = panel.t_max + 1;
     let mut tables: BTreeMap<Option<i64>, (f64, BTreeMap<i64, usize>)> = BTreeMap::new();
     for g in 0..panel.n_grid_groups() {
@@ -194,7 +204,7 @@ pub fn dcdh_first_switch_dates(
                 dates: dates
                     .into_iter()
                     .map(|(f, n)| DcdhSwitchDate {
-                        time: panel.times[usize::try_from(f - 1).expect("rank from 1")],
+                        period: panel.times[usize::try_from(f - 1).expect("rank from 1")],
                         n_groups: n,
                         share: n as f64 / total as f64,
                     })

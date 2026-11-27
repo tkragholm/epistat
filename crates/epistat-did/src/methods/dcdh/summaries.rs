@@ -10,7 +10,7 @@
 
 use super::core::DirectionTerms;
 use super::panel::Panel;
-use super::{DcdhAvgTimePeriods, DcdhConfig, DcdhEstimate, DcdhSwitchers};
+use super::{DcdhAvgTimePeriods, DcdhOptions, DcdhSwitchers, DcdhTerm};
 
 /// `normalized_weights`: the weight of lag `k` in normalised effect `l` is
 ///
@@ -25,7 +25,7 @@ pub(super) fn lag_weights(
     inn: Option<&DirectionTerms>,
     out: Option<&DirectionTerms>,
     normalization: &[Option<f64>],
-    effects: &[DcdhEstimate],
+    effects: &[DcdhTerm],
 ) -> Vec<Option<Vec<f64>>> {
     let nt = panel.nt;
     let cells = panel.n_grid_groups() * nt;
@@ -73,7 +73,7 @@ pub(super) fn lag_weights(
 /// `|D_{g,F_g+k} - D_g1| (M_g - k)` to the numerator and
 /// `|D_{g,F_g+k} - D_g1|` to the denominator. With `same_switchers` only
 /// switchers with `M_g = L` contribute.
-pub(super) fn time_periods(panel: &Panel, l: usize, config: &DcdhConfig) -> DcdhAvgTimePeriods {
+pub(super) fn time_periods(panel: &Panel, l: usize, options: &DcdhOptions) -> DcdhAvgTimePeriods {
     let nt = panel.nt;
     let gn = panel.n_grid_groups();
     let observed = |c: usize| !panel.y[c].is_nan();
@@ -123,10 +123,10 @@ pub(super) fn time_periods(panel: &Panel, l: usize, config: &DcdhConfig) -> Dcdh
         }
         let li = i64::try_from(l).expect("effects fit i64");
         let m = li.min(last - f + 1);
-        if config.same_switchers && m < li {
+        if options.same_switchers && m < li {
             continue;
         }
-        let direction_ok = match config.switchers {
+        let direction_ok = match options.switchers {
             DcdhSwitchers::Both => true,
             DcdhSwitchers::In => panel.s_g[g] == 1.0,
             DcdhSwitchers::Out => panel.s_g[g] == 0.0,

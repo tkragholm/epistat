@@ -75,6 +75,29 @@ pub enum Error {
     /// An influence function could not be formed.
     #[error(transparent)]
     Inference(#[from] epistat_inference::Error),
+    /// After the sample rules of dCDH no period has both switchers and
+    /// controls (Design Restriction 1 of de Chaisemartin and
+    /// D'Haultfoeuille fails), so no effect can be estimated.
+    #[error("no treatment effect can be estimated")]
+    NoEffect,
+    /// After the sample rules of dCDH a period inside the panel has no rows.
+    #[error("a period inside the panel has no rows after the sample rules")]
+    EmptyPeriod,
+    /// The controls of dCDH cannot be used for a baseline treatment.
+    #[error("controls at baseline treatment {baseline}: {reason}")]
+    Controls {
+        /// The baseline treatment.
+        baseline: f64,
+        /// What is wrong.
+        reason: &'static str,
+    },
+    /// The regressors of a regression are collinear, as the covariates of
+    /// dCDH's heterogeneity regression with its cells.
+    #[error("collinear: {what}")]
+    Collinear {
+        /// The regression.
+        what: &'static str,
+    },
 }
 
 impl Classify for Error {
@@ -83,7 +106,11 @@ impl Classify for Error {
             Self::Input(error) => error.kind(),
             Self::Glm(error) => error.kind(),
             Self::Inference(error) => error.kind(),
-            Self::NoTreatment
+            Self::Collinear { .. } => ErrorKind::Numerical,
+            Self::NoEffect
+            | Self::EmptyPeriod
+            | Self::Controls { .. }
+            | Self::NoTreatment
             | Self::NoNeverTreated
             | Self::Periods
             | Self::Bins
@@ -102,6 +129,10 @@ impl Classify for Error {
             Self::Input(error) => error.code(),
             Self::Glm(error) => error.code(),
             Self::Inference(error) => error.code(),
+            Self::NoEffect => "did.no_effect",
+            Self::EmptyPeriod => "did.empty_period",
+            Self::Controls { .. } => "did.controls",
+            Self::Collinear { .. } => "did.collinear",
             Self::NoTreatment => "did.no_treatment",
             Self::NoNeverTreated => "did.no_never_treated",
             Self::Periods => "did.periods",
@@ -154,6 +185,13 @@ mod tests {
             Error::Unbalanced,
             Error::Groups,
             Error::Unsupported { what: "weights" },
+            Error::NoEffect,
+            Error::EmptyPeriod,
+            Error::Controls {
+                baseline: 0.0,
+                reason: "collinear",
+            },
+            Error::Collinear { what: "covariates" },
         ];
         epistat_testkit::assert_codes_unique("did", &errors);
         assert_eq!(Error::Bins.kind(), ErrorKind::Input);

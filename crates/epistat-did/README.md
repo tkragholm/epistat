@@ -22,7 +22,7 @@ standard error comes from the influence function of the whole procedure,
 estimated control trend included.
 
 For treatments that go on and off or take several values, such as benefit
-spells, `estimate_dcdh` is the event-study estimator of de Chaisemartin and
+spells, `dcdh::estimate` is the event-study estimator of de Chaisemartin and
 D'Haultfoeuille as `did_multiplegt_dyn` of R's `DIDmultiplegtDYN` computes
 it: the effects of a group's first change of treatment against groups with
 the same baseline treatment that have not changed yet, for switchers in and

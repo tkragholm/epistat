@@ -19,7 +19,7 @@
 //! The data `dcdh` are a panel of eight periods and a binary treatment that
 //! goes on and off: the baseline is 1 for 40% of the groups, the first change
 //! comes in a random period or never, and after it the treatment flips with
-//! probability 0.3 each period. Method: `dcdh`, `estimate_dcdh` with three
+//! probability 0.3 each period. Method: `dcdh`, `dcdh::estimate` with three
 //! effects and two placebos, set against `DIDmultiplegtDYN::did_multiplegt_dyn`
 //! 2.2.0 (the last release that runs without polars). On the same data,
 //! `dcdh_trends_lin`, `dcdh_same_switchers` and `dcdh_less_conservative` add
@@ -36,9 +36,8 @@ mod common;
 
 use common::{Lines, Rng, Table, Writer};
 use epistat_did::{
-    AttGtConfig, AttGtDrConfig, AttGtDrObservation, DcdhConfig, DcdhObservation, DrDidConfig,
-    StaggeredPanel, TwfeOptions, TwfeSpec, estimate_att_gt_dr_panel_with_influence, estimate_dcdh,
-    estimate_dcdh_bootstrap, twfe,
+    AttGtConfig, AttGtDrConfig, AttGtDrObservation, DcdhOptions, DrDidConfig, StaggeredPanel,
+    SwitchingPanel, TwfeOptions, TwfeSpec, dcdh, estimate_att_gt_dr_panel_with_influence, twfe,
 };
 
 const SEED: u64 = 20_261_208;
@@ -155,46 +154,46 @@ fn twfe(n: usize) {
 
 fn run_dcdh(n: usize, method: &str) {
     let t = Table::read(&common::data_path("dcdh", n));
-    let rows: Vec<DcdhObservation> = (0..t.len())
-        .map(|i| DcdhObservation {
-            group: t.col("id")[i] as i64,
-            time: t.col("time")[i] as i64,
-            outcome: Some(t.col("y")[i]),
-            treatment: Some(t.col("d")[i]),
-            weight: 1.0,
-            controls: Vec::new(),
-            stratum: 0,
-            cluster: None,
-        })
-        .collect();
-    let config = DcdhConfig {
+    // The rows are written by id and then period, so the ids are the codes.
+    let unit: Vec<u32> = t.col("id").iter().map(|&v| v as u32).collect();
+    let period: Vec<i64> = t.col("time").iter().map(|&v| v as i64).collect();
+    let y: Vec<Option<f64>> = t.col("y").iter().copied().map(Some).collect();
+    let d: Vec<Option<f64>> = t.col("d").iter().copied().map(Some).collect();
+    let panel = SwitchingPanel::builder(&unit, &period, &y, &d)
+        .build()
+        .expect("panel");
+    let config = DcdhOptions {
         effects: 3,
         placebo: 2,
         trends_lin: method == "dcdh_trends_lin",
         same_switchers: method == "dcdh_same_switchers",
         less_conservative_se: method == "dcdh_less_conservative",
-        ..DcdhConfig::default()
+        ..DcdhOptions::default()
     };
     let mut lines = Lines::default();
     if method == "dcdh_bootstrap" {
+        let options = DcdhOptions {
+            bootstrap: Some(epistat_core::Bootstrap::new(50, 1)),
+            ..config
+        };
         let (times, r) = common::timed(common::reps(), || {
-            estimate_dcdh_bootstrap(&rows, &config, 50, 1).expect("dcdh")
+            dcdh::estimate(&panel, &options).expect("dcdh")
         });
-        for e in &r.effects {
+        for e in &r.bootstrap.expect("bootstrap").effects {
             lines.push(
                 &format!("est_effect{}", e.relative_period),
-                e.estimate.unwrap_or(f64::NAN),
+                e.estimate.map_or(f64::NAN, |e| e.estimate),
             );
             lines.push(
                 &format!("bse_effect{}", e.relative_period),
-                e.se.unwrap_or(f64::NAN),
+                e.estimate.and_then(|e| e.se).unwrap_or(f64::NAN),
             );
         }
         common::finish(method, n, &times, &lines);
         return;
     }
     let (times, r) = common::timed(common::reps(), || {
-        estimate_dcdh(&rows, &config).expect("dcdh")
+        dcdh::estimate(&panel, &config).expect("dcdh")
     });
     let rows = r
         .effects
@@ -213,8 +212,14 @@ fn run_dcdh(n: usize, method: &str) {
         if e.estimate.is_none() && name == "average" {
             continue;
         }
-        lines.push(&format!("est_{name}"), e.estimate.unwrap_or(f64::NAN));
-        lines.push(&format!("se_{name}"), e.se.unwrap_or(f64::NAN));
+        lines.push(
+            &format!("est_{name}"),
+            e.estimate.map_or(f64::NAN, |e| e.estimate),
+        );
+        lines.push(
+            &format!("se_{name}"),
+            e.estimate.and_then(|e| e.se).unwrap_or(f64::NAN),
+        );
     }
     common::finish(method, n, &times, &lines);
 }
