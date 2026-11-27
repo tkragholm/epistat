@@ -54,6 +54,7 @@ mod adaptive_grid;
 mod api_types;
 mod conditional_confidence_sets;
 mod conic;
+mod error;
 mod event_study_assessment;
 mod linear_algebra;
 mod relative_magnitude;
@@ -62,6 +63,7 @@ mod solver_tally;
 mod summary_api;
 
 pub(crate) use api_types::*;
+pub(crate) use error::EngineError;
 pub(crate) use event_study_assessment::{
     assess_honest_event_study_directional_region_with_config,
     assess_honest_event_study_joint_path_region_with_config,

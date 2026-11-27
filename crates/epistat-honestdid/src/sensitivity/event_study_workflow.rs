@@ -13,6 +13,7 @@ use super::super::{
     HonestStudyWorkflowResult, HonestWorkflowConfig, HonestWorkflowDirectionMode,
 };
 use super::HonestEventStudyInput;
+use crate::sensitivity::EngineError;
 use crate::util::InferenceConfig;
 use rayon::prelude::*;
 
@@ -39,7 +40,7 @@ pub fn assess_honest_event_study_workflow(
     sensitivity: HonestSensitivity,
     inference: InferenceConfig,
     null_value: f64,
-) -> Result<HonestStudyWorkflowResult, String> {
+) -> Result<HonestStudyWorkflowResult, EngineError> {
     assess_honest_event_study_workflow_counted(
         input,
         functionals,
@@ -58,7 +59,7 @@ pub(in crate::sensitivity) fn assess_honest_event_study_workflow_counted(
     inference: InferenceConfig,
     null_value: f64,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestStudyWorkflowResult, String> {
+) -> Result<HonestStudyWorkflowResult, EngineError> {
     assess_honest_event_study_workflow_with_config_counted(
         input,
         functionals,
@@ -68,9 +69,10 @@ pub(in crate::sensitivity) fn assess_honest_event_study_workflow_counted(
         &HonestWorkflowConfig {
             relative_magnitude: super::RelativeMagnitudeConfidenceSetConfig::from_inference(
                 inference,
+                crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
             ),
             joint: HonestJointPathConfig::default_for_production(),
-            direction_mode: HonestWorkflowDirectionMode::default_for_production(),
+            direction_mode: HonestWorkflowDirectionMode::adaptive_surface(1729),
         },
         counter,
     )
@@ -82,14 +84,14 @@ pub(in crate::sensitivity) fn assess_honest_event_study_workflow_counted(
 /// # Errors
 /// Returns an error if any underlying component computation fails.
 #[cfg(test)]
-pub fn assess_honest_event_study_workflow_with_config(
+pub(crate) fn assess_honest_event_study_workflow_with_config(
     input: &HonestEventStudyInput,
     functionals: &[HonestPostFunctional],
     sensitivity: HonestSensitivity,
     inference: InferenceConfig,
     null_value: f64,
     config: &HonestWorkflowConfig,
-) -> Result<HonestStudyWorkflowResult, String> {
+) -> Result<HonestStudyWorkflowResult, EngineError> {
     assess_honest_event_study_workflow_with_config_counted(
         input,
         functionals,
@@ -110,14 +112,14 @@ pub(in crate::sensitivity) fn assess_honest_event_study_workflow_with_config_cou
     null_value: f64,
     config: &HonestWorkflowConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestStudyWorkflowResult, String> {
+) -> Result<HonestStudyWorkflowResult, EngineError> {
     if functionals.is_empty() {
-        return Err("workflow requires at least one functional".to_string());
+        return Err(EngineError::empty("targets"));
     }
     let workflow_post_weights = functionals
         .iter()
         .map(|functional| super::post_weights_for_functional(input, functional))
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, EngineError>>()?;
     let prepared_relative_magnitude = match sensitivity {
         HonestSensitivity::RelativeMagnitude(mbar) => {
             Some(super::prepare_relative_magnitude_base_context(input, mbar)?)
@@ -137,7 +139,7 @@ pub(in crate::sensitivity) fn assess_honest_event_study_workflow_with_config_cou
                         )
                     }
                 })
-                .collect::<Result<Vec<_>, String>>()?,
+                .collect::<Result<Vec<_>, EngineError>>()?,
         ),
         None => None,
     };
@@ -169,7 +171,7 @@ pub(in crate::sensitivity) fn assess_honest_event_study_workflow_with_config_cou
                     assessment,
                 })
             })
-            .collect::<Result<Vec<_>, String>>()?,
+            .collect::<Result<Vec<_>, EngineError>>()?,
         _ => functionals
             .par_iter()
             .zip(workflow_post_weights.par_iter())
@@ -188,7 +190,7 @@ pub(in crate::sensitivity) fn assess_honest_event_study_workflow_with_config_cou
                     assessment,
                 })
             })
-            .collect::<Result<Vec<_>, String>>()?,
+            .collect::<Result<Vec<_>, EngineError>>()?,
     };
 
     let joint_path_region =
@@ -277,7 +279,7 @@ fn build_workflow_directional_region(
     config: &HonestWorkflowConfig,
     prepared_relative_magnitude: Option<&super::PreparedRelativeMagnitudeBaseContext>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestDirectionalRegion, String> {
+) -> Result<HonestDirectionalRegion, EngineError> {
     match &config.direction_mode {
         HonestWorkflowDirectionMode::Basis => {
             let mut directions =
@@ -324,7 +326,7 @@ fn build_workflow_multi_function_intervals(
     prepared_relative_magnitude: Option<&super::PreparedRelativeMagnitudeBaseContext>,
     prepared_functional_branch_sets: Option<&[Vec<RelativeMagnitudePreparedFunctionalBranch>]>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<Option<HonestMultiFlciResult>, String> {
+) -> Result<Option<HonestMultiFlciResult>, EngineError> {
     match sensitivity {
         HonestSensitivity::RelativeMagnitude(mbar) => {
             let originals = functional_assessments

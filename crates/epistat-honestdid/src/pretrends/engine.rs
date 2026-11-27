@@ -78,62 +78,49 @@
 //! 4. Tallis GM. The moment generating function of the truncated
 //!    multi-normal distribution. J R Stat Soc B 1961;23(1):223-9.
 
+use epistat_core::{InputError, Level};
 use epistat_rng::Stream;
 use epistat_stats::dist::normal;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-/// Errors of the pre-trends calculations.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum PretrendError {
-    /// An input has the wrong shape or value.
-    #[error("invalid input: {0}")]
-    InvalidInput(String),
-    /// A covariance block is not positive definite.
-    #[error("the covariance of the {0} is not positive definite")]
-    NotPositiveDefinite(&'static str),
-    /// No slope in the search interval has the requested power.
-    #[error("no slope in [0, {upper}] has power {target}; the power there is {power_at_upper}")]
-    NoSlope {
-        /// The requested power.
-        target: f64,
-        /// The upper end of the search interval.
-        upper: f64,
-        /// The power at the upper end.
-        power_at_upper: f64,
-    },
-}
+use crate::error::Error;
 
 /// Numerical settings of the rectangle probabilities.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PretrendConfig {
-    /// Significance level of each pre-period coefficient, default 0.05.
-    pub alpha: f64,
+    /// Level of the test of each pre-period coefficient, which it passes
+    /// inside `+- Phi^{-1}(1 - alpha / 2)` standard errors.
+    pub level: Level,
     /// Critical value of the t-statistic of each pre-period coefficient. When
     /// `None` it is `Phi^{-1}(1 - alpha / 2)`; the R package uses 1.96.
     pub threshold: Option<f64>,
     /// The lattice grows until the standard error of a rectangle probability
-    /// is at most this, default `1e-7`.
+    /// is at most this.
     pub abs_tol: f64,
-    /// Number of random shifts, default 12.
+    /// Number of random shifts.
     pub shifts: usize,
-    /// Seed of the shifts, default 20_260_125.
+    /// Seed of the shifts.
     pub seed: u64,
 }
 
-impl Default for PretrendConfig {
-    fn default() -> Self {
+#[cfg(test)]
+impl PretrendConfig {
+    /// The level `alpha = 0.05`, no threshold, tolerance `1e-7` and 12 shifts
+    /// from `seed`.
+    pub(crate) fn with_seed(seed: u64) -> Self {
         Self {
-            alpha: 0.05,
+            level: Level::alpha(0.05).expect("0.05 is in (0, 1)"),
             threshold: None,
             abs_tol: 1e-7,
             shifts: 12,
-            seed: 20_260_125,
+            seed,
         }
     }
 }
 
 /// A value with the standard error of its numerical evaluation.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Evaluated {
     /// The value.
@@ -173,21 +160,25 @@ impl PretrendInput {
             .collect()
     }
 
-    pub(super) fn validate(&self) -> Result<(), PretrendError> {
+    pub(super) fn validate(&self) -> Result<(), Error> {
+        use epistat_core::check;
         let k = self.pre_periods.len() + self.post_periods.len();
-        if self.pre_periods.is_empty() {
-            return Err(invalid("there is no pre-period coefficient"));
+        check::non_empty("pre-treatment coefficients", self.pre_periods.len())?;
+        check::same_length("betahat", k, self.betahat.len())?;
+        check::same_length("covariance rows", k, self.covariance.len())?;
+        for row in &self.covariance {
+            check::same_length("covariance columns", k, row.len())?;
         }
-        if self.betahat.len() != k {
-            return Err(invalid("betahat does not have one entry per period"));
-        }
-        if self.covariance.len() != k || self.covariance.iter().any(|row| row.len() != k) {
-            return Err(invalid("the covariance is not square of the same size"));
-        }
-        let finite = self.betahat.iter().all(|v| v.is_finite())
-            && self.covariance.iter().flatten().all(|v| v.is_finite());
-        if !finite {
-            return Err(invalid("betahat and the covariance must be finite"));
+        check::finite("betahat", &self.betahat)?;
+        for (i, row) in self.covariance.iter().enumerate() {
+            if let Some(j) = row.iter().position(|v| !v.is_finite()) {
+                return Err(InputError::NotFinite {
+                    what: "covariance",
+                    row: i,
+                    column: Some(j),
+                }
+                .into());
+            }
         }
         for i in 0..k {
             for j in 0..i {
@@ -196,16 +187,18 @@ impl PretrendInput {
                     .max(self.covariance[j][j].abs())
                     .max(f64::MIN_POSITIVE);
                 if (self.covariance[i][j] - self.covariance[j][i]).abs() > 1e-8 * scale {
-                    return Err(invalid("the covariance is not symmetric"));
+                    return Err(InputError::Domain {
+                        what: "covariance",
+                        value: self.covariance[i][j],
+                        domain: "symmetric",
+                        row: Some(i),
+                    }
+                    .into());
                 }
             }
         }
         Ok(())
     }
-}
-
-fn invalid(message: &str) -> PretrendError {
-    PretrendError::InvalidInput(message.to_owned())
 }
 
 /// The result of [`analyse_pretest`].
@@ -245,15 +238,12 @@ pub fn analyse_pretest(
     input: &PretrendInput,
     delta: &[f64],
     config: &PretrendConfig,
-) -> Result<PretrendAnalysis, PretrendError> {
+) -> Result<PretrendAnalysis, Error> {
     input.validate()?;
     validate_config(config)?;
     let k = input.betahat.len();
-    if delta.len() != k || delta.iter().any(|v| !v.is_finite()) {
-        return Err(invalid(
-            "delta must be finite with one entry per coefficient",
-        ));
-    }
+    epistat_core::check::same_length("violation", k, delta.len())?;
+    epistat_core::check::finite("violation", delta)?;
     let p = input.n_pre();
     let cov_pre: Vec<Vec<f64>> = input.covariance[..p]
         .iter()
@@ -268,7 +258,9 @@ pub fn analyse_pretest(
     let moments = conditional_mean(delta_pre, &cov_pre, z, config)?;
 
     // Post block: regression on the pre block.
-    let chol = cholesky(&cov_pre).ok_or(PretrendError::NotPositiveDefinite("pre-period block"))?;
+    let chol = cholesky(&cov_pre).ok_or(Error::NotPositiveDefinite {
+        what: "pre-period block",
+    })?;
     let shift: Vec<f64> = moments
         .iter()
         .zip(delta_pre)
@@ -333,11 +325,13 @@ pub fn pretest_pass_probability(
     delta_pre: &[f64],
     cov_pre: &[Vec<f64>],
     config: &PretrendConfig,
-) -> Result<Evaluated, PretrendError> {
+) -> Result<Evaluated, Error> {
     validate_config(config)?;
     let p = delta_pre.len();
-    if p == 0 || cov_pre.len() != p || cov_pre.iter().any(|r| r.len() != p) {
-        return Err(invalid("the pre-period mean and covariance do not match"));
+    epistat_core::check::non_empty("pre-period mean", p)?;
+    epistat_core::check::same_length("pre-period covariance rows", p, cov_pre.len())?;
+    for row in cov_pre {
+        epistat_core::check::same_length("pre-period covariance columns", p, row.len())?;
     }
     let z = critical_value(config);
     rect_prob(&box_limits(cov_pre, z), delta_pre, cov_pre, config)
@@ -359,15 +353,29 @@ pub fn slope_for_power(
     reference_period: f64,
     target_power: f64,
     config: &PretrendConfig,
-) -> Result<Evaluated, PretrendError> {
+) -> Result<Evaluated, Error> {
     validate_config(config)?;
     if !(target_power > 0.0 && target_power < 1.0) {
-        return Err(invalid("the target power must be in (0, 1)"));
+        return Err(InputError::Domain {
+            what: "power",
+            value: target_power,
+            domain: "(0, 1)",
+            row: None,
+        }
+        .into());
     }
     let p = input.n_pre();
-    if p == 0 || input.covariance.len() < p || input.covariance.iter().take(p).any(|r| r.len() < p)
+    epistat_core::check::non_empty("pre-treatment coefficients", p)?;
+    if let Some(found) = std::iter::once(input.covariance.len())
+        .chain(input.covariance.iter().take(p).map(Vec::len))
+        .find(|&len| len < p)
     {
-        return Err(invalid("the covariance does not cover the pre-periods"));
+        return Err(InputError::Length {
+            what: "covariance",
+            expected: p,
+            found,
+        }
+        .into());
     }
     let cov_pre: Vec<Vec<f64>> = input.covariance[..p]
         .iter()
@@ -378,7 +386,7 @@ pub fn slope_for_power(
         .iter()
         .map(|t| t - reference_period)
         .collect();
-    let power = |slope: f64| -> Result<Evaluated, PretrendError> {
+    let power = |slope: f64| -> Result<Evaluated, Error> {
         let mean: Vec<f64> = rel.iter().map(|t| t * slope).collect();
         let pass = pretest_pass_probability(&mean, &cov_pre, config)?;
         Ok(Evaluated {
@@ -397,7 +405,7 @@ pub fn slope_for_power(
     let top = power(hi)?;
     let mut f_hi = top.value - target_power;
     if f_lo > 0.0 || f_hi < 0.0 {
-        return Err(PretrendError::NoSlope {
+        return Err(Error::NoSlope {
             target: target_power,
             upper,
             power_at_upper: top.value,
@@ -441,21 +449,29 @@ pub fn slope_for_power(
 fn critical_value(config: &PretrendConfig) -> f64 {
     config
         .threshold
-        .unwrap_or_else(|| normal::quantile(1.0 - config.alpha / 2.0))
+        .unwrap_or_else(|| normal::quantile(1.0 - config.level.alpha_value() / 2.0))
 }
 
-fn validate_config(config: &PretrendConfig) -> Result<(), PretrendError> {
-    if !(config.alpha > 0.0 && config.alpha < 1.0) {
-        return Err(invalid("alpha must be in (0, 1)"));
-    }
-    if config
-        .threshold
-        .is_some_and(|t| !(t > 0.0 && t.is_finite()))
+pub(super) fn validate_config(config: &PretrendConfig) -> Result<(), Error> {
+    let domain = |what, value, domain| -> Error {
+        InputError::Domain {
+            what,
+            value,
+            domain,
+            row: None,
+        }
+        .into()
+    };
+    if let Some(threshold) = config.threshold
+        && !(threshold > 0.0 && threshold.is_finite())
     {
-        return Err(invalid("the threshold must be positive and finite"));
+        return Err(domain("threshold", threshold, "positive and finite"));
     }
-    if (config.abs_tol <= 0.0 || config.abs_tol.is_nan()) || config.shifts < 2 {
-        return Err(invalid("abs_tol must be positive and shifts at least 2"));
+    if config.abs_tol <= 0.0 || config.abs_tol.is_nan() {
+        return Err(domain("tolerance", config.abs_tol, "positive"));
+    }
+    if config.shifts < 2 {
+        return Err(domain("shifts", config.shifts as f64, "at least 2"));
     }
     Ok(())
 }
@@ -551,11 +567,13 @@ fn rect_prob(
     mean: &[f64],
     cov: &[Vec<f64>],
     config: &PretrendConfig,
-) -> Result<Evaluated, PretrendError> {
+) -> Result<Evaluated, Error> {
     let p = mean.len();
     let sd: Vec<f64> = (0..p).map(|i| cov[i][i].sqrt()).collect();
     if sd.iter().any(|s| *s <= 0.0 || s.is_nan()) {
-        return Err(PretrendError::NotPositiveDefinite("pre-period block"));
+        return Err(Error::NotPositiveDefinite {
+            what: "pre-period block",
+        });
     }
     let corr: Vec<Vec<f64>> = (0..p)
         .map(|i| (0..p).map(|j| cov[i][j] / (sd[i] * sd[j])).collect())
@@ -590,7 +608,7 @@ struct Prepared {
     b: Vec<f64>,
 }
 
-fn reorder(corr: &[Vec<f64>], a0: &[f64], b0: &[f64]) -> Result<Prepared, PretrendError> {
+fn reorder(corr: &[Vec<f64>], a0: &[f64], b0: &[f64]) -> Result<Prepared, Error> {
     let n = corr.len();
     let mut cov = corr.to_vec();
     let mut a = a0.to_vec();
@@ -618,7 +636,9 @@ fn reorder(corr: &[Vec<f64>], a0: &[f64], b0: &[f64]) -> Result<Prepared, Pretre
             }
         }
         if !best_range.is_finite() {
-            return Err(PretrendError::NotPositiveDefinite("pre-period block"));
+            return Err(Error::NotPositiveDefinite {
+                what: "pre-period block",
+            });
         }
         if best != i {
             cov.swap(i, best);
@@ -758,10 +778,15 @@ fn genz(
     a: &[f64],
     b: &[f64],
     config: &PretrendConfig,
-) -> Result<Evaluated, PretrendError> {
+) -> Result<Evaluated, Error> {
     let n = corr.len();
     if n > MAX_DIM {
-        return Err(invalid("at most 63 pre-period coefficients are supported"));
+        return Err(InputError::TooLarge {
+            what: "pre-period coefficients",
+            limit: MAX_DIM as u64,
+            found: n as u64,
+        }
+        .into());
     }
     if n == 0 {
         return Ok(Evaluated {
@@ -831,12 +856,12 @@ fn conditional_mean(
     cov: &[Vec<f64>],
     z: f64,
     config: &PretrendConfig,
-) -> Result<Vec<Evaluated>, PretrendError> {
+) -> Result<Vec<Evaluated>, Error> {
     let p = mean.len();
     let limits = box_limits(cov, z);
     let pass = rect_prob(&limits, mean, cov, config)?;
     if pass.value <= 0.0 || pass.value.is_nan() {
-        return Err(invalid("the pre-test passes with probability zero"));
+        return Err(Error::PassProbabilityZero);
     }
     // g_i = f_i(a_i) P_i(a_i) - f_i(b_i) P_i(b_i), with its error bound.
     let mut g = vec![0.0; p];
@@ -893,7 +918,8 @@ mod tests {
     #[test]
     fn one_dimension_is_exact() {
         let cov = vec![vec![4.0]];
-        let p = pretest_pass_probability(&[1.0], &cov, &PretrendConfig::default()).unwrap();
+        let p =
+            pretest_pass_probability(&[1.0], &cov, &PretrendConfig::with_seed(20_260_125)).unwrap();
         let z = normal::quantile(0.975);
         let want = normal::cdf(z - 0.5) - normal::cdf(-z - 0.5);
         assert!((p.value - want).abs() < 1e-15);
@@ -908,7 +934,7 @@ mod tests {
             vec![0.0, 0.0, 0.5],
         ];
         let mean = [0.3, -0.5, 0.2];
-        let cfg = PretrendConfig::default();
+        let cfg = PretrendConfig::with_seed(20_260_125);
         let p = pretest_pass_probability(&mean, &cov, &cfg).unwrap();
         let z = normal::quantile(0.975);
         let want: f64 = (0..3)
@@ -931,7 +957,7 @@ mod tests {
         let cov = vec![vec![1.0, 0.0], vec![0.0, 2.0]];
         let mean = [0.7, -0.4];
         let z = normal::quantile(0.975);
-        let m = conditional_mean(&mean, &cov, z, &PretrendConfig::default()).unwrap();
+        let m = conditional_mean(&mean, &cov, z, &PretrendConfig::with_seed(20_260_125)).unwrap();
         for i in 0..2 {
             let s = cov[i][i].sqrt();
             let (lo, hi) = ((-z * s - mean[i]) / s, (z * s - mean[i]) / s);

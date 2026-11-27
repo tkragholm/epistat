@@ -14,6 +14,7 @@
 
 mod identified_set_lp_workspace;
 
+use crate::sensitivity::EngineError;
 use clarabel::algebra::CscMatrix;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -73,7 +74,7 @@ pub(in crate::sensitivity) struct RelativeMagnitudePreparedInputBranch {
     pub(in crate::sensitivity) sd_arp: Vec<f64>,
 }
 
-type LeastFavorableCache = BTreeMap<(u64, usize, u64), Arc<OnceLock<Result<f64, String>>>>;
+type LeastFavorableCache = BTreeMap<(u64, usize, u64), Arc<OnceLock<Result<f64, EngineError>>>>;
 
 pub(in crate::sensitivity) struct RelativeMagnitudePreparedFunctionalBranch {
     pub(in crate::sensitivity) a_target_arp: Vec<f64>,
@@ -92,7 +93,7 @@ impl RelativeMagnitudePreparedFunctionalBranch {
         hybrid_kappa: f64,
         draws: usize,
         seed: u64,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, EngineError> {
         let cache_key = (normalized_f64_bits(hybrid_kappa), draws, seed);
         let cell = {
             let mut cache = self
@@ -154,7 +155,7 @@ impl<'a> RelativeMagnitudeThetaEvaluator<'a> {
         alpha: f64,
         hybrid_kappa: f64,
         lf_cv: f64,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, EngineError> {
         let k = x_arp.first().map_or(0, Vec::len);
         Ok(Self {
             y_arp_base,
@@ -196,7 +197,7 @@ impl<'a> RelativeMagnitudeThetaEvaluator<'a> {
     /// `eta*` is the optimal value of an LP whose right-hand side is AFFINE in
     /// `theta`, and partial minimisation preserves convexity, so `eta*` is a
     /// CONVEX function of `theta`. That is what [`Self::argmin_eta`] rests on.
-    fn eta_at(&mut self, theta: f64) -> Result<f64, String> {
+    fn eta_at(&mut self, theta: f64) -> Result<f64, EngineError> {
         self.shift_to(theta);
         self.workspace.solve_eta_only(&self.shifted_y_arp)
     }
@@ -207,7 +208,7 @@ impl<'a> RelativeMagnitudeThetaEvaluator<'a> {
     /// first index whose forward difference is non-negative is a minimiser, and
     /// binary search finds it in `2*log2(n)` probes rather than `n`. A plateau
     /// is fine: the leftmost minimiser is returned, and any minimiser will do.
-    fn argmin_eta(&mut self, grid: &[f64]) -> Result<(usize, f64), String> {
+    fn argmin_eta(&mut self, grid: &[f64]) -> Result<(usize, f64), EngineError> {
         let (mut lo, mut hi) = (0usize, grid.len() - 1);
         while lo < hi {
             let mid = usize::midpoint(lo, hi);
@@ -227,7 +228,7 @@ impl<'a> RelativeMagnitudeThetaEvaluator<'a> {
         &mut self,
         theta: f64,
         counter: &crate::sensitivity::SolverCounter,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, EngineError> {
         self.shift_to(theta);
         relative_magnitude_lp_conditional_test_prepared(
             &self.shifted_y_arp,
@@ -286,12 +287,10 @@ pub(in crate::sensitivity) fn prepare_relative_magnitude_functional_branches(
     post_weights: &[f64],
     prepared_branches: &[RelativeMagnitudePreparedBranch],
     prepared_input_branches: &[RelativeMagnitudePreparedInputBranch],
-) -> Result<Vec<RelativeMagnitudePreparedFunctionalBranch>, String> {
+) -> Result<Vec<RelativeMagnitudePreparedFunctionalBranch>, EngineError> {
     if prepared_branches.len() != prepared_input_branches.len() {
-        return Err(format!(
-            "prepared relative-magnitude branch count {} does not match prepared input branch count {}",
-            prepared_branches.len(),
-            prepared_input_branches.len()
+        return Err(EngineError::Internal(
+            "prepared branches of another count than the branches",
         ));
     }
     let prepared_transform = prepare_relative_magnitude_functional_transform(post_weights)?;
@@ -322,7 +321,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_identified_set_with_pre
     post_weights: &[f64],
     prepared_branches: &[RelativeMagnitudePreparedBranch],
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     let branch_sets = compute_relative_magnitude_branch_identified_sets_with_prepared_branches(
         input,
         post_weights,
@@ -339,7 +338,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_branch_identified_sets_
     post_weights: &[f64],
     prepared_branches: &[RelativeMagnitudePreparedBranch],
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<Vec<Option<HonestIdentifiedSet>>, String> {
+) -> Result<Vec<Option<HonestIdentifiedSet>>, EngineError> {
     let num_pre = input.num_pre_periods();
     let num_post = input.num_post_periods();
     let target_estimate = post_weights
@@ -452,7 +451,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_identified_set_for_basi
     post_idx: usize,
     prepared_branches: &[RelativeMagnitudePreparedBranch],
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     let post_weights = super::geometry::basis_post_weights(input.num_post_periods(), post_idx);
     compute_relative_magnitude_identified_set_with_prepared_branches(
         input,
@@ -471,12 +470,10 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_for_basi
     prepared_branches: &[RelativeMagnitudePreparedBranch],
     prepared_input_branches: &[RelativeMagnitudePreparedInputBranch],
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestConditionalConfidenceSet, String> {
+) -> Result<HonestConditionalConfidenceSet, EngineError> {
     if prepared_branches.len() != prepared_input_branches.len() {
-        return Err(format!(
-            "prepared relative-magnitude branch count {} does not match prepared input branch count {}",
-            prepared_branches.len(),
-            prepared_input_branches.len()
+        return Err(EngineError::Internal(
+            "prepared branches of another count than the branches",
         ));
     }
     let post_weights = super::geometry::basis_post_weights(input.num_post_periods(), post_idx);
@@ -529,7 +526,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_for_basi
             };
             Ok((prepared_functional, lf_cv))
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, EngineError>>()?;
     for ((prepared_input, prepared_functional), branch_identified) in prepared_input_branches
         .iter()
         .zip(prepared_functional_branches.iter())
@@ -565,9 +562,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_for_basi
         }
     }
     let Some(accepted_range) = global_range else {
-        return Err(
-            "relative-magnitude conditional confidence set accepted no grid points".to_string(),
-        );
+        return Err(EngineError::NoAcceptedValues);
     };
     Ok(HonestConditionalConfidenceSet {
         lb: grid[accepted_range.lower_idx],
@@ -585,7 +580,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_with_pre
     identified: &HonestIdentifiedSet,
     prepared_branches: &[RelativeMagnitudePreparedBranch],
     prepared_input_branches: &[RelativeMagnitudePreparedInputBranch],
-) -> Result<HonestConditionalConfidenceSet, String> {
+) -> Result<HonestConditionalConfidenceSet, EngineError> {
     let prepared_functional_branches = prepare_relative_magnitude_functional_branches(
         post_weights,
         prepared_branches,
@@ -616,7 +611,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_with_pre
     prepared_input_branches: &[RelativeMagnitudePreparedInputBranch],
     prepared_functional_branches: &[RelativeMagnitudePreparedFunctionalBranch],
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestConditionalConfidenceSet, String> {
+) -> Result<HonestConditionalConfidenceSet, EngineError> {
     let branch_identified_sets =
         compute_relative_magnitude_branch_identified_sets_with_prepared_branches(
             input,
@@ -651,19 +646,15 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_with_pre
     prepared_functional_branches: &[RelativeMagnitudePreparedFunctionalBranch],
     branch_identified_sets: &[Option<HonestIdentifiedSet>],
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestConditionalConfidenceSet, String> {
+) -> Result<HonestConditionalConfidenceSet, EngineError> {
     if prepared_functional_branches.len() != prepared_input_branches.len() {
-        return Err(format!(
-            "prepared functional branch count {} does not match prepared input branch count {}",
-            prepared_functional_branches.len(),
-            prepared_input_branches.len()
+        return Err(EngineError::Internal(
+            "prepared branches of another count than the branches",
         ));
     }
     if branch_identified_sets.len() != prepared_input_branches.len() {
-        return Err(format!(
-            "branch identified set count {} does not match prepared input branch count {}",
-            branch_identified_sets.len(),
-            prepared_input_branches.len()
+        return Err(EngineError::Internal(
+            "identified sets of another count than the prepared branches",
         ));
     }
     let (grid_lower, grid_upper) = super::grid_bounds_around_identified_set(original, identified);
@@ -714,9 +705,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_with_pre
         }
     }
     let Some(accepted_range) = global_range else {
-        return Err(
-            "relative-magnitude conditional confidence set accepted no grid points".to_string(),
-        );
+        return Err(EngineError::NoAcceptedValues);
     };
     Ok(HonestConditionalConfidenceSet {
         lb: grid[accepted_range.lower_idx],
@@ -732,12 +721,10 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_with_pre
     identified: &HonestIdentifiedSet,
     prepared_input_branches: &[RelativeMagnitudePreparedInputBranch],
     prepared_functional_branches: &[RelativeMagnitudePreparedFunctionalBranch],
-) -> Result<HonestConditionalConfidenceSet, String> {
+) -> Result<HonestConditionalConfidenceSet, EngineError> {
     if prepared_functional_branches.len() != prepared_input_branches.len() {
-        return Err(format!(
-            "prepared functional branch count {} does not match prepared input branch count {}",
-            prepared_functional_branches.len(),
-            prepared_input_branches.len()
+        return Err(EngineError::Internal(
+            "prepared branches of another count than the branches",
         ));
     }
     let (grid_lower, grid_upper) = super::grid_bounds_around_identified_set(original, identified);
@@ -779,9 +766,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_with_pre
         }
     }
     let Some(accepted_range) = global_range else {
-        return Err(
-            "relative-magnitude conditional confidence set accepted no grid points".to_string(),
-        );
+        return Err(EngineError::NoAcceptedValues);
     };
     Ok(HonestConditionalConfidenceSet {
         lb: grid[accepted_range.lower_idx],
@@ -801,7 +786,7 @@ pub(in crate::sensitivity) fn prepare_relative_magnitude_branch_draws(
     a_matrix: &[Vec<f64>],
     draws: usize,
     seed: u64,
-) -> Result<Vec<f64>, String> {
+) -> Result<Vec<f64>, EngineError> {
     let rows_for_arp = find_post_period_constraint_rows(a_matrix, num_pre);
     let sigma_y = sandwich_covariance(a_matrix, &input.covariance);
     let sigma_arp = super::super::linear_algebra::subset_square_matrix(&sigma_y, &rows_for_arp);
@@ -816,7 +801,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_branch_accepted_range_f
     a_matrix: &[Vec<f64>],
     shared_draws: Option<&[f64]>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<Option<AcceptedGridRange>, String> {
+) -> Result<Option<AcceptedGridRange>, EngineError> {
     let rows_for_arp = find_post_period_constraint_rows(a_matrix, branch_problem.num_pre);
     let a_post: Vec<Vec<f64>> = a_matrix
         .iter()
@@ -894,7 +879,7 @@ fn compute_relative_magnitude_branch_accepted_range_for_branch(
     hybrid_kappa: f64,
     lf_cv: f64,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<(Option<AcceptedGridRange>, AdaptiveGridDiagnostics), String> {
+) -> Result<(Option<AcceptedGridRange>, AdaptiveGridDiagnostics), EngineError> {
     let mut evaluator = RelativeMagnitudeThetaEvaluator::new(
         y_arp_base,
         a_target_arp,
@@ -944,7 +929,7 @@ fn better_anchor_idx(
     anchor_idx: usize,
     evaluator: &mut RelativeMagnitudeThetaEvaluator<'_>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<Option<usize>, String> {
+) -> Result<Option<usize>, EngineError> {
     let anchor_idx = anchor_idx.min(grid.len() - 1);
     if evaluator.accepts(grid[anchor_idx], counter)? {
         return Ok(Some(anchor_idx));
@@ -961,7 +946,7 @@ fn compute_relative_magnitude_branch_accepted_range_adaptive(
     anchor_idx: usize,
     evaluator: &mut RelativeMagnitudeThetaEvaluator<'_>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<(Option<AcceptedGridRange>, AdaptiveGridDiagnostics), String> {
+) -> Result<(Option<AcceptedGridRange>, AdaptiveGridDiagnostics), EngineError> {
     compute_accepted_grid_range_adaptive_with_diagnostics(grid, anchor_idx, |theta| {
         evaluator.accepts(theta, counter)
     })
@@ -971,7 +956,7 @@ fn compute_relative_magnitude_branch_accepted_range_adaptive(
 fn compute_relative_magnitude_branch_accepted_range_full_grid(
     grid: &[f64],
     evaluator: &mut RelativeMagnitudeThetaEvaluator<'_>,
-) -> Result<Option<AcceptedGridRange>, String> {
+) -> Result<Option<AcceptedGridRange>, EngineError> {
     compute_accepted_grid_range_full_grid(grid, |theta| {
         evaluator.accepts(theta, &crate::sensitivity::SolverCounter::new())
     })
@@ -1007,7 +992,7 @@ pub(in crate::sensitivity) fn solve_relative_magnitude_branch_with_matrix(
     post_weights: &[f64],
     inequality_matrix: &[Vec<f64>],
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<Option<HonestIdentifiedSet>, String> {
+) -> Result<Option<HonestIdentifiedSet>, EngineError> {
     let target_estimate = post_weights
         .iter()
         .zip(&true_beta[num_pre..])
@@ -1068,7 +1053,7 @@ fn relative_magnitude_lp_conditional_test_prepared(
     inv_m_scratch: &mut Vec<f64>,
     rho_tmp_scratch: &mut Vec<f64>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<bool, String> {
+) -> Result<bool, EngineError> {
     if workspace.solve_in_place(y_arp).is_err() {
         // Clarabel returned NumericalError (typically a near-degenerate KKT factorisation
         // for high-variance outcomes such as income in large monetary units).  Including
@@ -1123,11 +1108,8 @@ fn relative_magnitude_lp_conditional_test_prepared(
     };
     if degenerate || !full_rank {
         if binding_scratch.is_empty() {
-            return Err(format!(
-                "relative-magnitude primal binding set is empty (eta={}, rows={}, cols={})",
-                workspace.eta_star(),
-                y_arp.len(),
-                k
+            return Err(EngineError::Degenerate(
+                "an empty binding set of the relative-magnitude program",
             ));
         }
         let gamma_tilde = recover_dual_vertex_from_binding(

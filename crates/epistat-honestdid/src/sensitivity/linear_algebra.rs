@@ -1,3 +1,4 @@
+use crate::sensitivity::EngineError;
 use clarabel::algebra::CscMatrix;
 use epistat_linalg::{
     Accum, Mat, MatMut, MatRef, Par, Regularisation, Side, Solve, cholesky_factor, matmul,
@@ -54,9 +55,9 @@ pub(super) fn drop_zero_columns(matrix: &[Vec<f64>], tol: f64) -> Vec<Vec<f64>> 
         .collect()
 }
 
-pub(super) fn cholesky_lower(matrix: &[Vec<f64>]) -> Result<Mat<f64>, String> {
+pub(super) fn cholesky_lower(matrix: &[Vec<f64>]) -> Result<Mat<f64>, EngineError> {
     if matrix.iter().any(|row| row.len() != matrix.len()) {
-        return Err("covariance matrix must be square".to_string());
+        return Err(EngineError::Internal("a covariance that is not square"));
     }
     if matrix.is_empty() {
         return Ok(Mat::zeros(0, 0));
@@ -81,7 +82,7 @@ pub(super) fn cholesky_lower(matrix: &[Vec<f64>]) -> Result<Mat<f64>, String> {
     cholesky_lower_tolerant(&sym)
 }
 
-fn cholesky_lower_tolerant(matrix: &Mat<f64>) -> Result<Mat<f64>, String> {
+fn cholesky_lower_tolerant(matrix: &Mat<f64>) -> Result<Mat<f64>, EngineError> {
     let n = matrix.nrows();
     let max_diag = (0..n)
         .map(|idx| matrix[(idx, idx)].abs())
@@ -96,7 +97,7 @@ fn cholesky_lower_tolerant(matrix: &Mat<f64>) -> Result<Mat<f64>, String> {
             }
             if i == j {
                 if sum < -neg_diag_tol {
-                    return Err("covariance matrix is not positive semidefinite".to_string());
+                    return Err(EngineError::NotPositiveDefinite("event study"));
                 }
                 lower[(i, j)] = sum.max(0.0).sqrt();
             } else if lower[(j, j)].abs() > 1e-12 {
@@ -147,21 +148,21 @@ pub(super) fn sup_t_critical_value(
     confidence_level: f64,
     simulation_draws: usize,
     simulation_seed: u64,
-) -> Result<f64, String> {
+) -> Result<f64, EngineError> {
     let dim = covariance.len();
     if covariance.iter().any(|row| row.len() != dim) {
-        return Err("covariance matrix must be square".to_string());
+        return Err(EngineError::Internal("a covariance that is not square"));
     }
     let matrix = Mat::from_fn(dim, dim, |row, col| covariance[row][col]);
     let alpha = 1.0 - confidence_level;
     let level = epistat_core::Level::alpha(alpha)
-        .map_err(|_| format!("sup-t critical value: alpha must lie in (0, 1), got {alpha}"))?;
+        .map_err(|_| EngineError::domain("confidence level", confidence_level, "(0, 1)"))?;
     epistat_inference::simultaneous::sup_t_from_covariance(
         matrix.as_ref(),
         level,
         epistat_core::Bootstrap::new(simulation_draws, simulation_seed),
     )
-    .map_err(|error| format!("sup-t critical value: {error}"))
+    .map_err(EngineError::Inference)
 }
 
 /// Covariance of the linear functionals `weights[i]' beta` of an estimator
@@ -170,8 +171,8 @@ pub(super) fn sup_t_critical_value(
 pub(super) fn functional_covariance_matrix(
     covariance: &[Vec<f64>],
     weight_sets: &[Vec<f64>],
-    message: &str,
-) -> Result<Vec<Vec<f64>>, String> {
+    message: &'static str,
+) -> Result<Vec<Vec<f64>>, EngineError> {
     let projected = weight_sets
         .iter()
         .map(|weights| {
@@ -187,7 +188,7 @@ pub(super) fn functional_covariance_matrix(
         .map(|(projection, weights)| dot(weights, projection).max(0.0))
         .collect::<Vec<_>>();
     if variances.iter().any(|variance| *variance <= 1e-14) {
-        return Err(message.to_string());
+        return Err(EngineError::Degenerate(message));
     }
     let count = weight_sets.len();
     let mut result = vec![vec![0.0; count]; count];
@@ -219,17 +220,17 @@ pub(super) fn post_covariance_block(
 pub(super) fn solve_square_linear_system(
     matrix: &[Vec<f64>],
     rhs: &[f64],
-) -> Result<Vec<f64>, String> {
-    let (rows, cols) = matrix_shape(matrix, "coefficient")?;
+) -> Result<Vec<f64>, EngineError> {
+    let (rows, cols) = matrix_shape(
+        matrix,
+        "a coefficient matrix with rows of different lengths",
+    )?;
     if rows != cols {
-        return Err(format!(
-            "square linear solve requires a square coefficient matrix; got {rows}x{cols}"
-        ));
+        return Err(EngineError::Internal("a linear system that is not square"));
     }
     if rhs.len() != rows {
-        return Err(format!(
-            "square linear solve rhs length {} does not match matrix size {rows}",
-            rhs.len()
+        return Err(EngineError::Internal(
+            "a right-hand side of another length than its system",
         ));
     }
     let dense = Mat::from_fn(rows, cols, |row, col| matrix[row][col]);
@@ -257,9 +258,8 @@ pub(super) fn solve_square_linear_system(
         .fold(0.0, f64::max)
         .max(1.0);
     if residual > 1e-7 * scale {
-        return Err(format!(
-            "square linear solve residual {residual} exceeds tolerance {}",
-            1e-7 * scale
+        return Err(EngineError::Degenerate(
+            "a linear system solved with a residual above 1e-7",
         ));
     }
     Ok(out)
@@ -268,17 +268,17 @@ pub(super) fn solve_square_linear_system(
 pub(super) fn solve_square_linear_system_transposed(
     matrix: &[Vec<f64>],
     rhs: &[f64],
-) -> Result<Vec<f64>, String> {
-    let (rows, cols) = matrix_shape(matrix, "coefficient")?;
+) -> Result<Vec<f64>, EngineError> {
+    let (rows, cols) = matrix_shape(
+        matrix,
+        "a coefficient matrix with rows of different lengths",
+    )?;
     if rows != cols {
-        return Err(format!(
-            "transposed square linear solve requires a square coefficient matrix; got {rows}x{cols}"
-        ));
+        return Err(EngineError::Internal("a linear system that is not square"));
     }
     if rhs.len() != rows {
-        return Err(format!(
-            "transposed square linear solve rhs length {} does not match matrix size {rows}",
-            rhs.len()
+        return Err(EngineError::Internal(
+            "a right-hand side of another length than its system",
         ));
     }
     let dense_transposed = Mat::from_fn(rows, cols, |row, col| matrix[col][row]);
@@ -300,19 +300,21 @@ pub(super) fn solve_square_linear_system_transposed(
         .fold(0.0, f64::max)
         .max(1.0);
     if residual > 1e-7 * scale {
-        return Err(format!(
-            "transposed square linear solve residual {residual} exceeds tolerance {}",
-            1e-7 * scale
+        return Err(EngineError::Degenerate(
+            "a linear system solved with a residual above 1e-7",
         ));
     }
     Ok(out)
 }
 
-pub(super) fn invert_square_matrix(matrix: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, String> {
-    let (rows, cols) = matrix_shape(matrix, "coefficient")?;
+pub(super) fn invert_square_matrix(matrix: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, EngineError> {
+    let (rows, cols) = matrix_shape(
+        matrix,
+        "a coefficient matrix with rows of different lengths",
+    )?;
     if rows != cols {
-        return Err(format!(
-            "matrix inverse requires a square coefficient matrix; got {rows}x{cols}"
+        return Err(EngineError::Internal(
+            "an inverse of a matrix that is not square",
         ));
     }
     let dense = Mat::from_fn(rows, cols, |row, col| matrix[row][col]);
@@ -337,8 +339,8 @@ pub(super) fn invert_square_matrix(matrix: &[Vec<f64>]) -> Result<Vec<Vec<f64>>,
         .map(f64::abs)
         .fold(0.0, f64::max);
     if residual > 1e-7 {
-        return Err(format!(
-            "matrix inverse residual {residual} exceeds tolerance 1e-7"
+        return Err(EngineError::Degenerate(
+            "an inverse with a residual above 1e-7",
         ));
     }
     Ok(out)
@@ -515,11 +517,11 @@ pub(super) fn bilinear_form_into(
     dot(tmp, right)
 }
 
-fn matrix_shape(matrix: &[Vec<f64>], name: &str) -> Result<(usize, usize), String> {
+fn matrix_shape(matrix: &[Vec<f64>], name: &'static str) -> Result<(usize, usize), EngineError> {
     let rows = matrix.len();
     let cols = matrix.first().map_or(0, Vec::len);
     if matrix.iter().any(|row| row.len() != cols) {
-        return Err(format!("{name} matrix has non-rectangular rows"));
+        return Err(EngineError::Internal(name));
     }
     Ok((rows, cols))
 }
@@ -589,9 +591,8 @@ pub(super) fn dense_rows_to_csc(rows: &[Vec<f64>]) -> CscMatrix<f64> {
     clippy::float_cmp,
     reason = "an interval of one point has that point as every quantile"
 )]
-pub(super) fn truncated_normal_quantile(p: f64, l: f64, u: f64) -> Result<f64, String> {
-    let undefined =
-        || format!("truncated normal quantile is undefined for p = {p}, interval [{l}, {u}]");
+pub(super) fn truncated_normal_quantile(p: f64, l: f64, u: f64) -> Result<f64, EngineError> {
+    let undefined = || EngineError::CriticalValue("truncated normal quantile");
     if p.is_nan() || l.is_nan() || u.is_nan() || !(0.0..=1.0).contains(&p) {
         return Err(undefined());
     }

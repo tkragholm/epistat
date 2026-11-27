@@ -8,6 +8,7 @@
 //! in the build.
 
 use super::super::linear_algebra::diag_sqrt;
+use crate::sensitivity::EngineError;
 
 /// Optimal bases each workspace keeps as starting points; see
 /// [`DenseSimplex::set_memory`].
@@ -42,15 +43,14 @@ impl ConditionalMomentLpWorkspace {
     pub(in crate::sensitivity) fn new(
         x_matrix: &[Vec<f64>],
         sigma: &[Vec<f64>],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, EngineError> {
         let sd_vec = diag_sqrt(sigma);
         let scale = sd_vec.iter().copied().fold(0.0_f64, f64::max).max(1.0);
         let k = x_matrix.first().map_or(0, Vec::len);
         let rows = x_matrix.len();
         if sd_vec.len() != rows {
-            return Err(format!(
-                "HonestDiD eta/delta LP has {rows} design rows but {} variances",
-                sd_vec.len()
+            return Err(EngineError::Internal(
+                "variances of another count than the rows of the eta/delta program",
             ));
         }
         let columns: Vec<Vec<f64>> = x_matrix
@@ -87,27 +87,26 @@ impl ConditionalMomentLpWorkspace {
         let _ = self.lp.prepare();
     }
 
-    fn load(&mut self, y_vec: &[f64]) -> Result<(), String> {
+    fn load(&mut self, y_vec: &[f64]) -> Result<(), EngineError> {
         if self.cost_scratch.len() != y_vec.len() {
-            return Err(format!(
-                "HonestDiD eta/delta LP rhs length mismatch: expected {}, got {}",
-                self.cost_scratch.len(),
-                y_vec.len()
+            return Err(EngineError::Internal(
+                "a right-hand side of another length than the eta/delta program",
             ));
         }
         for (dst, y) in self.cost_scratch.iter_mut().zip(y_vec) {
             *dst = y / self.scale;
         }
         self.lp.set_cost(&self.cost_scratch);
-        self.lp
-            .solve()
-            .map_err(|status| format!("failed to solve HonestDiD eta/delta LP: {status}"))
+        self.lp.solve().map_err(EngineError::Optim)
     }
 
     /// # Errors
     /// Returns an error if the rhs length is wrong or the program has no
     /// bounded optimum.
-    pub(in crate::sensitivity) fn solve_in_place(&mut self, y_vec: &[f64]) -> Result<(), String> {
+    pub(in crate::sensitivity) fn solve_in_place(
+        &mut self,
+        y_vec: &[f64],
+    ) -> Result<(), EngineError> {
         self.load(y_vec)?;
         let duals = self.lp.duals();
         self.eta_star = duals[0];
@@ -124,7 +123,10 @@ impl ConditionalMomentLpWorkspace {
     ///
     /// # Errors
     /// As [`Self::solve_in_place`].
-    pub(in crate::sensitivity) fn solve_eta_only(&mut self, y_vec: &[f64]) -> Result<f64, String> {
+    pub(in crate::sensitivity) fn solve_eta_only(
+        &mut self,
+        y_vec: &[f64],
+    ) -> Result<f64, EngineError> {
         self.load(y_vec)?;
         Ok(self.lp.dual_0())
     }
@@ -176,11 +178,13 @@ pub(in crate::sensitivity) struct DualMaxLpWorkspace<'a> {
 }
 
 impl<'a> DualMaxLpWorkspace<'a> {
-    pub(in crate::sensitivity) fn new(w_t: &'a [Vec<f64>]) -> Result<Self, String> {
+    pub(in crate::sensitivity) fn new(w_t: &'a [Vec<f64>]) -> Result<Self, EngineError> {
         let dim = w_t.len();
         let width = w_t.first().map_or(0, Vec::len);
         if w_t.iter().any(|row| row.len() != width) {
-            return Err("HonestDiD dual max LP has ragged rows".to_string());
+            return Err(EngineError::Internal(
+                "a dual program with rows of different lengths",
+            ));
         }
         let mut g = vec![0.0; width];
         if width > 0 {
@@ -219,9 +223,11 @@ impl<'a> DualMaxLpWorkspace<'a> {
         sigma_b2: f64,
         c: f64,
         counter: &crate::sensitivity::SolverCounter,
-    ) -> Result<f64, String> {
+    ) -> Result<f64, EngineError> {
         if sigma_b2.abs() < f64::EPSILON {
-            return Err("HonestDiD dual max program encountered zero gamma variance".to_string());
+            return Err(EngineError::Degenerate(
+                "a zero variance in the dual of the conditional test",
+            ));
         }
         for ((f_value, s_value), sigma_gamma_value) in self
             .f_scratch
@@ -289,17 +295,17 @@ impl<'a> DualMaxLpWorkspace<'a> {
                 }
                 Ok(self.lp.objective())
             }
-            Err(LpError::Infeasible) => Err("HonestDiD dual max program is infeasible".to_string()),
-            Err(LpError::Unbounded) => Err("HonestDiD dual max program is unbounded".to_string()),
+            Err(LpError::Infeasible) => Err(EngineError::Solver {
+                program: "dual of the conditional test",
+                status: crate::SolverStatus::Infeasible,
+            }),
+            Err(LpError::Unbounded) => Err(EngineError::Solver {
+                program: "dual of the conditional test",
+                status: crate::SolverStatus::Unbounded,
+            }),
             Err(status) => {
-                solve_dual_max_with_clarabel_fallback(self.w_t, &self.f_scratch, counter).map_err(
-                    |fallback_err| {
-                        format!(
-                            "dense simplex failed to solve HonestDiD dual max LP: {status}; \
-                         Clarabel fallback also failed: {fallback_err}"
-                        )
-                    },
-                )
+                solve_dual_max_with_clarabel_fallback(self.w_t, &self.f_scratch, counter)
+                    .map_err(|_| EngineError::Optim(status))
             }
         }
     }
@@ -312,6 +318,8 @@ mod tests {
         DefaultSettingsBuilder, DefaultSolver, IPSolver, SolverStatus, SupportedConeT,
     };
     use epistat_rng::Stream;
+
+    use crate::sensitivity::EngineError;
     use rand::RngExt;
 
     use super::super::super::linear_algebra::{
@@ -438,7 +446,11 @@ mod tests {
                 // both solvers must then say so.
                 let Some(reference) = solve_arp_with_clarabel(&x_matrix, &sigma, &y_vec) else {
                     let error = workspace.solve_in_place(&y_vec).unwrap_err();
-                    assert!(error.contains("no feasible point"), "{error}");
+                    assert_eq!(
+                        error,
+                        EngineError::Optim(epistat_optim::Error::Infeasible),
+                        "{error}"
+                    );
                     continue;
                 };
                 workspace.solve_in_place(&y_vec).unwrap();
@@ -546,6 +558,15 @@ mod tests {
                 &crate::sensitivity::SolverCounter::new(),
             )
             .unwrap_err();
-        assert!(error.contains("infeasible"), "{error}");
+        assert!(
+            matches!(
+                error,
+                EngineError::Solver {
+                    status: crate::SolverStatus::Infeasible,
+                    ..
+                } | EngineError::Optim(epistat_optim::Error::Infeasible)
+            ),
+            "{error}"
+        );
     }
 }

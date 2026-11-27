@@ -125,9 +125,9 @@ struct Slope {
 /// Critical value of the tight reference: the normal quantile at `alpha`.
 fn config_for(r: &Reference) -> PretrendConfig {
     PretrendConfig {
-        alpha: r.alpha,
+        level: epistat_core::Level::alpha(r.alpha).expect("alpha in (0, 1)"),
         abs_tol: 1e-6,
-        ..PretrendConfig::default()
+        ..PretrendConfig::with_seed(20_260_125)
     }
 }
 

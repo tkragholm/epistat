@@ -280,7 +280,7 @@ fn smoothness_conditional_flci_matches_honestdid() {
                     Some(&[case.m]),
                     bias,
                     monotone,
-                    LeastFavorableSimulation::default(),
+                    LeastFavorableSimulation::new(1_000, 0),
                 );
                 assert!(expected.lb.is_finite(), "{label}: R accepted no grid point");
                 let row = &got.expect("conditional").rows[0];
@@ -380,7 +380,7 @@ fn smoothness_intervals_do_not_depend_on_the_thread_count() {
                 Some(&[0.0, 0.1]),
                 None,
                 monotone,
-                LeastFavorableSimulation::default(),
+                LeastFavorableSimulation::new(1_000, 0),
             )
             .expect("conditional");
             out.extend(summary.rows.iter().flat_map(|row| [row.lb, row.ub]));

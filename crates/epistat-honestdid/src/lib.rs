@@ -55,4 +55,4 @@ mod sensitivity;
 mod tests;
 mod util;
 
-pub use error::Error;
+pub use error::{Error, SolverStatus};

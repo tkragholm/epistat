@@ -16,6 +16,7 @@
 //!   Trends", especially the least-favorable / FLCI discussion
 //! - `HonestDiD` R package `flci.R`
 
+use crate::sensitivity::EngineError;
 use crate::util::InferenceConfig;
 use rayon::prelude::*;
 
@@ -119,7 +120,7 @@ pub fn build_relative_magnitude_flci_problem(
     post_weights: &[f64],
     mbar: f64,
     inference: InferenceConfig,
-) -> Result<RelativeMagnitudeFlciProblem, String> {
+) -> Result<RelativeMagnitudeFlciProblem, EngineError> {
     build_relative_magnitude_flci_problem_counted(
         input,
         post_weights,
@@ -136,7 +137,7 @@ pub(in crate::sensitivity) fn build_relative_magnitude_flci_problem_counted(
     mbar: f64,
     inference: InferenceConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<RelativeMagnitudeFlciProblem, String> {
+) -> Result<RelativeMagnitudeFlciProblem, EngineError> {
     let original = compute_original_confidence_set(input, post_weights, inference)?;
     let identified_set =
         crate::sensitivity::relative_magnitude::compute_relative_magnitude_identified_set_counted(
@@ -165,7 +166,7 @@ pub(in crate::sensitivity) fn build_relative_magnitude_flci_problem_counted(
 #[cfg(test)]
 pub fn compute_relative_magnitude_flci(
     problem: &RelativeMagnitudeFlciProblem,
-) -> Result<RelativeMagnitudeFlciResult, String> {
+) -> Result<RelativeMagnitudeFlciResult, EngineError> {
     compute_relative_magnitude_flci_counted(problem, &crate::sensitivity::SolverCounter::new())
 }
 
@@ -173,10 +174,13 @@ pub fn compute_relative_magnitude_flci(
 pub(in crate::sensitivity) fn compute_relative_magnitude_flci_counted(
     problem: &RelativeMagnitudeFlciProblem,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<RelativeMagnitudeFlciResult, String> {
+) -> Result<RelativeMagnitudeFlciResult, EngineError> {
     compute_relative_magnitude_flci_with_config_counted(
         problem,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(problem.inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            problem.inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
         counter,
     )
 }
@@ -191,10 +195,10 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_flci_counted(
 /// Returns an error if `config` fails validation or the conditional confidence
 /// set fails.
 #[cfg(test)]
-pub fn compute_relative_magnitude_flci_with_config(
+pub(crate) fn compute_relative_magnitude_flci_with_config(
     problem: &RelativeMagnitudeFlciProblem,
     config: RelativeMagnitudeConfidenceSetConfig,
-) -> Result<RelativeMagnitudeFlciResult, String> {
+) -> Result<RelativeMagnitudeFlciResult, EngineError> {
     compute_relative_magnitude_flci_with_config_counted(
         problem,
         config,
@@ -207,7 +211,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_flci_with_config_counte
     problem: &RelativeMagnitudeFlciProblem,
     config: RelativeMagnitudeConfidenceSetConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<RelativeMagnitudeFlciResult, String> {
+) -> Result<RelativeMagnitudeFlciResult, EngineError> {
     let conditional: HonestConditionalConfidenceSet =
         crate::sensitivity::relative_magnitude::compute_relative_magnitude_confidence_set_with_config_counted(
             &problem.input,
@@ -234,7 +238,7 @@ pub fn build_relative_magnitude_multi_flci_problem(
     post_weight_sets: &[Vec<f64>],
     mbar: f64,
     inference: InferenceConfig,
-) -> Result<RelativeMagnitudeMultiFlciProblem, String> {
+) -> Result<RelativeMagnitudeMultiFlciProblem, EngineError> {
     build_relative_magnitude_multi_flci_problem_counted(
         input,
         post_weight_sets,
@@ -250,9 +254,9 @@ pub(in crate::sensitivity) fn build_relative_magnitude_multi_flci_problem_counte
     mbar: f64,
     inference: InferenceConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<RelativeMagnitudeMultiFlciProblem, String> {
+) -> Result<RelativeMagnitudeMultiFlciProblem, EngineError> {
     if post_weight_sets.is_empty() {
-        return Err("multi FLCI requires at least one functional".to_string());
+        return Err(EngineError::empty("targets"));
     }
     let mut originals = Vec::with_capacity(post_weight_sets.len());
     let mut identified_sets = Vec::with_capacity(post_weight_sets.len());
@@ -293,22 +297,18 @@ pub fn build_relative_magnitude_multi_flci_problem_with_precomputed_sets(
     inference: InferenceConfig,
     originals: Vec<HonestOriginalConfidenceSet>,
     identified_sets: Vec<HonestIdentifiedSet>,
-) -> Result<RelativeMagnitudeMultiFlciProblem, String> {
+) -> Result<RelativeMagnitudeMultiFlciProblem, EngineError> {
     if post_weight_sets.is_empty() {
-        return Err("multi FLCI requires at least one functional".to_string());
+        return Err(EngineError::empty("targets"));
     }
     if originals.len() != post_weight_sets.len() {
-        return Err(format!(
-            "original confidence-set count {} does not match functional count {}",
-            originals.len(),
-            post_weight_sets.len()
+        return Err(EngineError::Internal(
+            "original confidence sets of another count than the functionals",
         ));
     }
     if identified_sets.len() != post_weight_sets.len() {
-        return Err(format!(
-            "identified-set count {} does not match functional count {}",
-            identified_sets.len(),
-            post_weight_sets.len()
+        return Err(EngineError::Internal(
+            "identified sets of another count than the functionals",
         ));
     }
     Ok(RelativeMagnitudeMultiFlciProblem {
@@ -327,9 +327,9 @@ fn simulated_joint_pointwise_confidence_level(
     post_weight_sets: &[Vec<f64>],
     simulation_draws: usize,
     simulation_seed: u64,
-) -> Result<f64, String> {
+) -> Result<f64, EngineError> {
     if simulation_draws == 0 {
-        return Err("multi FLCI simulation_draws must be positive".to_string());
+        return Err(EngineError::domain("calibration draws", 0.0, "[1, inf)"));
     }
     let sigma_post = post_covariance_block(
         &input.covariance,
@@ -352,7 +352,7 @@ fn simulated_joint_pointwise_confidence_level(
 fn joint_pointwise_confidence_level(
     problem: &RelativeMagnitudeMultiFlciProblem,
     joint_config: HonestJointPathConfig,
-) -> Result<(f64, f64), String> {
+) -> Result<(f64, f64), EngineError> {
     let n = problem.post_weight_sets.len();
     if n == 1 {
         return Ok((
@@ -365,8 +365,10 @@ fn joint_pointwise_confidence_level(
         HonestJointPathMethod::Bonferroni => {
             let pointwise = 1.0 - alpha / usize_to_f64(n);
             if !validate_confidence_level(pointwise) {
-                return Err(format!(
-                    "invalid Bonferroni-adjusted confidence level {pointwise}"
+                return Err(EngineError::domain(
+                    "pointwise confidence level",
+                    pointwise,
+                    "(0, 1)",
                 ));
             }
             Ok((
@@ -399,7 +401,7 @@ fn joint_pointwise_confidence_level(
 #[cfg(test)]
 pub fn compute_relative_magnitude_multi_flci(
     problem: &RelativeMagnitudeMultiFlciProblem,
-) -> Result<RelativeMagnitudeMultiFlciResult, String> {
+) -> Result<RelativeMagnitudeMultiFlciResult, EngineError> {
     compute_relative_magnitude_multi_flci_counted(
         problem,
         &crate::sensitivity::SolverCounter::new(),
@@ -410,10 +412,13 @@ pub fn compute_relative_magnitude_multi_flci(
 pub(in crate::sensitivity) fn compute_relative_magnitude_multi_flci_counted(
     problem: &RelativeMagnitudeMultiFlciProblem,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<RelativeMagnitudeMultiFlciResult, String> {
+) -> Result<RelativeMagnitudeMultiFlciResult, EngineError> {
     compute_relative_magnitude_multi_flci_with_config_counted(
         problem,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(problem.inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            problem.inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
         HonestJointPathConfig::default_for_production(),
         counter,
     )
@@ -425,11 +430,11 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_multi_flci_counted(
 /// # Errors
 /// Returns an error if the joint calibration fails or any interval cannot be
 /// computed.
-pub fn compute_relative_magnitude_multi_flci_with_config(
+pub(crate) fn compute_relative_magnitude_multi_flci_with_config(
     problem: &RelativeMagnitudeMultiFlciProblem,
     config: RelativeMagnitudeConfidenceSetConfig,
     joint_config: HonestJointPathConfig,
-) -> Result<RelativeMagnitudeMultiFlciResult, String> {
+) -> Result<RelativeMagnitudeMultiFlciResult, EngineError> {
     compute_relative_magnitude_multi_flci_with_config_counted(
         problem,
         config,
@@ -443,7 +448,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_multi_flci_with_config_
     config: RelativeMagnitudeConfidenceSetConfig,
     joint_config: HonestJointPathConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<RelativeMagnitudeMultiFlciResult, String> {
+) -> Result<RelativeMagnitudeMultiFlciResult, EngineError> {
     let prepared_branches = prepare_relative_magnitude_branches(
         problem.input.num_pre_periods(),
         problem.input.num_post_periods(),
@@ -468,7 +473,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_multi_flci_with_prepare
     prepared_branches: &[RelativeMagnitudePreparedBranch],
     prepared_input_branches: &[RelativeMagnitudePreparedInputBranch],
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<RelativeMagnitudeMultiFlciResult, String> {
+) -> Result<RelativeMagnitudeMultiFlciResult, EngineError> {
     let prepared_functional_branch_sets = problem
         .post_weight_sets
         .iter()
@@ -479,7 +484,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_multi_flci_with_prepare
                 prepared_input_branches,
             )
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, EngineError>>()?;
     compute_relative_magnitude_multi_flci_with_prepared_functional_branches(
         problem,
         config,
@@ -499,12 +504,14 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_multi_flci_with_prepare
     prepared_input_branches: &[RelativeMagnitudePreparedInputBranch],
     prepared_functional_branch_sets: &[Vec<RelativeMagnitudePreparedFunctionalBranch>],
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<RelativeMagnitudeMultiFlciResult, String> {
+) -> Result<RelativeMagnitudeMultiFlciResult, EngineError> {
     let (pointwise_confidence_level, calibrated_max_t_critical_value) =
         joint_pointwise_confidence_level(problem, joint_config)?;
     let pointwise_inference = InferenceConfig::new(pointwise_confidence_level);
-    let pointwise_default =
-        RelativeMagnitudeConfidenceSetConfig::from_inference(pointwise_inference);
+    let pointwise_default = RelativeMagnitudeConfidenceSetConfig::from_inference(
+        pointwise_inference,
+        config.simulation(),
+    );
     // Intentional override: `hybrid_kappa` is re-derived from the
     // pointwise-adjusted confidence level so first-stage size tracks the
     // simultaneous calibration.
@@ -515,10 +522,8 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_multi_flci_with_prepare
         least_favorable_seed: config.least_favorable_seed,
     };
     if prepared_functional_branch_sets.len() != problem.post_weight_sets.len() {
-        return Err(format!(
-            "prepared functional set count {} does not match functional count {}",
-            prepared_functional_branch_sets.len(),
-            problem.post_weight_sets.len()
+        return Err(EngineError::Internal(
+            "prepared branches of another count than the functionals",
         ));
     }
 
@@ -595,7 +600,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_multi_flci_with_prepare
                 })
             },
         )
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, EngineError>>()?;
 
     Ok(RelativeMagnitudeMultiFlciResult {
         confidence_level: problem.inference.confidence_level,

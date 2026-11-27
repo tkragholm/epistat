@@ -8,25 +8,20 @@ use super::super::super::{
     HonestEventStudyInput, HonestJointPathConfig, HonestJointPathMethod, HonestSensitivity,
     RelativeMagnitudeConfidenceSetConfig,
 };
+use crate::sensitivity::EngineError;
 use crate::util::InferenceConfig;
 use crate::util::usize_to_f64;
 use crate::util::validate_confidence_level;
 use rayon::prelude::*;
 
-fn validate_direction(direction: &[f64], num_post: usize) -> Result<(), String> {
+fn validate_direction(direction: &[f64], num_post: usize) -> Result<(), EngineError> {
     if direction.len() != num_post {
-        return Err(format!(
-            "direction length {} does not match number of post periods {}",
-            direction.len(),
-            num_post
-        ));
+        return Err(EngineError::length("direction", num_post, direction.len()));
     }
-    if direction.iter().any(|value| !value.is_finite()) {
-        return Err("direction vector values must be finite".to_string());
-    }
+    EngineError::check_finite("direction", direction)?;
     let l1: f64 = direction.iter().map(|value| value.abs()).sum();
     if l1 <= 1e-12 {
-        return Err("direction vector must have non-zero weight".to_string());
+        return Err(EngineError::all_zero("direction"));
     }
     Ok(())
 }
@@ -37,9 +32,9 @@ fn simulated_directional_pointwise_confidence_level(
     simulation_draws: usize,
     simulation_seed: u64,
     directions: &[Vec<f64>],
-) -> Result<f64, String> {
+) -> Result<f64, EngineError> {
     if simulation_draws == 0 {
-        return Err("directional simulation_draws must be positive".to_string());
+        return Err(EngineError::domain("calibration draws", 0.0, "[1, inf)"));
     }
     let sigma_post = post_covariance_block(
         &input.covariance,
@@ -62,10 +57,10 @@ fn simulated_directional_pointwise_confidence_level(
 fn validate_direction_set(
     input: &HonestEventStudyInput,
     directions: &[Vec<f64>],
-) -> Result<(), String> {
+) -> Result<(), EngineError> {
     input.validate()?;
     if directions.is_empty() {
-        return Err("directional region requires at least one direction".to_string());
+        return Err(EngineError::empty("directions"));
     }
     let num_post = input.num_post_periods();
     for direction in directions {
@@ -79,15 +74,17 @@ pub(super) fn calibrate_directional_region(
     directions: &[Vec<f64>],
     inference: InferenceConfig,
     joint_config: HonestJointPathConfig,
-) -> Result<(f64, f64), String> {
+) -> Result<(f64, f64), EngineError> {
     validate_direction_set(input, directions)?;
     let alpha = 1.0 - inference.confidence_level;
     match joint_config.method {
         HonestJointPathMethod::Bonferroni => {
             let pointwise = 1.0 - alpha / usize_to_f64(directions.len());
             if !validate_confidence_level(pointwise) {
-                return Err(format!(
-                    "invalid Bonferroni-adjusted confidence level {pointwise}"
+                return Err(EngineError::domain(
+                    "pointwise confidence level",
+                    pointwise,
+                    "(0, 1)",
                 ));
             }
             Ok((
@@ -121,7 +118,7 @@ pub(super) fn calibrate_directional_region(
 /// # Errors
 /// Returns an error if any direction is malformed, if calibration fails, or if
 /// any directional scalar assessment fails.
-pub fn assess_honest_event_study_directional_region_with_config(
+pub(crate) fn assess_honest_event_study_directional_region_with_config(
     input: &HonestEventStudyInput,
     directions: &[Vec<f64>],
     sensitivity: HonestSensitivity,
@@ -129,7 +126,7 @@ pub fn assess_honest_event_study_directional_region_with_config(
     null_value: f64,
     relative_magnitude_config: RelativeMagnitudeConfidenceSetConfig,
     joint_config: HonestJointPathConfig,
-) -> Result<HonestDirectionalRegion, String> {
+) -> Result<HonestDirectionalRegion, EngineError> {
     assess_honest_event_study_directional_region_with_config_counted(
         input,
         directions,
@@ -151,7 +148,7 @@ pub(in crate::sensitivity) fn assess_honest_event_study_directional_region_with_
     relative_magnitude_config: RelativeMagnitudeConfidenceSetConfig,
     joint_config: HonestJointPathConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestDirectionalRegion, String> {
+) -> Result<HonestDirectionalRegion, EngineError> {
     assess_honest_event_study_directional_region_with_optional_prepared_relative_magnitude(
         input,
         directions,
@@ -175,7 +172,7 @@ pub(in crate::sensitivity) fn assess_honest_event_study_directional_region_with_
     joint_config: HonestJointPathConfig,
     prepared_relative_magnitude: Option<&super::super::PreparedRelativeMagnitudeBaseContext>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestDirectionalRegion, String> {
+) -> Result<HonestDirectionalRegion, EngineError> {
     let (pointwise_confidence_level, calibrated_max_t_critical_value) =
         calibrate_directional_region(input, directions, inference, joint_config)?;
     assess_honest_event_study_directional_region_with_precalibrated_pointwise(
@@ -205,10 +202,12 @@ pub(in crate::sensitivity) fn assess_honest_event_study_directional_region_with_
     pointwise_confidence_level: f64,
     calibrated_max_t_critical_value: f64,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestDirectionalRegion, String> {
+) -> Result<HonestDirectionalRegion, EngineError> {
     let pointwise_inference = InferenceConfig::new(pointwise_confidence_level);
-    let pointwise_relative_magnitude_config =
-        RelativeMagnitudeConfidenceSetConfig::from_inference(pointwise_inference);
+    let pointwise_relative_magnitude_config = RelativeMagnitudeConfidenceSetConfig::from_inference(
+        pointwise_inference,
+        relative_magnitude_config.simulation(),
+    );
     let owned_relative_magnitude = match (sensitivity, prepared_relative_magnitude) {
         (HonestSensitivity::RelativeMagnitude(mbar), None) => Some(
             super::super::prepare_relative_magnitude_base_context(input, mbar)?,
@@ -235,7 +234,7 @@ pub(in crate::sensitivity) fn assess_honest_event_study_directional_region_with_
                             )
                         }
                     })
-                    .collect::<Result<Vec<_>, String>>()?,
+                    .collect::<Result<Vec<_>, EngineError>>()?,
             ),
             _ => None,
         };
@@ -279,7 +278,7 @@ pub(in crate::sensitivity) fn assess_honest_event_study_directional_region_with_
                         &prepared.input_branches,
                         &prepared_functional_branch_sets
                             .as_ref()
-                            .ok_or("missing prepared functional branch sets")?[direction_index], counter,
+                            .ok_or(EngineError::Internal("missing prepared functional branch sets"))?[direction_index], counter,
                     )?,
                 },
                 None => super::super::assess_honest_event_study_functional_with_config_counted(
@@ -296,7 +295,7 @@ pub(in crate::sensitivity) fn assess_honest_event_study_directional_region_with_
                 assessment,
             })
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, EngineError>>()?;
 
     Ok(HonestDirectionalRegion {
         confidence_level,

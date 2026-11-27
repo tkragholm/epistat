@@ -87,7 +87,7 @@ use epistat_core::{Bootstrap, EventStudy, InputError, Level};
 
 use crate::error::Error;
 pub use engine::Evaluated;
-use engine::{PretrendConfig, PretrendError, PretrendInput};
+use engine::{PretrendConfig, PretrendInput};
 
 /// The hypothesised violation of parallel trends.
 #[non_exhaustive]
@@ -206,12 +206,11 @@ pub fn power(study: &EventStudy, options: &PretrendOptions) -> Result<PretrendAn
                 }
                 .into());
             }
-            let slope = engine::slope_for_power(&input, reference, *target, &config)
-                .map_err(from_engine)?;
+            let slope = engine::slope_for_power(&input, reference, *target, &config)?;
             (input.linear_trend(slope.value, reference), Some(slope))
         }
     };
-    let analysis = engine::analyse_pretest(&input, &delta, &config).map_err(from_engine)?;
+    let analysis = engine::analyse_pretest(&input, &delta, &config)?;
     Ok(PretrendAnalysis {
         delta,
         slope,
@@ -255,66 +254,18 @@ fn engine_input(study: &EventStudy) -> Result<PretrendInput, Error> {
     };
     // Lengths and finiteness hold by construction, so the engine's check can
     // only find the covariance asymmetric.
-    input.validate().map_err(|_| InputError::Domain {
-        what: "covariance",
-        value: f64::NAN,
-        domain: "symmetric",
-        row: None,
-    })?;
+    input.validate()?;
     Ok(input)
 }
 
 fn config(options: &PretrendOptions) -> Result<PretrendConfig, Error> {
-    if let Some(threshold) = options.threshold
-        && !(threshold > 0.0 && threshold.is_finite())
-    {
-        return Err(InputError::Domain {
-            what: "threshold",
-            value: threshold,
-            domain: "positive and finite",
-            row: None,
-        }
-        .into());
-    }
-    if options.tolerance.is_nan() || options.tolerance <= 0.0 {
-        return Err(InputError::Domain {
-            what: "tolerance",
-            value: options.tolerance,
-            domain: "positive",
-            row: None,
-        }
-        .into());
-    }
-    if options.shifts.replicates < 2 {
-        return Err(InputError::Domain {
-            what: "shifts",
-            value: options.shifts.replicates as f64,
-            domain: "at least 2",
-            row: None,
-        }
-        .into());
-    }
-    Ok(PretrendConfig {
-        alpha: options.level.alpha_value(),
+    let config = PretrendConfig {
+        level: options.level,
         threshold: options.threshold,
         abs_tol: options.tolerance,
         shifts: options.shifts.replicates,
         seed: options.shifts.seed,
-    })
-}
-
-fn from_engine(error: PretrendError) -> Error {
-    match error {
-        PretrendError::NotPositiveDefinite(what) => Error::NotPositiveDefinite { what },
-        PretrendError::NoSlope {
-            target,
-            upper,
-            power_at_upper,
-        } => Error::NoSlope {
-            target,
-            upper,
-            power_at_upper,
-        },
-        PretrendError::InvalidInput(message) => Error::Solver(message),
-    }
+    };
+    engine::validate_config(&config)?;
+    Ok(config)
 }

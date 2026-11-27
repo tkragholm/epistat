@@ -15,6 +15,7 @@
 //! - Andrews, I., Roth, J., and Pakes, A. (2022). "Inference for Linear
 //!   Conditional Moment Inequalities". *Econometrica* 90(5), 2345-2377.
 
+use crate::sensitivity::EngineError;
 use epistat_rng::{Stream, replicate_seed};
 use rayon::prelude::*;
 
@@ -55,7 +56,7 @@ pub(in crate::sensitivity) fn compute_least_favorable_cv(
     hybrid_kappa: f64,
     sims: usize,
     seed: u64,
-) -> Result<f64, String> {
+) -> Result<f64, EngineError> {
     compute_least_favorable_cv_uncached(x_matrix, sigma, hybrid_kappa, sims, seed)
 }
 
@@ -65,7 +66,7 @@ pub(in crate::sensitivity) fn compute_least_favorable_cv_uncached(
     hybrid_kappa: f64,
     sims: usize,
     seed: u64,
-) -> Result<f64, String> {
+) -> Result<f64, EngineError> {
     let draws = simulation_draws(sigma, sims, seed)?;
     compute_least_favorable_cv_from_draws(x_matrix, sigma, hybrid_kappa, &draws)
 }
@@ -93,7 +94,7 @@ pub(in crate::sensitivity) fn simulation_draws(
     sigma: &[Vec<f64>],
     sims: usize,
     seed: u64,
-) -> Result<Vec<f64>, String> {
+) -> Result<Vec<f64>, EngineError> {
     let chol = cholesky_lower(sigma)?;
     let dim = sigma.len();
     let mut draws = vec![0.0; sims * dim];
@@ -140,12 +141,11 @@ pub(in crate::sensitivity) fn compute_least_favorable_cv_from_draws(
     sigma: &[Vec<f64>],
     hybrid_kappa: f64,
     draws: &[f64],
-) -> Result<f64, String> {
+) -> Result<f64, EngineError> {
     let dim = sigma.len();
     if dim == 0 || !draws.len().is_multiple_of(dim) {
-        return Err(format!(
-            "least-favorable draws of length {} do not tile a dimension of {dim}",
-            draws.len()
+        return Err(EngineError::Internal(
+            "least-favourable draws that do not tile their dimension",
         ));
     }
     let sims = draws.len() / dim;
@@ -174,7 +174,7 @@ pub(in crate::sensitivity) fn compute_least_favorable_cv_from_draws(
                     .expect("workspace result checked above");
                 Ok(workspace.solve_eta_only(y).ok())
             })
-            .collect::<Result<Vec<_>, String>>()?
+            .collect::<Result<Vec<_>, EngineError>>()?
     } else {
         let mut workspace = ConditionalMomentLpWorkspace::new(x_matrix, sigma)?;
         draws
@@ -182,17 +182,16 @@ pub(in crate::sensitivity) fn compute_least_favorable_cv_from_draws(
             .map(|y| workspace.solve_eta_only(y).ok())
             .collect()
     };
-    let failed = draw_results.iter().filter(|eta| eta.is_none()).count();
     let mut etas = draw_results.into_iter().flatten().collect::<Vec<_>>();
     let min_successful = sims / 2;
     if etas.len() < min_successful {
-        return Err(format!(
-            "least-favorable CV simulation: too many LP failures ({failed}/{sims}); \
-             cannot estimate critical value reliably"
+        return Err(EngineError::CriticalValue(
+            "least-favourable critical value",
         ));
     }
     let p = (1.0 - hybrid_kappa).clamp(0.0, 1.0);
     etas.sort_by(f64::total_cmp);
-    epistat_stats::compat::rounded_rank(&etas, p)
-        .ok_or_else(|| "failed to compute least-favorable critical value".to_string())
+    epistat_stats::compat::rounded_rank(&etas, p).ok_or(EngineError::CriticalValue(
+        "least-favourable critical value",
+    ))
 }

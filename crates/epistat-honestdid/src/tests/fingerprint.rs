@@ -216,7 +216,10 @@ fn cases(honest: &HonestEventStudyInput) -> Vec<(&'static str, u64)> {
                 RelativeMagnitudeConfidenceSetConfig {
                     least_favorable_draws: 200,
                     least_favorable_seed: 0,
-                    ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+                    ..RelativeMagnitudeConfidenceSetConfig::from_inference(
+                        inference,
+                        crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+                    )
                 },
                 HonestJointPathConfig {
                     method,
@@ -265,7 +268,10 @@ fn cases(honest: &HonestEventStudyInput) -> Vec<(&'static str, u64)> {
             RelativeMagnitudeConfidenceSetConfig {
                 least_favorable_draws: 200,
                 least_favorable_seed: 0,
-                ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+                ..RelativeMagnitudeConfidenceSetConfig::from_inference(
+                    inference,
+                    crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+                )
             },
             HonestJointPathConfig {
                 method: HonestJointPathMethod::GaussianSimulated,

@@ -45,6 +45,7 @@
 //! - `HonestDiD` 0.2.8, `flci.R`: `.createObjectiveObjectForBias`,
 //!   `.findLowestH`, `.findHForMinimumBias`, `.findWorstCaseBiasGivenH`.
 
+use crate::sensitivity::EngineError;
 use clarabel::algebra::CscMatrix;
 use clarabel::solver::SupportedConeT;
 use rayon::prelude::*;
@@ -201,7 +202,7 @@ fn lower_triangular_ones(num_pre: usize) -> Vec<Vec<f64>> {
 fn build_variance_soc_terms(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
-) -> Result<(Vec<Vec<f64>>, Vec<f64>), String> {
+) -> Result<(Vec<Vec<f64>>, Vec<f64>), EngineError> {
     let num_pre = input.num_pre_periods();
     let total_periods = input.betahat.len();
     let lower = cholesky_lower(&input.covariance)?;
@@ -287,7 +288,7 @@ fn solve_socp(
     soc_rows: &[Vec<f64>],
     rhs: &[f64],
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<Option<SmoothnessSocpSolution>, String> {
+) -> Result<Option<SmoothnessSocpSolution>, EngineError> {
     let mut equality_and_soc = Vec::with_capacity(equalities.len() + soc_rows.len());
     equality_and_soc.extend_from_slice(equalities);
     equality_and_soc.extend_from_slice(soc_rows);
@@ -315,7 +316,7 @@ fn find_lowest_h(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<Option<(f64, Vec<f64>)>, String> {
+) -> Result<Option<(f64, Vec<f64>)>, EngineError> {
     let num_pre = input.num_pre_periods();
     let weighted_sum = weighted_post_sum(post_weights);
     let (transform, d) = build_variance_soc_terms(input, post_weights)?;
@@ -376,7 +377,7 @@ fn find_worst_case_bias_given_h(
     post_weights: &[f64],
     h: f64,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<Option<SmoothnessBiasAtH>, String> {
+) -> Result<Option<SmoothnessBiasAtH>, EngineError> {
     let num_pre = input.num_pre_periods();
     let weighted_sum = weighted_post_sum(post_weights);
     let constant = bias_objective_constant(post_weights);
@@ -466,13 +467,13 @@ fn find_worst_case_bias_given_h(
     }))
 }
 
-fn folded_normal_quantile(p: f64, mu: f64) -> Result<f64, String> {
+fn folded_normal_quantile(p: f64, mu: f64) -> Result<f64, EngineError> {
     Some(epistat_stats::dist::normal::folded_quantile(p, mu))
         .filter(|q| !q.is_nan())
-        .ok_or_else(|| format!("folded-normal quantile probability must lie in (0,1), got {p}"))
+        .ok_or(EngineError::CriticalValue("folded-normal quantile"))
 }
 
-fn half_length_for_bias(alpha: f64, max_bias: f64, h: f64) -> Result<f64, String> {
+fn half_length_for_bias(alpha: f64, max_bias: f64, h: f64) -> Result<f64, EngineError> {
     if h <= 1e-12 {
         return Ok(max_bias.abs());
     }
@@ -483,7 +484,7 @@ fn find_optimal_flci(
     problem: &SmoothnessFlciProblem,
     config: SmoothnessFlciConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<Option<(Vec<f64>, f64)>, String> {
+) -> Result<Option<(Vec<f64>, f64)>, EngineError> {
     let Some((h_min, _)) = find_lowest_h(&problem.input, &problem.post_weights, counter)? else {
         return Ok(None);
     };
@@ -555,7 +556,7 @@ pub fn build_smoothness_flci_problem(
     post_weights: &[f64],
     m: f64,
     inference: InferenceConfig,
-) -> Result<SmoothnessFlciProblem, String> {
+) -> Result<SmoothnessFlciProblem, EngineError> {
     build_smoothness_flci_problem_counted(
         input,
         post_weights,
@@ -571,7 +572,7 @@ pub(in crate::sensitivity) fn build_smoothness_flci_problem_counted(
     m: f64,
     inference: InferenceConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<SmoothnessFlciProblem, String> {
+) -> Result<SmoothnessFlciProblem, EngineError> {
     let original = compute_original_confidence_set(input, post_weights, inference)?;
     let identified_set = crate::sensitivity::smoothness::compute_smoothness_identified_set_counted(
         input,
@@ -597,7 +598,7 @@ pub(in crate::sensitivity) fn build_smoothness_flci_problem_counted(
 #[cfg(test)]
 pub fn compute_smoothness_flci(
     problem: &SmoothnessFlciProblem,
-) -> Result<SmoothnessFlciResult, String> {
+) -> Result<SmoothnessFlciResult, EngineError> {
     compute_smoothness_flci_counted(problem, &crate::sensitivity::SolverCounter::new())
 }
 
@@ -605,7 +606,7 @@ pub fn compute_smoothness_flci(
 pub(in crate::sensitivity) fn compute_smoothness_flci_counted(
     problem: &SmoothnessFlciProblem,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<SmoothnessFlciResult, String> {
+) -> Result<SmoothnessFlciResult, EngineError> {
     compute_smoothness_flci_with_config_counted(
         problem,
         SmoothnessFlciConfig::default_for_production(),
@@ -619,10 +620,10 @@ pub(in crate::sensitivity) fn compute_smoothness_flci_counted(
 /// Returns an error if the typed problem is invalid or the smoothness
 /// least-favorable optimization fails.
 #[cfg(test)]
-pub fn compute_smoothness_flci_with_config(
+pub(crate) fn compute_smoothness_flci_with_config(
     problem: &SmoothnessFlciProblem,
     config: SmoothnessFlciConfig,
-) -> Result<SmoothnessFlciResult, String> {
+) -> Result<SmoothnessFlciResult, EngineError> {
     compute_smoothness_flci_with_config_counted(
         problem,
         config,
@@ -634,16 +635,19 @@ pub(in crate::sensitivity) fn compute_smoothness_flci_with_config_counted(
     problem: &SmoothnessFlciProblem,
     config: SmoothnessFlciConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<SmoothnessFlciResult, String> {
+) -> Result<SmoothnessFlciResult, EngineError> {
     if !validate_confidence_level(problem.inference.confidence_level) {
-        return Err(format!(
-            "invalid confidence level {}",
-            problem.inference.confidence_level
+        return Err(EngineError::domain(
+            "confidence level",
+            problem.inference.confidence_level,
+            "(0, 1)",
         ));
     }
     let Some((optimal_vec, optimal_half_length)) = find_optimal_flci(problem, config, counter)?
     else {
-        return Err("failed to compute smoothness fixed-length confidence interval".to_string());
+        return Err(EngineError::CriticalValue(
+            "fixed-length confidence interval",
+        ));
     };
     let center = dot(&optimal_vec, &problem.input.betahat);
     Ok(SmoothnessFlciResult {
@@ -666,7 +670,7 @@ pub fn build_smoothness_multi_flci_problem(
     post_weight_sets: &[Vec<f64>],
     m: f64,
     inference: InferenceConfig,
-) -> Result<SmoothnessMultiFlciProblem, String> {
+) -> Result<SmoothnessMultiFlciProblem, EngineError> {
     build_smoothness_multi_flci_problem_counted(
         input,
         post_weight_sets,
@@ -682,9 +686,9 @@ pub(in crate::sensitivity) fn build_smoothness_multi_flci_problem_counted(
     m: f64,
     inference: InferenceConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<SmoothnessMultiFlciProblem, String> {
+) -> Result<SmoothnessMultiFlciProblem, EngineError> {
     if post_weight_sets.is_empty() {
-        return Err("multi FLCI requires at least one functional".to_string());
+        return Err(EngineError::empty("targets"));
     }
     let mut originals = Vec::with_capacity(post_weight_sets.len());
     let mut identified_sets = Vec::with_capacity(post_weight_sets.len());
@@ -719,7 +723,7 @@ fn simulated_joint_pointwise_confidence_level(
     post_weight_sets: &[Vec<f64>],
     simulation_draws: usize,
     simulation_seed: u64,
-) -> Result<f64, String> {
+) -> Result<f64, EngineError> {
     let sigma_post = post_covariance_block(
         &input.covariance,
         input.num_pre_periods(),
@@ -741,7 +745,7 @@ fn simulated_joint_pointwise_confidence_level(
 fn joint_pointwise_confidence_level(
     problem: &SmoothnessMultiFlciProblem,
     joint_config: HonestJointPathConfig,
-) -> Result<(f64, f64), String> {
+) -> Result<(f64, f64), EngineError> {
     let n = problem.post_weight_sets.len();
     if n == 1 {
         return Ok((
@@ -779,7 +783,7 @@ fn joint_pointwise_confidence_level(
 #[cfg(test)]
 pub fn compute_smoothness_multi_flci(
     problem: &SmoothnessMultiFlciProblem,
-) -> Result<SmoothnessMultiFlciResult, String> {
+) -> Result<SmoothnessMultiFlciResult, EngineError> {
     compute_smoothness_multi_flci_counted(problem, &crate::sensitivity::SolverCounter::new())
 }
 
@@ -787,7 +791,7 @@ pub fn compute_smoothness_multi_flci(
 pub(in crate::sensitivity) fn compute_smoothness_multi_flci_counted(
     problem: &SmoothnessMultiFlciProblem,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<SmoothnessMultiFlciResult, String> {
+) -> Result<SmoothnessMultiFlciResult, EngineError> {
     compute_smoothness_multi_flci_with_config_counted(
         problem,
         SmoothnessFlciConfig::default_for_production(),
@@ -802,11 +806,11 @@ pub(in crate::sensitivity) fn compute_smoothness_multi_flci_counted(
 /// # Errors
 /// Returns an error if the typed problem is invalid or the joint calibration /
 /// scalar smoothness solves fail.
-pub fn compute_smoothness_multi_flci_with_config(
+pub(crate) fn compute_smoothness_multi_flci_with_config(
     problem: &SmoothnessMultiFlciProblem,
     config: SmoothnessFlciConfig,
     joint_config: HonestJointPathConfig,
-) -> Result<SmoothnessMultiFlciResult, String> {
+) -> Result<SmoothnessMultiFlciResult, EngineError> {
     compute_smoothness_multi_flci_with_config_counted(
         problem,
         config,
@@ -820,7 +824,7 @@ pub(in crate::sensitivity) fn compute_smoothness_multi_flci_with_config_counted(
     config: SmoothnessFlciConfig,
     joint_config: HonestJointPathConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<SmoothnessMultiFlciResult, String> {
+) -> Result<SmoothnessMultiFlciResult, EngineError> {
     let (pointwise_confidence_level, calibrated_max_t_critical_value) =
         joint_pointwise_confidence_level(problem, joint_config)?;
     let pointwise_inference = InferenceConfig::new(pointwise_confidence_level);
@@ -849,7 +853,7 @@ pub(in crate::sensitivity) fn compute_smoothness_multi_flci_with_config_counted(
                 robustly_significant: flci.flci.0 > 0.0 || flci.flci.1 < 0.0,
             })
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, EngineError>>()?;
 
     Ok(SmoothnessMultiFlciResult {
         confidence_level: problem.inference.confidence_level,

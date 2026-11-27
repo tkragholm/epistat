@@ -410,7 +410,7 @@ fn honest(out: &mut Vec<(&'static str, u64)>, study: &EventStudy) {
             },
         )
         .expect("joint path");
-        h.f(region.pointwise_level);
+        h.f(region.pointwise_level.confidence_value());
         h.o(region.critical_value);
         for point in &region.points {
             h.int(point.period.expect("a period"));

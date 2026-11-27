@@ -19,6 +19,7 @@ pub(in crate::sensitivity) mod conditional_confidence_set;
 pub(in crate::sensitivity) mod geometry;
 pub mod least_favorable_intervals;
 
+use crate::sensitivity::EngineError;
 use rayon::prelude::*;
 
 use crate::util::InferenceConfig;
@@ -64,17 +65,6 @@ pub(in crate::sensitivity) enum RelativeMagnitudeFamily {
 }
 
 impl RelativeMagnitudeFamily {
-    const fn description(self) -> &'static str {
-        match self {
-            Self::Base => "relative-magnitude sensitivity",
-            Self::SignedBase(_) => "sign-restricted relative-magnitude sensitivity",
-            Self::MonotoneBase(_) => "monotone relative-magnitude sensitivity",
-            Self::Linear => "linear-trend relative-magnitude sensitivity",
-            Self::SignedLinear(_) => "sign-restricted linear-trend relative-magnitude sensitivity",
-            Self::MonotoneLinear(_) => "monotone linear-trend relative-magnitude sensitivity",
-        }
-    }
-
     const fn requires_two_pre_periods(self) -> bool {
         matches!(
             self,
@@ -82,33 +72,13 @@ impl RelativeMagnitudeFamily {
         )
     }
 
-    fn min_s(self, num_pre: usize) -> Result<isize, String> {
-        let num_pre = isize::try_from(num_pre).map_err(|_| "too many pre-periods".to_string())?;
+    fn min_s(self, num_pre: usize) -> Result<isize, EngineError> {
+        let num_pre = isize::try_from(num_pre)
+            .map_err(|_| EngineError::Internal("more periods than an isize holds"))?;
         Ok(match self {
             Self::Base | Self::SignedBase(_) | Self::MonotoneBase(_) => -(num_pre - 1),
             Self::Linear | Self::SignedLinear(_) | Self::MonotoneLinear(_) => -(num_pre - 2),
         })
-    }
-
-    const fn empty_message(self) -> &'static str {
-        match self {
-            Self::Base => "relative-magnitude conditional confidence set accepted no grid points",
-            Self::SignedBase(_) => {
-                "sign-restricted relative-magnitude conditional confidence set accepted no grid points"
-            }
-            Self::MonotoneBase(_) => {
-                "monotone relative-magnitude conditional confidence set accepted no grid points"
-            }
-            Self::Linear => {
-                "linear-trend relative-magnitude conditional confidence set accepted no grid points"
-            }
-            Self::SignedLinear(_) => {
-                "sign-restricted linear-trend relative-magnitude conditional confidence set accepted no grid points"
-            }
-            Self::MonotoneLinear(_) => {
-                "monotone linear-trend relative-magnitude conditional confidence set accepted no grid points"
-            }
-        }
     }
 
     fn build_constraint_matrix(
@@ -118,7 +88,7 @@ impl RelativeMagnitudeFamily {
         mbar: f64,
         s: isize,
         max_positive: bool,
-    ) -> Result<Vec<Vec<f64>>, String> {
+    ) -> Result<Vec<Vec<f64>>, EngineError> {
         match self {
             Self::Base => geometry::build_relative_magnitude_constraint_matrix(
                 num_pre,
@@ -174,19 +144,17 @@ fn validate_post_weights(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
     require_nonzero: bool,
-) -> Result<(), String> {
+) -> Result<(), EngineError> {
     if post_weights.len() != input.num_post_periods() {
-        return Err(format!(
-            "post_weights length {} does not match number of post periods {}",
+        return Err(EngineError::length(
+            "target weights",
+            input.num_post_periods(),
             post_weights.len(),
-            input.num_post_periods()
         ));
     }
-    if post_weights.iter().any(|weight| !weight.is_finite()) {
-        return Err("post_weights weights must be finite".to_string());
-    }
+    EngineError::check_finite("target weights", post_weights)?;
     if require_nonzero && post_weights.iter().all(|weight| weight.abs() <= 1e-12) {
-        return Err("post_weights must contain at least one non-zero weight".to_string());
+        return Err(EngineError::all_zero("target weights"));
     }
     Ok(())
 }
@@ -196,18 +164,16 @@ fn validate_relative_magnitude_family_inputs(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
     mbar: f64,
-) -> Result<(), String> {
+) -> Result<(), EngineError> {
     input.validate()?;
     if !mbar.is_finite() || mbar < 0.0 {
-        return Err(format!(
-            "{} requires finite non-negative Mbar, got {mbar}",
-            family.description()
-        ));
+        return Err(EngineError::domain("Mbar", mbar, "finite and non-negative"));
     }
     if family.requires_two_pre_periods() && input.num_pre_periods() <= 1 {
-        return Err(format!(
-            "{} requires at least two pre-periods",
-            family.description()
+        return Err(EngineError::length(
+            "pre-treatment coefficients, at least",
+            2,
+            input.num_pre_periods(),
         ));
     }
     validate_post_weights(input, post_weights, true)
@@ -220,7 +186,7 @@ fn build_signed_parallel_trend_constraint_matrix(
     s: isize,
     max_positive: bool,
     bias_direction: HonestBiasDirection,
-) -> Result<Vec<Vec<f64>>, String> {
+) -> Result<Vec<Vec<f64>>, EngineError> {
     let mut a_matrix = geometry::build_relative_magnitude_constraint_matrix(
         num_pre,
         num_post,
@@ -243,7 +209,7 @@ fn build_monotone_parallel_trend_constraint_matrix(
     s: isize,
     max_positive: bool,
     monotonicity_direction: HonestMonotonicityDirection,
-) -> Result<Vec<Vec<f64>>, String> {
+) -> Result<Vec<Vec<f64>>, EngineError> {
     let mut a_matrix = geometry::build_relative_magnitude_constraint_matrix(
         num_pre,
         num_post,
@@ -266,7 +232,7 @@ fn build_linear_trend_relative_magnitude_constraint_matrix(
     mbar: f64,
     s: isize,
     max_positive: bool,
-) -> Result<Vec<Vec<f64>>, String> {
+) -> Result<Vec<Vec<f64>>, EngineError> {
     let total_diffs = num_pre + num_post - 1;
     let full_cols = num_pre + num_post + 1;
     let mut a_tilde = vec![vec![0.0; full_cols]; total_diffs];
@@ -276,16 +242,19 @@ fn build_linear_trend_relative_magnitude_constraint_matrix(
         row[row_idx + 2] = 1.0;
     }
 
-    let start = isize::try_from(num_pre).map_err(|_| "too many pre-periods".to_string())? + s - 2;
+    let start = isize::try_from(num_pre)
+        .map_err(|_| EngineError::Internal("more periods than an isize holds"))?
+        + s
+        - 2;
     if start < 0
-        || start + 2 >= isize::try_from(full_cols).map_err(|_| "too many periods".to_string())?
+        || start + 2
+            >= isize::try_from(full_cols)
+                .map_err(|_| EngineError::Internal("more periods than an isize holds"))?
     {
-        return Err(format!(
-            "invalid linear-trend relative-magnitude branch index s={s} for num_pre={num_pre}"
-        ));
+        return Err(EngineError::Internal("a branch index outside the periods"));
     }
     let start = usize::try_from(start)
-        .map_err(|_| "invalid linear-trend relative-magnitude branch index".to_string())?;
+        .map_err(|_| EngineError::Internal("a branch index outside the periods"))?;
     let mut v_max = vec![0.0; full_cols];
     v_max[start] = 1.0;
     v_max[start + 1] = -2.0;
@@ -345,7 +314,7 @@ fn build_signed_linear_trend_constraint_matrix(
     s: isize,
     max_positive: bool,
     bias_direction: HonestBiasDirection,
-) -> Result<Vec<Vec<f64>>, String> {
+) -> Result<Vec<Vec<f64>>, EngineError> {
     let mut a_matrix = build_linear_trend_relative_magnitude_constraint_matrix(
         num_pre,
         num_post,
@@ -368,7 +337,7 @@ fn build_monotone_linear_trend_constraint_matrix(
     s: isize,
     max_positive: bool,
     monotonicity_direction: HonestMonotonicityDirection,
-) -> Result<Vec<Vec<f64>>, String> {
+) -> Result<Vec<Vec<f64>>, EngineError> {
     let mut a_matrix = build_linear_trend_relative_magnitude_constraint_matrix(
         num_pre,
         num_post,
@@ -391,14 +360,14 @@ fn compute_relative_magnitude_identified_set_with_builder<F>(
     min_s: isize,
     build_matrix: F,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestIdentifiedSet, String>
+) -> Result<HonestIdentifiedSet, EngineError>
 where
-    F: Fn(isize, bool) -> Result<Vec<Vec<f64>>, String> + Sync,
+    F: Fn(isize, bool) -> Result<Vec<Vec<f64>>, EngineError> + Sync,
 {
     let num_pre = input.num_pre_periods();
     let num_post = input.num_post_periods();
     if num_pre == 0 {
-        return Err("relative-magnitude sensitivity requires at least one pre-period".to_string());
+        return Err(EngineError::empty("pre-treatment coefficients"));
     }
     let branches: Vec<(isize, bool)> = (min_s..=0)
         .flat_map(|s| {
@@ -407,7 +376,7 @@ where
                 .map(move |max_positive| (s, max_positive))
         })
         .collect();
-    let branch_results: Result<Vec<Option<HonestIdentifiedSet>>, String> = branches
+    let branch_results: Result<Vec<Option<HonestIdentifiedSet>>, EngineError> = branches
         .into_par_iter()
         .map(|(s, max_positive)| {
             let inequality_matrix = build_matrix(s, max_positive)?;
@@ -455,12 +424,11 @@ fn compute_relative_magnitude_confidence_set_with_builder<F>(
     identified: &HonestIdentifiedSet,
     min_s: isize,
     build_matrix: F,
-    empty_message: &'static str,
     shared_draws: Option<&[Vec<f64>]>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestConditionalConfidenceSet, String>
+) -> Result<HonestConditionalConfidenceSet, EngineError>
 where
-    F: Fn(isize, bool) -> Result<Vec<Vec<f64>>, String> + Sync,
+    F: Fn(isize, bool) -> Result<Vec<Vec<f64>>, EngineError> + Sync,
 {
     let num_pre = input.num_pre_periods();
     let (grid_lower, grid_upper) = grid_bounds_around_identified_set(original, identified);
@@ -480,13 +448,11 @@ where
     if let Some(shared_draws) = shared_draws
         && shared_draws.len() != branches.len()
     {
-        return Err(format!(
-            "shared least-favorable draws cover {} branches but the family has {}",
-            shared_draws.len(),
-            branches.len()
+        return Err(EngineError::Internal(
+            "shared least-favourable draws of another count than the branches",
         ));
     }
-    let branch_acceptance: Result<Vec<Option<AcceptedGridRange>>, String> = branches
+    let branch_acceptance: Result<Vec<Option<AcceptedGridRange>>, EngineError> = branches
         .into_par_iter()
         .enumerate()
         .map(|(branch_idx, (s, max_positive))| {
@@ -522,7 +488,7 @@ where
         },
     );
     let Some(accepted_range) = accepted_range else {
-        return Err(empty_message.to_string());
+        return Err(EngineError::NoAcceptedValues);
     };
     Ok(HonestConditionalConfidenceSet {
         lb: grid[accepted_range.lower_idx],
@@ -543,7 +509,7 @@ pub fn compute_original_confidence_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
     inference: InferenceConfig,
-) -> Result<HonestOriginalConfidenceSet, String> {
+) -> Result<HonestOriginalConfidenceSet, EngineError> {
     input.validate()?;
     validate_post_weights(input, post_weights, false)?;
     let post_offset = input.num_pre_periods();
@@ -574,7 +540,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_family_identified_set(
     mbar: f64,
     family: RelativeMagnitudeFamily,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     validate_relative_magnitude_family_inputs(family, input, post_weights, mbar)?;
     let num_pre = input.num_pre_periods();
     let num_post = input.num_post_periods();
@@ -598,7 +564,7 @@ fn compute_relative_magnitude_family_conditional_cs_with_config(
     config: RelativeMagnitudeConfidenceSetConfig,
     family: RelativeMagnitudeFamily,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestConditionalConfidenceSet, String> {
+) -> Result<HonestConditionalConfidenceSet, EngineError> {
     validate_relative_magnitude_family_inputs(family, input, post_weights, mbar)?;
     config.validate(inference)?;
     let original = compute_original_confidence_set(input, post_weights, inference)?;
@@ -634,7 +600,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_family_conditional_cs_w
     family: RelativeMagnitudeFamily,
     shared_draws: Option<&[Vec<f64>]>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestConditionalConfidenceSet, String> {
+) -> Result<HonestConditionalConfidenceSet, EngineError> {
     let num_pre = input.num_pre_periods();
     let num_post = input.num_post_periods();
     compute_relative_magnitude_confidence_set_with_builder(
@@ -648,7 +614,6 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_family_conditional_cs_w
         move |s, max_positive| {
             family.build_constraint_matrix(num_pre, num_post, mbar, s, max_positive)
         },
-        family.empty_message(),
         shared_draws,
         counter,
     )
@@ -671,7 +636,7 @@ pub(in crate::sensitivity) fn prepare_relative_magnitude_family_draws(
     family: RelativeMagnitudeFamily,
     draws: usize,
     seed: u64,
-) -> Result<Vec<Vec<f64>>, String> {
+) -> Result<Vec<Vec<f64>>, EngineError> {
     let num_pre = input.num_pre_periods();
     let num_post = input.num_post_periods();
     let min_s = family.min_s(num_pre)?;
@@ -708,7 +673,7 @@ pub fn compute_relative_magnitude_identified_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
     mbar: f64,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     compute_relative_magnitude_identified_set_counted(
         input,
         post_weights,
@@ -722,7 +687,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_identified_set_counted(
     post_weights: &[f64],
     mbar: f64,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     compute_relative_magnitude_family_identified_set(
         input,
         post_weights,
@@ -749,7 +714,7 @@ pub fn compute_relative_magnitude_confidence_set(
     post_weights: &[f64],
     mbar: f64,
     inference: InferenceConfig,
-) -> Result<HonestConditionalConfidenceSet, String> {
+) -> Result<HonestConditionalConfidenceSet, EngineError> {
     compute_relative_magnitude_confidence_set_counted(
         input,
         post_weights,
@@ -766,13 +731,16 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_counted(
     mbar: f64,
     inference: InferenceConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestConditionalConfidenceSet, String> {
+) -> Result<HonestConditionalConfidenceSet, EngineError> {
     compute_relative_magnitude_confidence_set_with_config_counted(
         input,
         post_weights,
         mbar,
         inference,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
         counter,
     )
 }
@@ -787,13 +755,13 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_counted(
 /// Returns an error if `config` fails validation, if the input, `post_weights`
 /// or `mbar` is invalid, or if no grid point is accepted.
 #[cfg(test)]
-pub fn compute_relative_magnitude_confidence_set_with_config(
+pub(crate) fn compute_relative_magnitude_confidence_set_with_config(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
     mbar: f64,
     inference: InferenceConfig,
     config: RelativeMagnitudeConfidenceSetConfig,
-) -> Result<HonestConditionalConfidenceSet, String> {
+) -> Result<HonestConditionalConfidenceSet, EngineError> {
     compute_relative_magnitude_confidence_set_with_config_counted(
         input,
         post_weights,
@@ -811,7 +779,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_with_con
     inference: InferenceConfig,
     config: RelativeMagnitudeConfidenceSetConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestConditionalConfidenceSet, String> {
+) -> Result<HonestConditionalConfidenceSet, EngineError> {
     compute_relative_magnitude_family_conditional_cs_with_config(
         input,
         post_weights,
@@ -832,7 +800,7 @@ pub(in crate::sensitivity) fn compute_relative_magnitude_confidence_set_with_pre
     original: &HonestOriginalConfidenceSet,
     identified: &HonestIdentifiedSet,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestConditionalConfidenceSet, String> {
+) -> Result<HonestConditionalConfidenceSet, EngineError> {
     compute_relative_magnitude_family_conditional_cs_with_precomputed_sets(
         input,
         post_weights,
@@ -865,7 +833,7 @@ pub fn compute_monotone_relative_magnitude_identified_set(
     post_weights: &[f64],
     mbar: f64,
     monotonicity_direction: HonestMonotonicityDirection,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     compute_monotone_relative_magnitude_identified_set_counted(
         input,
         post_weights,
@@ -882,7 +850,7 @@ pub(in crate::sensitivity) fn compute_monotone_relative_magnitude_identified_set
     mbar: f64,
     monotonicity_direction: HonestMonotonicityDirection,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     compute_relative_magnitude_family_identified_set(
         input,
         post_weights,
@@ -909,7 +877,7 @@ pub fn compute_linear_trend_relative_magnitude_identified_set(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
     mbar: f64,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     compute_linear_trend_relative_magnitude_identified_set_counted(
         input,
         post_weights,
@@ -924,7 +892,7 @@ pub(in crate::sensitivity) fn compute_linear_trend_relative_magnitude_identified
     post_weights: &[f64],
     mbar: f64,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     compute_relative_magnitude_family_identified_set(
         input,
         post_weights,
@@ -952,7 +920,7 @@ pub fn compute_signed_linear_trend_relative_magnitude_identified_set(
     post_weights: &[f64],
     mbar: f64,
     bias_direction: HonestBiasDirection,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     compute_signed_linear_trend_relative_magnitude_identified_set_counted(
         input,
         post_weights,
@@ -969,7 +937,7 @@ pub(in crate::sensitivity) fn compute_signed_linear_trend_relative_magnitude_ide
     mbar: f64,
     bias_direction: HonestBiasDirection,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     compute_relative_magnitude_family_identified_set(
         input,
         post_weights,
@@ -997,7 +965,7 @@ pub fn compute_monotone_linear_trend_relative_magnitude_identified_set(
     post_weights: &[f64],
     mbar: f64,
     monotonicity_direction: HonestMonotonicityDirection,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     compute_monotone_linear_trend_relative_magnitude_identified_set_counted(
         input,
         post_weights,
@@ -1014,7 +982,7 @@ pub(in crate::sensitivity) fn compute_monotone_linear_trend_relative_magnitude_i
     mbar: f64,
     monotonicity_direction: HonestMonotonicityDirection,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     compute_relative_magnitude_family_identified_set(
         input,
         post_weights,

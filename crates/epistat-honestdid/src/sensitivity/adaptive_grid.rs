@@ -1,3 +1,5 @@
+use crate::sensitivity::EngineError;
+
 #[derive(Clone, Copy)]
 pub struct AcceptedGridRange {
     pub(crate) lower_idx: usize,
@@ -35,9 +37,9 @@ pub fn compute_accepted_grid_range_adaptive<F>(
     grid: &[f64],
     anchor_idx: usize,
     evaluate: F,
-) -> Result<Option<AcceptedGridRange>, String>
+) -> Result<Option<AcceptedGridRange>, EngineError>
 where
-    F: FnMut(f64) -> Result<bool, String>,
+    F: FnMut(f64) -> Result<bool, EngineError>,
 {
     compute_accepted_grid_range_adaptive_with_diagnostics(grid, anchor_idx, evaluate)
         .map(|(range, _)| range)
@@ -51,16 +53,16 @@ pub fn compute_accepted_grid_range_adaptive_with_diagnostics<F>(
     grid: &[f64],
     anchor_idx: usize,
     mut evaluate: F,
-) -> Result<(Option<AcceptedGridRange>, AdaptiveGridDiagnostics), String>
+) -> Result<(Option<AcceptedGridRange>, AdaptiveGridDiagnostics), EngineError>
 where
-    F: FnMut(f64) -> Result<bool, String>,
+    F: FnMut(f64) -> Result<bool, EngineError>,
 {
     let mut cache = vec![None; grid.len()];
     let mut diagnostics = AdaptiveGridDiagnostics {
         anchor_idx: anchor_idx.min(grid.len().saturating_sub(1)),
         ..AdaptiveGridDiagnostics::default()
     };
-    let mut evaluate_idx = |idx: usize| -> Result<bool, String> {
+    let mut evaluate_idx = |idx: usize| -> Result<bool, EngineError> {
         if let Some(value) = cache[idx] {
             diagnostics.cache_hits = diagnostics.cache_hits.saturating_add(1);
             return Ok(value);
@@ -185,9 +187,9 @@ fn find_nearest_accepted_index<F>(
     anchor_idx: usize,
     grid_len: usize,
     evaluate_idx: &mut F,
-) -> Result<Option<usize>, String>
+) -> Result<Option<usize>, EngineError>
 where
-    F: FnMut(usize) -> Result<bool, String>,
+    F: FnMut(usize) -> Result<bool, EngineError>,
 {
     for radius in 1..grid_len {
         if let Some(left_idx) = anchor_idx.checked_sub(radius)
@@ -207,9 +209,9 @@ where
 pub fn compute_accepted_grid_range_full_grid<F>(
     grid: &[f64],
     evaluate: F,
-) -> Result<Option<AcceptedGridRange>, String>
+) -> Result<Option<AcceptedGridRange>, EngineError>
 where
-    F: FnMut(f64) -> Result<bool, String>,
+    F: FnMut(f64) -> Result<bool, EngineError>,
 {
     let mut cache = vec![None; grid.len()];
     compute_accepted_grid_range_full_grid_cached(grid, &mut cache, evaluate)
@@ -219,9 +221,9 @@ fn compute_accepted_grid_range_full_grid_cached<F>(
     grid: &[f64],
     cache: &mut [Option<bool>],
     mut evaluate: F,
-) -> Result<Option<AcceptedGridRange>, String>
+) -> Result<Option<AcceptedGridRange>, EngineError>
 where
-    F: FnMut(f64) -> Result<bool, String>,
+    F: FnMut(f64) -> Result<bool, EngineError>,
 {
     let mut flags = vec![false; grid.len()];
     for (idx, theta) in grid.iter().enumerate() {
