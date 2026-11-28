@@ -4,12 +4,19 @@ description = "Linear and generalised linear mixed models with one grouping fact
 keywords = ["mixed-models", "lme4", "glmm", "statistics", "epidemiology"]
 categories = ["mathematics", "science"]
 readme = "README.md"
+# The R references, and the scripts that write them, are read only by this
+# repository's tests, so they stay out of the package.
+exclude = ["tests/data/"]
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 epistat-core = { path = "../epistat-core", version = "0.1.0" }
