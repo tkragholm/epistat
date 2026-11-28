@@ -1,10 +1,11 @@
 //! Shared inference utilities: influence-function standard errors, the
-//! cluster sums of R's `did`, a multiplier bootstrap interval, quantiles and
-//! normal critical values.
+//! cluster sums of R's `did`, a multiplier bootstrap interval and normal
+//! critical values.
 
 pub mod did_clusters;
 
 use epistat_core::{Estimate, Interval, Level, Scale};
+use epistat_stats::quantile::type7_unsorted;
 
 use crate::types::BootstrapConfig;
 
@@ -106,16 +107,8 @@ pub(crate) fn multiplier_bootstrap_ci(
     };
 
     let alpha = (1.0 - confidence_level).clamp(0.0, 1.0);
-    let lower = quantile_unsorted(&mut draws, alpha / 2.0);
-    let upper = quantile_unsorted(&mut draws, 1.0 - alpha / 2.0);
-    (lower, upper)
-}
-
-/// Type 7 quantile of an unsorted sample, which it partially reorders, with
-/// `q` clamped to `[0, 1]`. NaN for an empty sample.
-#[must_use]
-pub(crate) fn quantile_unsorted(values: &mut [f64], q: f64) -> f64 {
-    epistat_stats::quantile::type7_unsorted(values, q.clamp(0.0, 1.0)).unwrap_or(f64::NAN)
+    let mut at = |q: f64| type7_unsorted(&mut draws, q).unwrap_or(f64::NAN);
+    (at(alpha / 2.0), at(1.0 - alpha / 2.0))
 }
 
 #[cfg(test)]
@@ -123,10 +116,7 @@ mod tests {
     use super::*;
     use crate::util::usize_to_f64;
     use epistat_rng::Stream;
-
-    fn quantile_sorted(sorted: &[f64], q: f64) -> f64 {
-        epistat_stats::quantile::type7(sorted, q.clamp(0.0, 1.0)).unwrap_or(f64::NAN)
-    }
+    use epistat_stats::quantile::type7;
 
     fn multiplier_bootstrap_ci_sorted_reference(
         estimate: f64,
@@ -146,8 +136,8 @@ mod tests {
         draws.sort_by(f64::total_cmp);
 
         let alpha = (1.0 - confidence_level).clamp(0.0, 1.0);
-        let lower = quantile_sorted(&draws, alpha / 2.0);
-        let upper = quantile_sorted(&draws, 1.0 - alpha / 2.0);
+        let lower = type7(&draws, alpha / 2.0).unwrap();
+        let upper = type7(&draws, 1.0 - alpha / 2.0).unwrap();
         (lower, upper)
     }
 
@@ -161,7 +151,6 @@ mod tests {
     }
 
     use proptest::prelude::*;
-    use rstest::rstest;
 
     proptest! {
         #[test]
@@ -170,18 +159,6 @@ mod tests {
             values.reverse();
             let se2 = standard_error_from_influence(&values);
             prop_assert!((se1 - se2).abs() < 1e-12);
-        }
-
-        #[test]
-        fn quantile_unsorted_matches_reference_proptest(
-            mut values in prop::collection::vec(-1000.0..1000.0f64, 1..200),
-            q in 0.0..1.0f64
-        ) {
-            let mut sorted = values.clone();
-            sorted.sort_by(f64::total_cmp);
-            let expected = quantile_sorted(&sorted, q);
-            let actual = quantile_unsorted(&mut values, q);
-            prop_assert_eq!(actual.to_bits(), expected.to_bits());
         }
     }
 
@@ -208,26 +185,6 @@ mod tests {
         let ci_a = multiplier_bootstrap_ci(1.0, &influence, 0.95, bootstrap);
         let ci_b = multiplier_bootstrap_ci(1.0, &influence, 0.95, bootstrap);
         assert_eq!(ci_a, ci_b);
-    }
-
-    #[rstest]
-    fn quantile_unsorted_matches_sorted_interpolation_contract(
-        #[values(10usize, 100, 999, 1_000, 1_001)] n: usize,
-        #[values(0.025, 0.05, 0.5, 0.95, 0.975)] q: f64,
-    ) {
-        let values = (0..n)
-            .map(|index| {
-                let index_f = usize_to_f64(index);
-                ((0.37 * index_f).sin() + (0.11 * index_f).cos())
-                    .mul_add(0.5, usize_to_f64(index % 7) * 0.01)
-            })
-            .collect::<Vec<_>>();
-        let mut sorted = values.clone();
-        sorted.sort_by(f64::total_cmp);
-        let expected = quantile_sorted(&sorted, q);
-        let mut unsorted = values;
-        let actual = quantile_unsorted(&mut unsorted, q);
-        assert_eq!(actual.to_bits(), expected.to_bits(), "n={n}, q={q}");
     }
 
     #[test]
@@ -325,12 +282,12 @@ mod tests {
         scalar_sorted.sort_by(f64::total_cmp);
         let mut bitpacked_sorted = bitpacked_draws;
         bitpacked_sorted.sort_by(f64::total_cmp);
-        let scalar_q05 = quantile_sorted(&scalar_sorted, 0.05);
-        let scalar_q50 = quantile_sorted(&scalar_sorted, 0.50);
-        let scalar_q95 = quantile_sorted(&scalar_sorted, 0.95);
-        let bitpacked_q05 = quantile_sorted(&bitpacked_sorted, 0.05);
-        let bitpacked_q50 = quantile_sorted(&bitpacked_sorted, 0.50);
-        let bitpacked_q95 = quantile_sorted(&bitpacked_sorted, 0.95);
+        let scalar_q05 = type7(&scalar_sorted, 0.05).unwrap();
+        let scalar_q50 = type7(&scalar_sorted, 0.50).unwrap();
+        let scalar_q95 = type7(&scalar_sorted, 0.95).unwrap();
+        let bitpacked_q05 = type7(&bitpacked_sorted, 0.05).unwrap();
+        let bitpacked_q50 = type7(&bitpacked_sorted, 0.50).unwrap();
+        let bitpacked_q95 = type7(&bitpacked_sorted, 0.95).unwrap();
         let quantile_tolerance = 0.1 * scalar_var.sqrt().max(1.0);
 
         let mean_diff = (scalar_mean - bitpacked_mean).abs();

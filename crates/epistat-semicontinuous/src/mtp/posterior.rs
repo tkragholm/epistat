@@ -1,6 +1,7 @@
 //! Posterior storage and summaries for MTP.
 
-use crate::utils::{calculate_quantile, defined, usize_to_f64};
+use crate::utils::{defined, usize_to_f64};
+use epistat_stats::quantile::type7;
 
 /// A single posterior draw from the MTP parameter space.
 #[non_exhaustive]
@@ -147,9 +148,9 @@ fn summarize_scalar_in_place(values: &mut [f64]) -> ParameterSummary {
     ParameterSummary {
         mean: defined(mean),
         std_dev: defined(variance.sqrt()),
-        q025: calculate_quantile(values, 0.025),
-        q50: calculate_quantile(values, 0.5),
-        q975: calculate_quantile(values, 0.975),
+        q025: type7(values, 0.025),
+        q50: type7(values, 0.5),
+        q975: type7(values, 0.975),
     }
 }
 

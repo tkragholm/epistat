@@ -13,8 +13,9 @@ use epistat_epi::rates::{
     standardised_difference, standardised_ratio,
 };
 use epistat_epi::rosenbaum::{
-    MScore, WilcoxonDistribution, hodges_lehmann_bounds, hodges_lehmann_gamma, m_scores,
-    wilcoxon_bounds,
+    MScore, Sides, WilcoxonDistribution, hodges_lehmann_bounds, hodges_lehmann_gamma, m_scores,
+    m_statistic_interval, matched_sets_bounds, scores_sensitivity_value, set_bounds,
+    wilcoxon_bounds, wilcoxon_sensitivity_value,
 };
 use epistat_epi::sir::{sir, sir_homogeneity, sir_trend};
 use epistat_epi::{Counts2x2, PersonTime2, bias, evalue, mantel_haenszel, signed_rank};
@@ -310,4 +311,72 @@ fn evalue_and_bias_refuse_bad_numbers() {
             bias::correct_exposure(&t, &m)
         })
     });
+}
+
+#[test]
+fn the_sensitivity_values_and_set_bounds_refuse_bad_columns() {
+    assert_rejects_bad_input_with_codes("wilcoxon_sensitivity_value", single, |bad| {
+        one(bad).then(|| {
+            wilcoxon_sensitivity_value(&bad.column(&DIFFERENCES), 0.05, WilcoxonDistribution::Exact)
+        })
+    });
+    let sets = |bad: BadInput| {
+        vec![
+            bad.column(&[3.0, 1.0, 2.0]),
+            vec![4.0, 2.5],
+            vec![1.5, 0.5, 1.0],
+        ]
+    };
+    let spoilt = |bad: BadInput| matches!(bad, BadInput::Nan | BadInput::Infinite);
+    assert_rejects_bad_input_with_codes("set_bounds", single, |bad| {
+        spoilt(bad).then(|| set_bounds(&sets(bad), 2.0))
+    });
+    assert_rejects_bad_input_with_codes("scores_sensitivity_value", single, |bad| {
+        spoilt(bad).then(|| scores_sensitivity_value(&sets(bad), 0.05))
+    });
+    assert_rejects_bad_input_with_codes("matched_sets_bounds", single, |bad| {
+        spoilt(bad).then(|| matched_sets_bounds(&sets(bad), 2.0, &MScore::default()))
+    });
+    assert_rejects_bad_input_with_codes("m_statistic_interval", single, |bad| {
+        spoilt(bad).then(|| {
+            m_statistic_interval(
+                &sets(bad),
+                1.0,
+                &MScore::default(),
+                Level::default(),
+                Sides::Two,
+            )
+        })
+    });
+    // The ranks are refused by one check for a value that is not finite or is
+    // negative, which has the crate's code.
+    assert_rejects_bad_input_with_codes(
+        "signed_rank::exact_upper_tail",
+        |_| "epi.invalid",
+        |bad| {
+            matches!(bad, BadInput::Nan | BadInput::Infinite)
+                .then(|| signed_rank::exact_upper_tail(&bad.column(&[1.0, 2.0, 3.0]), 2.0, 0.5))
+        },
+    );
+}
+
+#[test]
+fn the_record_tables_refuse_columns_of_another_length() {
+    let stratum = [0_usize, 0, 1, 1, 1];
+    let exposed = [true, false, true, true, false];
+    let case = [true, true, false, true, false];
+    assert_rejects_bad_input_with_codes(
+        "tables_from_records",
+        |_| "input.length",
+        |bad| {
+            matches!(bad, BadInput::Empty | BadInput::Mismatched).then(|| {
+                let short = if bad == BadInput::Empty {
+                    &case[..0]
+                } else {
+                    &case[..4]
+                };
+                mantel_haenszel::tables_from_records(&stratum, &exposed, short)
+            })
+        },
+    );
 }

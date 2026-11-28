@@ -10,6 +10,7 @@ use epistat_rng::{Stream, replicate_seed};
 use epistat_semicontinuous::tweedie::TweedieOptions;
 use epistat_semicontinuous::two_part::TwoPartOptions;
 use epistat_semicontinuous::{CostData, tweedie, two_part};
+use epistat_testkit::{Tolerance, assert_close};
 
 const N_ROWS: usize = 20_000;
 
@@ -70,15 +71,6 @@ fn column(m: &Mat<f64>) -> Vec<f64> {
     (0..m.nrows()).map(|i| m[(i, 0)]).collect()
 }
 
-fn assert_close(label: &str, got: &[f64], want: &[f64], rel_tol: f64) {
-    for (k, (g, w)) in got.iter().zip(want).enumerate() {
-        assert!(
-            ((g - w) / w).abs() < rel_tol,
-            "{label}[{k}]: got {g}, want {w} (tolerance {rel_tol})"
-        );
-    }
-}
-
 /// HC0 standard errors from R 4 on the rows of `two_part_fixture`:
 /// `glm(pos ~ x1 + x2, binomial)` for the logit part and
 /// `glm(y ~ x1 + x2, Gamma(link = "log"), subset = y > 0)` for the positive part,
@@ -126,23 +118,24 @@ fn two_part_standard_errors_match_r() {
     let model_se = column(model_based.se_logit.as_ref().expect("model-based SE"));
     let robust_se = column(robust.se_logit.as_ref().expect("robust SE"));
     assert_close(
-        "logit model-based vs R",
         &model_se,
         &R_MODEL_LOGIT,
-        R_TOLERANCE,
+        Tolerance::exact().rel(R_TOLERANCE),
     );
-    assert_close("logit robust vs R", &robust_se, &R_HC0_LOGIT, R_TOLERANCE);
     assert_close(
-        "gamma robust vs R",
+        &robust_se,
+        &R_HC0_LOGIT,
+        Tolerance::exact().rel(R_TOLERANCE),
+    );
+    assert_close(
         &column(robust.se_gamma.as_ref().expect("robust SE")),
         &R_HC0_GAMMA,
-        R_TOLERANCE,
+        Tolerance::exact().rel(R_TOLERANCE),
     );
     assert_close(
-        "gamma model-based vs R",
         &column(model_based.se_gamma.as_ref().expect("model-based SE")),
         &R_MODEL_GAMMA,
-        R_TOLERANCE,
+        Tolerance::exact().rel(R_TOLERANCE),
     );
 }
 
@@ -168,16 +161,14 @@ fn two_part_singleton_clusters_reproduce_the_unclustered_sandwich() {
         .expect("clustered fit")
         .report;
     assert_close(
-        "logit",
         &column(clustered.se_logit.as_ref().expect("SE")),
         &column(plain.se_logit.as_ref().expect("SE")),
-        1e-9,
+        Tolerance::exact().rel(1e-9),
     );
     assert_close(
-        "gamma",
         &column(clustered.se_gamma.as_ref().expect("SE")),
         &column(plain.se_gamma.as_ref().expect("SE")),
-        1e-9,
+        Tolerance::exact().rel(1e-9),
     );
 }
 
@@ -198,16 +189,14 @@ fn tweedie_gamma_standard_errors_match_r() {
     let robust_se = column(model.report.se.as_ref().expect("robust SE"));
     let model_se = tweedie_model_based_se(&x_pos, &model.beta, 2.0);
     assert_close(
-        "tweedie(2) model-based vs R",
         &model_se,
         &R_MODEL_GAMMA,
-        R_TOLERANCE,
+        Tolerance::exact().rel(R_TOLERANCE),
     );
     assert_close(
-        "tweedie(2) robust vs R",
         &robust_se,
         &R_HC0_GAMMA,
-        R_TOLERANCE,
+        Tolerance::exact().rel(R_TOLERANCE),
     );
 }
 
@@ -236,16 +225,14 @@ fn tweedie_standard_errors_match_r_at_power_one_and_a_half() {
     let robust_se = column(model.report.se.as_ref().expect("robust SE"));
     let model_se = tweedie_model_based_se(&x, &model.beta, 1.5);
     assert_close(
-        "tweedie(1.5) model-based vs R",
         &model_se,
         &R_MODEL_TWEEDIE_1_5,
-        R_TOLERANCE,
+        Tolerance::exact().rel(R_TOLERANCE),
     );
     assert_close(
-        "tweedie(1.5) robust vs R",
         &robust_se,
         &R_HC0_TWEEDIE_1_5,
-        R_TOLERANCE,
+        Tolerance::exact().rel(R_TOLERANCE),
     );
 
     let clusters: Vec<u32> = (0..N_ROWS)
@@ -258,9 +245,8 @@ fn tweedie_standard_errors_match_r_at_power_one_and_a_half() {
     let clustered =
         tweedie::fit(&clustered_data, 1.5, &options, None, None).expect("clustered fit");
     assert_close(
-        "tweedie(1.5) singleton clusters",
         &column(clustered.report.se.as_ref().expect("SE")),
         &robust_se,
-        1e-9,
+        Tolerance::exact().rel(1e-9),
     );
 }

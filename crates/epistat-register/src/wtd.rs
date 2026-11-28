@@ -202,7 +202,7 @@ fn density(family: Family, a: f64, b: f64, t: f64) -> (f64, f64, f64) {
 
 /// The natural parameters from the scale of estimation.
 fn natural(family: Family, x: &[f64]) -> (f64, f64, f64) {
-    let prevalent = 1.0 / (1.0 + (-x[0]).exp());
+    let prevalent = epistat_stats::logistic::expit(x[0]);
     match family {
         Family::LogNormal => (prevalent, x[1], x[2].exp()),
         Family::Weibull => (prevalent, x[1].exp(), x[2].exp()),

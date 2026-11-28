@@ -865,7 +865,7 @@ impl Transform {
     fn inverse(self, x: f64) -> f64 {
         match self {
             Self::Log => x.exp(),
-            Self::Logit => 1.0 / (1.0 + (-x).exp()),
+            Self::Logit => epistat_stats::logistic::expit(x),
             Self::FisherZ => x.tanh(),
             Self::Cloglog => -(-x.exp()).exp_m1(),
             Self::Sqrt => x * x,

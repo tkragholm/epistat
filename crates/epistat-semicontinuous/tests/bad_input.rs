@@ -8,6 +8,7 @@
 //! model, so `Unsorted` is not tried.
 
 use epistat_linalg::Mat;
+use epistat_semicontinuous::compare::{CrossValidationOptions, cross_validate, select};
 use epistat_semicontinuous::{CostData, LongitudinalData};
 use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
 
@@ -88,5 +89,25 @@ fn longitudinal_data_refuses_bad_columns() {
                 .build()
                 .map(|_| ())
         })
+    });
+}
+
+#[test]
+fn the_power_selection_refuses_bad_powers() {
+    let x = design();
+    let data = CostData::builder(x.as_ref(), &Y).build().unwrap();
+    let powers = [1.2, 1.5, 1.8];
+    // No powers is a selection among the other models, and the powers have no
+    // length to match.
+    let powered = |bad: BadInput| matches!(bad, BadInput::Nan | BadInput::Infinite);
+    assert_rejects_bad_input_with_codes("select", first, |bad| {
+        column(bad, &powers)
+            .filter(|_| powered(bad))
+            .map(|p| select(&data, &p).map(|_| ()))
+    });
+    assert_rejects_bad_input_with_codes("cross_validate", first, |bad| {
+        column(bad, &powers)
+            .filter(|_| powered(bad))
+            .map(|p| cross_validate(&data, &p, &CrossValidationOptions::new(1)).map(|_| ()))
     });
 }
