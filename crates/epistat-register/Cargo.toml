@@ -22,8 +22,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 # The Statistics Denmark annual consumer price index, 1900 to 2025, as
-# `DENMARK_ANNUAL_CPI`. Off by default so the crate carries no national data
-# for callers who bring their own table.
+# `DENMARK_ANNUAL_CPI` and `CpiTable::denmark`. Off by default for callers who
+# bring their own price index. The feature is for the index only: the Danish
+# Charlson coding of `comorbidity` is always built.
 denmark = []
 # Serde support for `icd10::Icd10Chapter`, as its label string.
 serde = ["dep:serde"]

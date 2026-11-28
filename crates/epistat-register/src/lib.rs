@@ -44,8 +44,9 @@
 //! - [`pre2dup`] estimates drug use periods from each person's own pattern of
 //!   purchases, by the PRE2DUP method.
 //! - [`cpi`] deflates nominal values to the prices of a reference year with an
-//!   annual price index the caller supplies. The Statistics Denmark index is
-//!   available behind the cargo feature `denmark`.
+//!   annual price index the caller supplies, checked by
+//!   [`CpiTable::try_new`]. The Statistics Denmark index is available behind
+//!   the cargo feature `denmark` as `CpiTable::denmark`.
 //!
 //! # Conventions
 //!

@@ -25,6 +25,7 @@ The crate grows from person-time, spans and deflation into the main tools for re
 - `age::birthday_on_age`, and `person_time::add_months` and `add_years`.
 - `MergedSpans::bounds`, the start and end of each merged span.
 - `Error`, with `CodeItemProblem`, `CrosswalkProblem` and `PedigreeProblem`, which implements `Classify`.
+- `CpiTable::try_new`, which refuses an index that is not finite and positive and a year given twice with `InputError::Domain` at its row, where `CpiTable::new` keeps a zero index and lets the later of two rows win; `CpiTable::years`, the first and last year of the table; and `CpiTable::denmark` with the feature `denmark`.
 
 ### Deprecated
 
