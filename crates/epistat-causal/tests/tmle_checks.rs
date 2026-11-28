@@ -92,7 +92,7 @@ fn fluctuation_solves_its_score_equations() {
     let Targeting::Fluctuation { epsilon, .. } = r.targeting else {
         panic!("targeting");
     };
-    let b = r.propensity_bound.map_or(0.0, |b| b.lower());
+    let b = r.propensity_bound.map_or(0.0, ProbabilityBounds::lower);
     let g = propensity(&d);
     let (mut u, mut info, mut deviance) = ([0.0f64; 2], [0.0f64; 2], 0.0);
     for (i, &gi) in g.iter().enumerate() {

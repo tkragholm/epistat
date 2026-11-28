@@ -80,6 +80,7 @@ pub(crate) fn weight_column(
 
 /// Whether every outcome is 0 or 1, so that predictions of its mean are
 /// probabilities.
+#[expect(clippy::float_cmp, reason = "a binary outcome holds exactly 0 and 1")]
 pub(crate) fn is_binary(outcome: &[f64]) -> bool {
     outcome.iter().all(|&y| y == 0.0 || y == 1.0)
 }

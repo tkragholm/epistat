@@ -457,7 +457,7 @@ fn prepare<'a>(
     };
     let width = upper - lower;
     let ystar = outcome.iter().map(|&y| (y - lower) / width).collect();
-    let (bound, bound0, bounds) = match opts.propensity_bound {
+    let (bound, bound0, limits) = match opts.propensity_bound {
         PropensityBound::None => (0.0, 0.0, None),
         PropensityBound::Tmle => {
             let m = n as f64;
@@ -508,7 +508,7 @@ fn prepare<'a>(
         width,
         bound,
         bound0,
-        bounds,
+        bounds: limits,
         delta: opts.outcome_bound,
     })
 }

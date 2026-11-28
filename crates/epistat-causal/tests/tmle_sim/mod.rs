@@ -69,7 +69,7 @@ pub fn flatten(r: &Tmle) -> Vec<f64> {
     let mut out = vec![
         r.n_trimmed as f64,
         r.n_used as f64,
-        r.propensity_bound.map_or(0.0, |b| b.lower()),
+        r.propensity_bound.map_or(0.0, ProbabilityBounds::lower),
         r.range.0,
         r.range.1,
         r.score,

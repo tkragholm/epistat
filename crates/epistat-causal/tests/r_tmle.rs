@@ -305,7 +305,9 @@ fn compare(s: &Scenario, got: &Tmle, t: usize, tol: &Tolerances<'_>, worst: &mut
         (target, targeting) => panic!("{name}: {target:?} with {targeting:?}"),
     }
     assert_eq!(
-        got.propensity_bound.map_or(0.0, |b| b.lower()).to_bits(),
+        got.propensity_bound
+            .map_or(0.0, ProbabilityBounds::lower)
+            .to_bits(),
         s.bound.to_bits(),
         "{name}"
     );
