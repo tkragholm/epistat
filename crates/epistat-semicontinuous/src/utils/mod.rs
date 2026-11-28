@@ -9,6 +9,7 @@ use epistat_linalg::{
 
 use crate::Error;
 use crate::mtp::input::LongitudinalInput;
+use epistat_stats::quantile::type7;
 
 /// Calibration summary for one predicted-probability bin.
 #[non_exhaustive]
@@ -421,13 +422,6 @@ pub fn weighted_xtz_ref_with_buffer(
     epistat_linalg::xtv(x, &weighted_buffer[..n])
 }
 
-/// The type 7 quantile of sorted values, `None` for no values. `quantile` is clamped to
-/// `[0, 1]`.
-#[must_use]
-pub fn calculate_quantile(sorted_values: &[f64], quantile: f64) -> Option<f64> {
-    epistat_stats::quantile::type7(sorted_values, quantile.clamp(0.0, 1.0))
-}
-
 #[must_use]
 pub fn calibration_bins_summary(
     predicted_probability: &[f64],
@@ -499,9 +493,9 @@ pub fn summarize_draws_in_place(values: &mut [f64]) -> EffectIntervalSummary {
 
     EffectIntervalSummary {
         mean: defined(mean),
-        q025: calculate_quantile(values, 0.025),
-        q50: calculate_quantile(values, 0.5),
-        q975: calculate_quantile(values, 0.975),
+        q025: type7(values, 0.025),
+        q50: type7(values, 0.5),
+        q975: type7(values, 0.975),
     }
 }
 

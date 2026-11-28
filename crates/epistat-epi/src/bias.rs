@@ -820,7 +820,7 @@ impl Dist {
             }
             Self::LogitNormal { mean, sd } => {
                 let x = mean + sd * normal::quantile(u);
-                Some(1.0 / (1.0 + (-x).exp()))
+                Some(epistat_stats::logistic::expit(x))
             }
             Self::Beta { alpha, beta } => finite(beta::quantile(u, alpha, beta)),
             Self::LogNormal { mu, sigma } => Some((mu + sigma * normal::quantile(u)).exp()),

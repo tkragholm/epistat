@@ -44,7 +44,6 @@ epistat-testkit = { path = "../epistat-testkit" }
 criterion = { version = "0.8.2", default-features = false }
 rand = "0.10.0"
 rand_distr = "0.6.0"
-rstest = "0.26"
 proptest = "1.6.0"
 
 [[bench]]
