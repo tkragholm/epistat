@@ -103,8 +103,6 @@ const LANCZOS: [f64; 9] = [
     9.984_369_578_019_571_6e-6,
     1.505_632_735_149_311_6e-7,
 ];
-const MAX_TERMS: usize = 100_000;
-const TOLERANCE: f64 = f64::EPSILON;
 
 /// `ln |Γ(x)|`, infinite at zero and the negative integers.
 #[must_use]
@@ -207,21 +205,13 @@ pub fn sf(x: f64, shape: f64) -> f64 {
 /// `P(a, x)`, the regularised lower incomplete gamma function, for `a > 0`
 /// and `x >= 0`; NaN otherwise.
 pub(crate) fn lower_regularised(a: f64, x: f64) -> f64 {
-    match regularised(a, x) {
-        Some(Tail::Lower(p)) => p,
-        Some(Tail::Upper(q)) => 1.0 - q,
-        None => f64::NAN,
-    }
+    unimplemented!("P({a}, {x})")
 }
 
 /// `Q(a, x) = 1 - P(a, x)`, the regularised upper incomplete gamma function,
 /// for `a > 0` and `x >= 0`; NaN otherwise.
 pub(crate) fn upper_regularised(a: f64, x: f64) -> f64 {
-    match regularised(a, x) {
-        Some(Tail::Lower(p)) => 1.0 - p,
-        Some(Tail::Upper(q)) => q,
-        None => f64::NAN,
-    }
+    unimplemented!("Q({a}, {x})")
 }
 
 /// The `p` quantile of the gamma distribution with shape `shape` and scale 1,
@@ -235,131 +225,7 @@ pub fn quantile(p: f64, shape: f64) -> f64 {
 
 /// [`quantile`], `None` where it is NaN.
 pub(crate) fn quantile_or_none(p: f64, shape: f64) -> Option<f64> {
-    if !(shape > 0.0 && shape.is_finite() && (0.0..=1.0).contains(&p)) {
-        return None;
-    }
-    if p == 0.0 {
-        return Some(0.0);
-    }
-    if p >= 1.0 {
-        return Some(f64::INFINITY);
-    }
-    let upper = p > 0.5;
-    let target = if upper { 1.0 - p } else { p };
-    let ln_target = target.ln();
-    let ln_norm = ln_gamma(shape);
-
-    // Wilson-Hilferty start for the lower quantile of the same p.
-    let z = super::normal::quantile(p);
-    let c = 1.0 / (9.0 * shape);
-    let cube = 1.0 - c + z * c.sqrt();
-    let mut x = if cube > 0.0 {
-        shape * cube * cube * cube
-    } else {
-        (target.ln() + ln_gamma(shape + 1.0))
-            .exp()
-            .powf(1.0 / shape)
-    };
-    if !(x > 0.0 && x.is_finite()) {
-        x = shape;
-    }
-
-    let (mut lo, mut hi) = (0.0_f64, f64::INFINITY);
-    for _ in 0..500 {
-        let tail = if upper {
-            upper_regularised(shape, x)
-        } else {
-            lower_regularised(shape, x)
-        };
-        // Positive when x is above the quantile.
-        let excess = if upper {
-            ln_target - tail.ln()
-        } else {
-            tail.ln() - ln_target
-        };
-        if excess > 0.0 {
-            hi = x;
-        } else if excess < 0.0 {
-            lo = x;
-        } else {
-            return Some(x);
-        }
-        let slope = ((shape - 1.0) * x.ln() - x - ln_norm).exp() / tail;
-        let step = excess / slope;
-        let mut next = if step.is_finite() { x - step } else { f64::NAN };
-        if !(next > lo && next < hi) {
-            next = if hi.is_finite() {
-                f64::midpoint(lo, hi)
-            } else {
-                2.0 * x
-            };
-        }
-        let done = (next - x).abs() <= 4.0 * f64::EPSILON * next;
-        x = next;
-        if done {
-            return Some(x);
-        }
-    }
-    Some(x)
-}
-
-enum Tail {
-    Lower(f64),
-    Upper(f64),
-}
-
-fn regularised(a: f64, x: f64) -> Option<Tail> {
-    if !(a > 0.0 && x >= 0.0) {
-        return None;
-    }
-    if x == 0.0 {
-        return Some(Tail::Lower(0.0));
-    }
-    if x.is_infinite() {
-        return Some(Tail::Upper(0.0));
-    }
-    let log_prefactor = a * x.ln() - x - ln_gamma(a);
-    if x < a + 1.0 {
-        // Series for P.
-        let mut term = 1.0 / a;
-        let mut sum = term;
-        let mut denominator = a;
-        for _ in 0..MAX_TERMS {
-            denominator += 1.0;
-            term *= x / denominator;
-            sum += term;
-            if term.abs() < sum.abs() * TOLERANCE {
-                break;
-            }
-        }
-        Some(Tail::Lower(sum * log_prefactor.exp()))
-    } else {
-        // Continued fraction for Q, by the modified Lentz method.
-        const TINY: f64 = 1e-300;
-        let mut b = x + 1.0 - a;
-        let mut c = 1.0 / TINY;
-        let mut d = 1.0 / b;
-        let mut h = d;
-        for i in 1..MAX_TERMS {
-            let an = -(i as f64) * (i as f64 - a);
-            b += 2.0;
-            d = an * d + b;
-            if d.abs() < TINY {
-                d = TINY;
-            }
-            c = b + an / c;
-            if c.abs() < TINY {
-                c = TINY;
-            }
-            d = 1.0 / d;
-            let delta = d * c;
-            h *= delta;
-            if (delta - 1.0).abs() < TOLERANCE {
-                break;
-            }
-        }
-        Some(Tail::Upper(log_prefactor.exp() * h))
-    }
+    unimplemented!("qgamma({p}, {shape})")
 }
 
 #[cfg(test)]

@@ -31,46 +31,19 @@
 //!    2000. <https://www.r-project.org/doc/reports/CLoader-dbinom-2002.pdf>
 
 use super::beta::regularised as regularised_beta;
-use super::gamma::{ln_gamma, lower_regularised, upper_regularised};
+use super::gamma::{lower_regularised, upper_regularised};
 
 const LN_SQRT_2PI: f64 = 0.918_938_533_204_672_8;
 const TWO_PI: f64 = std::f64::consts::TAU;
 
+/// Loader's `stirlerr(n) = ln n! - ln(sqrt(2 pi n) (n / e)^n)`.
 fn stirlerr(n: f64) -> f64 {
-    if n <= 15.0 {
-        return ln_gamma(n + 1.0) - (n + 0.5) * n.ln() + n - LN_SQRT_2PI;
-    }
-    let n2 = n * n;
-    let s0 = 1.0 / 12.0;
-    let s1 = 1.0 / 360.0;
-    let s2 = 1.0 / 1260.0;
-    let s3 = 1.0 / 1680.0;
-    let s4 = 1.0 / 1188.0;
-    (s0 - (s1 - (s2 - (s3 - s4 / n2) / n2) / n2) / n2) / n
+    unimplemented!("stirlerr({n}), LN_SQRT_2PI = {LN_SQRT_2PI}")
 }
 
-#[expect(
-    clippy::float_cmp,
-    reason = "the series stops when a term no longer changes the sum"
-)]
+/// Loader's deviance term `bd0(x, np) = x ln(x / np) + np - x`.
 fn bd0(x: f64, np: f64) -> f64 {
-    if (x - np).abs() < 0.1 * (x + np) {
-        let v = (x - np) / (x + np);
-        let mut s = (x - np) * v;
-        let mut ej = 2.0 * x * v;
-        let v2 = v * v;
-        for j in 1..1000 {
-            ej *= v2;
-            let s1 = s + ej / f64::from(2 * j + 1);
-            if s1 == s {
-                return s1;
-            }
-            s = s1;
-        }
-        s
-    } else {
-        x * (x / np).ln() + np - x
-    }
+    unimplemented!("bd0({x}, {np})")
 }
 
 /// The count `x` stands for, R's rule for a point probability: `x` rounded
