@@ -67,8 +67,8 @@
 //!   reorders the slice. It returns the same doubles as [`type7`] on the sorted
 //!   sample.
 //!
-//! The rounded-rank quantile that Study II reproduces, which is not a Hyndman
-//! and Fan type, is [`crate::compat::rounded_rank`].
+//! A rounded-rank quantile, which is not a Hyndman and Fan type, is
+//! [`crate::compat::rounded_rank`].
 //!
 //! # Edge cases
 //!

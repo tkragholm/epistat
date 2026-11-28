@@ -15,17 +15,16 @@
 //! | [`likelihood`] | log-sum-exp, softmax and information criteria |
 //! | [`mcmc`] | autocorrelation, effective sample size and split R-hat |
 //! | [`cluster`] | k-means from given centres |
-//! | [`compat`] | the approximations that Studies I and II reproduce |
+//! | [`compat`] | older normal approximations and a rounded-rank quantile, for reproducing earlier results |
 //!
 //! The distribution functions return NaN for a parameter outside the domain,
 //! as R's do; every other function reports an undefined result as `None` and
 //! invalid input as an [`Error`].
 //!
-//! The modules `normal`, `gamma`, `student` and `poisson` hold the paths of
-//! 0.2 as deprecated forwarders for one release. The epidemiological modules
-//! moved to `epistat-epi`; `balance`, `decomposition`, `evalue`, `rosenbaum`,
-//! `signed_rank` and `standardisation` stay here as deprecated copies of
-//! their 0.2 items for one release.
+//! The modules `normal`, `gamma`, `student` and `poisson` are deprecated
+//! forwarders to [`dist`]. `balance`, `decomposition`, `evalue`, `rosenbaum`,
+//! `signed_rank` and `standardisation` are deprecated; their items are in
+//! `epistat-epi`, and each deprecation note names the new path.
 #![warn(missing_docs)]
 
 pub mod balance;

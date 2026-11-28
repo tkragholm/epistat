@@ -59,8 +59,8 @@
 //!
 //! The tests compare [`variance`] with R's `cov.wt()` on normalised weights, which
 //! uses the same divisor, to `1e-14` relative, and [`mean`] and [`variance`] with
-//! the polars computation that `weighted_mean` and `weighted_variance` of the
-//! `dansk_register` Python package run, bit for bit, on fixed data.
+//! the same computation in polars, a `Decimal(38, 15)` sum for the mean and
+//! the float sum of one chunk for the variance, bit for bit, on fixed data.
 //!
 //! # Effective sample size and limits
 //!

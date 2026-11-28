@@ -1,13 +1,11 @@
-//! The approximations that Studies I and II reproduce.
+//! Older approximations of the normal distribution and a rounded-rank
+//! quantile, for results that were computed with them.
 //!
 //! These functions are less accurate than the ones in [`crate::dist`] and
-//! [`crate::quantile`], and a new caller should use those. They are kept
-//! because published results were computed with them: the cost-model
-//! intervals of Study II (`societal_costs`) with [`cdf_as26`], [`erf_as26`],
-//! [`quantile_acklam`] and [`rounded_rank`], and the aggregate quantiles of
-//! Study I (`parental_income`) with [`quantile_acklam`]. Each is the formula
-//! below, in a fixed order of operations, so it gives the same bits as those
-//! analyses did.
+//! [`crate::quantile`], and a new caller should use those. They are here for
+//! a caller that must reproduce numbers an earlier analysis computed with
+//! these formulas. Each is the formula below, in a fixed order of
+//! operations, so it gives the same bits on every platform.
 //!
 //! # Algorithm
 //!

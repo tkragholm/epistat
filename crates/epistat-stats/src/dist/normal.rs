@@ -6,8 +6,8 @@
 //! [`log_cdf`] the log of the distribution function, R's `pnorm(x, lower.tail =
 //! FALSE)` and `pnorm(x, log.p = TRUE)`. [`truncated_quantile`],
 //! [`folded_quantile`] and [`two_sided_z`] build on [`cdf`] and [`quantile`].
-//! The approximations that Studies I and II reproduce, Abramowitz and Stegun's
-//! 7.1.26 and Acklam's quantile, are in [`crate::compat`].
+//! Two older approximations, Abramowitz and Stegun's 7.1.26 and Acklam's
+//! quantile, are in [`crate::compat`].
 //!
 //! # Algorithm
 //!
