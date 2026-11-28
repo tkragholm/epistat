@@ -408,7 +408,7 @@ fn extra_options_match_r() {
         };
         note(
             "variance",
-            variance_units(&f.variance, &dense(&r.variance), q as f64),
+            variance_units(f.variance.as_slice(), &dense(&r.variance), q as f64),
         );
         let ll_bound = 4.0 * n * f64::EPSILON;
         note(
@@ -450,7 +450,10 @@ fn extra_options_match_r() {
         ) {
             let (native, corrected) = (&native, &corrected);
             let factor = 2.0 * q as f64;
-            note("robust variance", variance_units(got, corrected, factor));
+            note(
+                "robust variance",
+                variance_units(got.as_slice(), corrected, factor),
+            );
             if r.interval_scale_defect {
                 // R's own robust variance differs from the one that follows
                 // from its definition.
@@ -467,7 +470,7 @@ fn extra_options_match_r() {
             } else {
                 note(
                     "robust variance vs native",
-                    variance_units(got, native, factor),
+                    variance_units(got.as_slice(), native, factor),
                 );
             }
             assert_eq!(f.n_clusters, r.n_clusters, "{}", r.name);

@@ -72,7 +72,7 @@
 
 use rayon::prelude::*;
 
-use epistat_core::InputError;
+use epistat_core::{Covariance, InputError};
 use epistat_linalg::eigen::pinv_quadratic_form;
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 
@@ -113,9 +113,9 @@ pub struct Survdiff {
     pub observed: Vec<f64>,
     /// The weighted expected events of each group, over all strata.
     pub expected: Vec<f64>,
-    /// The variance matrix of the expected counts, `groups * groups`, summed
-    /// over the strata.
-    pub variance: Vec<f64>,
+    /// The variance matrix of the expected counts, `groups` by `groups`,
+    /// summed over the strata.
+    pub variance: Covariance,
     /// The caller's stratum code of each stratum with rows used, ascending, or
     /// `None` without a stratum column.
     pub strata: Option<Vec<u32>>,
@@ -350,7 +350,7 @@ pub fn test(data: &SurvData<'_>, group: &[u32], opts: &SurvdiffOptions) -> Resul
         n,
         observed,
         expected,
-        variance,
+        variance: crate::covariance::from_values(k, &variance)?,
         strata,
         n_strata: if data.stratum().is_some() {
             n_strata

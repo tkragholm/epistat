@@ -225,7 +225,7 @@ mod robust;
 mod tdist;
 
 use dist::Base;
-use epistat_core::{InputError, check};
+use epistat_core::{Covariance, InputError, check};
 use epistat_linalg::MatRef;
 use newton::{Control, Problem, factorise, newton};
 
@@ -236,6 +236,7 @@ pub use predict::{
 #[expect(deprecated, reason = "the 0.3 names stay for one release")]
 pub use predict::{PredictOptions, PredictType, Prediction, ResidualKind};
 
+use crate::covariance;
 use crate::error::{Error, Result};
 use crate::ldl;
 use crate::surv::{IntervalKind, Outcome, SurvData};
@@ -355,11 +356,11 @@ pub struct SurvregFit {
     /// variance has no rows for it.
     pub scale_estimated: bool,
     /// The variance matrix over the coefficients and, when the scale is
-    /// estimated, the log scales, row-major with `q * q` entries, `q` the
-    /// number of coefficients plus the number of estimated log scales. `None`
-    /// in the row and column of an aliased coefficient, and in every entry when
-    /// the information matrix at the estimate is not positive semi-definite.
-    pub variance: Vec<Option<f64>>,
+    /// estimated, the log scales, `q` by `q` with `q` the number of
+    /// coefficients plus the number of estimated log scales. `None` in the row
+    /// and column of an aliased coefficient, and in every entry when the
+    /// information matrix at the estimate is not positive semi-definite.
+    pub variance: Covariance,
     /// The robust (sandwich) variance, laid out as `variance`: the sum over
     /// the clusters of the products of the cluster totals of the weighted
     /// dfbeta residuals, which is `var` of `survreg(robust = TRUE)`. `None`
@@ -367,7 +368,7 @@ pub struct SurvregFit {
     /// `variance` stays the model-based one, `naive.var` of `survreg`, and is
     /// the one the residuals use. All entries are `None` when the model-based
     /// variance is not defined.
-    pub robust_variance: Option<Vec<Option<f64>>>,
+    pub robust_variance: Option<Covariance>,
     /// The number of clusters of the robust variance: those of the data, or
     /// the rows used when there are none. `None` without a robust variance.
     pub n_clusters: Option<usize>,
@@ -1041,8 +1042,10 @@ pub fn fit(
             .collect(),
         log_scale,
         scale_estimated: n_scale > 0,
-        variance: variance_out,
-        robust_variance,
+        variance: covariance::from_options(q, variance_out)?,
+        robust_variance: robust_variance
+            .map(|v| covariance::from_options(q, v))
+            .transpose()?,
         n_clusters,
         loglik: fitted.loglik + log_correction,
         loglik_null: null_loglik,

@@ -80,6 +80,7 @@
 //! 2. Therneau TM, Grambsch PM. Modeling survival data: extending the Cox
 //!    model. New York: Springer; 2000. Section 6.2.
 
+use epistat_core::Covariance;
 use epistat_linalg::MatRef;
 use epistat_stats::sum::compensated;
 
@@ -160,9 +161,9 @@ pub struct CoxZph {
     /// The scaled Schoenfeld residuals, one vector per term with one value per
     /// event, `None` where the term plays no part in the stratum.
     pub y: Vec<Vec<Option<f64>>>,
-    /// The inverse of the matrix that scaled `y`, `terms` by `terms`, row by
-    /// row, with `None` in every entry when it cannot be inverted.
-    pub variance: Vec<Option<f64>>,
+    /// The inverse of the matrix that scaled `y`, `terms` by `terms`, with
+    /// `None` in every entry when it cannot be inverted.
+    pub variance: Covariance,
     /// The rows of the data.
     pub n_rows: usize,
     /// The rows with a weight above zero.
@@ -693,7 +694,7 @@ pub fn zph(
         rows: rows.row,
         stratum,
         y,
-        variance,
+        variance: crate::covariance::from_options(nterm, variance)?,
         n_rows: prep.n_rows,
         n_used: prep.n_used,
     })

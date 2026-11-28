@@ -965,10 +965,10 @@ fn check_zph(s: &Setup<'_>, worst: &mut Worst) {
         }
         worst.add(&format!("{label} y"), value);
         let mut value = 0.0f64;
-        for i in 0..nterm {
-            for k in 0..nterm {
-                let g = got.variance[i * nterm + k].unwrap();
-                value = value.max((g - z.var[i][k]).abs() / (kz * var_scale(i, k)));
+        for (i, row) in z.var.iter().enumerate().take(nterm) {
+            for (k, &want) in row.iter().enumerate().take(nterm) {
+                let g = got.variance.get(i, k).unwrap();
+                value = value.max((g - want).abs() / (kz * var_scale(i, k)));
             }
         }
         worst.add(&format!("{label} variance"), value);

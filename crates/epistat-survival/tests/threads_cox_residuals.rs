@@ -100,7 +100,7 @@ fn residuals_and_zph() {
                 for column in &got.y {
                     out.extend(column.iter().copied().map(absent));
                 }
-                out.extend(got.variance.iter().copied().map(absent));
+                out.extend(got.variance.as_slice().iter().copied().map(absent));
             }
             out
         });

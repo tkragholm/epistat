@@ -171,7 +171,7 @@ fn dfbeta_collapsed_by_the_cluster_of_the_fit_sums_to_the_robust_meat() {
             for g in 0..collapsed.n_rows {
                 sum += collapsed.values[g * q + a].unwrap() * collapsed.values[g * q + b].unwrap();
             }
-            let want = robust[a * q + b].unwrap();
+            let want = robust.get(a, b).unwrap();
             assert!(
                 (sum - want).abs() <= 1e-12 * want.abs().max(1e-12),
                 "{a} {b}"
@@ -220,7 +220,7 @@ fn terms_sum_to_the_centred_linear_predictor() {
     }
     // The standard error of one term is |x - mean| times that of its
     // coefficient. The variance has the two coefficients and the log scale.
-    let se_b1 = f.variance[3 + 1].unwrap().sqrt();
+    let se_b1 = f.variance.get(1, 1).unwrap().sqrt();
     for i in 0..40 {
         let want = (x[(i, 1)] - f.column_means[1]).abs() * se_b1;
         assert!((sample.se.as_ref().unwrap()[2 * i + 1] - want).abs() < 1e-12);

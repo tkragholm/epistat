@@ -171,7 +171,7 @@ pub struct Dfbeta {
 
 impl SurvregFit {
     fn dense_variance(&self) -> Result<Vec<f64>> {
-        self.dense_of(&self.variance)
+        self.dense_of(self.variance.as_slice())
     }
 
     fn dense_of(&self, variance: &[Option<f64>]) -> Result<Vec<f64>> {
@@ -288,7 +288,7 @@ impl SurvregFit {
         let variance = if options.se_fit {
             Some(if options.robust {
                 match &self.robust_variance {
-                    Some(v) => self.dense_of(v)?,
+                    Some(v) => self.dense_of(v.as_slice())?,
                     None => {
                         return Err(Error::fit("the fit has no robust variance".to_owned()));
                     }

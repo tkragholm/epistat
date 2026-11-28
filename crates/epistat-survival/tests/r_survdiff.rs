@@ -183,8 +183,14 @@ fn survdiff_matches_survival() {
             total_e_err_sq += d_err * d_err;
         }
         let v_tol = 8.0 * n * (1.0 + rho.abs()) * U * max_e;
-        for (g, w) in got.variance.iter().zip(&case.variance) {
-            worst.variance = worst.variance.max(ratio(*g, *w, v_tol));
+        for (g, w) in got
+            .variance
+            .as_slice()
+            .iter()
+            .map(|v| v.unwrap_or(f64::NAN))
+            .zip(&case.variance)
+        {
+            worst.variance = worst.variance.max(ratio(g, *w, v_tol));
         }
 
         let stat = got.statistic.expect("statistic");

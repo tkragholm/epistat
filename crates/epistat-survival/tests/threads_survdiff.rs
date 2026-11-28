@@ -38,7 +38,7 @@ fn survdiff_does_not_depend_on_the_number_of_threads() {
             let mut out = vec![];
             out.extend(&r.observed);
             out.extend(&r.expected);
-            out.extend(&r.variance);
+            out.extend(r.variance.as_slice().iter().map(|v| v.unwrap_or(f64::NAN)));
             out.extend(&r.observed_by_stratum);
             out.extend(&r.expected_by_stratum);
             out.extend(r.statistic);
