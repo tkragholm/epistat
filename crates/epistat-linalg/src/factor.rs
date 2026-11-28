@@ -168,6 +168,7 @@ impl Attempt {
 }
 
 /// A solution with the factorisation and ridge that produced it.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Solution {
     /// The solution.

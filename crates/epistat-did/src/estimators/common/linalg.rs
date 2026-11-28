@@ -157,19 +157,19 @@ const fn validate_square_system_shape(a: &[f64], n: usize) -> Result<(), &'stati
 #[cfg(test)]
 mod tests {
     use super::*;
-    use epistat_linalg::Solve;
 
-    /// `ridge_solve_lu` as it called faer directly, kept to show that the
-    /// route through `epistat_linalg::solve` gives the same bits.
+    /// `ridge_solve_lu` as faer's LU with partial pivoting of the ridged
+    /// matrix, the one call of `epistat_linalg::solve::lu_partial`, kept to
+    /// show that the route through `epistat_linalg::solve` gives its bits.
     fn ridge_solve_lu_direct(mut a: Mat<f64>, b: &Mat<f64>, lambda: f64) -> Mat<f64> {
         for i in 0..a.ncols() {
             *a.get_mut(i, i) += lambda;
         }
-        a.partial_piv_lu().solve(b)
+        epistat_linalg::solve::lu_partial(a.as_ref(), b.as_ref()).expect("square")
     }
 
     #[test]
-    fn ridge_solve_lu_gives_the_bits_of_the_direct_faer_call() {
+    fn ridge_solve_lu_gives_the_bits_of_faer_lu_on_one_thread() {
         let mut stream = epistat_rng::Stream::seeded(41);
         for (dim, rhs) in [(1, 1), (3, 1), (7, 2), (22, 1), (40, 3)] {
             let x = Mat::from_fn(4 * dim, dim, |_, _| stream.uniform() - 0.5);

@@ -51,5 +51,6 @@ mod tests {
         let empty = Error::EmptyCluster { cluster: 2 };
         assert_eq!(empty.kind(), ErrorKind::Numerical);
         assert_eq!(empty.code(), "stats.empty_cluster");
+        epistat_testkit::assert_codes_unique("stats", &[empty]);
     }
 }

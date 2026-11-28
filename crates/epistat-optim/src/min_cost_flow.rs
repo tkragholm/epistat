@@ -135,6 +135,7 @@ const TREE: i8 = 0;
 pub type FlowError = Error;
 
 /// An optimal flow.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FlowSolution {
     /// Flow on each arc, in the order the arcs were added.

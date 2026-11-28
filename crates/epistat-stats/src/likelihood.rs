@@ -86,6 +86,7 @@ pub fn sabic(log_likelihood: f64, parameters: usize, observations: usize) -> f64
 }
 
 /// The three information criteria of one fit.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct InformationCriteria {
     /// Akaike's criterion.

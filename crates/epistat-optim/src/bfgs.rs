@@ -260,7 +260,7 @@ impl Bfgs {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for an empty start, an inverse Hessian or gradient of
+    /// [`Error::Input`] for an empty start or one that is not finite, an inverse Hessian or gradient of
     /// the wrong length, a cost or gradient that is not finite at the start,
     /// or a line search with no evaluations; [`Error::NotDescent`] when a
     /// direction does not descend.
@@ -292,6 +292,7 @@ impl Bfgs {
         let n = x0.len();
         let mut h = inverse_hessian.unwrap_or_else(|| identity(n));
         check::non_empty("x0", n)?;
+        check::finite("x0", x0)?;
         check::same_length("inverse_hessian", n * n, h.len())?;
         let mut x = x0.to_vec();
         let (mut cost, mut grad) = f(&x);

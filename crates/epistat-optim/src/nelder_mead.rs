@@ -180,8 +180,9 @@ impl NelderMead {
     ///
     /// # Errors
     ///
-    /// Returns an error if the simplex is empty, ragged or has the wrong
-    /// number of vertices, or if the objective returns NaN at a trial point.
+    /// Returns an error if the simplex is empty, ragged, has the wrong
+    /// number of vertices or a coordinate that is not finite, or if the
+    /// objective returns NaN at a trial point.
     pub fn minimize(
         &self,
         simplex: Vec<Vec<f64>>,
@@ -203,8 +204,9 @@ impl NelderMead {
     ) -> Result<Minimum, Error> {
         let dimension = simplex.first().map_or(0, Vec::len);
         check::non_empty("simplex", dimension)?;
-        for vertex in &simplex {
+        for (i, vertex) in simplex.iter().enumerate() {
             check::same_length("vertex", dimension, vertex.len())?;
+            check::finite_column("simplex", i, vertex)?;
         }
         check::same_length("simplex", dimension + 1, simplex.len())?;
 

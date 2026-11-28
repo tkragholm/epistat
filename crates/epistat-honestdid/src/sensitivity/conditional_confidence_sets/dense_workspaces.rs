@@ -65,7 +65,7 @@ impl ConditionalMomentLpWorkspace {
             .collect();
         let mut g = vec![0.0; k + 1];
         g[0] = 1.0;
-        let mut lp = DenseSimplex::new(&columns, &g);
+        let mut lp = DenseSimplex::new(&columns, &g).map_err(EngineError::Optim)?;
         lp.set_memory(BASIS_MEMORY);
         Ok(Self {
             lp,
@@ -190,7 +190,7 @@ impl<'a> DualMaxLpWorkspace<'a> {
         if width > 0 {
             g[0] = 1.0;
         }
-        let mut lp = DenseSimplex::new(w_t, &g);
+        let mut lp = DenseSimplex::new(w_t, &g).map_err(EngineError::Optim)?;
         lp.set_memory(BASIS_MEMORY);
         Ok(Self {
             lp,

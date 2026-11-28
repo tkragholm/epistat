@@ -90,6 +90,7 @@ use crate::inference::did_clusters::{covariance, standard_error};
 use crate::inference::{estimate_from_parts, finite, normal_interval, z_score_for_confidence};
 use crate::util::usize_to_f64;
 
+use super::bands::by_unit;
 use super::{AttGt, BasePeriod, aggregation, cell_estimate};
 
 /// Which summary to produce, `aggte(type = ...)`.
@@ -897,9 +898,9 @@ fn apply_bootstrap(
             .iter()
             .map(|point| point.influence.as_slice())
             .collect::<Vec<_>>();
-        let bands = level
-            .clone()
-            .and_then(|level| multiplier_bands(&columns, clusters, level, bootstrap));
+        let bands = level.clone().and_then(|level| {
+            multiplier_bands(by_unit(&columns)?.as_ref(), clusters, level, bootstrap)
+        });
         // An error here means that no draw gave a finite studentised maximum,
         // so there are no bootstrap standard errors either.
         let standard_errors = bands.as_ref().ok().map(|bands| bands.se.clone());
@@ -918,7 +919,8 @@ fn apply_bootstrap(
 
     if let Some(overall) = summary.overall.as_mut() {
         let bands = level.and_then(|level| {
-            multiplier_bands(&[overall.influence.as_slice()], clusters, level, bootstrap)
+            let influence = by_unit(&[overall.influence.as_slice()])?;
+            multiplier_bands(influence.as_ref(), clusters, level, bootstrap)
         });
         overall.rescale(bands.ok().and_then(|bands| bands.se[0]), pointwise);
     }

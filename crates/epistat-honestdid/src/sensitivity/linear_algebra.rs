@@ -1,7 +1,7 @@
 use crate::sensitivity::EngineError;
 use clarabel::algebra::CscMatrix;
 use epistat_linalg::{
-    Accum, Mat, MatMut, MatRef, Par, Regularisation, Side, Solve, cholesky_factor, matmul,
+    Accum, Mat, MatMut, MatRef, Par, Regularisation, cholesky_factor, matmul, solve,
 };
 use epistat_stats::dist::normal;
 
@@ -217,6 +217,11 @@ pub(super) fn post_covariance_block(
         .collect()
 }
 
+/// The shape error of a solve whose shapes the caller has checked.
+const fn shape_error(_: epistat_linalg::Error) -> EngineError {
+    EngineError::Internal("a linear system whose shapes do not match")
+}
+
 pub(super) fn solve_square_linear_system(
     matrix: &[Vec<f64>],
     rhs: &[f64],
@@ -235,10 +240,10 @@ pub(super) fn solve_square_linear_system(
     }
     let dense = Mat::from_fn(rows, cols, |row, col| matrix[row][col]);
     let rhs_mat = Mat::from_fn(rows, 1, |row, _| rhs[row]);
-    let solution = dense.as_ref().llt(Side::Lower).map_or_else(
-        |_| dense.as_ref().partial_piv_lu().solve(&rhs_mat),
-        |cholesky| cholesky.solve(&rhs_mat),
-    );
+    let solution = match solve::llt(dense.as_ref(), rhs_mat.as_ref()).map_err(shape_error)? {
+        Some(solution) => solution,
+        None => solve::lu_partial(dense.as_ref(), rhs_mat.as_ref()).map_err(shape_error)?,
+    };
     let out: Vec<f64> = (0..rows).map(|row| solution[(row, 0)]).collect();
     let residual = matrix
         .iter()
@@ -283,7 +288,8 @@ pub(super) fn solve_square_linear_system_transposed(
     }
     let dense_transposed = Mat::from_fn(rows, cols, |row, col| matrix[col][row]);
     let rhs_mat = Mat::from_fn(rows, 1, |row, _| rhs[row]);
-    let solution = dense_transposed.as_ref().partial_piv_lu().solve(&rhs_mat);
+    let solution =
+        solve::lu_partial(dense_transposed.as_ref(), rhs_mat.as_ref()).map_err(shape_error)?;
     let out: Vec<f64> = (0..rows).map(|row| solution[(row, 0)]).collect();
     let residual = (0..rows)
         .map(|row| {
@@ -319,7 +325,7 @@ pub(super) fn invert_square_matrix(matrix: &[Vec<f64>]) -> Result<Vec<Vec<f64>>,
     }
     let dense = Mat::from_fn(rows, cols, |row, col| matrix[row][col]);
     let identity = Mat::from_fn(rows, cols, |row, col| if row == col { 1.0 } else { 0.0 });
-    let inverse = dense.as_ref().partial_piv_lu().solve(&identity);
+    let inverse = solve::lu_partial(dense.as_ref(), identity.as_ref()).map_err(shape_error)?;
     let out: Vec<Vec<f64>> = (0..rows)
         .map(|row| (0..cols).map(|col| inverse[(row, col)]).collect())
         .collect();
@@ -353,7 +359,9 @@ pub(super) fn try_invert_square_matrix_row_major_into(
 ) -> bool {
     let dense = MatRef::from_row_major_slice(matrix, n, n).to_owned();
     let identity = Mat::from_fn(n, n, |row, col| if row == col { 1.0 } else { 0.0 });
-    let inverse = dense.as_ref().partial_piv_lu().solve(&identity);
+    let Ok(inverse) = solve::lu_partial(dense.as_ref(), identity.as_ref()) else {
+        return false;
+    };
     out.clear();
     out.resize(n * n, 0.0);
     for row in 0..n {

@@ -157,11 +157,7 @@ mod tests {
             },
             Error::Solve(epistat_linalg::Error::Singular),
         ];
-        let mut codes: Vec<&str> = errors.iter().map(Classify::code).collect();
-        codes.sort_unstable();
-        codes.dedup();
-        assert_eq!(codes.len(), errors.len());
-        assert!(codes.iter().all(|c| c.starts_with("inference.")));
+        epistat_testkit::assert_codes_unique("inference", &errors);
         assert_eq!(Error::NotFinite.kind(), ErrorKind::Numerical);
         assert_eq!(Error::NotSymmetric.kind(), ErrorKind::Input);
         let input = Error::from(InputError::Empty { what: "x" });

@@ -106,7 +106,7 @@ mod tests {
             let Some(reference) = clarabel_reference(&columns, &g, &c) else {
                 continue;
             };
-            let mut lp = DenseSimplex::new(&columns, &g);
+            let mut lp = DenseSimplex::new(&columns, &g).unwrap();
             lp.set_cost(&c);
             lp.solve().unwrap_or_else(|e| panic!("trial {trial}: {e}"));
             assert!(
@@ -139,12 +139,12 @@ mod tests {
             let n = rng.random_range(m + 2..m + 20);
             let (columns, g, c1) = random_feasible_problem(&mut rng, m, n);
             let c2 = bounded_cost(&mut rng, &columns, m);
-            let mut warm = DenseSimplex::new(&columns, &g);
+            let mut warm = DenseSimplex::new(&columns, &g).unwrap();
             warm.set_cost(&c1);
             warm.solve().unwrap();
             warm.set_cost(&c2);
             warm.solve().unwrap();
-            let mut cold = DenseSimplex::new(&columns, &g);
+            let mut cold = DenseSimplex::new(&columns, &g).unwrap();
             cold.set_cost(&c2);
             cold.solve().unwrap();
             assert!((warm.objective() - cold.objective()).abs() < 1e-9);
@@ -155,7 +155,7 @@ mod tests {
     fn reports_infeasibility() {
         // Columns all in the positive orthant cannot reach a negative g.
         let columns = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]];
-        let mut lp = DenseSimplex::new(&columns, &[-1.0, 1.0]);
+        let mut lp = DenseSimplex::new(&columns, &[-1.0, 1.0]).unwrap();
         lp.set_cost(&[1.0, 1.0, 1.0]);
         assert_eq!(lp.solve(), Err(LpError::Infeasible));
     }
@@ -164,7 +164,7 @@ mod tests {
     fn reports_unboundedness() {
         // λ_1 - λ_2 = 1 with both free to grow, and a cost that rewards it.
         let columns = vec![vec![1.0], vec![-1.0]];
-        let mut lp = DenseSimplex::new(&columns, &[1.0]);
+        let mut lp = DenseSimplex::new(&columns, &[1.0]).unwrap();
         lp.set_cost(&[1.0, 1.0]);
         assert_eq!(lp.solve(), Err(LpError::Unbounded));
     }
@@ -188,7 +188,7 @@ mod tests {
             let mut g = vec![0.0; m];
             g[0] = 1.0;
             let c: Vec<f64> = (0..n).map(|_| rng.random_range(-1.0..1.0)).collect();
-            let mut lp = DenseSimplex::new(&columns, &g);
+            let mut lp = DenseSimplex::new(&columns, &g).unwrap();
             lp.set_cost(&c);
             let reference = clarabel_reference(&columns, &g, &c);
             match (lp.solve(), reference) {

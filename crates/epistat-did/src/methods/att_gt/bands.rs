@@ -28,6 +28,7 @@
 use epistat_core::{Bootstrap, Level};
 use epistat_inference::Clusters;
 use epistat_inference::simultaneous::multiplier_bands;
+use epistat_linalg::Mat;
 
 use super::AttGt;
 use crate::error::Error;
@@ -65,17 +66,29 @@ pub struct AttGtBands {
     pub level: Level,
 }
 
+/// The units-by-estimates matrix of one influence column per estimate, which
+/// `multiplier_bands` takes; no columns give an empty matrix, which it
+/// refuses.
+pub(super) fn by_unit(columns: &[&[f64]]) -> Result<Mat<f64>, epistat_inference::Error> {
+    let n = columns.first().map_or(0, |column| column.len());
+    for column in columns {
+        epistat_core::check::same_length("influence column", n, column.len())?;
+    }
+    Ok(Mat::from_fn(n, columns.len(), |i, j| columns[j][i]))
+}
+
 /// [`AttGt::bands`].
 pub(super) fn bands(fit: &AttGt, level: Level, bootstrap: Bootstrap) -> Result<AttGtBands, Error> {
     let influence = fit.kept_influence()?;
     let columns: Vec<&[f64]> = (0..influence.n_columns())
         .map(|j| influence.column(j))
         .collect();
+    let columns = by_unit(&columns)?;
     let clusters = fit.clusters.as_deref().map(Clusters::from_codes);
     // The bands take the level as an alpha, which is the number `did` gives
     // them; a level given as a confidence passes its own `1 - c`.
     let alpha = Level::alpha(level.alpha_value())?;
-    let bands = multiplier_bands(&columns, clusters.as_ref(), alpha, bootstrap)?;
+    let bands = multiplier_bands(columns.as_ref(), clusters.as_ref(), alpha, bootstrap)?;
     let cells = fit
         .estimated()
         .zip(&bands.se)

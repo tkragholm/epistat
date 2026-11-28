@@ -20,6 +20,7 @@
 use epistat_core::{Bootstrap, Interval, Level};
 use epistat_inference::interval::{self, Percentile};
 use epistat_inference::simultaneous::multiplier_bands;
+use epistat_linalg::MatRef;
 use epistat_testkit::{Fingerprint, SplitMix64};
 
 /// A fingerprint that hashes NaN and `None` alike, so a value that becomes
@@ -97,9 +98,11 @@ fn cases() -> Vec<(&'static str, u64)> {
             scale * (stream.unit() - 0.5) * 1e-3
         })
         .collect();
-    let rows: Vec<&[f64]> = flat.chunks_exact(n_clusters).collect();
+    // Row-major aggregates by clusters is column-major clusters by aggregates.
+    let influence = MatRef::from_column_major_slice(&flat, n_clusters, n_aggregates);
     let level = Level::alpha(BAND_ALPHA).expect("alpha");
-    let bands = multiplier_bands(&rows, None, level, Bootstrap::new(1_000, 17_431)).expect("bands");
+    let bands =
+        multiplier_bands(influence, None, level, Bootstrap::new(1_000, 17_431)).expect("bands");
     let mut h = Hash::new();
     h.f(bands.critical);
     for &se in &bands.se {

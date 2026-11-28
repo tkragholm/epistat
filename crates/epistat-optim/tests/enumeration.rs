@@ -506,7 +506,7 @@ fn network_simplex_agrees_with_successive_shortest_paths() {
 #[test]
 fn dense_simplex_reports_an_infeasible_program_on_a_small_scale() {
     use epistat_optim::simplex::DenseSimplex;
-    let mut lp = DenseSimplex::new(&[vec![1.0]], &[-1e-9]);
+    let mut lp = DenseSimplex::new(&[vec![1.0]], &[-1e-9]).unwrap();
     lp.set_cost(&[1.0]);
     let result = lp.solve();
     assert_eq!(
@@ -522,7 +522,7 @@ fn dense_simplex_reports_an_infeasible_program_on_a_small_scale() {
 #[test]
 fn dense_simplex_reports_the_same_program_at_unit_scale_infeasible() {
     use epistat_optim::simplex::DenseSimplex;
-    let mut lp = DenseSimplex::new(&[vec![1.0]], &[-1.0]);
+    let mut lp = DenseSimplex::new(&[vec![1.0]], &[-1.0]).unwrap();
     lp.set_cost(&[1.0]);
     assert_eq!(lp.solve(), Err(Error::Infeasible));
 }
