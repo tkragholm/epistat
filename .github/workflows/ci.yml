@@ -39,8 +39,7 @@ jobs:
 
   # The committed lock is ignored: a fresh resolution is what a consumer gets.
   # The minimum supported Rust is 1.89, the first with fearless_simd's
-  # requirements and bytemuck's AVX-512 types, which `epistat-linalg`'s
-  # `nightly` feature uses.
+  # requirements.
   msrv:
     strategy:
       matrix:

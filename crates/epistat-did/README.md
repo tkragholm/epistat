@@ -145,8 +145,7 @@ main estimators.
 The HonestDiD sensitivity analysis of Rambachan and Roth and the power of the
 pre-trends test (Roth, 2022) are in the crate `epistat-honestdid`, which takes
 the event study that `AttGt::event_study` and the fixed-effects estimators
-return. The `nightly` feature enables faer's AVX-512 kernels through
-epistat-linalg.
+return.
 
 The tests compare estimates, standard errors and influence functions with
 `did` 2.5.1, `DRDID` 1.3.0, `triplediff`, `contdid`

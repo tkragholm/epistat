@@ -56,5 +56,4 @@ units fit in memory.
 The `arrow` feature builds records or a `Cohort` from Apache Arrow arrays.
 The `test-utils` feature adds small fixtures for tests and benchmarks. The
 `bench-internals` feature exposes the balance statistics that the benchmarks
-time. The `nightly` feature enables faer's AVX-512 kernels through
-`epistat-linalg`.
+time.
