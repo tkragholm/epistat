@@ -3,16 +3,17 @@
 
 mod common;
 
-use common::simulate;
+use common::{simulate, view};
+use epistat_core::Covariance;
 use epistat_glm::{Family, Link};
 use epistat_mixed::{Criterion, Glmm, GlmmFit, Lmm, LmmFit};
 use epistat_testkit::assert_same_on_threads;
 
 fn lmm_values(fit: &LmmFit) -> Vec<f64> {
     let mut v = fit.beta.clone();
-    v.extend(&fit.beta_covariance);
+    v.extend(entries(&fit.beta_covariance));
     v.extend(&fit.theta);
-    v.extend(&fit.random_covariance);
+    v.extend(entries(&fit.random_covariance));
     v.extend([fit.sigma, fit.criterion]);
     v.extend(&fit.modes);
     v.extend(&fit.mode_covariances);
@@ -21,7 +22,7 @@ fn lmm_values(fit: &LmmFit) -> Vec<f64> {
 
 fn glmm_values(fit: &GlmmFit) -> Vec<f64> {
     let mut v = fit.beta.clone();
-    v.extend(fit.beta_covariance.as_ref().unwrap());
+    v.extend(entries(fit.beta_covariance.as_ref().unwrap()));
     v.extend([fit.theta, fit.theta_se.unwrap(), fit.log_likelihood]);
     v.extend(&fit.gradient);
     v.extend(&fit.modes);
@@ -36,12 +37,15 @@ fn linear_mixed_models_do_not_depend_on_the_thread_count() {
         assert_same_on_threads(|| {
             let fit = Lmm::new(criterion)
                 .fit(
-                    d.x.as_ref(),
-                    &d.y,
-                    &d.cluster,
-                    Some(&d.slope),
-                    Some(&d.weights),
-                    Some(&d.offset),
+                    &view(
+                        d.x.as_ref(),
+                        &d.y,
+                        &d.cluster,
+                        Some(&d.slope),
+                        Some(&d.weights),
+                        Some(&d.offset),
+                    )
+                    .unwrap(),
                 )
                 .unwrap();
             lmm_values(&fit)
@@ -59,14 +63,27 @@ fn generalised_linear_mixed_models_do_not_depend_on_the_thread_count() {
         assert_same_on_threads(|| {
             let fit = Glmm::new(family, link, nodes)
                 .fit(
-                    d.x.as_ref(),
-                    &d.y,
-                    &d.cluster,
-                    Some(&d.weights),
-                    Some(&d.offset),
+                    &view(
+                        d.x.as_ref(),
+                        &d.y,
+                        &d.cluster,
+                        None,
+                        Some(&d.weights),
+                        Some(&d.offset),
+                    )
+                    .unwrap(),
                 )
                 .unwrap();
             glmm_values(&fit)
         });
     }
+}
+
+/// The entries of a covariance, every one defined.
+fn entries(covariance: &Covariance) -> Vec<f64> {
+    covariance
+        .as_slice()
+        .iter()
+        .map(|v| v.expect("a defined entry"))
+        .collect()
 }
