@@ -237,6 +237,7 @@ fn opts(name: &str) -> EntropyOptions {
         estimand: target(name),
         tolerance: 1e-12,
         max_iterations: 100,
+        ..Default::default()
     }
 }
 
@@ -543,6 +544,7 @@ fn cbps_opts(case_att: &str, ident: &str, twostep: bool, std: bool) -> CbpsOptio
         standardise: std,
         tolerance: 1e-12,
         max_iterations: 500,
+        ..Default::default()
     }
 }
 

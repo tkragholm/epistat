@@ -82,10 +82,10 @@ fn fluctuation_solves_its_score_equations() {
         &TmleGlmOptions {
             tmle: TmleOptions {
                 estimand: Estimand::Ate,
-
                 ..opts
             },
             outcome_model: OutcomeModel::Pooled,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -153,10 +153,10 @@ fn one_step_score_converges_with_the_step() {
                     &TmleGlmOptions {
                         tmle: TmleOptions {
                             estimand: target,
-
                             ..opts
                         },
                         outcome_model: OutcomeModel::Pooled,
+                        ..Default::default()
                     },
                 )
                 .unwrap()
@@ -248,10 +248,10 @@ fn targeted_estimate_approaches_the_augmented_one() {
             &TmleGlmOptions {
                 tmle: TmleOptions {
                     estimand: Estimand::Ate,
-
                     ..opts
                 },
                 outcome_model: OutcomeModel::ByArm,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -301,10 +301,10 @@ fn options_that_change_nothing_change_no_bits() {
             &TmleGlmOptions {
                 tmle: TmleOptions {
                     estimand: target,
-
                     ..base
                 },
                 outcome_model: OutcomeModel::Pooled,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -314,10 +314,10 @@ fn options_that_change_nothing_change_no_bits() {
             &TmleGlmOptions {
                 tmle: TmleOptions {
                     estimand: target,
-
                     ..known
                 },
                 outcome_model: OutcomeModel::Pooled,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -337,10 +337,10 @@ fn options_that_change_nothing_change_no_bits() {
         &TmleGlmOptions {
             tmle: TmleOptions {
                 estimand: Estimand::Att,
-
                 ..open
             },
             outcome_model: OutcomeModel::Pooled,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -387,6 +387,7 @@ fn refusals() {
             &TmleGlmOptions {
                 tmle: TmleOptions { ..opts },
                 outcome_model: OutcomeModel::Pooled,
+                ..Default::default()
             },
         )
     };
@@ -429,10 +430,10 @@ fn refusals() {
             &TmleGlmOptions {
                 tmle: TmleOptions {
                     estimand: Estimand::Ate,
-
                     ..base
                 },
-                outcome_model: OutcomeModel::Pooled
+                outcome_model: OutcomeModel::Pooled,
+                ..Default::default()
             }
         )
         .is_err()
@@ -449,10 +450,10 @@ fn refusals() {
             &TmleGlmOptions {
                 tmle: TmleOptions {
                     estimand: Estimand::Ate,
-
                     ..base
                 },
-                outcome_model: OutcomeModel::Pooled
+                outcome_model: OutcomeModel::Pooled,
+                ..Default::default()
             }
         )
         .is_err()

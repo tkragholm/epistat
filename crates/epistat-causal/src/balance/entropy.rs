@@ -119,11 +119,14 @@ pub struct EntropyOptions {
     pub tolerance: f64,
     /// The most Newton iterations in one group. The default is 100.
     pub max_iterations: usize,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for EntropyOptions {
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             estimand: Estimand::Ate,
             tolerance: 1e-10,
             max_iterations: 100,

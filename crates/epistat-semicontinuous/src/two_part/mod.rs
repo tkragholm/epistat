@@ -213,11 +213,14 @@ pub struct TwoPartOptions {
     pub separation: Separation,
     /// What a fit that fails does.
     pub strategy: FitStrategy,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for TwoPartOptions {
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             max_iterations: 50,
             tolerance: 1e-6,
             deviance_tolerance: 1e-8,

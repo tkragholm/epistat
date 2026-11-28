@@ -36,10 +36,10 @@ pub fn run(s: &Simulated, case: Case) -> Vec<f64> {
             &TmleGlmOptions {
                 tmle: TmleOptions {
                     estimand: target,
-
                     ..opts
                 },
                 outcome_model: model,
+                ..Default::default()
             },
         )
         .unwrap()

@@ -123,11 +123,14 @@ pub struct AipwOptions {
     /// Bounds at which the propensity is truncated, with
     /// `0 < lower < upper < 1`. The default is no truncation.
     pub truncation: Option<ProbabilityBounds>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for AipwOptions {
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             estimand: Estimand::Ate,
             level: Level::default(),
             truncation: None,

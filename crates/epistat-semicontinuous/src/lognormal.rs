@@ -71,11 +71,14 @@ pub struct LogNormalOptions {
     pub variance: Variance,
     /// What a fit that fails does.
     pub strategy: FitStrategy,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for LogNormalOptions {
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             max_iterations: 1,
             tolerance: 1e-12,
             l2_penalty: 0.0,

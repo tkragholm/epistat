@@ -446,10 +446,10 @@ fn glm_wrapper_matches_tmle_and_the_hand_written_estimator() {
                 &TmleGlmOptions {
                     tmle: TmleOptions {
                         estimand: target,
-
                         ..options(s)
                     },
                     outcome_model: model,
+                    ..Default::default()
                 },
             )
             .unwrap();

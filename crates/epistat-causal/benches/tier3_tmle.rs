@@ -123,10 +123,10 @@ fn main() {
                     &TmleGlmOptions {
                         tmle: TmleOptions {
                             estimand: target,
-
                             ..opts
                         },
                         outcome_model: OutcomeModel::Pooled,
+                        ..Default::default()
                     },
                 )
                 .expect("tmle")

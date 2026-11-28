@@ -288,6 +288,8 @@ pub struct CompareOptions {
     pub include_tweedie: bool,
     /// Whether to fit the log-normal model.
     pub include_lognormal: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl CompareOptions {
@@ -296,6 +298,7 @@ impl CompareOptions {
     #[must_use]
     pub fn new(seed: Seed) -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             tweedie_powers: vec![1.2, 1.5, 1.8],
             two_part: TwoPartOptions::default(),
             two_part_elastic_net: None,
@@ -374,6 +377,8 @@ pub struct CrossValidationOptions {
     pub include_two_part: bool,
     /// Whether to cross-validate the log-normal model.
     pub include_lognormal: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl CrossValidationOptions {
@@ -382,6 +387,7 @@ impl CrossValidationOptions {
     #[must_use]
     pub fn new(seed: Seed) -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             folds: 5,
             fold_rule: FoldRule::Clusters,
             seed,
@@ -547,6 +553,7 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
         data,
         &options.tweedie_powers,
         &CrossValidationOptions {
+            _extensible: epistat_core::Extensible::NEW,
             folds: options.folds,
             fold_rule: options.fold_rule,
             seed: options.seed,
@@ -564,6 +571,7 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
                 data,
                 &[],
                 &CrossValidationOptions {
+                    _extensible: epistat_core::Extensible::NEW,
                     folds: options.folds,
                     fold_rule: options.fold_rule,
                     seed: options.seed,

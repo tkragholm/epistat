@@ -161,6 +161,8 @@ pub struct SurvivalOptions {
     pub propensity_bound: PropensityBound,
     /// The largest number of targeting rounds of each arm. The default is 50.
     pub max_iterations: usize,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl SurvivalOptions {
@@ -169,6 +171,7 @@ impl SurvivalOptions {
     #[must_use]
     pub fn new(horizon: usize) -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             horizon,
             level: Level::default(),
             propensity_bound: PropensityBound::None,

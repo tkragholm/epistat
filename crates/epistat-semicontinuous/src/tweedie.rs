@@ -100,11 +100,14 @@ pub struct TweedieOptions {
     pub variance: Variance,
     /// What a fit that fails does.
     pub strategy: FitStrategy,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for TweedieOptions {
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             max_iterations: 50,
             tolerance: 1e-6,
             min_weight: 1e-6,

@@ -219,6 +219,8 @@ pub struct MtpOptions {
     pub chains: usize,
     /// Whether the fit keeps every chain's draws.
     pub keep_draws: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl MtpOptions {
@@ -226,6 +228,7 @@ impl MtpOptions {
     #[must_use]
     pub fn new(seed: Seed) -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             iterations: 4_000,
             burn_in: 1_000,
             thin: 4,

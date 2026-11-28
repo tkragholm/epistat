@@ -237,11 +237,14 @@ pub struct TmleOptions {
     /// Whether the effect on the treated or on the controls leaves out persons
     /// outside the support of the other arm, as `tmle`. The default is true.
     pub restrict_support: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for TmleOptions {
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             estimand: Estimand::Ate,
             level: Level::default(),
             range: OutcomeRange::Observed,
@@ -262,6 +265,8 @@ pub struct TmleGlmOptions {
     /// The outcome model. The default is [`OutcomeModel::Pooled`], `tmle`'s
     /// main-terms model.
     pub outcome_model: OutcomeModel,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// How the outcome predictions were moved.

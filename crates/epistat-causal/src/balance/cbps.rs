@@ -241,11 +241,14 @@ pub struct CbpsOptions {
     pub tolerance: f64,
     /// The most iterations of each solver. The default is 200.
     pub max_iterations: usize,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for CbpsOptions {
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             estimand: Estimand::Ate,
             identification: Identification::Over,
             two_step: true,

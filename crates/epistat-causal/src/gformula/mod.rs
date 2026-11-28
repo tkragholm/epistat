@@ -509,6 +509,8 @@ pub struct GFormulaOptions {
     /// person and period for each strategy. The default is false: the memory
     /// is `strategies * simulated * periods * (variables + 6)` values.
     pub keep_simulated: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl GFormulaOptions {
@@ -517,6 +519,7 @@ impl GFormulaOptions {
     #[must_use]
     pub fn new(seed: Seed) -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             simulated: None,
             periods: None,
             bootstrap: None,

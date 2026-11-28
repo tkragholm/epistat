@@ -116,6 +116,8 @@ pub struct OutcomeOptions {
     pub variance: WeightVariance,
     /// The level of the confidence limits, by default 95%.
     pub level: Level,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// The weights of one group of persons.
