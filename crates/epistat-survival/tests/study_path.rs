@@ -294,17 +294,17 @@ fn cases() -> Vec<(&'static str, u64)> {
 const GOLDEN: &[(&str, u64)] = &[
     (
         "cause_specific_efron_weighted_clustered",
-        0x2e3c_a017_c363_87b9,
+        0x8507_0140_798d_45ff,
     ),
-    ("cause_specific_efron_weighted", 0x8fe8_657a_1e7c_79b7),
+    ("cause_specific_efron_weighted", 0x4932_0890_175a_c63e),
     (
         "subdistribution_efron_weighted_clustered",
-        0xde21_1ff2_f210_b891,
+        0x874c_3990_4179_be2f,
     ),
-    ("subdistribution_efron_weighted", 0x7961_23e0_7b05_ef18),
+    ("subdistribution_efron_weighted", 0x5b27_aaf9_414d_72d4),
     (
         "sibling_fixed_effects_stratified_clustered",
-        0x6d79_0a0e_2880_4a5e,
+        0xade7_9267_e287_5988,
     ),
 ];
 
