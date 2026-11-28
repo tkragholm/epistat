@@ -27,8 +27,9 @@
 //! rounding. The other estimates move with `θ`; they are compared at a
 //! relative `1e-6`, above `δ` times their derivatives in `θ` in these data.
 
-use epistat_linalg::Mat;
-use epistat_mixed::{Criterion, Lmm, LmmFit};
+use epistat_core::Covariance;
+use epistat_linalg::{Mat, MatRef};
+use epistat_mixed::{Criterion, Error, Lmm, LmmFit, MixedData};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -127,12 +128,15 @@ fn design(case: &Case) -> Mat<f64> {
 fn evaluate(model: Lmm, case: &Case, x: &Mat<f64>, theta: &[f64]) -> LmmFit {
     model
         .evaluate(
-            x.as_ref(),
-            &case.y,
-            &case.cluster,
-            case.slope.as_deref(),
-            Some(&case.weights),
-            Some(&case.offset),
+            &view(
+                x.as_ref(),
+                &case.y,
+                &case.cluster,
+                case.slope.as_deref(),
+                Some(&case.weights),
+                Some(&case.offset),
+            )
+            .unwrap(),
             theta,
         )
         .unwrap()
@@ -145,8 +149,8 @@ fn compare(got: &LmmFit, want: &Report) -> [f64; 8] {
         deviation(&[got.log_likelihood], &[want.log_lik]),
         deviation(&got.beta, &want.beta),
         deviation(&[got.sigma], &[want.sigma]),
-        deviation(&got.beta_covariance, &want.vcov),
-        deviation(&got.random_covariance, &want.random_cov),
+        deviation(&entries(&got.beta_covariance), &want.vcov),
+        deviation(&entries(&got.random_covariance), &want.random_cov),
         deviation(&got.modes, &want.modes),
         deviation(&got.mode_covariances, &want.mode_cov),
     ]
@@ -203,12 +207,15 @@ fn the_optimum_matches_lmer() {
             let model = Lmm::new(criterion);
             let fit = model
                 .fit(
-                    x.as_ref(),
-                    &case.y,
-                    &case.cluster,
-                    case.slope.as_deref(),
-                    Some(&case.weights),
-                    Some(&case.offset),
+                    &view(
+                        x.as_ref(),
+                        &case.y,
+                        &case.cluster,
+                        case.slope.as_deref(),
+                        Some(&case.weights),
+                        Some(&case.offset),
+                    )
+                    .unwrap(),
                 )
                 .unwrap();
             let want = &entry.fit;
@@ -304,4 +311,35 @@ fn solve(h: &[f64], g: &[f64]) -> Vec<f64> {
         b[c] = s / a[c * k + c];
     }
     b
+}
+
+/// The data view of the given columns.
+fn view<'a>(
+    x: MatRef<'a, f64>,
+    y: &'a [f64],
+    groups: &'a [u32],
+    slope: Option<&'a [f64]>,
+    weights: Option<&'a [f64]>,
+    offset: Option<&'a [f64]>,
+) -> Result<MixedData<'a>, Error> {
+    let mut data = MixedData::builder(x, y, groups);
+    if let Some(slope) = slope {
+        data = data.slope(slope);
+    }
+    if let Some(weights) = weights {
+        data = data.weights(weights);
+    }
+    if let Some(offset) = offset {
+        data = data.offset(offset);
+    }
+    data.build()
+}
+
+/// The entries of a covariance, every one defined.
+fn entries(covariance: &Covariance) -> Vec<f64> {
+    covariance
+        .as_slice()
+        .iter()
+        .map(|v| v.expect("a defined entry"))
+        .collect()
 }

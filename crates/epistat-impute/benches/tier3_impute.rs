@@ -107,10 +107,9 @@ fn main() {
     let options = ImputeOptions {
         m: if method == "pmm_chains" { 10 } else { 1 },
         max_iterations: 5,
-        seed: SEED,
     };
     let (times, imputed) = common::timed(common::reps(), || {
-        impute(&data, &spec, &options).expect("impute")
+        impute(&data, &spec, &options, SEED).expect("impute")
     });
     let cells = &imputed.values[3][0];
     let count = cells.len() as f64;

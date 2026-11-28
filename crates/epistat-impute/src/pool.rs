@@ -4,7 +4,9 @@ use epistat_inference::pooling::{Pooled, PooledVector, rubin, rubin_vector};
 use epistat_linalg::{Mat, MatRef};
 
 use crate::data::Incomplete;
-use crate::error::{ImputeError, Result};
+use epistat_core::InputError;
+
+use crate::error::{Error, Result, length};
 use crate::impute::Imputed;
 
 impl Imputed {
@@ -14,22 +16,34 @@ impl Imputed {
     ///
     /// # Errors
     ///
-    /// [`ImputeError::Length`] when `set` is out of range or `data` is not the
-    /// data that was imputed.
+    /// [`Error::Input`] when `set` is not below the number of data sets
+    /// ([`InputError::NotBelow`]) or `data` does not have the columns and
+    /// rows of the data that were imputed ([`InputError::Length`]).
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the set number is reported, not computed with"
+    )]
     pub fn completed(&self, data: &Incomplete, set: usize) -> Result<Vec<Vec<f64>>> {
         if set >= self.m {
-            return Err(ImputeError::Length {
+            return Err(InputError::NotBelow {
                 what: "set",
-                expected: self.m,
-                found: set,
-            });
+                value: set as f64,
+                limit: self.m as f64,
+            }
+            .into());
         }
-        if data.n_columns() != self.values.len() {
-            return Err(ImputeError::Length {
-                what: "columns",
-                expected: self.values.len(),
-                found: data.n_columns(),
-            });
+        length("columns", self.values.len(), data.n_columns())?;
+        for (j, rows) in self.missing_rows.iter().enumerate() {
+            if rows.last().is_some_and(|&row| row >= data.rows())
+                || rows.len() != data.missing(j).count()
+            {
+                return Err(InputError::Length {
+                    what: "missing",
+                    expected: rows.len(),
+                    found: data.missing(j).count(),
+                }
+                .into());
+            }
         }
         Ok((0..data.n_columns())
             .map(|j| {
@@ -51,7 +65,7 @@ impl Imputed {
     ///
     /// # Errors
     ///
-    /// [`ImputeError::Analysis`] for an analysis that fails, and the errors of
+    /// [`Error::Analysis`] for an analysis that fails, and the errors of
     /// [`completed`](Self::completed) and of
     /// [`rubin`](epistat_inference::pooling::rubin).
     pub fn pool<E>(
@@ -66,7 +80,7 @@ impl Imputed {
         let (mut estimates, mut variances) = (Vec::new(), Vec::new());
         for set in 0..self.m {
             let completed = self.completed(data, set)?;
-            let (q, u) = analysis(&completed).map_err(|e| ImputeError::Analysis {
+            let (q, u) = analysis(&completed).map_err(|e| Error::Analysis {
                 set,
                 source: e.into(),
             })?;
@@ -95,7 +109,7 @@ impl Imputed {
         let (mut estimates, mut covariances) = (Vec::new(), Vec::new());
         for set in 0..self.m {
             let completed = self.completed(data, set)?;
-            let (q, u) = analysis(&completed).map_err(|e| ImputeError::Analysis {
+            let (q, u) = analysis(&completed).map_err(|e| Error::Analysis {
                 set,
                 source: e.into(),
             })?;

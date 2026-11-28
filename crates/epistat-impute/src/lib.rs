@@ -49,7 +49,9 @@
 //!          inverse distribution function
 //! ```
 //!
-//! The formulas and the matching rule are in [`parts`]. Before the first
+//! The formulas and the matching rule are in the documentation of the
+//! `parts` module, which is public for the tests that compare each step with
+//! `mice` and hidden from the documentation. Before the first
 //! iteration each missing cell holds a random draw of an observed value of its
 //! column. A column whose predictors include one that is a linear combination
 //! of the others is fitted without it, and the number of such fits is
@@ -62,8 +64,9 @@
 //!
 //! # Streams
 //!
-//! Every draw comes from a [`SplitMix64`](epistat_rng::Stream) stream seeded
-//! from the seed, the chain, the iteration, the column and the row: the seed
+//! [`impute`] takes the seed as an argument; there is no default seed. Every
+//! draw comes from a [`SplitMix64`](epistat_rng::Stream) stream seeded from
+//! the seed, the chain, the iteration, the column and the row: the seed
 //! is mixed by `splitmix64` and then by `replicate_seed` with the chain, the
 //! iteration, the column and the row in turn. The parameters of a column's model
 //! use the row index `u64::MAX`. A draw therefore does not depend on the thread
@@ -128,13 +131,14 @@
 mod data;
 mod error;
 mod impute;
+#[doc(hidden)]
 pub mod parts;
 mod pool;
 mod spec;
 pub mod survival;
 
 pub use data::{Column, Incomplete, Mask};
-pub use error::{ImputeError, Result};
+pub use error::{Error, Result};
 pub use impute::{Imputed, impute};
 pub use spec::{ImputeOptions, ImputeSpec, MatchType, Method, PassiveFn};
 pub use survival::{Ties, nelson_aalen};

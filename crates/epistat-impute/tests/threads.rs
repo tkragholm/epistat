@@ -101,8 +101,8 @@ fn run(seed: u64) -> Imputed {
         &ImputeOptions {
             m: 6,
             max_iterations: 3,
-            seed,
         },
+        seed,
     )
     .unwrap()
 }

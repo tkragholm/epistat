@@ -1,6 +1,7 @@
 //! Simulated clustered data for the behaviour, thread and golden tests.
 
-use epistat_linalg::Mat;
+use epistat_linalg::{Mat, MatRef};
+use epistat_mixed::{Error, MixedData};
 use epistat_testkit::SplitMix64;
 
 /// A data set: design, response, cluster labels, slope variable, weights
@@ -76,4 +77,26 @@ pub fn simulate(clusters: usize, kind: &str, seed: u64) -> Data {
         weights,
         offset,
     }
+}
+
+/// The data view of the given columns.
+pub fn view<'a>(
+    x: MatRef<'a, f64>,
+    y: &'a [f64],
+    groups: &'a [u32],
+    slope: Option<&'a [f64]>,
+    weights: Option<&'a [f64]>,
+    offset: Option<&'a [f64]>,
+) -> Result<MixedData<'a>, Error> {
+    let mut data = MixedData::builder(x, y, groups);
+    if let Some(slope) = slope {
+        data = data.slope(slope);
+    }
+    if let Some(weights) = weights {
+        data = data.weights(weights);
+    }
+    if let Some(offset) = offset {
+        data = data.offset(offset);
+    }
+    data.build()
 }

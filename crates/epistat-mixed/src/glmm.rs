@@ -110,9 +110,9 @@
 //!
 //! # Determinism
 //!
-//! Clusters are processed in blocks of [`BLOCK`] clusters, each block in
-//! order, and the blocks summed in order, so results do not depend on the
-//! number of threads.
+//! Clusters are processed in blocks of 512 clusters, each block in order, and
+//! the blocks summed in order, so results do not depend on the number of
+//! threads. The block size is fixed and part of the bits of a fit.
 //!
 //! # References
 //!
@@ -125,23 +125,20 @@
 //! 4. Liu Q, Pierce DA. A note on Gauss-Hermite quadrature. Biometrika.
 //!    1994;81(3):624-9.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
-use epistat_glm::{Family, Glm, Link};
+use epistat_core::{Covariance, check};
+use epistat_glm::{Family, Glm, GlmData, Link};
+use epistat_linalg::cholesky::{Pivot, cholesky_lower};
+use epistat_linalg::small::{cholesky_inverse, cholesky_solve};
 use epistat_linalg::{Mat, MatRef, matvec_into, xtv};
 use epistat_optim::bfgs::Bfgs;
 use epistat_stats::dist::gamma::ln_gamma;
 use rayon::prelude::*;
 
+use crate::error::{iterations, tolerance};
 use crate::groups::Groups;
-use crate::lmm::{check, finite};
+use crate::lmm::{BLOCK, check_size, covariance};
 use crate::quadrature::gauss_hermite;
-use crate::{Convergence, MixedError, small};
-
-pub use crate::lmm::BLOCK;
+use crate::{Convergence, Error, MixedData};
 
 /// `lme4`'s tolerance below which `θ` counts as zero.
 const SINGULAR: f64 = 1e-4;
@@ -181,14 +178,15 @@ impl Glmm {
 }
 
 /// A fitted generalised linear mixed model.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct GlmmFit {
     /// The fixed effects.
     pub beta: Vec<f64>,
-    /// Their covariance, row-major `p x p`, from the Hessian of the
-    /// likelihood in `(θ, β)`; `None` when that Hessian is not positive
-    /// definite.
-    pub beta_covariance: Option<Vec<f64>>,
+    /// Their covariance, `p x p`, from the Hessian of the likelihood in
+    /// `(θ, β)`; `None` when that Hessian is not positive definite, and an
+    /// entry that is not finite is `None`.
+    pub beta_covariance: Option<Covariance>,
     /// The standard deviation `θ` of the random intercept.
     pub theta: f64,
     /// The standard error of `θ`; `None` at `θ = 0` or when the Hessian is
@@ -200,7 +198,7 @@ pub struct GlmmFit {
     /// The gradient of `-2` times the log likelihood with respect to
     /// `(θ, β)`.
     pub gradient: Vec<f64>,
-    /// The cluster labels, increasing; the order of the modes.
+    /// The group labels, increasing; the order of the modes.
     pub groups: Vec<u32>,
     /// The conditional modes `b_i = θ û_i`.
     pub modes: Vec<f64>,
@@ -312,66 +310,34 @@ struct Contribution {
 }
 
 impl<'a> Problem<'a> {
-    fn new(
-        model: &Glmm,
-        x: MatRef<'a, f64>,
-        y: &[f64],
-        cluster: &[u32],
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-    ) -> Result<Self, MixedError> {
+    fn new(model: &Glmm, data: &MixedData<'a>) -> Result<Self, Error> {
         let kind = match (model.family, model.link) {
             (Family::Binomial, Link::Logit) => Kind::Binomial,
             (Family::Poisson, Link::Log) => Kind::Poisson,
-            _ => return Err(MixedError::Family),
-        };
-        let (n, p) = (x.nrows(), x.ncols());
-        check("y", n, y.len())?;
-        check("cluster", n, cluster.len())?;
-        if let Some(w) = weights {
-            check("weights", n, w.len())?;
-        }
-        if let Some(o) = offset {
-            check("offset", n, o.len())?;
-        }
-        if p == 0 {
-            return Err(MixedError::Size("the design has no columns"));
-        }
-        if n <= p {
-            return Err(MixedError::Size(
-                "there must be more rows than coefficients",
-            ));
-        }
-        for j in 0..p {
-            if let Some(row) = (0..n).find(|&i| !x[(i, j)].is_finite()) {
-                return Err(MixedError::NotFinite { what: "x", row });
+            _ => {
+                return Err(Error::Unsupported {
+                    what: "a family and link other than binomial-logit and Poisson-log",
+                });
             }
+        };
+        if data.slope().is_some() {
+            return Err(Error::Unsupported {
+                what: "a random slope in a generalised linear mixed model",
+            });
         }
-        finite("y", y)?;
-        if let Some(o) = offset {
-            finite("offset", o)?;
-        }
-        let w: Vec<f64> = weights.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
-        if let Some((row, &value)) = w
-            .iter()
-            .enumerate()
-            .find(|&(_, &v)| !(v.is_finite() && v >= 0.0))
-        {
-            return Err(MixedError::Weight { row, value });
-        }
+        let (x, y, offset) = (data.x(), data.y(), data.offset());
+        let (n, p) = (x.nrows(), x.ncols());
+        check_size(n, p)?;
+        let w: Vec<f64> = data.weights().map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
         let valid = |v: f64| match kind {
             Kind::Binomial => (0.0..=1.0).contains(&v),
             Kind::Poisson => v >= 0.0,
         };
         if let Some((row, &value)) = y.iter().enumerate().find(|&(_, &v)| !valid(v)) {
-            return Err(MixedError::Response { row, value });
+            return Err(Error::Response { row, value });
         }
-        if !(model.tolerance.is_finite() && model.tolerance > 0.0) {
-            return Err(MixedError::Control("the tolerance"));
-        }
-        if model.max_iterations == 0 {
-            return Err(MixedError::Control("the iteration limit"));
-        }
+        tolerance(model.tolerance)?;
+        iterations(model.max_iterations)?;
         let (nodes, node_weights) = gauss_hermite(model.nodes)?;
         let log_weights = nodes
             .iter()
@@ -394,7 +360,7 @@ impl<'a> Problem<'a> {
                 }
             };
         }
-        let groups = Groups::new(cluster);
+        let groups = Groups::new(data.groups());
         Ok(Self {
             n,
             p,
@@ -577,7 +543,7 @@ impl<'a> Problem<'a> {
         params: &[f64],
         modes: &mut [f64],
         gradient: bool,
-    ) -> Result<Evaluation, MixedError> {
+    ) -> Result<Evaluation, Error> {
         let (n, p) = (self.n, self.p);
         let theta = params[0];
         let beta = Mat::from_fn(p, 1, |j, _| params[1 + j]);
@@ -639,7 +605,7 @@ impl<'a> Problem<'a> {
             .collect();
         let (mut log_l, mut d_theta) = (0.0, 0.0);
         for part in parts {
-            let (l, d) = part.map_err(MixedError::Mode)?;
+            let (l, d) = part.map_err(|cluster| Error::Mode { cluster })?;
             log_l += l;
             d_theta += d;
         }
@@ -698,7 +664,7 @@ impl<'a> Problem<'a> {
         params: &mut [f64],
         modes: &mut Vec<f64>,
         free: &[usize],
-    ) -> Result<(bool, usize, Option<Vec<f64>>), MixedError> {
+    ) -> Result<(bool, usize, Option<Vec<f64>>), Error> {
         let norm = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
         let pick = |g: &[f64]| free.iter().map(|&j| g[j]).collect::<Vec<f64>>();
         let mut gradient = pick(&self.evaluate(params, modes, true)?.gradient);
@@ -708,9 +674,11 @@ impl<'a> Problem<'a> {
             let Some(hessian) = self.hessian(params, modes, free) else {
                 return Ok((false, steps, None));
             };
-            let Some(step) = small::solve_symmetric(&hessian, k, &gradient) else {
+            let Some(factor) = cholesky_lower(&hessian, k, Pivot::Strict) else {
                 return Ok((false, steps, Some(hessian)));
             };
+            let mut step = gradient.clone();
+            cholesky_solve(&factor, k, &mut step)?;
             if norm(&step) <= tolerance * norm(&pick(params)).max(1.0) {
                 return Ok((true, steps, Some(hessian)));
             }
@@ -743,7 +711,7 @@ impl<'a> Problem<'a> {
         modes: &mut [f64],
         nodes: usize,
         hessian: Option<Vec<f64>>,
-    ) -> Result<GlmmFit, MixedError> {
+    ) -> Result<GlmmFit, Error> {
         let e = self.evaluate(params, modes, true)?;
         let p = self.p;
         let theta = params[0];
@@ -755,21 +723,23 @@ impl<'a> Problem<'a> {
         };
         let hessian = hessian.or_else(|| self.hessian(params, modes, &free));
         let k = free.len();
-        let covariance = hessian.and_then(|h| {
-            let r = small::cholesky(&h, k)?;
-            Some(
-                small::inverse(&r, k)
+        let factor = hessian.and_then(|h| cholesky_lower(&h, k, Pivot::Strict));
+        let inverse = match factor {
+            Some(r) => Some(
+                cholesky_inverse(&r, k)?
                     .iter()
                     .map(|v| 2.0 * v)
                     .collect::<Vec<f64>>(),
-            )
-        });
-        let (beta_covariance, theta_se) = match covariance {
-            Some(c) if singular => (Some(c), None),
+            ),
+            None => None,
+        };
+        let (beta_covariance, theta_se) = match inverse {
+            Some(c) if singular => (Some(covariance(p, &c)?), None),
             Some(c) => {
                 let k = p + 1;
-                let beta_cov = (0..p * p).map(|i| c[(1 + i / p) * k + 1 + i % p]).collect();
-                (Some(beta_cov), Some(c[0].max(0.0).sqrt()))
+                let beta_cov: Vec<f64> =
+                    (0..p * p).map(|i| c[(1 + i / p) * k + 1 + i % p]).collect();
+                (Some(covariance(p, &beta_cov)?), Some(c[0].max(0.0).sqrt()))
             }
             None => (None, None),
         };
@@ -806,7 +776,7 @@ impl<'a> Problem<'a> {
         modes: &mut Vec<f64>,
         free: &[usize],
         inverse_hessian: &[f64],
-    ) -> Result<(f64, usize, bool), MixedError> {
+    ) -> Result<(f64, usize, bool), Error> {
         let scale = self.n as f64;
         let bfgs = Bfgs {
             max_iterations: controls.max_iterations,
@@ -850,7 +820,7 @@ impl<'a> Problem<'a> {
                     },
                     Some(h0.clone()),
                 )
-                .map_err(|_| MixedError::NotFiniteStart)?;
+                .map_err(|_| Error::NotFiniteStart)?;
             iterations += minimum.iterations;
             let improved = minimum.value * scale < value;
             for (&j, &v) in free.iter().zip(&minimum.x) {
@@ -871,32 +841,37 @@ impl<'a> Problem<'a> {
 }
 
 impl Glmm {
-    /// Fits the model.
-    ///
-    /// `x` is the `n x p` design of the fixed effects, `y` the response (a
-    /// proportion for the binomial family, with the number of trials as the
-    /// prior weight), `cluster` the cluster label of each row, `weights`
-    /// non-negative prior weights (1 when `None`) and `offset` a known part of
-    /// the linear predictor.
+    /// Fits the model to `data`: the response is a proportion for the
+    /// binomial family, with the number of trials as the prior weight, the
+    /// weights are not negative and the offset is a known part of the linear
+    /// predictor.
     ///
     /// # Errors
     ///
-    /// See [`MixedError`].
-    pub fn fit(
-        &self,
-        x: MatRef<'_, f64>,
-        y: &[f64],
-        cluster: &[u32],
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-    ) -> Result<GlmmFit, MixedError> {
-        let problem = Problem::new(self, x, y, cluster, weights, offset)?;
+    /// [`Error::Unsupported`] for a family and link other than binomial-logit
+    /// and Poisson-log, or data with a random slope; [`Error::Input`] for a
+    /// tolerance that is not positive and finite, an iteration limit of 0 or
+    /// a number of nodes outside `1..=100`; [`Error::Response`] for a
+    /// response outside the family's support; [`Error::TooFewRows`] and
+    /// [`Error::RankDeficient`] for a design whose fixed effects are not
+    /// identified; [`Error::Start`] when the fit without random effects
+    /// fails; [`Error::Mode`] and [`Error::NotFiniteStart`] when the
+    /// likelihood cannot be evaluated.
+    pub fn fit(&self, data: &MixedData<'_>) -> Result<GlmmFit, Error> {
+        let problem = Problem::new(self, data)?;
         let p = problem.p;
-        let start = Glm::new(self.family, self.link).fit_slices(x, y, weights, offset, None)?;
+        let mut start = GlmData::builder(data.x(), data.y());
+        if let Some(weights) = data.weights() {
+            start = start.weights(weights);
+        }
+        if let Some(offset) = data.offset() {
+            start = start.offset(offset);
+        }
+        let start = Glm::new(self.family, self.link).fit(&start.build()?)?;
         let mut params = Vec::with_capacity(p + 1);
         params.push(1.0);
         for c in &start.coefficients {
-            params.push(c.ok_or(MixedError::RankDeficient)?);
+            params.push(c.ok_or(Error::RankDeficient)?);
         }
         let k = p + 1;
         let scale = problem.n as f64 / 2.0;
@@ -904,8 +879,8 @@ impl Glmm {
         h0[0] = 1.0;
         for i in 0..p {
             for j in 0..p {
-                h0[(1 + i) * k + 1 + j] = scale
-                    * start.covariance.as_slice()[i * p + j].ok_or(MixedError::RankDeficient)?;
+                h0[(1 + i) * k + 1 + j] =
+                    scale * start.covariance.as_slice()[i * p + j].ok_or(Error::RankDeficient)?;
             }
         }
         let mut modes = vec![0.0; problem.groups.count()];
@@ -945,22 +920,19 @@ impl Glmm {
     ///
     /// # Errors
     ///
-    /// See [`MixedError`]; [`MixedError::Parameters`] when `beta` does not have
-    /// one entry per column of `x` or a parameter is not finite.
+    /// As [`Glmm::fit`] for the model and the data, and [`Error::Input`] when
+    /// `beta` does not have one entry per column of the design or a parameter
+    /// is not finite.
     pub fn evaluate(
         &self,
-        x: MatRef<'_, f64>,
-        y: &[f64],
-        cluster: &[u32],
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
+        data: &MixedData<'_>,
         theta: f64,
         beta: &[f64],
-    ) -> Result<GlmmFit, MixedError> {
-        let problem = Problem::new(self, x, y, cluster, weights, offset)?;
-        if beta.len() != problem.p || !theta.is_finite() || beta.iter().any(|b| !b.is_finite()) {
-            return Err(MixedError::Parameters(problem.p + 1));
-        }
+    ) -> Result<GlmmFit, Error> {
+        let problem = Problem::new(self, data)?;
+        check::same_length("beta", problem.p, beta.len())?;
+        check::finite("theta", &[theta])?;
+        check::finite("beta", beta)?;
         let mut params = vec![theta.abs()];
         params.extend_from_slice(beta);
         let mut modes = vec![0.0; problem.groups.count()];

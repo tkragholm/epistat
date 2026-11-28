@@ -138,15 +138,25 @@ impl ImputeSpec {
     }
 }
 
-/// The controls of a run.
+/// The controls of a run, with `mice`'s defaults.
+///
+/// The seed is not a control: [`impute`](crate::impute) takes it as an
+/// argument, so that a run cannot use a seed nobody chose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ImputeOptions {
-    /// The number of imputed data sets, one chain each.
+    /// The number of imputed data sets, one chain each, `m` of `mice`, whose
+    /// default is 5.
     pub m: usize,
     /// The number of iterations of each chain, `maxit` of `mice`, whose
     /// default is 5.
     pub max_iterations: usize,
-    /// The seed. A draw depends only on the seed, the chain, the iteration,
-    /// the column and the row.
-    pub seed: u64,
+}
+
+impl Default for ImputeOptions {
+    fn default() -> Self {
+        Self {
+            m: 5,
+            max_iterations: 5,
+        }
+    }
 }

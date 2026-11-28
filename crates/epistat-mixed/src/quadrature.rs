@@ -36,7 +36,9 @@
 //! 2. Liu Q, Pierce DA. A note on Gauss-Hermite quadrature. Biometrika.
 //!    1994;81(3):624-9.
 
-use crate::MixedError;
+use epistat_core::InputError;
+
+use crate::Error;
 
 /// The largest number of nodes [`gauss_hermite`] gives.
 pub const MAX_NODES: usize = 100;
@@ -46,10 +48,16 @@ pub const MAX_NODES: usize = 100;
 ///
 /// # Errors
 ///
-/// [`MixedError::Nodes`] when `k` is 0 or above [`MAX_NODES`].
-pub fn gauss_hermite(k: usize) -> Result<(Vec<f64>, Vec<f64>), MixedError> {
+/// [`Error::Input`] when `k` is 0 or above [`MAX_NODES`].
+pub fn gauss_hermite(k: usize) -> Result<(Vec<f64>, Vec<f64>), Error> {
     if k == 0 || k > MAX_NODES {
-        return Err(MixedError::Nodes(k));
+        return Err(InputError::Domain {
+            what: "nodes",
+            value: k as f64,
+            domain: "1..=100",
+            row: None,
+        }
+        .into());
     }
     let mut jacobi = vec![0.0_f64; k * k];
     for j in 1..k {
