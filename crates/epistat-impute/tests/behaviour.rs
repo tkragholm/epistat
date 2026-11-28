@@ -6,12 +6,15 @@
     reason = "exact comparisons of imputed values with their sources are intended"
 )]
 
+use epistat_core::{Classify, InputError};
 use epistat_impute::{
-    Column, ImputeError, ImputeOptions, ImputeSpec, Incomplete, Method, PassiveFn, Ties, impute,
+    Column, Error, ImputeOptions, ImputeSpec, Incomplete, Method, PassiveFn, Ties, impute,
     nelson_aalen,
 };
 use epistat_inference::pooling::rubin;
-use epistat_testkit::{SplitMix64, assert_within_standard_errors};
+use epistat_testkit::{
+    BadInput, SplitMix64, assert_rejects_bad_input_with_codes, assert_within_standard_errors,
+};
 
 fn normal(rng: &mut SplitMix64) -> f64 {
     let (u, v) = (1.0 - rng.unit(), rng.unit());
@@ -21,8 +24,8 @@ fn normal(rng: &mut SplitMix64) -> f64 {
 const OPTIONS: ImputeOptions = ImputeOptions {
     m: 4,
     max_iterations: 3,
-    seed: 5,
 };
+const SEED: u64 = 5;
 
 fn small(n: usize) -> (Incomplete, ImputeSpec) {
     let mut rng = SplitMix64::new(77);
@@ -38,8 +41,8 @@ fn small(n: usize) -> (Incomplete, ImputeSpec) {
     (data, spec)
 }
 
-fn error_of(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> ImputeError {
-    impute(data, spec, options).expect_err("an error")
+fn error_of(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> Error {
+    impute(data, spec, options, SEED).expect_err("an error")
 }
 
 #[test]
@@ -48,7 +51,7 @@ fn invalid_requests_are_errors() {
     let zero_m = ImputeOptions { m: 0, ..OPTIONS };
     assert!(matches!(
         error_of(&data, &spec, &zero_m),
-        ImputeError::Count { what: "m" }
+        Error::Input(InputError::Domain { what: "m", .. })
     ));
     let zero_it = ImputeOptions {
         max_iterations: 0,
@@ -56,60 +59,60 @@ fn invalid_requests_are_errors() {
     };
     assert!(matches!(
         error_of(&data, &spec, &zero_it),
-        ImputeError::Count { .. }
+        Error::Input(InputError::Domain {
+            what: "max_iterations",
+            ..
+        })
     ));
 
     let mut bad = spec.clone();
     bad.methods[0] = None;
     assert!(matches!(
         error_of(&data, &bad, &OPTIONS),
-        ImputeError::Method { column: 0, .. }
+        Error::NoMethod { column: 0 }
     ));
     let mut bad = spec.clone();
     bad.methods[1] = Some(Method::Norm);
     assert!(matches!(
         error_of(&data, &bad, &OPTIONS),
-        ImputeError::Method { column: 1, .. }
+        Error::MethodOnComplete { column: 1 }
     ));
     let mut bad = spec.clone();
     bad.predictors[0] = vec![0];
     assert!(matches!(
         error_of(&data, &bad, &OPTIONS),
-        ImputeError::Predictor { .. }
+        Error::Predictor { .. }
     ));
     let mut bad = spec.clone();
     bad.predictors[0] = vec![1, 1];
     assert!(matches!(
         error_of(&data, &bad, &OPTIONS),
-        ImputeError::Predictor { .. }
+        Error::Predictor { .. }
     ));
     let mut bad = spec.clone();
     bad.predictors[0] = vec![7];
     assert!(matches!(
         error_of(&data, &bad, &OPTIONS),
-        ImputeError::Predictor { .. }
+        Error::Predictor { .. }
     ));
     let mut bad = spec.clone();
     bad.visit_order = vec![];
-    assert!(matches!(
-        error_of(&data, &bad, &OPTIONS),
-        ImputeError::VisitOrder
-    ));
+    assert!(matches!(error_of(&data, &bad, &OPTIONS), Error::VisitOrder));
     let mut bad = spec.clone();
     bad.methods.pop();
     assert!(matches!(
         error_of(&data, &bad, &OPTIONS),
-        ImputeError::Length {
+        Error::Input(InputError::Length {
             what: "methods",
             ..
-        }
+        })
     ));
     // A continuous column cannot be imputed by logistic regression.
     let mut bad = spec.clone();
     bad.methods[0] = Some(Method::Logreg);
     assert!(matches!(
         error_of(&data, &bad, &OPTIONS),
-        ImputeError::Unsupported { column: 0 }
+        Error::WrongType { column: 0 }
     ));
     let mut bad = spec;
     bad.methods[0] = Some(Method::Pmm {
@@ -118,7 +121,7 @@ fn invalid_requests_are_errors() {
     });
     assert!(matches!(
         error_of(&data, &bad, &OPTIONS),
-        ImputeError::Method { .. }
+        Error::NoDonors { column: 0 }
     ));
 }
 
@@ -130,17 +133,21 @@ fn invalid_data_are_errors() {
             vec![col(vec![1.0, 2.0]), col(vec![1.0])],
             &[vec![false; 2], vec![false]]
         ),
-        Err(ImputeError::Length { .. })
+        Err(Error::Input(InputError::Length { .. }))
     ));
     assert!(matches!(
         Incomplete::new(vec![col(vec![1.0, f64::NAN])], &[vec![false; 2]]),
-        Err(ImputeError::Value { column: 0, row: 1 })
+        Err(Error::Input(InputError::NotFinite {
+            row: 1,
+            column: Some(0),
+            ..
+        }))
     ));
     // A missing cell's value is ignored.
     assert!(Incomplete::new(vec![col(vec![1.0, f64::NAN])], &[vec![false, true]]).is_ok());
     assert!(matches!(
         Incomplete::new(vec![Column::Binary(vec![0, 2])], &[vec![false; 2]]),
-        Err(ImputeError::Value { .. })
+        Err(Error::Value { .. })
     ));
     assert!(matches!(
         Incomplete::new(
@@ -150,7 +157,7 @@ fn invalid_data_are_errors() {
             }],
             &[vec![false; 2]]
         ),
-        Err(ImputeError::Value { .. })
+        Err(Error::Value { .. })
     ));
     assert!(matches!(
         Incomplete::new(
@@ -160,7 +167,7 @@ fn invalid_data_are_errors() {
             }],
             &[vec![false; 2]]
         ),
-        Err(ImputeError::Levels { .. })
+        Err(Error::Levels { .. })
     ));
     // A column with no observed value.
     let data = Incomplete::new(
@@ -171,7 +178,7 @@ fn invalid_data_are_errors() {
     let spec = ImputeSpec::default_for(&data);
     assert!(matches!(
         error_of(&data, &spec, &OPTIONS),
-        ImputeError::NothingObserved { column: 0 }
+        Error::NothingObserved { column: 0 }
     ));
     // Too few observed rows for the model: two observed rows, two parameters.
     let data = Incomplete::new(
@@ -182,7 +189,7 @@ fn invalid_data_are_errors() {
     let spec = ImputeSpec::default_for(&data);
     assert!(matches!(
         error_of(&data, &spec, &OPTIONS),
-        ImputeError::TooFewObserved { .. }
+        Error::TooFewObserved { .. }
     ));
     // A nominal level that never occurs among the observed values.
     let data = Incomplete::new(
@@ -202,7 +209,7 @@ fn invalid_data_are_errors() {
     let spec = ImputeSpec::default_for(&data);
     assert!(matches!(
         error_of(&data, &spec, &OPTIONS),
-        ImputeError::EmptyLevel {
+        Error::EmptyLevel {
             column: 0,
             level: 2
         }
@@ -225,7 +232,7 @@ fn invalid_data_are_errors() {
     let spec = ImputeSpec::default_for(&data);
     assert!(matches!(
         error_of(&data, &spec, &OPTIONS),
-        ImputeError::Method { column: 0, .. }
+        Error::NoMethod { column: 0 }
     ));
 }
 
@@ -235,7 +242,7 @@ fn a_passive_function_of_the_wrong_length_is_an_error() {
     spec.methods[0] = Some(Method::Passive(PassiveFn::new(|_| vec![1.0])));
     assert!(matches!(
         error_of(&data, &spec, &OPTIONS),
-        ImputeError::Passive { column: 0 }
+        Error::Passive { column: 0 }
     ));
 }
 
@@ -248,7 +255,10 @@ fn survival_inputs_are_checked() {
     // Three people, events at 1 and 3, censoring at 2.
     let h = nelson_aalen(&[1.0, 2.0, 3.0], &[1, 0, 1], Ties::Breslow).unwrap();
     assert_eq!(h, vec![1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0 + 1.0]);
-    assert_eq!(nelson_aalen(&[], &[], Ties::Efron).unwrap().len(), 0);
+    assert_eq!(
+        nelson_aalen(&[], &[], Ties::Efron).unwrap_err().code(),
+        "input.empty"
+    );
 }
 
 #[test]
@@ -306,8 +316,8 @@ fn imputed_values_are_valid_for_their_column() {
         &ImputeOptions {
             m: 5,
             max_iterations: 4,
-            seed: 9,
         },
+        9,
     )
     .unwrap();
 
@@ -383,8 +393,8 @@ fn passive_columns_follow_the_columns_they_are_computed_from() {
         &ImputeOptions {
             m: 3,
             max_iterations: 3,
-            seed: 8,
         },
+        8,
     )
     .unwrap();
     for s in 0..3 {
@@ -413,7 +423,7 @@ fn a_collinear_predictor_is_dropped_and_counted() {
     )
     .unwrap();
     let spec = ImputeSpec::default_for(&data);
-    let imputed = impute(&data, &spec, &OPTIONS).unwrap();
+    let imputed = impute(&data, &spec, &OPTIONS, SEED).unwrap();
     assert_eq!(
         imputed.n_aliased_dropped,
         OPTIONS.m * OPTIONS.max_iterations
@@ -441,8 +451,8 @@ fn perfect_prediction_is_handled_by_augmentation() {
         &ImputeOptions {
             m: 20,
             max_iterations: 3,
-            seed: 1,
         },
+        1,
     )
     .unwrap();
     assert_eq!(imputed.n_augmented, 20 * 3);
@@ -497,8 +507,8 @@ fn chains_started_at_the_observed_distribution_stay_there() {
         &ImputeOptions {
             m,
             max_iterations: maxit,
-            seed: 21,
         },
+        21,
     )
     .unwrap();
     for j in 0..2 {
@@ -526,7 +536,7 @@ fn chains_started_at_the_observed_distribution_stay_there() {
 #[test]
 fn pooling_the_completed_sets_is_rubins_rule() {
     let (data, spec) = small(150);
-    let imputed = impute(&data, &spec, &OPTIONS).unwrap();
+    let imputed = impute(&data, &spec, &OPTIONS, SEED).unwrap();
     let analysis = |c: &[Vec<f64>]| -> Result<(f64, f64), std::convert::Infallible> {
         let n = c[0].len() as f64;
         let mean = c[0].iter().sum::<f64>() / n;
@@ -544,7 +554,7 @@ fn pooling_the_completed_sets_is_rubins_rule() {
     let failing = |_: &[Vec<f64>]| -> Result<(f64, f64), std::fmt::Error> { Err(std::fmt::Error) };
     assert!(matches!(
         imputed.pool(&data, None, failing),
-        Err(ImputeError::Analysis { set: 0, .. })
+        Err(Error::Analysis { set: 0, .. })
     ));
     let vector = imputed
         .pool_vector(&data, 1, |c| {
@@ -553,4 +563,63 @@ fn pooling_the_completed_sets_is_rubins_rule() {
         })
         .unwrap();
     assert!((vector.estimate[0] - pooled.estimate).abs() < 1e-15);
+}
+
+/// The data and the survival predictor refuse an empty, non-finite or short
+/// column with the shared input codes. Neither needs sorted rows, so an
+/// unsorted column is not a fault. An empty column beside a column with rows
+/// is a length error.
+#[test]
+fn the_entry_points_refuse_bad_columns_with_the_shared_codes() {
+    let (data, spec) = small(40);
+    let columns: Vec<Vec<f64>> = (0..2)
+        .map(|j| match &data.columns()[j] {
+            Column::Continuous(v) => v.clone(),
+            _ => unreachable!("the columns are continuous"),
+        })
+        .collect();
+    let masks: Vec<Vec<bool>> = (0..2)
+        .map(|j| (0..data.rows()).map(|r| data.missing(j).get(r)).collect())
+        .collect();
+    let with_empty_as_length = |bad: BadInput| match bad {
+        BadInput::Empty => "input.length",
+        other => other.code(),
+    };
+    // Column 1 is complete, so a NaN in it is an observed value.
+    assert_rejects_bad_input_with_codes(
+        "Incomplete::new and impute",
+        with_empty_as_length,
+        |bad| {
+            if bad == BadInput::Unsorted {
+                return None;
+            }
+            let spoiled = bad.column(&columns[1]);
+            let mask = vec![false; spoiled.len()];
+            Some(
+                Incomplete::new(
+                    vec![
+                        Column::Continuous(columns[0].clone()),
+                        Column::Continuous(spoiled),
+                    ],
+                    &[masks[0].clone(), mask],
+                )
+                .and_then(|data| impute(&data, &spec, &OPTIONS, SEED)),
+            )
+        },
+    );
+    let time: Vec<f64> = (0..20).map(|i| f64::from(i) / 4.0 + 0.5).collect();
+    let status: Vec<i32> = (0..20).map(|i| i % 3 / 2).collect();
+    assert_rejects_bad_input_with_codes("nelson_aalen", BadInput::code, |bad| {
+        (bad != BadInput::Unsorted).then(|| nelson_aalen(&bad.column(&time), &status, Ties::Efron))
+    });
+    assert_eq!(
+        Incomplete::new(vec![], &[]).unwrap_err().code(),
+        "input.empty"
+    );
+}
+
+#[test]
+fn the_options_default_to_those_of_mice() {
+    let options = ImputeOptions::default();
+    assert_eq!((options.m, options.max_iterations), (5, 5));
 }

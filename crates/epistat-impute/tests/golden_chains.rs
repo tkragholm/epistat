@@ -106,8 +106,8 @@ fn golden_fingerprint() {
         &ImputeOptions {
             m: 5,
             max_iterations: 4,
-            seed: 20_261_124,
         },
+        20_261_124,
     )
     .unwrap();
     let values = flatten(&imputed);

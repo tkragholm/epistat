@@ -5,7 +5,7 @@ use epistat_rng::{Stream, replicate_seed, splitmix64};
 use rayon::prelude::*;
 
 use crate::data::{Column, Incomplete};
-use crate::error::{ImputeError, Result};
+use crate::error::{Error, Result, at_least_one, length};
 use crate::parts::{
     SortedDonors, augmentation_of, class_from_uniform, class_probabilities, design_matrix,
     draw_coefficients, draw_linear, linear_fit, logistic_fit, multinomial_fit,
@@ -18,6 +18,7 @@ use crate::spec::{ImputeOptions, ImputeSpec, MatchType, Method};
 /// Only the imputed cells are stored, as `mids$imp` of `mice` does, not `m`
 /// copies of the data. [`completed`](Imputed::completed) builds a completed
 /// data set.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Imputed {
     /// The number of data sets.
@@ -48,6 +49,7 @@ struct Context<'a> {
     data: &'a Incomplete,
     spec: &'a ImputeSpec,
     options: &'a ImputeOptions,
+    seed: u64,
     observed: Vec<Vec<usize>>,
     missing: Vec<Vec<usize>>,
     /// The values of each complete column as numbers, shared by the chains,
@@ -96,26 +98,33 @@ struct ChainOutput {
     augmented: usize,
 }
 
-/// Imputes the missing cells of `data` by chained equations.
+/// Imputes the missing cells of `data` by chained equations, with the draws
+/// from the streams of `seed`.
 ///
 /// Each chain starts from a random draw of an observed value for every missing
 /// cell. An iteration then visits the incomplete columns in `spec.visit_order`:
 /// the column is regressed on its predictors as currently completed, using the
 /// rows where it is observed, and its missing cells are replaced by draws from
 /// the fitted model. After `max_iterations` iterations the missing cells are
-/// the imputation. The `m` chains are independent. See the crate
+/// the imputation. The `m` chains are independent. A draw depends only on
+/// `seed`, the chain, the iteration, the column and the row. See the crate
 /// documentation for the methods, the streams and the survival predictors.
 ///
 /// # Errors
 ///
-/// [`ImputeError`]: no data set or iteration, a method list or predictor list
+/// [`Error`]: no data set or iteration, a method list or predictor list
 /// that does not fit the data, an incomplete column without a method or a
 /// complete one with a method, a column with no observed value, a method that
 /// does not apply to the column's type, a column with too few observed rows
 /// for its model, a categorical level that never occurs among the observed
 /// values, a regression that did not converge, and a covariance that is not
 /// positive definite.
-pub fn impute(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> Result<Imputed> {
+pub fn impute(
+    data: &Incomplete,
+    spec: &ImputeSpec,
+    options: &ImputeOptions,
+    seed: u64,
+) -> Result<Imputed> {
     validate(data, spec, options)?;
     let n_columns = data.n_columns();
     let observed: Vec<Vec<usize>> = (0..n_columns)
@@ -143,6 +152,7 @@ pub fn impute(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> 
         data,
         spec,
         options,
+        seed,
         observed,
         missing,
         shared,
@@ -180,53 +190,27 @@ pub fn impute(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> 
 }
 
 fn validate(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> Result<()> {
-    if options.m == 0 {
-        return Err(ImputeError::Count { what: "m" });
-    }
-    if options.max_iterations == 0 {
-        return Err(ImputeError::Count {
-            what: "max_iterations",
-        });
-    }
+    at_least_one("m", options.m)?;
+    at_least_one("max_iterations", options.max_iterations)?;
     let n = data.n_columns();
-    for (what, found) in [
-        ("methods", spec.methods.len()),
-        ("predictors", spec.predictors.len()),
-    ] {
-        if found != n {
-            return Err(ImputeError::Length {
-                what,
-                expected: n,
-                found,
-            });
-        }
-    }
+    length("methods", n, spec.methods.len())?;
+    length("predictors", n, spec.predictors.len())?;
     let incomplete: Vec<usize> = (0..n).filter(|&j| data.missing(j).count() > 0).collect();
     let mut visited = spec.visit_order.clone();
     visited.sort_unstable();
     if visited != incomplete {
-        return Err(ImputeError::VisitOrder);
+        return Err(Error::VisitOrder);
     }
     for (j, method) in spec.methods.iter().enumerate() {
         let missing = data.missing(j).count();
         let column = &data.columns()[j];
         match (method, missing) {
             (None, 0) => {}
-            (Some(_), 0) => {
-                return Err(ImputeError::Method {
-                    column: j,
-                    reason: "a column without missing cells has a method",
-                });
-            }
-            (None, _) => {
-                return Err(ImputeError::Method {
-                    column: j,
-                    reason: "an incomplete column has no method",
-                });
-            }
+            (Some(_), 0) => return Err(Error::MethodOnComplete { column: j }),
+            (None, _) => return Err(Error::NoMethod { column: j }),
             (Some(method), _) => {
                 if missing == data.rows() {
-                    return Err(ImputeError::NothingObserved { column: j });
+                    return Err(Error::NothingObserved { column: j });
                 }
                 let fits = matches!(
                     (method, column),
@@ -238,13 +222,10 @@ fn validate(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> Re
                         | (Method::Sample, _)
                 );
                 if !fits {
-                    return Err(ImputeError::Unsupported { column: j });
+                    return Err(Error::WrongType { column: j });
                 }
                 if matches!(method, Method::Pmm { donors: 0, .. }) {
-                    return Err(ImputeError::Method {
-                        column: j,
-                        reason: "predictive mean matching needs at least one donor",
-                    });
+                    return Err(Error::NoDonors { column: j });
                 }
             }
         }
@@ -253,7 +234,7 @@ fn validate(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> Re
         let mut seen = vec![false; n];
         for &k in predictors {
             if k >= n || k == j || seen[k] {
-                return Err(ImputeError::Predictor {
+                return Err(Error::Predictor {
                     column: j,
                     predictor: k,
                 });
@@ -276,7 +257,7 @@ fn validate(data: &Incomplete, spec: &ImputeSpec, options: &ImputeOptions) -> Re
                 seen[codes[r] as usize] = true;
             }
             if let Some(level) = seen.iter().position(|&s| !s) {
-                return Err(ImputeError::EmptyLevel { column: j, level });
+                return Err(Error::EmptyLevel { column: j, level });
             }
         }
     }
@@ -311,7 +292,7 @@ fn row_stream(column_seed: u64, row: usize) -> Stream {
 }
 
 fn run_chain(ctx: &Context<'_>, chain: usize) -> Result<ChainOutput> {
-    let (data, spec, options) = (ctx.data, ctx.spec, ctx.options);
+    let (data, spec, options, seed) = (ctx.data, ctx.spec, ctx.options, ctx.seed);
     let n_columns = data.n_columns();
     let maxit = options.max_iterations;
     let own = |j: usize| -> Vec<f64> {
@@ -339,7 +320,7 @@ fn run_chain(ctx: &Context<'_>, chain: usize) -> Result<ChainOutput> {
             continue;
         }
         let column = completed.column_mut(j);
-        let seed = column_seed(options.seed, chain, 0, j);
+        let seed = column_seed(seed, chain, 0, j);
         let draws: Vec<f64> = mis
             .par_iter()
             .with_min_len(4096)
@@ -358,8 +339,8 @@ fn run_chain(ctx: &Context<'_>, chain: usize) -> Result<ChainOutput> {
     };
     for iteration in 1..=maxit {
         for &j in &spec.visit_order {
-            let seed = column_seed(options.seed, chain, iteration, j);
-            let cells = impute_column(ctx, &completed, j, seed, &mut out)?;
+            let column_seed = column_seed(seed, chain, iteration, j);
+            let cells = impute_column(ctx, &completed, j, column_seed, &mut out)?;
             let column = completed.column_mut(j);
             for (&r, &v) in ctx.missing[j].iter().zip(&cells) {
                 column[r] = v;
@@ -452,7 +433,7 @@ fn impute_column(
                     .expect("a passive method keeps every column"),
             );
             if column.len() != data.rows() || mis.iter().any(|&r| !column[r].is_finite()) {
-                return Err(ImputeError::Passive { column: j });
+                return Err(Error::Passive { column: j });
             }
             Ok(mis.iter().map(|&r| column[r]).collect())
         }
@@ -476,7 +457,7 @@ fn impute_column(
                 let donors_sorted = SortedDonors::new(&predict(&cols, obs, obs_beta), j)?;
                 let targets = predict(&cols, mis, mis_beta);
                 if targets.iter().any(|t| !t.is_finite()) {
-                    return Err(ImputeError::NotFinite { column: j });
+                    return Err(Error::NotFinite { column: j });
                 }
                 Ok(mis
                     .par_iter()
@@ -493,7 +474,7 @@ fn impute_column(
                     .map(|(&r, &m)| m + row_stream(seed, r).normal() * draw.sigma)
                     .collect();
                 if cells.iter().any(|v| !v.is_finite()) {
-                    return Err(ImputeError::NotFinite { column: j });
+                    return Err(Error::NotFinite { column: j });
                 }
                 Ok(cells)
             }

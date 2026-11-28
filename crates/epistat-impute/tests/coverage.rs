@@ -103,8 +103,8 @@ fn linear_study(study: usize, method: &Method) -> (f64, bool) {
         &ImputeOptions {
             m: 10,
             max_iterations: 5,
-            seed: 7_000_001 + study as u64,
         },
+        7_000_001 + study as u64,
     )
     .unwrap();
     let pooled = imputed
@@ -228,8 +228,8 @@ fn cox_study(study: usize, with_outcome: bool) -> (f64, bool) {
         &ImputeOptions {
             m: 10,
             max_iterations: 5,
-            seed: 9_000_001 + study as u64,
         },
+        9_000_001 + study as u64,
     )
     .unwrap();
     let events = status.iter().filter(|&&s| s == 1).count();
