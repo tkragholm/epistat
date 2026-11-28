@@ -6,8 +6,8 @@
 //! [`log_cdf`] the log of the distribution function, R's `pnorm(x, lower.tail =
 //! FALSE)` and `pnorm(x, log.p = TRUE)`. [`truncated_quantile`],
 //! [`folded_quantile`] and [`two_sided_z`] build on [`cdf`] and [`quantile`].
-//! The approximations that Studies I and II reproduce, Abramowitz and Stegun's
-//! 7.1.26 and Acklam's quantile, are in [`crate::compat`].
+//! Two older approximations, Abramowitz and Stegun's 7.1.26 and Acklam's
+//! quantile, are in [`crate::compat`].
 //!
 //! # Algorithm
 //!
@@ -180,6 +180,13 @@ pub fn pdf(x: f64) -> f64 {
     FRAC_1_SQRT_2PI * (-0.5 * x * x).exp()
 }
 
+/// `ln f(x)` of the standard normal density, `-x^2 / 2 - ln(2 pi) / 2`, R's
+/// `dnorm(x, log = TRUE)`. Finite where [`pdf`] underflows; NaN for NaN.
+#[must_use]
+pub fn ln_pdf(x: f64) -> f64 {
+    -0.5 * x * x - super::stirling::LN_SQRT_2PI
+}
+
 /// `P(Z <= x)` for a standard normal `Z`.
 #[must_use]
 pub fn cdf(x: f64) -> f64 {
@@ -294,6 +301,19 @@ fn gaussian_tail(x: f64, factor: f64) -> f64 {
 #[must_use]
 pub fn sf(x: f64) -> f64 {
     cdf(-x)
+}
+
+/// `ln P(Z > x)`, R's `pnorm(x, lower.tail = FALSE, log.p = TRUE)`: [`log_cdf`]
+/// at `-x`, finite far above the point where [`sf`] underflows.
+#[must_use]
+pub fn ln_sf(x: f64) -> f64 {
+    log_cdf(-x)
+}
+
+/// `2 P(Z > |z|)`, the two-sided p-value of a normal statistic. NaN for NaN.
+#[must_use]
+pub fn two_sided_p(z: f64) -> f64 {
+    2.0 * cdf(-z.abs())
 }
 
 /// `ln P(Z <= x)` for a standard normal `Z`, R's `pnorm(x, log.p = TRUE)`.
@@ -418,6 +438,17 @@ fn horner(x: f64, coefficients: &[f64]) -> f64 {
     coefficients[1..]
         .iter()
         .fold(coefficients[0], |sum, &c| sum * x + c)
+}
+
+/// The upper-tail quantile, the `z` with `sf(z) = p`, R's
+/// `qnorm(p, lower.tail = FALSE)`: `-quantile(p)`, by the symmetry of the
+/// distribution. It keeps the precision of a small `p`, which
+/// `quantile(1.0 - p)` loses when it rounds `1 - p`: `isf(1e-17)` is 8.49
+/// where `quantile(1.0 - 1e-17)` is infinite. `inf` at 0, `-inf` at 1 and NaN
+/// outside `[0, 1]`.
+#[must_use]
+pub fn isf(p: f64) -> f64 {
+    -quantile(p)
 }
 
 /// The `p` quantile of a standard normal truncated to `[lower, upper]`.

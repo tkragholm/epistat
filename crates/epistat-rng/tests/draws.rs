@@ -80,6 +80,66 @@ fn mean_of_matrices(draw: impl Fn(&mut Stream) -> Vec<f64>, entry: usize) -> Vec
 }
 
 #[test]
+fn a_scale_given_itself_draws_as_its_cholesky_factor() {
+    // S = L L' with L = [[2, 0], [1, 3]].
+    let factor = [2.0, 0.0, 1.0, 3.0];
+    let scale = [4.0, 2.0, 2.0, 10.0];
+    let by_factor = Stream::seeded(11).wishart(6.0, &factor, 2).unwrap();
+    let by_scale = Stream::seeded(11).wishart_from_scale(6.0, &scale).unwrap();
+    assert_eq!(
+        by_factor.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+        by_scale.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+    );
+    let inverse = Stream::seeded(11).inverse_wishart(6.0, &factor, 2).unwrap();
+    let inverse_by_scale = Stream::seeded(11)
+        .inverse_wishart_from_scale(6.0, &scale)
+        .unwrap();
+    assert_eq!(
+        inverse.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+        inverse_by_scale
+            .iter()
+            .map(|v| v.to_bits())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_scale_that_is_not_a_covariance_is_refused() {
+    let mut stream = Stream::seeded(3);
+    assert!(stream.wishart_from_scale(4.0, &[]).is_err());
+    assert!(stream.wishart_from_scale(4.0, &[1.0, 0.0, 1.0]).is_err());
+    // Not symmetric, as a Cholesky factor passed for the scale is not.
+    assert!(
+        stream
+            .wishart_from_scale(4.0, &[2.0, 0.0, 1.0, 3.0])
+            .is_err()
+    );
+    // Symmetric but indefinite.
+    assert!(
+        stream
+            .wishart_from_scale(4.0, &[1.0, 2.0, 2.0, 1.0])
+            .is_err()
+    );
+    assert!(
+        stream
+            .wishart_from_scale(4.0, &[1.0, f64::NAN, f64::NAN, 1.0])
+            .is_err()
+    );
+    // Asymmetric only by rounding is taken.
+    assert!(
+        stream
+            .wishart_from_scale(4.0, &[1.0, 0.3, 0.3 + 1e-17, 1.0])
+            .is_ok()
+    );
+    // And df must exceed the dimension minus 1, as for the factor form.
+    assert!(
+        stream
+            .wishart_from_scale(0.5, &[1.0, 0.0, 0.0, 1.0])
+            .is_err()
+    );
+}
+
+#[test]
 fn wishart_and_inverse_wishart_have_their_means() {
     let scale = scale_matrix();
     let df = 7.0;

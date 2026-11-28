@@ -20,13 +20,37 @@ pub enum Error {
         /// The cluster.
         cluster: usize,
     },
+    /// The rounding of a fixed-point sum to `places` decimals could take more
+    /// than `1e-12` of the magnitude of its terms, which are too small for
+    /// the decimals kept.
+    #[error(
+        "the terms are too small for a sum to {places} decimals: its rounding of up to {bound:e} \
+         is more than 1e-12 of their magnitude {magnitude:e}"
+    )]
+    FixedPointRounding {
+        /// The decimals each term is rounded to.
+        places: u32,
+        /// The largest error the rounding can make in the sum.
+        bound: f64,
+        /// The sum of the magnitudes of the terms, rounded as they are.
+        magnitude: f64,
+    },
+    /// A term or the total of a fixed-point sum to `places` decimals has a
+    /// magnitude of `10^(38 - places)` or more.
+    #[error("a term or the total is too large for a sum to {places} decimals")]
+    FixedPointOverflow {
+        /// The decimals each term is rounded to.
+        places: u32,
+    },
 }
 
 impl Classify for Error {
     fn kind(&self) -> ErrorKind {
         match self {
             Self::Input(e) => e.kind(),
-            Self::EmptyCluster { .. } => ErrorKind::Numerical,
+            Self::EmptyCluster { .. }
+            | Self::FixedPointRounding { .. }
+            | Self::FixedPointOverflow { .. } => ErrorKind::Numerical,
         }
     }
 
@@ -34,6 +58,8 @@ impl Classify for Error {
         match self {
             Self::Input(e) => e.code(),
             Self::EmptyCluster { .. } => "stats.empty_cluster",
+            Self::FixedPointRounding { .. } => "stats.fixed_point_rounding",
+            Self::FixedPointOverflow { .. } => "stats.fixed_point_overflow",
         }
     }
 }
@@ -51,6 +77,15 @@ mod tests {
         let empty = Error::EmptyCluster { cluster: 2 };
         assert_eq!(empty.kind(), ErrorKind::Numerical);
         assert_eq!(empty.code(), "stats.empty_cluster");
-        epistat_testkit::assert_codes_unique("stats", &[empty]);
+        let rounding = Error::FixedPointRounding {
+            places: 15,
+            bound: 1.5e-15,
+            magnitude: 6e-16,
+        };
+        assert_eq!(rounding.kind(), ErrorKind::Numerical);
+        assert_eq!(rounding.code(), "stats.fixed_point_rounding");
+        let overflow = Error::FixedPointOverflow { places: 15 };
+        assert_eq!(overflow.code(), "stats.fixed_point_overflow");
+        epistat_testkit::assert_codes_unique("stats", &[empty, rounding, overflow]);
     }
 }

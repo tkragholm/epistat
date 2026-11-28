@@ -4,6 +4,7 @@ use std::fmt;
 
 use epistat_core::{Classify, ErrorKind, InputError};
 
+use crate::Termination;
 use crate::branch_and_bound::Status;
 
 /// Why a solver refused its input or stopped without a solution.
@@ -57,6 +58,14 @@ pub enum Error {
     /// An objective value of Nelder-Mead at a trial point cannot be ordered,
     /// such as NaN.
     Unordered,
+    /// An iterative search stopped without meeting its convergence test,
+    /// returned by `require_converged()` on its result.
+    NotConverged {
+        /// The rule that ended the search.
+        termination: Termination,
+        /// The iterations used.
+        iterations: usize,
+    },
 }
 
 impl fmt::Display for Error {
@@ -82,6 +91,13 @@ impl fmt::Display for Error {
             Self::NotDescent => f.write_str("the search direction is not a descent direction"),
             Self::NonFinite { x } => write!(f, "the function is not usable at {x}"),
             Self::Unordered => f.write_str("the objective returned a value that cannot be ordered"),
+            Self::NotConverged {
+                termination,
+                iterations,
+            } => write!(
+                f,
+                "the search did not converge in {iterations} iterations: {termination}"
+            ),
         }
     }
 }
@@ -126,6 +142,7 @@ impl Classify for Error {
             Self::NotDescent => "optim.not_descent",
             Self::NonFinite { .. } => "optim.non_finite",
             Self::Unordered => "optim.unordered",
+            Self::NotConverged { .. } => "optim.not_converged",
         }
     }
 }
@@ -163,6 +180,10 @@ mod tests {
             Error::NotDescent,
             Error::NonFinite { x: 0.5 },
             Error::Unordered,
+            Error::NotConverged {
+                termination: Termination::MaxIterations,
+                iterations: 100,
+            },
         ];
         epistat_testkit::assert_codes_unique("optim", &all);
         assert_eq!(Error::NoSignChange.kind(), ErrorKind::Input);
@@ -171,6 +192,15 @@ mod tests {
         assert_eq!(
             (input.kind(), input.code()),
             (ErrorKind::Input, "input.domain")
+        );
+        let unconverged = Error::NotConverged {
+            termination: Termination::StepRejected,
+            iterations: 3,
+        };
+        assert_eq!(unconverged.kind(), ErrorKind::Numerical);
+        assert_eq!(
+            unconverged.to_string(),
+            "the search did not converge in 3 iterations: a step was not finite or raised the cost"
         );
     }
 }

@@ -14,7 +14,9 @@
 //! - [`llt`]: the Cholesky factorisation `A = L L'` of the lower triangle,
 //!   faer's `llt`, or `None` when a pivot is not positive.
 //! - [`least_squares`]: the least-squares solution of `A x = b` by the QR
-//!   factorisation with column pivoting, faer's `col_piv_qr`.
+//!   factorisation with column pivoting, faer's `col_piv_qr`, and
+//!   [`least_squares_rank`], the same solution with the numerical rank of
+//!   `A`.
 //!
 //! These return faer's result without the checks of [`solve`](crate::solve()):
 //! a solution that is not finite is not refused. They are for code that
@@ -78,6 +80,51 @@ pub fn least_squares(a: MatRef<'_, f64>, b: MatRef<'_, f64>) -> Result<Mat<f64>,
     Ok(on_one_thread(|| a.col_piv_qr().solve_lstsq(b)))
 }
 
+/// A least-squares solution with the numerical rank of the matrix.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct LeastSquares {
+    /// The solution, the same as [`least_squares`] gives.
+    pub x: Mat<f64>,
+    /// The number of diagonal entries `r_ii` of the pivoted `R` with
+    /// `|r_ii| > max(m, n) eps |r_11|`, for an `m` by `n` matrix. Below `n`
+    /// the columns are linearly dependent to working precision, and `x` is
+    /// one of many minimisers whose entries mean nothing on their own.
+    pub rank: usize,
+}
+
+/// [`least_squares`] with the numerical rank of `a`, read from the diagonal
+/// of `R` in the QR factorisation with column pivoting, whose entries do not
+/// grow in magnitude down the diagonal. The threshold, `max(m, n)` times the
+/// machine epsilon times the largest, is the one numpy's `matrix_rank` uses
+/// on singular values. A matrix of zeros has rank 0.
+///
+/// # Errors
+///
+/// As [`least_squares`].
+pub fn least_squares_rank(a: MatRef<'_, f64>, b: MatRef<'_, f64>) -> Result<LeastSquares, Error> {
+    check_length("rows of b", b.nrows(), a.nrows())?;
+    if a.nrows() < a.ncols() {
+        return Err(Error::Input(InputError::TooLarge {
+            what: "columns of a",
+            limit: a.nrows() as u64,
+            found: a.ncols() as u64,
+        }));
+    }
+    let (x, rank) = on_one_thread(|| {
+        let qr = a.col_piv_qr();
+        let r = qr.R();
+        let diagonal = r.nrows().min(r.ncols());
+        let largest = if diagonal == 0 { 0.0 } else { r[(0, 0)].abs() };
+        let threshold = a.nrows().max(a.ncols()) as f64 * f64::EPSILON * largest;
+        let rank = (0..diagonal)
+            .filter(|&i| largest > 0.0 && r[(i, i)].abs() > threshold)
+            .count();
+        (qr.solve_lstsq(b), rank)
+    });
+    Ok(LeastSquares { x, rank })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +170,26 @@ mod tests {
         assert_eq!(
             bits(&least_squares(tall.as_ref(), rhs.as_ref()).unwrap()),
             bits(&qr)
+        );
+        let ranked = least_squares_rank(tall.as_ref(), rhs.as_ref()).unwrap();
+        assert_eq!(bits(&ranked.x), bits(&qr));
+        assert_eq!(ranked.rank, 3);
+    }
+
+    #[test]
+    fn the_rank_shows_dependent_columns() {
+        let a = mat![[1.0, 2.0], [2.0, 4.0], [3.0, 6.0]];
+        let b = mat![[1.0], [2.0], [3.0]];
+        assert_eq!(least_squares_rank(a.as_ref(), b.as_ref()).unwrap().rank, 1);
+        let zeros = Mat::<f64>::zeros(3, 2);
+        assert_eq!(
+            least_squares_rank(zeros.as_ref(), b.as_ref()).unwrap().rank,
+            0
+        );
+        let full = mat![[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
+        assert_eq!(
+            least_squares_rank(full.as_ref(), b.as_ref()).unwrap().rank,
+            2
         );
     }
 

@@ -56,7 +56,10 @@
 
 use epistat_core::{InputError, Interval, Level};
 
-use super::discrete::{dpois, ppois_lower, ppois_upper};
+use super::discrete::{
+    LOWER_FUZZ, UPPER_FUZZ, cornish_fisher, dpois, ln_dpois, ppois_lower, ppois_upper,
+    smallest_count,
+};
 use super::{gamma, normal};
 use crate::Error;
 
@@ -116,6 +119,71 @@ pub fn sf(x: f64, lambda: f64) -> f64 {
         return f64::from(k < 0.0);
     }
     ppois_upper(k, lambda)
+}
+
+/// `ln P(X = x)`, R's `dpois(x, lambda, log = TRUE)`, from the terms of
+/// [`pmf`] without the exponential, so it is finite where [`pmf`]
+/// underflows. `-inf` where [`pmf`] is 0; NaN as for [`pmf`].
+#[must_use]
+pub fn ln_pmf(x: f64, lambda: f64) -> f64 {
+    if x.is_nan() || !(lambda >= 0.0 && lambda.is_finite()) {
+        return f64::NAN;
+    }
+    match super::discrete::support_point(x) {
+        Some(k) => ln_dpois(k, lambda),
+        None => f64::NEG_INFINITY,
+    }
+}
+
+/// Whether `p` and `lambda` are a probability and a Poisson mean.
+fn valid(p: f64, lambda: f64) -> bool {
+    (0.0..=1.0).contains(&p) && lambda >= 0.0 && lambda.is_finite()
+}
+
+/// The `p` quantile, R's `qpois(p, lambda)`: the smallest count `k` with
+/// `P(X <= k) >= p`, compared after lowering `p` by a relative 12 eps, so
+/// that a `p` computed as `P(X <= k)` up to rounding gives `k`, as in R. The
+/// search starts at the Cornish-Fisher approximation and moves by doubling
+/// steps and then bisection, so it takes a few dozen evaluations of the
+/// tail at most. 0 at `p = 0` and infinity at `p = 1`; NaN for `p` outside
+/// `[0, 1]` or `lambda` as for [`pmf`].
+#[must_use]
+pub fn quantile(p: f64, lambda: f64) -> f64 {
+    if !valid(p, lambda) {
+        return f64::NAN;
+    }
+    if lambda == 0.0 || p == 0.0 {
+        return 0.0;
+    }
+    if p >= 1.0 {
+        return f64::INFINITY;
+    }
+    let target = p * (1.0 - LOWER_FUZZ);
+    let sd = lambda.sqrt();
+    let start = cornish_fisher(lambda, sd, 1.0 / sd, normal::quantile(p));
+    smallest_count(start, f64::INFINITY, |k| ppois_lower(k, lambda) >= target)
+}
+
+/// The upper-tail quantile, R's `qpois(p, lambda, lower.tail = FALSE)`: the
+/// smallest count `k` with `P(X > k) <= p`, compared after raising `p` by a
+/// relative 6 eps, from the upper tail computed directly, so a small `p`
+/// keeps its precision. Infinity at `p = 0` and 0 at `p = 1`; NaN as for
+/// [`quantile`].
+#[must_use]
+pub fn isf(p: f64, lambda: f64) -> f64 {
+    if !valid(p, lambda) {
+        return f64::NAN;
+    }
+    if lambda == 0.0 || p >= 1.0 {
+        return 0.0;
+    }
+    if p == 0.0 {
+        return f64::INFINITY;
+    }
+    let target = p * (1.0 + UPPER_FUZZ);
+    let sd = lambda.sqrt();
+    let start = cornish_fisher(lambda, sd, 1.0 / sd, normal::isf(p));
+    smallest_count(start, f64::INFINITY, |k| ppois_upper(k, lambda) <= target)
 }
 
 /// The confidence interval of a Poisson count `count` divided by `time`, as

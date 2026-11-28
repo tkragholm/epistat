@@ -32,6 +32,14 @@
 //! `10^places` reaches `10^38` is refused. The unweighted mean divides by the
 //! number of rows.
 //!
+//! Each term that is not zero loses at most `0.5e-15` to the rounding, so a
+//! sum of `k` such terms is within `k 0.5e-15` of the exact sum of the
+//! terms. [`mean`] refuses a numerator or denominator whose bound exceeds
+//! [`ROUNDING_LIMIT`], `1e-12`, times the sum of the magnitudes of its terms:
+//! for values `1e-9` with weights `1e-7` every term rounds to zero and the
+//! mean would be 0. The magnitude, not the sum itself, is the scale, so a mean
+//! near zero from terms of both signs is kept.
+//!
 //! [`variance`] adds `w_i`, `w_i^2`, `w_i x_i` and the weighted squared
 //! deviations with [`crate::sum::blocked`], the order of the polars float sum
 //! over one chunk. The result depends on the order of the rows, as that sum
@@ -39,17 +47,20 @@
 //!
 //! # Edge cases
 //!
-//! Rows with a weight that is zero or negative are dropped. `None` is returned
-//! when the values and weights differ in length, a value or weight is NaN or
-//! infinite, no row remains, `W` is not positive and, for [`variance`], when
-//! fewer than two rows remain or the divisor is not positive.
+//! Rows with a weight of zero are dropped. `None` is returned when the values
+//! and weights differ in length, a value or weight is NaN or infinite, a
+//! weight is negative, no row remains, `W` is not positive and, for
+//! [`variance`], when fewer than two rows remain or the divisor is not
+//! positive. [`mean`] is also `None` when the rounding of its fixed-point
+//! sums could take more than [`ROUNDING_LIMIT`] of their magnitude (below);
+//! [`try_mean`] says which of these applies.
 //!
 //! # Agreement with other software
 //!
 //! The tests compare [`variance`] with R's `cov.wt()` on normalised weights, which
 //! uses the same divisor, to `1e-14` relative, and [`mean`] and [`variance`] with
-//! the polars computation that `weighted_mean` and `weighted_variance` of the
-//! `dansk_register` Python package run, bit for bit, on fixed data.
+//! the same computation in polars, a `Decimal(38, 15)` sum for the mean and
+//! the float sum of one chunk for the variance, bit for bit, on fixed data.
 //!
 //! # Effective sample size and limits
 //!
@@ -139,17 +150,45 @@ pub fn fixed_point_sum(values: impl IntoIterator<Item = f64>, places: u32) -> Op
     total_to_f64(total, scale)
 }
 
-/// The rows with a positive weight, as values and weights, or `None` for the
-/// refusals above. Without weights every row stays and `weights` is empty.
-fn usable(values: &[f64], weights: Option<&[f64]>) -> Option<(Vec<f64>, Vec<f64>)> {
-    if values.iter().any(|v| !v.is_finite()) {
-        return None;
+/// The rows with a positive weight, as values and weights, or the reason
+/// there are none to use. Without weights every row stays and `weights` is
+/// empty.
+fn usable(values: &[f64], weights: Option<&[f64]>) -> Result<(Vec<f64>, Vec<f64>), Error> {
+    if let Some(row) = values.iter().position(|v| !v.is_finite()) {
+        return Err(InputError::NotFinite {
+            what: "values",
+            row,
+            column: None,
+        }
+        .into());
     }
     let Some(weights) = weights else {
-        return Some((values.to_vec(), Vec::new()));
+        return Ok((values.to_vec(), Vec::new()));
     };
-    if weights.len() != values.len() || weights.iter().any(|w| !w.is_finite()) {
-        return None;
+    if weights.len() != values.len() {
+        return Err(InputError::Length {
+            what: "weights",
+            expected: values.len(),
+            found: weights.len(),
+        }
+        .into());
+    }
+    if let Some(row) = weights.iter().position(|w| !w.is_finite()) {
+        return Err(InputError::NotFinite {
+            what: "weights",
+            row,
+            column: None,
+        }
+        .into());
+    }
+    if let Some(row) = weights.iter().position(|&w| w < 0.0) {
+        return Err(InputError::Domain {
+            what: "weights",
+            value: weights[row],
+            domain: "[0, inf)",
+            row: Some(row),
+        }
+        .into());
     }
     let (x, w): (Vec<f64>, Vec<f64>) = values
         .iter()
@@ -157,35 +196,84 @@ fn usable(values: &[f64], weights: Option<&[f64]>) -> Option<(Vec<f64>, Vec<f64>
         .filter(|&(_, &w)| w > 0.0)
         .map(|(&x, &w)| (x, w))
         .unzip();
-    Some((x, w))
+    Ok((x, w))
+}
+
+/// The share of a fixed-point sum that its rounding may take before
+/// [`try_mean`] refuses it.
+pub const ROUNDING_LIMIT: f64 = 1e-12;
+
+/// `sum` of `terms` by [`fixed_point_sum`] with [`WEIGHTED_DECIMAL_PLACES`],
+/// refused when the rounding of the terms could exceed [`ROUNDING_LIMIT`] of
+/// their magnitude, the same sum of `|term|`. Each term that is not zero is
+/// rounded by at most half a unit in the last decimal kept.
+fn guarded_sum(terms: &[f64]) -> Result<f64, Error> {
+    let places = WEIGHTED_DECIMAL_PLACES;
+    let overflow = || Error::FixedPointOverflow { places };
+    let total = fixed_point_sum(terms.iter().copied(), places).ok_or_else(overflow)?;
+    let magnitude = fixed_point_sum(terms.iter().map(|t| t.abs()), places).ok_or_else(overflow)?;
+    let rounded = terms.iter().filter(|&&t| t != 0.0).count();
+    let bound = rounded as f64 * 0.5 / POWERS_OF_TEN[places as usize];
+    if bound > ROUNDING_LIMIT * magnitude {
+        return Err(Error::FixedPointRounding {
+            places,
+            bound,
+            magnitude,
+        });
+    }
+    Ok(total)
 }
 
 /// The weighted mean `sum(w x) / sum(w)`, or the mean when `weights` is
 /// `None`. Terms are summed by [`fixed_point_sum`] with
 /// [`WEIGHTED_DECIMAL_PLACES`] decimals.
 ///
-/// `None` for the cases in the module documentation.
+/// `None` where [`try_mean`] returns an error.
 #[must_use]
 pub fn mean(values: &[f64], weights: Option<&[f64]>) -> Option<f64> {
+    try_mean(values, weights).ok()
+}
+
+/// [`mean`], with the reason when there is no mean.
+///
+/// The terms `x w` and the weights are each rounded to
+/// [`WEIGHTED_DECIMAL_PLACES`] decimals and added as integers. A sum whose
+/// rounding could reach [`ROUNDING_LIMIT`] of the magnitude of its terms, as
+/// for values or weights near `1e-12` and below, is refused rather than
+/// returned with its digits lost.
+///
+/// # Errors
+///
+/// [`Error::Input`] when a value or weight is NaN or infinite, the weights
+/// differ in length from the values, a weight is negative, or no row has a
+/// positive weight (`Empty`); [`Error::FixedPointRounding`] when the rounding
+/// bound is too large; [`Error::FixedPointOverflow`] when a term or a sum is
+/// too large for the fixed-point sum.
+pub fn try_mean(values: &[f64], weights: Option<&[f64]>) -> Result<f64, Error> {
     let (x, w) = usable(values, weights)?;
     if x.is_empty() {
-        return None;
+        let what = if weights.is_some() && !values.is_empty() {
+            "rows with a positive weight"
+        } else {
+            "values"
+        };
+        return Err(InputError::Empty { what }.into());
     }
     let (numerator, denominator) = if weights.is_some() {
-        (
-            fixed_point_sum(
-                x.iter().zip(&w).map(|(&x, &w)| x * w),
-                WEIGHTED_DECIMAL_PLACES,
-            )?,
-            fixed_point_sum(w.iter().copied(), WEIGHTED_DECIMAL_PLACES)?,
-        )
+        let products: Vec<f64> = x.iter().zip(&w).map(|(&x, &w)| x * w).collect();
+        (guarded_sum(&products)?, guarded_sum(&w)?)
     } else {
-        (
-            fixed_point_sum(x.iter().map(|&x| x * 1.0), WEIGHTED_DECIMAL_PLACES)?,
-            x.len() as f64,
-        )
+        let terms: Vec<f64> = x.iter().map(|&x| x * 1.0).collect();
+        (guarded_sum(&terms)?, x.len() as f64)
     };
-    (denominator > 0.0).then(|| numerator / denominator)
+    if denominator > 0.0 {
+        Ok(numerator / denominator)
+    } else {
+        Err(InputError::Empty {
+            what: "rows with a positive weight",
+        }
+        .into())
+    }
 }
 
 /// The variance with reliability weights, `sum(w (x - mean)^2) / (W - sum(w^2)
@@ -194,7 +282,7 @@ pub fn mean(values: &[f64], weights: Option<&[f64]>) -> Option<f64> {
 /// `None` for the cases in the module documentation.
 #[must_use]
 pub fn variance(values: &[f64], weights: Option<&[f64]>) -> Option<f64> {
-    let (x, w) = usable(values, weights)?;
+    let (x, w) = usable(values, weights).ok()?;
     if x.len() < 2 {
         return None;
     }
@@ -488,6 +576,68 @@ mod tests {
         assert_eq!(mean(&[1.0], Some(&[0.0])), None);
         assert_eq!(variance(&[1.0], None), None);
         assert_eq!(variance(&[1.0, 2.0], Some(&[1.0, 0.0])), None);
+    }
+
+    #[test]
+    fn a_negative_weight_is_refused_not_dropped() {
+        let x = [1.0, 100.0, 3.0];
+        let w = [1.0, -5.0, 1.0];
+        assert_eq!(mean(&x, Some(&w)), None);
+        assert_eq!(variance(&x, Some(&w)), None);
+        assert_eq!(
+            try_mean(&x, Some(&w)),
+            Err(Error::Input(InputError::Domain {
+                what: "weights",
+                value: -5.0,
+                domain: "[0, inf)",
+                row: Some(1),
+            }))
+        );
+        assert_eq!(
+            try_mean(&[1.0], Some(&[0.0])),
+            Err(Error::Input(InputError::Empty {
+                what: "rows with a positive weight"
+            }))
+        );
+        assert_eq!(
+            try_mean(&[], None),
+            Err(Error::Input(InputError::Empty { what: "values" }))
+        );
+    }
+
+    #[test]
+    fn terms_lost_to_the_rounding_are_refused() {
+        // Every term x w is below 1e-15 and rounds to zero.
+        let x = [1e-9, 2e-9, 3e-9];
+        let w = [1e-7; 3];
+        assert_eq!(mean(&x, Some(&w)), None);
+        assert!(matches!(
+            try_mean(&x, Some(&w)),
+            Err(Error::FixedPointRounding { places: 15, .. })
+        ));
+        // Unweighted values are rounded the same way.
+        assert_eq!(mean(&[1e-14, 2e-14], None), None);
+        // Small weights alone round too: the denominator is refused.
+        assert!(matches!(
+            try_mean(&[1.0, 2.0], Some(&[1e-6, 1e-6])),
+            Err(Error::FixedPointRounding { .. })
+        ));
+        // Terms of both signs whose sum is zero are not too small.
+        assert_eq!(
+            mean(&[-1.0, 1.0], None).unwrap().to_bits(),
+            0.0_f64.to_bits()
+        );
+        assert_eq!(
+            mean(&[0.0, 0.0], None).unwrap().to_bits(),
+            0.0_f64.to_bits()
+        );
+        // Values of 1e-3 over a thousand rows keep 1e-12 of their sum.
+        let small = vec![1e-3; 1000];
+        assert!((mean(&small, None).unwrap() - 1e-3).abs() <= 1e-18);
+        assert_eq!(
+            try_mean(&[1e30], Some(&[1e10])),
+            Err(Error::FixedPointOverflow { places: 15 })
+        );
     }
 
     /// The values are what `weighted_mean` and `weighted_variance` of the

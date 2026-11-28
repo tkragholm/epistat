@@ -3,8 +3,9 @@
 //! the check that refuses it, through
 //! `epistat_testkit::assert_rejects_bad_input_with_codes`. A kind an entry
 //! point accepts is not tried: an empty set of internal knots is a spline
-//! without internal knots, and a matrix given to a solve may hold NaN, which
-//! is refused as `Singular` once no factorisation gives a finite solution.
+//! without internal knots. The solves of the fallback sequence refuse NaN or
+//! an infinity in the matrix or the right-hand side before they factorise;
+//! the wrappers of `solve` return faer's result for them as it is.
 
 use epistat_linalg::basis::{
     BSpline, NaturalSpline, RestrictedCubic, harrell_knots, natural_spline_knots,
@@ -72,9 +73,43 @@ fn solves_refuse_a_right_hand_side_of_another_length() {
     };
     let shape = |bad: BadInput| matches!(bad, BadInput::Empty | BadInput::Mismatched);
     let length = |_: BadInput| "input.length";
-    assert_rejects_bad_input_with_codes("solve", length, |bad| {
-        shape(bad).then(|| solve(a.as_ref(), rhs(bad).as_ref(), &Attempt::SYMMETRIC))
+    let solvable = |bad: BadInput| bad != BadInput::Unsorted;
+    let checked = |bad: BadInput| match bad {
+        BadInput::Nan | BadInput::Infinite => "input.not_finite",
+        _ => "input.length",
+    };
+    assert_rejects_bad_input_with_codes("solve", checked, |bad| {
+        solvable(bad).then(|| solve(a.as_ref(), rhs(bad).as_ref(), &Attempt::SYMMETRIC))
     });
+    assert_rejects_bad_input_with_codes("Factor::solve", checked, |bad| {
+        solvable(bad).then(|| {
+            epistat_linalg::Factor::new(a.as_ref(), &Attempt::SYMMETRIC)
+                .and_then(|factor| factor.solve(rhs(bad).as_ref()))
+        })
+    });
+    assert_rejects_bad_input_with_codes(
+        "solve matrix",
+        |_| "input.not_finite",
+        |bad| {
+            matches!(bad, BadInput::Nan | BadInput::Infinite).then(|| {
+                let mut spoiled = a.clone();
+                spoiled[(2, 1)] = bad.column(&[1.0])[0];
+                solve(
+                    spoiled.as_ref(),
+                    Mat::<f64>::ones(3, 1).as_ref(),
+                    &Attempt::SYMMETRIC,
+                )
+            })
+        },
+    );
+    assert_rejects_bad_input_with_codes(
+        "solve attempts",
+        |_| "linalg.no_attempts",
+        |bad| {
+            (bad == BadInput::Empty)
+                .then(|| solve(a.as_ref(), Mat::<f64>::ones(3, 1).as_ref(), &[]))
+        },
+    );
     assert_rejects_bad_input_with_codes("lu_partial", length, |bad| {
         shape(bad).then(|| epistat_linalg::solve::lu_partial(a.as_ref(), rhs(bad).as_ref()))
     });

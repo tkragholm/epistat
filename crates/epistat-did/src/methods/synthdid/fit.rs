@@ -258,7 +258,7 @@ fn solve_weights(
         x0,
         FrankWolfeOptions {
             tolerance,
-            max_iter: first_limit,
+            max_iterations: first_limit,
         },
     )?;
     if !opts.sparsify {
@@ -268,7 +268,7 @@ fn solve_weights(
         sparsify(first.x),
         FrankWolfeOptions {
             tolerance,
-            max_iter: opts.max_iter,
+            max_iterations: opts.max_iter,
         },
     )?;
     Ok((second.x, second.values, second.converged))

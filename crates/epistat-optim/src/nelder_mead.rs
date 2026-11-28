@@ -71,7 +71,7 @@
 
 use epistat_core::check;
 
-use crate::Error;
+use crate::{Error, Termination};
 
 /// Settings for the Nelder-Mead method.
 #[derive(Debug, Clone, PartialEq)]
@@ -107,6 +107,7 @@ impl Default for NelderMead {
 /// Result of a minimisation.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
+#[must_use = "a search can stop without converging: check `converged` or call `require_converged()`"]
 pub struct Minimum {
     /// Best point found.
     pub x: Vec<f64>,
@@ -120,6 +121,29 @@ pub struct Minimum {
     /// True if the standard deviation criterion was met, false if the
     /// iteration cap stopped the search.
     pub converged: bool,
+    /// The stopping rule that ended the search,
+    /// [`Termination::SpreadTolerance`], [`Termination::MaxIterations`] or
+    /// [`Termination::UnboundedBelow`].
+    pub termination: Termination,
+}
+
+impl Minimum {
+    /// The result, or [`Error::NotConverged`] when its convergence test was
+    /// not met.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotConverged`] with the termination and the iterations used.
+    pub fn require_converged(self) -> Result<Self, Error> {
+        if self.converged {
+            Ok(self)
+        } else {
+            Err(Error::NotConverged {
+                termination: self.termination,
+                iterations: self.iterations,
+            })
+        }
+    }
 }
 
 /// The error of [`NelderMead::minimize`] under its name in 0.1.
@@ -226,20 +250,23 @@ impl NelderMead {
 
         let mut iterations = 0;
         let mut converged = false;
-        loop {
+        let termination = loop {
             if cost_sd(&vertices) < self.sd_tolerance {
                 converged = true;
-                break;
+                break Termination::SpreadTolerance;
             }
-            if iterations >= self.max_iterations || best.cost <= f64::NEG_INFINITY {
-                break;
+            if best.cost <= f64::NEG_INFINITY {
+                break Termination::UnboundedBelow;
+            }
+            if iterations >= self.max_iterations {
+                break Termination::MaxIterations;
             }
 
             self.step(&mut vertices, &mut f)?;
             sort_by_cost(&mut vertices);
             best.offer(&vertices[0]);
             iterations += 1;
-        }
+        };
 
         Ok(Minimum {
             x: best.x,
@@ -247,6 +274,7 @@ impl NelderMead {
             iterations,
             evaluations: 0,
             converged,
+            termination,
         })
     }
 
@@ -399,6 +427,14 @@ mod tests {
             })
             .unwrap();
         assert!(!m.converged);
+        assert_eq!(m.termination, Termination::MaxIterations);
+        assert!(matches!(
+            m.clone().require_converged(),
+            Err(Error::NotConverged {
+                termination: Termination::MaxIterations,
+                iterations: 3
+            })
+        ));
         assert_eq!(m.iterations, 3);
         assert_eq!(m.evaluations, calls);
         assert!(m.evaluations >= 3 + 3);

@@ -13,10 +13,26 @@ pub enum Error {
     #[error(transparent)]
     Input(#[from] InputError),
     /// No attempted factorisation gave a finite solution: the matrix is
-    /// singular to working precision, is not positive definite for a
-    /// Cholesky-only sequence, or holds a value that is not finite.
-    #[error("no factorisation gave a finite solution")]
+    /// singular to working precision or is not positive definite for a
+    /// Cholesky-only sequence. A ridge, a sequence with a pivoting method or
+    /// dropping a collinear column may help.
+    #[error("no factorisation gave a finite solution: the matrix is singular to working precision")]
     Singular,
+    /// A solve was given no attempts to try.
+    #[error("no factorisation to attempt: the list of attempts is empty")]
+    NoAttempts,
+    /// The solution was found, but the reciprocal condition number of the
+    /// matrix is below the limit asked for, so it has lost the digits the
+    /// limit demands.
+    #[error(
+        "the matrix is ill conditioned: reciprocal condition number {rcond:e} is below {limit:e}"
+    )]
+    IllConditioned {
+        /// The estimated reciprocal condition number.
+        rcond: f64,
+        /// The smallest reciprocal condition number accepted.
+        limit: f64,
+    },
     /// The boundary knots are not finite, or the lower is not below the upper.
     #[error("the boundary knots must be finite with lower below upper")]
     Boundary,
@@ -39,8 +55,9 @@ impl Classify for Error {
     fn kind(&self) -> ErrorKind {
         match self {
             Self::Input(error) => error.kind(),
-            Self::Singular => ErrorKind::Numerical,
-            Self::Boundary
+            Self::Singular | Self::IllConditioned { .. } => ErrorKind::Numerical,
+            Self::NoAttempts
+            | Self::Boundary
             | Self::OutsideBoundary
             | Self::TooFewKnots
             | Self::TooFewObservations
@@ -52,6 +69,8 @@ impl Classify for Error {
         match self {
             Self::Input(error) => error.code(),
             Self::Singular => "linalg.singular",
+            Self::NoAttempts => "linalg.no_attempts",
+            Self::IllConditioned { .. } => "linalg.ill_conditioned",
             Self::Boundary => "linalg.boundary",
             Self::OutsideBoundary => "linalg.outside_boundary",
             Self::TooFewKnots => "linalg.too_few_knots",
@@ -117,6 +136,11 @@ mod tests {
     fn codes_are_distinct_and_kinds_follow_the_cause() {
         let all = [
             Error::Singular,
+            Error::NoAttempts,
+            Error::IllConditioned {
+                rcond: 1e-17,
+                limit: 2.2e-16,
+            },
             Error::Boundary,
             Error::OutsideBoundary,
             Error::TooFewKnots,
@@ -125,6 +149,15 @@ mod tests {
         ];
         epistat_testkit::assert_codes_unique("linalg", &all);
         assert_eq!(Error::Singular.kind(), ErrorKind::Numerical);
+        assert_eq!(Error::NoAttempts.kind(), ErrorKind::Input);
+        assert_eq!(
+            Error::IllConditioned {
+                rcond: 0.0,
+                limit: 1e-16
+            }
+            .code(),
+            "linalg.ill_conditioned"
+        );
         assert_eq!(Error::TooFewKnots.kind(), ErrorKind::Input);
         let weight = weight_error(&[1.0, -2.0]).unwrap();
         assert_eq!(

@@ -50,11 +50,13 @@
 //! 2. Forsythe GE, Malcolm MA, Moler CB. Computer Methods for Mathematical
 //!    Computations. Englewood Cliffs: Prentice-Hall; 1977. Chapter 8.
 
+use crate::Termination;
 use crate::error::{Error, domain};
 
 /// The result of [`minimize`].
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[must_use = "a search can stop without converging: check `converged` or call `require_converged()`"]
 pub struct Minimum {
     /// The point found.
     pub x: f64,
@@ -66,6 +68,27 @@ pub struct Minimum {
     pub evaluations: usize,
     /// Whether the stopping rule was met before the iteration limit.
     pub converged: bool,
+    /// [`Termination::BracketTolerance`] or [`Termination::MaxIterations`].
+    pub termination: Termination,
+}
+
+impl Minimum {
+    /// The result, or [`Error::NotConverged`] when its convergence test was
+    /// not met.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotConverged`] with the termination and the iterations used.
+    pub fn require_converged(self) -> Result<Self, Error> {
+        if self.converged {
+            Ok(self)
+        } else {
+            Err(Error::NotConverged {
+                termination: self.termination,
+                iterations: self.iterations,
+            })
+        }
+    }
 }
 
 /// Settings of [`minimize`], with R's `optimize` names in the docs.
@@ -219,5 +242,10 @@ pub fn minimize<E: From<Error>>(
         iterations,
         evaluations: iterations + 1,
         converged,
+        termination: if converged {
+            Termination::BracketTolerance
+        } else {
+            Termination::MaxIterations
+        },
     })
 }

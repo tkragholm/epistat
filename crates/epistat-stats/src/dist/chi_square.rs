@@ -35,6 +35,29 @@ pub fn sf(x: f64, df: f64) -> f64 {
     gamma::upper_regularised(df / 2.0, x / 2.0)
 }
 
+/// The chi-square density at `x` with `df` degrees of freedom, R's
+/// `dchisq(x, df)`: half the gamma density of shape `df / 2` at `x / 2`. 0
+/// for `x < 0`; NaN for `df` not positive or `x` NaN.
+#[must_use]
+pub fn pdf(x: f64, df: f64) -> f64 {
+    0.5 * gamma::pdf(0.5 * x, 0.5 * df)
+}
+
+/// The log of [`pdf`].
+#[must_use]
+pub fn ln_pdf(x: f64, df: f64) -> f64 {
+    gamma::ln_pdf(0.5 * x, 0.5 * df) - std::f64::consts::LN_2
+}
+
+/// The upper-tail quantile, the `x` with `P(X > x) = p`, R's
+/// `qchisq(p, df, lower.tail = FALSE)`: twice [`gamma::isf`] of shape
+/// `df / 2`, so a small `p` keeps its precision. Infinity at `p = 0` and 0
+/// at `p = 1`; NaN as for [`quantile`].
+#[must_use]
+pub fn isf(p: f64, df: f64) -> f64 {
+    2.0 * gamma::isf(p, df / 2.0)
+}
+
 /// The `p` quantile of the chi-square distribution with `df` degrees of
 /// freedom, R's `qchisq(p, df)`: twice the gamma quantile of shape `df / 2`.
 /// 0 at `p = 0` and infinity at `p = 1`; NaN when `df` is not positive and

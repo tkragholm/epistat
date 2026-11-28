@@ -36,18 +36,23 @@
 //! [`Bfgs`] checks, in this order:
 //!
 //! 1. At the start of an iteration, `|g| < gradient_tolerance`, the Euclidean
-//!    norm. The result is converged. This also holds at iteration 0.
+//!    norm. The result is converged, [`Termination::GradientTolerance`]. This
+//!    also holds at iteration 0.
 //! 2. After the step, `|f_old - f_new| < cost_tolerance`, an absolute change.
-//!    The result is converged.
+//!    The result is converged, [`Termination::CostTolerance`].
 //!    This holds also for a step whose value is above the current one by less
 //!    than `cost_tolerance`: the cost has stopped changing beyond rounding, and
 //!    the result is the current point.
 //! 3. A step whose value is not finite, whose gradient is not finite, or whose
 //!    value is above the current one by `cost_tolerance` or more ends the
-//!    search at the current point, which is not converged.
+//!    search at the current point, which is not converged,
+//!    [`Termination::StepRejected`].
 //! 4. After `max_iterations` iterations the loop ends. The result is converged
 //!    only if the gradient at the last point has norm below
-//!    `gradient_tolerance`.
+//!    `gradient_tolerance`, and is [`Termination::MaxIterations`] otherwise.
+//!
+//! A result that is not converged is still `Ok`, as R's `optim` returns
+//! with `convergence = 1`; [`Minimum::require_converged`] makes it an error.
 //!
 //! The defaults are 100 iterations, `gradient_tolerance = sqrt(ε)` and
 //! `cost_tolerance = ε`, with `ε = f64::EPSILON`. Because rule 3 refuses a step
@@ -162,6 +167,7 @@
 
 use epistat_core::check;
 
+use crate::Termination;
 use crate::error::{Error, domain};
 
 /// The Moré-Thuente line search: finds a step that satisfies the strong
@@ -230,6 +236,7 @@ impl Default for Bfgs {
 /// The best point found.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
+#[must_use = "a search can stop without converging: check `converged` or call `require_converged()`"]
 pub struct Minimum {
     /// The point.
     pub x: Vec<f64>,
@@ -244,6 +251,28 @@ pub struct Minimum {
     pub evaluations: usize,
     /// Whether a tolerance was met before the iteration limit.
     pub converged: bool,
+    /// The stopping rule that ended the search, one of
+    /// [`Termination::GradientTolerance`], [`Termination::CostTolerance`],
+    /// [`Termination::StepRejected`] and [`Termination::MaxIterations`].
+    pub termination: Termination,
+}
+
+impl Minimum {
+    /// The minimum, or [`Error::NotConverged`] when no tolerance was met.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotConverged`] with the termination and the iterations used.
+    pub fn require_converged(self) -> Result<Self, Error> {
+        if self.converged {
+            Ok(self)
+        } else {
+            Err(Error::NotConverged {
+                termination: self.termination,
+                iterations: self.iterations,
+            })
+        }
+    }
 }
 
 /// The error of [`Bfgs::minimize`] under its name in 0.1.
@@ -308,10 +337,12 @@ impl Bfgs {
             iterations: 0,
             evaluations: 0,
             converged: false,
+            termination: Termination::MaxIterations,
         };
         for iteration in 1..=self.max_iterations {
             if norm(&grad) < self.gradient_tolerance {
                 best.converged = true;
+                best.termination = Termination::GradientTolerance;
                 return Ok(best);
             }
             let direction: Vec<f64> = (0..n)
@@ -337,6 +368,7 @@ impl Bfgs {
             {
                 best.iterations = iteration;
                 best.converged = true;
+                best.termination = Termination::CostTolerance;
                 return Ok(best);
             }
             // A step that leaves the finite region or does not decrease the
@@ -346,6 +378,7 @@ impl Bfgs {
                 || step.gradient.iter().any(|g| !g.is_finite())
             {
                 best.iterations = iteration;
+                best.termination = Termination::StepRejected;
                 return Ok(best);
             }
             let previous = cost;
@@ -357,9 +390,11 @@ impl Bfgs {
                 iterations: iteration,
                 evaluations: 0,
                 converged: false,
+                termination: Termination::MaxIterations,
             };
             if (previous - cost).abs() < self.cost_tolerance {
                 best.converged = true;
+                best.termination = Termination::CostTolerance;
                 return Ok(best);
             }
             let ys = dot(&y, &s);
@@ -368,6 +403,9 @@ impl Bfgs {
             }
         }
         best.converged = norm(&best.gradient) < self.gradient_tolerance;
+        if best.converged {
+            best.termination = Termination::GradientTolerance;
+        }
         Ok(best)
     }
 }
@@ -705,6 +743,7 @@ mod tests {
         };
         let minimum = solver.minimize(&start, rounded_up, None).unwrap();
         assert!(minimum.converged);
+        assert_eq!(minimum.termination, Termination::CostTolerance);
         assert_eq!(minimum.x, start);
     }
 
@@ -716,6 +755,8 @@ mod tests {
         };
         let minimum = solver.minimize(&[-1.2, 1.0], rosenbrock, None).unwrap();
         assert!(minimum.converged);
+        assert!(minimum.termination.is_converged());
+        let minimum = minimum.require_converged().unwrap();
         assert!(
             (minimum.x[0] - 1.0).abs() < 1e-6 && (minimum.x[1] - 1.0).abs() < 1e-6,
             "{:?}",
@@ -785,6 +826,34 @@ mod tests {
             .minimize(&[5.0], f, Some(vec![1e6]))
             .unwrap();
         assert!(minimum.value.is_finite() && minimum.x[0] > -1.0);
+        eprintln!(
+            "TERMINATION {:?} {}",
+            minimum.termination, minimum.converged
+        );
+    }
+
+    #[test]
+    fn an_iteration_limit_is_ok_with_a_flag_or_an_error_on_request() {
+        let solver = Bfgs {
+            max_iterations: 2,
+            ..Bfgs::default()
+        };
+        let minimum = solver.minimize(&[-1.2, 1.0], rosenbrock, None).unwrap();
+        assert!(!minimum.converged);
+        assert_eq!(minimum.termination, Termination::MaxIterations);
+        assert_eq!(
+            minimum.require_converged(),
+            Err(Error::NotConverged {
+                termination: Termination::MaxIterations,
+                iterations: 2,
+            })
+        );
+        // A gradient that points the wrong way: every step raises the cost.
+        let wrong = |p: &[f64]| (p[0] * p[0], vec![-1.0]);
+        let rejected = Bfgs::default().minimize(&[1.0], wrong, None).unwrap();
+        assert_eq!(rejected.termination, Termination::StepRejected);
+        assert!(!rejected.converged);
+        assert_eq!(rejected.x, [1.0]);
     }
 
     #[test]

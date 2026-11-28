@@ -295,6 +295,61 @@ pub fn trigamma(x: f64) -> f64 {
     1.0 / x + 0.5 * r + series / x + shift
 }
 
+/// The density at `x` of the gamma distribution with shape `shape` and
+/// scale 1, R's `dgamma(x, shape)`, `x^(shape - 1) e^-x / Gamma(shape)`.
+///
+/// It is Loader's saddle-point form of the Poisson point probability, which
+/// avoids the cancellation of `(shape - 1) ln x - x - ln Gamma(shape)` for a
+/// large shape: `dpois(shape - 1, x)` from a shape of 1, and
+/// `dpois(shape, x) shape / x` below. At `x = 0` it is infinite for a shape
+/// below 1, 1 for a shape of 1 and 0 above; 0 for `x < 0` and `x = inf`.
+/// NaN for `shape` not positive and finite or `x` NaN.
+#[must_use]
+pub fn pdf(x: f64, shape: f64) -> f64 {
+    if x.is_nan() || !(shape > 0.0 && shape.is_finite()) {
+        return f64::NAN;
+    }
+    if x < 0.0 || x.is_infinite() {
+        return 0.0;
+    }
+    if x == 0.0 {
+        return match shape.partial_cmp(&1.0) {
+            Some(core::cmp::Ordering::Less) => f64::INFINITY,
+            Some(core::cmp::Ordering::Equal) => 1.0,
+            _ => 0.0,
+        };
+    }
+    if shape < 1.0 {
+        super::discrete::dpois(shape, x) * shape / x
+    } else {
+        super::discrete::dpois(shape - 1.0, x)
+    }
+}
+
+/// The log of [`pdf`], from the same terms, finite where the density
+/// underflows.
+#[must_use]
+pub fn ln_pdf(x: f64, shape: f64) -> f64 {
+    if x.is_nan() || !(shape > 0.0 && shape.is_finite()) {
+        return f64::NAN;
+    }
+    if x < 0.0 || x.is_infinite() {
+        return f64::NEG_INFINITY;
+    }
+    if x == 0.0 {
+        return match shape.partial_cmp(&1.0) {
+            Some(core::cmp::Ordering::Less) => f64::INFINITY,
+            Some(core::cmp::Ordering::Equal) => 0.0,
+            _ => f64::NEG_INFINITY,
+        };
+    }
+    if shape < 1.0 {
+        super::discrete::ln_dpois(shape, x) + (shape / x).ln()
+    } else {
+        super::discrete::ln_dpois(shape - 1.0, x)
+    }
+}
+
 /// `P(X <= x)` for `X` gamma with shape `shape` and scale 1, R's
 /// `pgamma(x, shape)`: the regularised lower incomplete gamma function
 /// `P(shape, x)`. NaN for `shape` not positive or `x` negative or NaN.
@@ -353,6 +408,36 @@ pub(crate) fn quantile_or_none(p: f64, shape: f64) -> Option<f64> {
         invert(1.0 - p, shape, Side::Upper)
     } else {
         invert(p, shape, Side::Lower)
+    }
+}
+
+/// The upper-tail quantile, the `x` with `P(X > x) = p` for the gamma
+/// distribution with shape `shape` and scale 1, R's
+/// `qgamma(p, shape, lower.tail = FALSE)`. It inverts `Q` directly for
+/// `p < 1/2`, so a small `p` keeps its precision, and is [`quantile`] at
+/// `1 - p`, which is exact, otherwise. Infinity at `p = 0` and 0 at `p = 1`;
+/// NaN as for [`quantile`].
+#[must_use]
+pub fn isf(p: f64, shape: f64) -> f64 {
+    isf_or_none(p, shape).unwrap_or(f64::NAN)
+}
+
+/// [`isf`], `None` where it is NaN.
+pub(crate) fn isf_or_none(p: f64, shape: f64) -> Option<f64> {
+    if !(shape > 0.0 && shape.is_finite() && (0.0..=1.0).contains(&p)) {
+        return None;
+    }
+    if p <= 0.0 {
+        return Some(f64::INFINITY);
+    }
+    if p >= 1.0 {
+        return Some(0.0);
+    }
+    // 1 - p is exact for p >= 1/2.
+    if p < 0.5 {
+        invert(p, shape, Side::Upper)
+    } else {
+        invert(1.0 - p, shape, Side::Lower)
     }
 }
 

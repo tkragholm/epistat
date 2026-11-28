@@ -32,6 +32,11 @@ fn options(tolerance: f64) -> Itp {
 
 /// Runs `itp`, and checks the bound on evaluations, that the count returned
 /// is the number of calls, and that a sign change lies within the tolerance.
+/// [`solve`] for a case whose root needs no check beyond its own.
+fn check(f: impl Fn(f64) -> f64, lower: f64, upper: f64, tolerance: f64) {
+    let _checked = solve(f, lower, upper, tolerance);
+}
+
 fn solve(f: impl Fn(f64) -> f64, lower: f64, upper: f64, tolerance: f64) -> Root {
     let mut calls = 0;
     let root = itp(
@@ -131,7 +136,7 @@ fn roots_at_an_end_or_at_zero_need_no_step() {
 #[test]
 fn test_families_meet_the_bound() {
     for tolerance in [1e-4, 1e-8, 1e-12] {
-        solve(
+        check(
             |x| x.sin() - x / 2.0,
             std::f64::consts::FRAC_PI_2,
             std::f64::consts::PI,
@@ -147,32 +152,32 @@ fn test_families_meet_the_bound() {
                     })
                     .sum::<f64>()
             };
-            solve(f, n * n + 1e-9, (n + 1.0).powi(2) - 1e-9, tolerance);
+            check(f, n * n + 1e-9, (n + 1.0).powi(2) - 1e-9, tolerance);
         }
         for (a, b) in [(-40.0, -1.0), (-100.0, -2.0), (-200.0, -3.0)] {
-            solve(move |x: f64| a * x * (b * x).exp(), -9.0, 31.0, tolerance);
+            check(move |x: f64| a * x * (b * x).exp(), -9.0, 31.0, tolerance);
         }
         for a in [0.2, 1.0] {
             for n in [4, 6, 8, 10, 12] {
-                solve(move |x: f64| x.powi(n) - a, 0.0, 5.0, tolerance);
+                check(move |x: f64| x.powi(n) - a, 0.0, 5.0, tolerance);
             }
         }
         for n in [1, 2, 3, 5, 10, 20, 40, 100] {
             let n = f64::from(n);
-            solve(
+            check(
                 move |x: f64| 2.0 * x * (-n).exp() - 2.0 * (-n * x).exp() + 1.0,
                 0.0,
                 1.0,
                 tolerance,
             );
-            solve(
+            check(
                 move |x: f64| (1.0 + (1.0 - n).powi(2)) * x - (1.0 - n * x).powi(2),
                 0.0,
                 1.0,
                 tolerance,
             );
-            solve(move |x: f64| x * x - (1.0 - x).powf(n), 0.0, 1.0, tolerance);
-            solve(
+            check(move |x: f64| x * x - (1.0 - x).powf(n), 0.0, 1.0, tolerance);
+            check(
                 move |x: f64| (-n * x).exp() * (x - 1.0) + x.powf(n),
                 0.0,
                 1.0,
@@ -181,20 +186,20 @@ fn test_families_meet_the_bound() {
         }
         for n in [2, 5, 15, 20] {
             let n = f64::from(n);
-            solve(
+            check(
                 move |x: f64| (n * x - 1.0) / ((n - 1.0) * x),
                 0.01,
                 1.0,
                 tolerance,
             );
-            solve(
+            check(
                 move |x: f64| x.powf(1.0 / n) - n.powf(1.0 / n),
                 1.0,
                 100.0,
                 tolerance,
             );
         }
-        solve(
+        check(
             |x: f64| {
                 if x == 0.0 {
                     0.0
