@@ -275,6 +275,7 @@ fn propensity_weights_alone_give_the_propensity_only_variance() {
         .unwrap();
     let times = [2.0, 4.0, 6.0];
     let mut worst = 0.0f64;
+    let mut differing = 0usize;
     for stabilise in [false, true] {
         let w = iptw::fit(
             &treat,
@@ -292,7 +293,13 @@ fn propensity_weights_alone_give_the_propensity_only_variance() {
             subject: Some(&subject),
             censoring: None,
         };
-        let new = wcox::fit(&d, x.as_ref(), &opts, &est).unwrap();
+        // The general route of 0.3's `fit_estimated`, which every model of the
+        // weights takes.
+        #[expect(
+            deprecated,
+            reason = "the general route is reached through the 0.3 name"
+        )]
+        let new = wcox::fit_estimated(&d, x.as_ref(), &opts, &est).unwrap();
         assert_eq!(old.n_units, new.n_units);
         assert_eq!(old.coefficients, new.coefficients);
         for (a, b) in [
@@ -316,7 +323,11 @@ fn propensity_weights_alone_give_the_propensity_only_variance() {
             &Weights::iptw(&w, Some(&subject)),
         )
         .unwrap();
-        let new = km::estimate(&arms, &times, &KmOptions::default(), &est).unwrap();
+        #[expect(
+            deprecated,
+            reason = "the general route is reached through the 0.3 name"
+        )]
+        let new = km::estimate_estimated(&arms, &times, &KmOptions::default(), &est).unwrap();
         assert_eq!(old.surv, new.surv);
         for (a, b) in old
             .covariance
@@ -329,10 +340,15 @@ fn propensity_weights_alone_give_the_propensity_only_variance() {
             )
         {
             let (a, b) = (a.unwrap(), b.unwrap());
+            if a.to_bits() != b.to_bits() {
+                differing += 1;
+            }
             worst = worst.max((a - b).abs() / a.abs().max(1e-12));
         }
     }
     // The routes sum the same terms in another order, so they agree to rounding.
-    println!("propensity only against the generic route: {worst:.2e}");
+    println!(
+        "propensity only against the generic route: {worst:.2e}, {differing} Kaplan-Meier covariance entries differ in their bits"
+    );
     assert!(worst < 1e-10, "{worst}");
 }
