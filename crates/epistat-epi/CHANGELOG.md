@@ -15,7 +15,7 @@ First release. The crate holds the epidemiological measures and sensitivity anal
 - `bias`, quantitative bias analysis of misclassification, selection, an unmeasured confounder and misclassified person-time, simple and probabilistic. The probabilistic analyses take `bias::ProbOptions`, which holds a `Bootstrap`, the random-error setting and a `Level`, and return the draws and the risk difference.
 - `rosenbaum`, Rosenbaum bounds for matched designs (Wilcoxon, Hodges-Lehmann and M-statistic scores, with sets of different sizes) and the sensitivity values `wilcoxon_sensitivity_value`, `hodges_lehmann_gamma` and `scores_sensitivity_value`.
 - `signed_rank`, the signed rank statistic with its exact and normal upper tails.
-- `balance`, standardised mean differences, variance ratios, eCDF and eQQ distances, and Cramer's V, with weighted forms.
+- `balance`, standardised mean differences, variance ratios, eCDF and eQQ distances, and Cramer's V, with weighted forms. `smd` takes each group as `Moments { mean, variance }`, with `Moments::from_sd` for a standard deviation, so a standard deviation cannot be passed where a variance is read.
 - `tables`, the `Counts2x2`, `PersonTime` and `PersonTime2` tables every measure starts from.
 - `Error`, one error type with stable codes that implements `epistat_core::Classify`. Bad input is reported as `Error::Input` with the row where there is one.
 
