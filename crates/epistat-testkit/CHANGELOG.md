@@ -2,7 +2,7 @@
 
 ## [0.1.2] - unreleased
 
-The crate gains checks for bad input and for error codes, a small random generator, and a helper that records the hash of a test case. No existing item changes.
+The crate gains checks for bad input and for error codes, a small random generator, and a helper that records the hash of a test case. No existing item changes, except that the error checks inherit core's stricter `Classify`.
 
 ### Added
 
@@ -14,6 +14,10 @@ The crate gains checks for bad input and for error codes, a small random generat
 - `SplitMix64`, a small deterministic generator for test data, with `unit`, `uniform` and `below`.
 - `hash_out` and `hash_out_words`, which write the hash of a case to the file named by `EPISTAT_HASH_OUT`, and `RECORDED_PLATFORM`, which says whether the recorded hashes apply to the machine running the test.
 - The crate depends on `epistat-core`, and reference JSON is parsed with exact float round trip.
+
+### Changed
+
+- The error checks take an error that implements `epistat_core::Classify`, which requires `std::error::Error + Send + Sync + 'static`, so a test's own error type implements `Display` and `Error`.
 
 ### Results
 
