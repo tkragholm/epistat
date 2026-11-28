@@ -57,6 +57,7 @@ fn the_codes_of_input_error_are_unique() {
             value: 1.0,
             limit: 1.0,
         },
+        InputError::AllZero { what: "a" },
         InputError::Percentage {
             what: "a",
             value: 95.0,

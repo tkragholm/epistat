@@ -27,6 +27,7 @@
 //! | [`csr_offsets`] | offsets that are not a layout of the rows | `Empty`, `Domain`, `Unsorted`, `Length` |
 //! | [`constant_within`] | a value that changes within a unit | `NotConstant` |
 //! | [`fits_u32`] | a count above `u32::MAX` | `TooLarge` |
+//! | [`CaseWeights::new`](crate::CaseWeights::new) | a weight [`weights`] refuses, or weights all zero | `NotFinite`, `Domain`, `Empty`, `AllZero` |
 //!
 //! The checks are written for each argument once, where it enters, and an
 //! estimator does not repeat them on input a validated view already holds.
@@ -122,6 +123,12 @@ pub enum InputError {
         /// The count given.
         found: u64,
     },
+    /// `input.all_zero`: an argument whose values may be zero is zero in
+    /// every row, as case weights that leave no row in the fit.
+    AllZero {
+        /// The argument.
+        what: &'static str,
+    },
     /// `input.percentage`: a proportion in `(0, 1)`, such as a confidence
     /// level, was given as a percentage between 1 and 100, as `95` for
     /// `0.95`.
@@ -185,6 +192,7 @@ impl fmt::Display for InputError {
                     "{what} has {found} entries, more than the {limit} allowed"
                 )
             }
+            Self::AllZero { what } => write!(f, "{what} are zero in every row"),
             Self::Percentage { what, value } => write!(
                 f,
                 "{what} is {value}, outside (0, 1); as a proportion, {value}% is {}",
@@ -212,6 +220,7 @@ impl Classify for InputError {
             Self::Duplicate { .. } => "input.duplicate",
             Self::NotConstant { .. } => "input.not_constant",
             Self::TooLarge { .. } => "input.too_large",
+            Self::AllZero { .. } => "input.all_zero",
             Self::Percentage { .. } => "input.percentage",
         }
     }
@@ -284,7 +293,8 @@ pub fn finite_column(what: &'static str, column: usize, values: &[f64]) -> Resul
 }
 
 /// Case weights: every weight finite and not negative. A weight of 0 is
-/// allowed.
+/// allowed. [`CaseWeights`](crate::CaseWeights) runs this check and also
+/// refuses weights that are all zero.
 ///
 /// # Errors
 ///

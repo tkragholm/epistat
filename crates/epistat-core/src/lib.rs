@@ -20,6 +20,7 @@
 //! | [`Panel`] | the validated unit-and-period key of person-period data |
 //! | [`Permutation`] | a reordering of rows, applied to each column alike |
 //! | [`day`], [`Day`] | civil dates as `i64` days since 1970-01-01, and one such date |
+//! | [`CaseWeights`], [`WeightKind`] | a checked column of case weights and what they mean |
 //! | [`check`], [`InputError`] | the input checks every estimator shares |
 //! | [`ErrorKind`], [`Classify`] | what kind of failure an error is, and its stable code |
 //!
@@ -47,6 +48,7 @@ pub mod level;
 pub mod matrix;
 pub mod panel;
 pub mod permutation;
+pub mod weights;
 
 pub use bootstrap::{Bootstrap, Seed};
 pub use check::InputError;
@@ -62,3 +64,4 @@ pub use level::Level;
 pub use matrix::Matrix;
 pub use panel::Panel;
 pub use permutation::Permutation;
+pub use weights::{CaseWeights, WeightKind};
