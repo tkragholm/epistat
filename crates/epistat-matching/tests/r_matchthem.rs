@@ -38,6 +38,7 @@ use epistat_matching::{
     BalanceRecord, CovariateValue, MatchingCriteria, NearestSelection, PropensityScoreConfig,
 };
 
+use epistat_testkit::Tolerance;
 use r_reference::{
     Versions, assert_r_version, covariate_unit, reference as load_reference, split_by_group,
 };
@@ -103,9 +104,8 @@ fn records(data: &BTreeMap<String, Vec<f64>>) -> (Vec<BalanceRecord>, Vec<Balanc
     }))
 }
 
-fn close(got: f64, want: f64, rel: f64) -> bool {
-    (got - want).abs() <= rel * want.abs().max(1e-300)
-}
+/// 1e-9 relative to the reference, and absolute below 1e-300.
+const RESULTS: Tolerance = Tolerance::exact().rel(1e-9).abs(1e-9 * 1e-300);
 
 #[test]
 fn reference_was_made_by_the_documented_versions() {
@@ -202,13 +202,13 @@ fn matches_and_pooled_effects_agree_with_matchthem() {
         for (i, (ours, rs)) in effects.per_set.iter().zip(&reference.sets).enumerate() {
             let se = ours.difference.se.unwrap();
             assert!(
-                close(ours.difference.estimate, rs.estimate, 1e-9),
+                RESULTS.accepts(ours.difference.estimate, rs.estimate),
                 "set {i} estimate {} vs {}",
                 ours.difference.estimate,
                 rs.estimate
             );
             assert!(
-                close(se * se, rs.variance, 1e-9),
+                RESULTS.accepts(se * se, rs.variance),
                 "set {i} variance {} vs {}",
                 se * se,
                 rs.variance
@@ -223,22 +223,22 @@ fn matches_and_pooled_effects_agree_with_matchthem() {
             (p.total - want.t).abs() / want.t,
             (p.df.unwrap() - want.df).abs() / want.df
         );
-        assert!(close(p.estimate, want.qbar, 1e-9), "estimate");
+        assert!(RESULTS.accepts(p.estimate, want.qbar), "estimate");
         assert!(
-            close(p.estimate, reference.matchthem_estimate, 1e-9),
+            RESULTS.accepts(p.estimate, reference.matchthem_estimate),
             "MatchThem"
         );
-        assert!(close(p.within, want.ubar, 1e-9), "within");
-        assert!(close(p.between, want.b, 1e-9), "between");
-        assert!(close(p.total, want.t, 1e-9), "total");
+        assert!(RESULTS.accepts(p.within, want.ubar), "within");
+        assert!(RESULTS.accepts(p.between, want.b), "between");
+        assert!(RESULTS.accepts(p.total, want.t), "total");
         assert!(
-            close(p.df.unwrap(), want.df, 1e-9),
+            RESULTS.accepts(p.df.unwrap(), want.df),
             "df {:?} vs {}",
             p.df,
             want.df
         );
-        assert!(close(p.fmi.unwrap(), want.fmi, 1e-9), "fmi");
-        assert!(close(p.riv.unwrap(), want.r, 1e-9), "riv");
+        assert!(RESULTS.accepts(p.fmi.unwrap(), want.fmi), "fmi");
+        assert!(RESULTS.accepts(p.riv.unwrap(), want.r), "riv");
         assert!(p.between > 0.0, "the sets differ in their outcomes");
         let rows_rule =
             pool_effects(&effects.per_set, CompleteDataDf::RowsLessCoefficients).unwrap();
@@ -279,9 +279,9 @@ fn check_given_degrees_of_freedom(per_set: &[EffectEstimates]) {
         let pooled = pool_effects(per_set, CompleteDataDf::Given(dfcom)).unwrap();
         assert_eq!(pooled.complete_data_df, dfcom);
         let p = pooled.difference.unwrap();
-        assert!(close(p.total, case.t, 1e-9), "total {dfcom:?}");
-        assert!(close(p.df.unwrap(), case.df, 1e-9), "df {dfcom:?}");
-        assert!(close(p.fmi.unwrap(), case.fmi, 1e-9), "fmi {dfcom:?}");
+        assert!(RESULTS.accepts(p.total, case.t), "total {dfcom:?}");
+        assert!(RESULTS.accepts(p.df.unwrap(), case.df), "df {dfcom:?}");
+        assert!(RESULTS.accepts(p.fmi.unwrap(), case.fmi), "fmi {dfcom:?}");
     }
     // Sets with no more rows than coefficients: the clamped rule pools with one
     // degree of freedom, the unclamped rule has none to give.

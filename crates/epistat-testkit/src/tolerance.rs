@@ -110,6 +110,20 @@ pub fn assert_close(got: &[f64], expected: &[f64], tolerance: Tolerance) {
     }
 }
 
+/// Checks that `tolerance` accepts `got` against `expected`.
+///
+/// # Panics
+///
+/// When it does not, naming `what`, the two values and the distance.
+#[track_caller]
+pub fn assert_close_to(what: &str, got: f64, expected: f64, tolerance: Tolerance) {
+    assert!(
+        tolerance.accepts(got, expected),
+        "{what}: got {got:e}, expected {expected:e} ({} ulps apart, tolerance {tolerance:?})",
+        ulps_apart(got, expected)
+    );
+}
+
 /// Checks that two estimates of one quantity agree within `k` combined
 /// standard errors: `|a - b| <= k * sqrt(se_a^2 + se_b^2)`.
 ///
@@ -172,6 +186,12 @@ mod tests {
     #[should_panic(expected = "index 1")]
     fn assert_close_names_the_index() {
         assert_close(&[1.0, 2.0], &[1.0, 2.5], Tolerance::exact().abs(0.1));
+    }
+
+    #[test]
+    #[should_panic(expected = "the mean: got")]
+    fn assert_close_to_names_the_value() {
+        assert_close_to("the mean", 2.5, 2.0, Tolerance::exact().rel(0.1));
     }
 
     #[test]

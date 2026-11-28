@@ -38,6 +38,7 @@ use epistat_matching::sensitivity::{
     evalues_rr, hodges_lehmann_bounds, m_statistic_bounds, wilcoxon_bounds,
 };
 
+use epistat_testkit::{Tolerance, assert_close_to};
 use r_reference::reference as load_reference;
 use serde::Deserialize;
 
@@ -134,17 +135,6 @@ fn pair_sets(trt: &[f64], ctrl: &[f64]) -> Vec<MatchedSet> {
         .collect()
 }
 
-fn close_rel(got: f64, expected: f64, tol: f64, what: &str) {
-    close(got, expected, tol, 0.0, what);
-}
-
-fn close(got: f64, expected: f64, rel: f64, abs: f64, what: &str) {
-    assert!(
-        (got - expected).abs() <= rel * expected.abs() + abs,
-        "{what}: {got} against {expected}"
-    );
-}
-
 #[test]
 fn signed_rank_bounds_agree_with_psens() {
     let r = reference();
@@ -153,8 +143,18 @@ fn signed_rank_bounds_agree_with_psens() {
     let got = wilcoxon_bounds(&sets, &p.gammas, WilcoxonDistribution::Normal).unwrap();
     assert!((got[0].statistic - p.statistic).abs() < 1e-12);
     for (i, b) in got.iter().enumerate() {
-        close_rel(b.p_lower, p.psens_exact_lower[i], 1e-12, "lower");
-        close_rel(b.p_upper, p.psens_exact_upper[i], 1e-12, "upper");
+        assert_close_to(
+            "lower",
+            b.p_lower,
+            p.psens_exact_lower[i],
+            Tolerance::exact().rel(1e-12),
+        );
+        assert_close_to(
+            "upper",
+            b.p_upper,
+            p.psens_exact_upper[i],
+            Tolerance::exact().rel(1e-12),
+        );
         assert!((b.p_lower - p.psens_lower[i]).abs() <= 5e-5 + 1e-12);
         assert!((b.p_upper - p.psens_upper[i]).abs() <= 5e-5 + 1e-12);
     }
@@ -164,7 +164,12 @@ fn signed_rank_bounds_agree_with_psens() {
 fn exact_signed_rank_tail_agrees_with_r() {
     let r = reference();
     let b = rosenbaum::wilcoxon_bounds(&r.exact1.diffs, 1.0, WilcoxonDistribution::Exact).unwrap();
-    close_rel(b.p_upper, r.exact1.p, 1e-12, "psignrank");
+    assert_close_to(
+        "psignrank",
+        b.p_upper,
+        r.exact1.p,
+        Tolerance::exact().rel(1e-12),
+    );
     let e = &r.exact2;
     for (i, g) in e.gammas.iter().enumerate() {
         let b = rosenbaum::wilcoxon_bounds(&e.diffs, *g, WilcoxonDistribution::Exact).unwrap();
@@ -212,10 +217,25 @@ fn check_set_bound(
     variance: f64,
     label: &str,
 ) {
-    close(got.statistic, statistic, 1e-10, 1e-13, label);
-    close(got.expectation, expectation, 1e-10, 1e-13, label);
-    close_rel(got.variance, variance, 1e-10, label);
-    close(got.deviate, deviate, 1e-10, 1e-12, label);
+    assert_close_to(
+        label,
+        got.statistic,
+        statistic,
+        Tolerance::exact().abs(1e-10 * (statistic).abs() + 1e-13),
+    );
+    assert_close_to(
+        label,
+        got.expectation,
+        expectation,
+        Tolerance::exact().abs(1e-10 * (expectation).abs() + 1e-13),
+    );
+    assert_close_to(label, got.variance, variance, Tolerance::exact().rel(1e-10));
+    assert_close_to(
+        label,
+        got.deviate,
+        deviate,
+        Tolerance::exact().abs(1e-10 * (deviate).abs() + 1e-12),
+    );
     assert!(
         (got.p_upper - pval).abs() < 1e-14,
         "{label} p: {} {pval}",
@@ -320,7 +340,7 @@ fn matched_set_bounds_agree_with_senmw() {
 fn same(got: Option<f64>, expected: Option<f64>, label: &str) {
     match (got, expected) {
         (None, None) => {}
-        (Some(g), Some(e)) => close_rel(g, e, 1e-12, label),
+        (Some(g), Some(e)) => assert_close_to(label, g, e, Tolerance::exact().rel(1e-12)),
         other => panic!("{label}: {other:?}"),
     }
 }

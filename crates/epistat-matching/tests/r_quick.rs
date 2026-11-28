@@ -38,6 +38,7 @@ use epistat_matching::{
     SubclassedUnits, quick_clusters, quick_match_subclasses, run_spec,
 };
 
+use epistat_testkit::Tolerance;
 use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -397,9 +398,10 @@ fn rescaled(treat: &[u8], weights: &[Option<f64>]) -> Vec<f64> {
 /// of at most 614 terms, the same again. 1e-12 leaves a margin of about seven.
 const WEIGHT_TOLERANCE: f64 = 1e-12;
 
-fn close(got: f64, expected: f64) -> bool {
-    (got - expected).abs() <= WEIGHT_TOLERANCE * expected.abs().max(1.0)
-}
+/// `WEIGHT_TOLERANCE` relative to the reference, or absolute below 1.
+const WEIGHTS: Tolerance = Tolerance::exact()
+    .rel(WEIGHT_TOLERANCE)
+    .abs(WEIGHT_TOLERANCE);
 
 fn check_against_matchit(
     data: &Dataset,
@@ -433,13 +435,13 @@ fn check_against_matchit(
     let scaled = rescaled(&data.treat, &unscaled);
     for row in 0..n {
         assert!(
-            close(scaled[row], run.weights[row]),
+            WEIGHTS.accepts(scaled[row], run.weights[row]),
             "{label}: weight of {row}: {} against {}",
             scaled[row],
             run.weights[row]
         );
         assert!(
-            close(unscaled[row].unwrap_or(0.0), run.unscaled_weights[row]),
+            WEIGHTS.accepts(unscaled[row].unwrap_or(0.0), run.unscaled_weights[row]),
             "{label}: unscaled weight of {row}"
         );
         assert_eq!(

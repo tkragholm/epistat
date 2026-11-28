@@ -38,7 +38,7 @@ use epistat_matching::effects::{
     bootstrap, cluster_resamples,
 };
 use epistat_matching::output::{LongMatches, MatchData};
-use epistat_testkit::load_json;
+use epistat_testkit::{Tolerance, assert_close_to, load_json};
 use r_reference::{Versions, assert_r_version};
 use serde::{Deserialize, Serialize};
 
@@ -162,41 +162,33 @@ fn sample(matches: &Matches, case: &Case, binary: bool) -> MatchedSample {
     }
 }
 
-fn close(label: &str, got: f64, expected: f64, rel: f64, scale: f64) {
-    let gap = (got - expected).abs();
-    assert!(
-        gap <= rel * expected.abs().max(1e-3 * scale),
-        "{label}: got {got}, R {expected}"
-    );
-}
-
 fn compare(label: &str, ours: &BootstrapStatistic, r: &Stat, rel: f64) {
     let scale = r.t0.abs().max(r.sd);
+    // `rel` relative to R's value, or to a thousandth of the statistic's scale
+    // for a value near zero.
+    let tolerance = Tolerance::exact().rel(rel).abs(rel * (1e-3 * scale));
     assert_eq!(ours.replicates.len(), r.t.len(), "{label}");
-    close(
+    assert_close_to(
         &format!("{label} estimate"),
         ours.summary.estimate,
         r.t0,
-        rel,
-        scale,
+        tolerance,
     );
     for (k, (a, b)) in ours.replicates.iter().zip(&r.t).enumerate() {
-        close(&format!("{label} replicate {k}"), *a, *b, rel, scale);
+        assert_close_to(&format!("{label} replicate {k}"), *a, *b, tolerance);
     }
-    close(&format!("{label} se"), ours.summary.se, r.sd, rel, scale);
-    close(
+    assert_close_to(&format!("{label} se"), ours.summary.se, r.sd, tolerance);
+    assert_close_to(
         &format!("{label} perc low"),
         ours.summary.percentile.lower.unwrap(),
         r.quantile7.0,
-        rel,
-        scale,
+        tolerance,
     );
-    close(
+    assert_close_to(
         &format!("{label} perc high"),
         ours.summary.percentile.upper.unwrap(),
         r.quantile7.1,
-        rel,
-        scale,
+        tolerance,
     );
     let mut sorted = r.t.clone();
     sorted.sort_by(f64::total_cmp);
@@ -222,19 +214,17 @@ fn compare(label: &str, ours: &BootstrapStatistic, r: &Stat, rel: f64) {
     }
     let mean = r.t.iter().sum::<f64>() / r.t.len() as f64;
     let bias = mean - r.t0;
-    close(
+    assert_close_to(
         &format!("{label} norm low"),
         ours.summary.normal.lower.unwrap() - bias,
         r.boot_norm.0,
-        rel,
-        scale,
+        tolerance,
     );
-    close(
+    assert_close_to(
         &format!("{label} norm high"),
         ours.summary.normal.upper.unwrap() - bias,
         r.boot_norm.1,
-        rel,
-        scale,
+        tolerance,
     );
 }
 
