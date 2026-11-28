@@ -7,6 +7,8 @@ First release. The crate holds the types the other epistat crates share, so that
 ### Added
 
 - `Level`, a confidence level kept as the confidence or the alpha the caller gave, built with `Level::confidence` or `Level::alpha`. `lower_probability` and `upper_probability` give the tail probabilities.
+- `Level::P90`, `Level::P95` and `Level::P99`, and `Level::percent(k)` for `k` percent, so a usual level needs no `unwrap`. `same_coverage` compares two levels whichever form each was given in. A level prints as `95%`.
+- `InputError::Percentage`: `Level::confidence(95.0)` is refused with a message that says 95% is 0.95. The documentation of each `InputError` variant names its code.
 - `Interval`, `Estimate`, `Scale` and `Contrast`, the way an estimator reports a number. Undefined values are `None`, never NaN.
 - `Covariance`, a covariance matrix that knows its dimension, with `variances`, `standard_errors` and `quadratic`.
 - `EventStudy`, event-study coefficients with their covariance and reference period.

@@ -49,8 +49,9 @@ use crate::check::InputError;
 
 /// A confidence level, as the confidence or the alpha the caller gave.
 ///
-/// Construct it with [`Level::confidence`] or [`Level::alpha`]; both refuse a
-/// number outside `(0, 1)`. Each probability is computed from the number in
+/// Construct it with [`Level::confidence`] or [`Level::alpha`], which refuse
+/// a number outside `(0, 1)`, or take [`Level::P90`], [`Level::P95`],
+/// [`Level::P99`] or [`Level::percent`]. Each probability is computed from the number in
 /// the form it was given, so the default, a confidence of 0.95, has a lower
 /// tail 6 ulps above that of `Level::alpha(0.05)` (see the module).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -88,6 +89,8 @@ impl From<Level> for LevelForm {
 fn open_unit(what: &'static str, value: f64) -> Result<f64, InputError> {
     if value > 0.0 && value < 1.0 {
         Ok(value)
+    } else if value > 1.0 && value < 100.0 {
+        Err(InputError::Percentage { what, value })
     } else {
         Err(InputError::Domain {
             what,
@@ -99,11 +102,20 @@ fn open_unit(what: &'static str, value: f64) -> Result<f64, InputError> {
 }
 
 impl Level {
+    /// A confidence of 0.90.
+    pub const P90: Self = Self(LevelForm::Confidence(0.90));
+    /// A confidence of 0.95, the default.
+    pub const P95: Self = Self(LevelForm::Confidence(0.95));
+    /// A confidence of 0.99.
+    pub const P99: Self = Self(LevelForm::Confidence(0.99));
+
     /// A level given as the confidence `c`, such as 0.95.
     ///
     /// # Errors
     ///
-    /// [`InputError::Domain`] unless `0 < c < 1`.
+    /// [`InputError::Percentage`] for a `c` between 1 and 100, which reads as
+    /// a percentage given where the proportion was meant, and
+    /// [`InputError::Domain`] for any other `c` outside `(0, 1)`.
     pub fn confidence(c: f64) -> Result<Self, InputError> {
         open_unit("confidence level", c).map(|c| Self(LevelForm::Confidence(c)))
     }
@@ -113,9 +125,52 @@ impl Level {
     ///
     /// # Errors
     ///
-    /// [`InputError::Domain`] unless `0 < a < 1`.
+    /// [`InputError::Percentage`] for an `a` between 1 and 100 and
+    /// [`InputError::Domain`] for any other `a` outside `(0, 1)`.
     pub fn alpha(a: f64) -> Result<Self, InputError> {
         open_unit("alpha", a).map(|a| Self(LevelForm::Alpha(a)))
+    }
+
+    /// The confidence `k` percent, as the confidence `k / 100`.
+    ///
+    /// `k / 100` is the same double as the literal `0.k` for every `k` from 1
+    /// to 99, so `Level::percent(95)` equals `Level::confidence(0.95)` to the
+    /// bit.
+    ///
+    /// ```
+    /// use epistat_core::Level;
+    ///
+    /// const LEVEL: Level = Level::percent(90);
+    /// assert_eq!(LEVEL, Level::confidence(0.9).unwrap());
+    /// assert_eq!(Level::percent(95), Level::P95);
+    /// assert_eq!(LEVEL.to_string(), "90%");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// For `k` outside 1 to 99; in a constant, that is a compile error.
+    #[must_use]
+    #[track_caller]
+    pub const fn percent(k: u8) -> Self {
+        assert!(k >= 1 && k <= 99, "Level::percent takes 1 to 99");
+        Self(LevelForm::Confidence(k as f64 / 100.0))
+    }
+
+    /// Whether two levels give the same coverage, whichever form each was
+    /// given in.
+    ///
+    /// Two levels given in the same form are the same when their numbers are
+    /// equal. Across forms, `1 - c` and `a` are compared to within
+    /// `f64::EPSILON`, the rounding of the subtraction from 1, so
+    /// `Level::alpha(0.05)` has the coverage of `Level::confidence(0.95)`
+    /// although the two are not equal (see the module).
+    #[must_use]
+    pub fn same_coverage(self, other: Self) -> bool {
+        match (self.0, other.0) {
+            (LevelForm::Confidence(a), LevelForm::Confidence(b))
+            | (LevelForm::Alpha(a), LevelForm::Alpha(b)) => a.to_bits() == b.to_bits(),
+            _ => (self.alpha_value() - other.alpha_value()).abs() <= f64::EPSILON,
+        }
     }
 
     /// Whether the level was given as an alpha.
@@ -163,9 +218,22 @@ impl Level {
 }
 
 impl Default for Level {
-    /// A confidence of 0.95.
+    /// A confidence of 0.95, [`Level::P95`].
     fn default() -> Self {
-        Self(LevelForm::Confidence(0.95))
+        Self::P95
+    }
+}
+
+impl core::fmt::Display for Level {
+    /// The confidence as a percentage, `95%`, whichever form the level was
+    /// given in; the percentage is rounded to 12 significant digits, so the
+    /// confidence `1 - 0.05` of `Level::alpha(0.05)` prints as `95%`.
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "{}%",
+            crate::format::Trimmed(self.confidence_value() * 100.0, 12)
+        )
     }
 }
 
@@ -252,6 +320,71 @@ mod tests {
                 row: None
             })
         );
+    }
+
+    #[test]
+    fn the_named_levels_are_the_literals() {
+        assert_eq!(Level::P95, Level::default());
+        assert_eq!(Level::P90, Level::confidence(0.9).unwrap());
+        assert_eq!(Level::P99, Level::confidence(0.99).unwrap());
+        for k in 1..=99_u8 {
+            let literal: f64 = format!("0.{k:02}").parse().unwrap();
+            assert_eq!(
+                Level::percent(k).confidence_value().to_bits(),
+                literal.to_bits(),
+                "{k}"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Level::percent takes 1 to 99")]
+    fn a_percent_of_100_panics() {
+        let _ = Level::percent(100);
+    }
+
+    #[test]
+    fn a_percentage_given_for_a_proportion_names_the_fix() {
+        let error = Level::confidence(95.0).unwrap_err();
+        assert_eq!(
+            error,
+            InputError::Percentage {
+                what: "confidence level",
+                value: 95.0
+            }
+        );
+        assert_eq!(
+            error.to_string(),
+            "confidence level is 95, outside (0, 1); as a proportion, 95% is 0.95"
+        );
+        assert!(matches!(
+            Level::alpha(5.0),
+            Err(InputError::Percentage { what: "alpha", .. })
+        ));
+        assert!(matches!(
+            Level::confidence(100.0),
+            Err(InputError::Domain { .. })
+        ));
+    }
+
+    #[test]
+    fn coverage_is_compared_across_forms() {
+        let alpha = Level::alpha(0.05).unwrap();
+        assert_ne!(alpha, Level::P95);
+        assert!(alpha.same_coverage(Level::P95));
+        assert!(Level::P95.same_coverage(alpha));
+        assert!(!alpha.same_coverage(Level::P90));
+        assert!(!Level::P95.same_coverage(Level::P99));
+        assert!(Level::alpha(0.1).unwrap().same_coverage(Level::P90));
+    }
+
+    #[test]
+    fn a_level_prints_as_a_percentage() {
+        assert_eq!(Level::P95.to_string(), "95%");
+        assert_eq!(Level::alpha(0.05).unwrap().to_string(), "95%");
+        assert_eq!(Level::confidence(0.975).unwrap().to_string(), "97.5%");
+        assert_eq!(Level::alpha(0.07).unwrap().to_string(), "93%");
+        assert_eq!(Level::percent(7).to_string(), "7%");
     }
 
     #[cfg(feature = "serde")]

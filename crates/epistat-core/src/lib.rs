@@ -38,6 +38,7 @@ pub mod error;
 pub mod estimand;
 pub mod estimate;
 pub mod event_study;
+mod format;
 pub mod level;
 pub mod panel;
 
