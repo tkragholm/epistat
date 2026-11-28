@@ -58,7 +58,7 @@ impl Sorted {
 /// one event code it must be 1.
 pub(super) fn sort_rows(data: &SurvData<'_>, timefix: TimeFix, cause: u32) -> Result<Sorted> {
     let data = data.clone().with_timefix(timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     if surv.start().is_some() {
         return Err(Error::not_applicable(
             "data with delayed entry has no censoring distribution to weight by; \
@@ -189,7 +189,7 @@ pub(super) fn check_shape(
 /// then only says when follow-up began, and the follow-up is the time to the
 /// stop.
 pub(super) fn check_common_start(data: &SurvData<'_>) -> Result<()> {
-    let surv = data.followup()?;
+    let surv = data.followup();
     let Some(start) = surv.start() else {
         return Ok(());
     };

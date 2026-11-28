@@ -190,7 +190,7 @@ fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions) -> R
     {
         return Err(Error::options("the grid width must be finite and positive"));
     }
-    if data.followup()?.n_codes() != 1 {
+    if data.followup().n_codes() != 1 {
         return Err(Error::not_applicable(
             "net survival needs a binary status: use SurvData::cause for competing events",
         ));
@@ -242,7 +242,7 @@ pub fn net_survival(
     opts: &NetOptions,
 ) -> Result<Vec<NetSurvival>> {
     check(data, expected, opts)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let (stop, status) = (surv.stop(), surv.status());
     let start = surv.start();
     let n_strata = data.n_strata().max(1);

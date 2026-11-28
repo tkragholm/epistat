@@ -5,7 +5,7 @@ use std::borrow::Cow;
 
 use super::checks;
 use super::dense::Dense;
-use super::{Outcome, SurvData};
+use super::{IntervalCensored, Stored, SurvData};
 use crate::check::{check_lengths, check_row_count};
 use crate::error::Result;
 
@@ -143,7 +143,16 @@ pub struct IntervalDataBuilder<'a> {
     id: Option<&'a [u32]>,
 }
 
-impl<'a> SurvData<'a> {
+impl<'a> SurvData<'a, IntervalCensored> {
+    /// The interval-censored outcome.
+    #[must_use]
+    pub fn interval(&self) -> &IntervalSurv<'a> {
+        match &self.outcome {
+            Stored::Interval(surv) => surv,
+            Stored::Followup(_) => unreachable!("interval-censored data holds interval columns"),
+        }
+    }
+
     /// Start an interval-censored outcome from its two bounds, written as in
     /// `Surv(type = "interval2")`: `-inf` for a missing lower bound and
     /// `+inf` for a missing upper one. See [`IntervalSurv`] for the kinds.
@@ -230,7 +239,7 @@ impl<'a> IntervalDataBuilder<'a> {
     /// # Errors
     ///
     /// An input error for the first rule that fails.
-    pub fn build(self) -> Result<SurvData<'a>> {
+    pub fn build(self) -> Result<SurvData<'a, IntervalCensored>> {
         let n_rows = match self.source {
             Source::Bounds { lower, .. } => lower.len(),
             Source::Status { time, .. } => time.len(),
@@ -304,7 +313,8 @@ impl<'a> IntervalDataBuilder<'a> {
             .weight
             .map_or(n_rows, |weight| weight.iter().filter(|&&w| w > 0.0).count());
         Ok(SurvData {
-            outcome: Outcome::Interval(IntervalSurv { lower, upper, kind }),
+            outcome: Stored::Interval(IntervalSurv { lower, upper, kind }),
+            kind: std::marker::PhantomData,
             weight: self.weight,
             offset: self.offset,
             stratum: self.stratum.map(Dense::new),

@@ -78,7 +78,7 @@ impl Group {
 )]
 #[expect(clippy::float_cmp, reason = "rows share an exit time or they do not")]
 pub(super) fn build(data: &SurvData<'_>, cause: Option<u32>) -> Result<Vec<Group>> {
-    let surv = data.followup()?;
+    let surv = data.followup();
     if data.n_used() == 0 {
         return Err(Error::no_information("no row has positive weight"));
     }

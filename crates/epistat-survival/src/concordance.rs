@@ -393,7 +393,7 @@ pub fn estimate(
         ));
     }
     let data = data.clone().with_timefix(opts.timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     if surv.n_codes() != 1 {
         return Err(Error::not_applicable(format!(
             "status has {} event codes, and concordance takes one; pass one cause as 0 and 1",
@@ -553,9 +553,7 @@ fn stratum_rows(data: &SurvData<'_>) -> Vec<(usize, Vec<u32>)> {
 
 /// The columns of the rows of one stratum, with the scores ranked.
 fn gather(data: &SurvData<'_>, stop: &[f64], score: &[f64], rows: &[u32]) -> Local {
-    let surv = data
-        .followup()
-        .expect("the data was checked as follow-up data");
+    let surv = data.followup();
     let pick = |column: &[f64]| rows.iter().map(|&r| column[r as usize]).collect::<Vec<_>>();
     let status = surv.status();
     let x = pick(score);

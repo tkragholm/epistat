@@ -419,7 +419,7 @@ pub(crate) fn prepare(
     let p = keep.len();
 
     let data = data.clone().with_timefix(opts.timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let code = match (opts.cause, surv.n_codes()) {
         (None, 1) => 1,
         (Some(code), _) => code,

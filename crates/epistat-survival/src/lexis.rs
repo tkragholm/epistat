@@ -448,7 +448,7 @@ pub fn split_cells(
     cause: Option<u32>,
     options: &LexisOptions,
 ) -> Result<Cells> {
-    let surv = data.followup()?;
+    let surv = data.followup();
     let code = match cause {
         Some(code) => data.cause(code)?.code(),
         None if surv.n_codes() == 1 => 1,
@@ -573,7 +573,7 @@ impl<'a> Walk<'a> {
         scales: &[TimeScale<'a>],
         options: LexisOptions,
     ) -> Result<Self> {
-        let surv = data.followup()?;
+        let surv = data.followup();
         let n = data.n_rows();
         check_row_count(n)?;
         let stop = surv.stop();

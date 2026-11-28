@@ -256,7 +256,7 @@ pub fn estimate(data: &SurvData<'_>, eta: &[f64], opts: &RoystonOptions) -> Resu
     }
     check_row_count(data.n_rows())?;
     let timefixed = data.clone().with_timefix(opts.timefix)?;
-    let surv = timefixed.followup()?;
+    let surv = timefixed.followup();
     let code = match (opts.cause, surv.n_codes()) {
         (None, 1) => 1,
         (Some(code), _) => code,
@@ -382,7 +382,7 @@ pub fn from_fit(
     let code = cox.cause;
     let adjust = if opts.adjust {
         let timefixed = data.clone().with_timefix(cox.timefix)?;
-        let ev = timefixed.followup()?;
+        let ev = timefixed.followup();
         let k = match (code, ev.n_codes()) {
             (None, 1) => 1,
             (Some(k), _) => k,

@@ -17,7 +17,7 @@ fn simple() -> (Vec<f64>, Vec<i32>) {
 fn a_right_censored_input_builds_with_defaults() {
     let (stop, status) = simple();
     let data = SurvData::builder(&stop, &status).build().unwrap();
-    let surv = data.followup().unwrap();
+    let surv = data.followup();
     assert!(surv.start().is_none());
     assert_eq!(surv.stop(), &stop[..]);
     assert_eq!(surv.status(), &status[..]);
@@ -38,7 +38,7 @@ fn a_right_censored_input_builds_with_defaults() {
 fn no_rows_is_a_valid_input() {
     let data = SurvData::builder(&[], &[]).build().unwrap();
     assert_eq!((data.n_rows(), data.n_used()), (0, 0));
-    assert!(data.followup().unwrap().is_empty());
+    assert!(data.followup().is_empty());
 }
 
 #[test]
@@ -188,10 +188,7 @@ fn an_interval_with_start_not_below_stop_is_refused() {
         .start(&[0.0, 1.999, 2.0])
         .build()
         .unwrap();
-    assert_eq!(
-        data.followup().unwrap().start(),
-        Some(&[0.0, 1.999, 2.0][..])
-    );
+    assert_eq!(data.followup().start(), Some(&[0.0, 1.999, 2.0][..]));
 }
 
 #[test]
@@ -292,14 +289,14 @@ fn the_buffer_hands_out_the_same_data_as_the_borrowed_builder() {
     assert_eq!(data.cluster().unwrap(), &[0, 1, 1, 0]);
     assert_eq!(data.n_clusters(), 2);
     assert_eq!(data.istate().unwrap(), &[1, 1, 2, 0]);
-    let surv = data.followup().unwrap();
+    let surv = data.followup();
     assert_eq!(surv.start().unwrap(), &[0.0, 0.5, 0.5, 1.0]);
     assert_eq!(surv.n_codes(), 2);
     assert_eq!(data.weight().unwrap(), &[1.0, 0.0, 2.0, 1.0]);
 }
 
 fn is_borrowed(data: &SurvData<'_>) -> bool {
-    let surv = data.followup().unwrap();
+    let surv = data.followup();
     matches!(surv.stop, std::borrow::Cow::Borrowed(_))
         && surv
             .start
@@ -313,7 +310,7 @@ const NEAR: f64 = 1e-12;
 fn a_new_data_set_has_had_no_tie_policy_applied() {
     let (stop, status) = simple();
     let data = SurvData::builder(&stop, &status).build().unwrap();
-    assert_eq!(data.timefix().unwrap(), TimeFix::Exact);
+    assert_eq!(data.timefix(), TimeFix::Exact);
 }
 
 #[test]
@@ -330,14 +327,14 @@ fn timefix_replaces_only_the_times_and_only_when_a_tie_is_found() {
         .build()
         .unwrap();
     let fixed = data.with_timefix(TimeFix::default()).unwrap();
-    let surv = fixed.followup().unwrap();
+    let surv = fixed.followup();
     assert_eq!(surv.stop(), &[1.0, 1.0, 5.0, 7.0]);
     assert_eq!(surv.start().unwrap(), &[0.0, 0.0, 1.0, 5.0]);
     assert!(!is_borrowed(&fixed));
     assert_eq!(surv.status().as_ptr(), status.as_ptr());
     assert_eq!(fixed.weight().unwrap().as_ptr(), weight.as_ptr());
     assert_eq!(fixed.stratum().unwrap(), &[1, 0, 1, 0]);
-    assert_eq!(fixed.timefix().unwrap(), TimeFix::default());
+    assert_eq!(fixed.timefix(), TimeFix::default());
     assert_eq!((fixed.n_rows(), fixed.n_used()), (4, 3));
 }
 
@@ -348,8 +345,8 @@ fn timefix_without_a_tie_keeps_the_times_borrowed_and_records_the_policy() {
     let data = SurvData::builder(&stop, &status).build().unwrap();
     let fixed = data.with_timefix(TimeFix::default()).unwrap();
     assert!(is_borrowed(&fixed));
-    assert_eq!(fixed.followup().unwrap().stop().as_ptr(), stop.as_ptr());
-    assert_eq!(fixed.timefix().unwrap(), TimeFix::default());
+    assert_eq!(fixed.followup().stop().as_ptr(), stop.as_ptr());
+    assert_eq!(fixed.timefix(), TimeFix::default());
 }
 
 #[test]
@@ -375,8 +372,8 @@ fn exact_and_a_zero_tolerance_change_nothing_and_are_not_recorded() {
             .with_timefix(policy)
             .unwrap();
         assert!(is_borrowed(&fixed));
-        assert_eq!(fixed.followup().unwrap().stop(), &stop[..]);
-        assert_eq!(fixed.timefix().unwrap(), TimeFix::Exact);
+        assert_eq!(fixed.followup().stop(), &stop[..]);
+        assert_eq!(fixed.timefix(), TimeFix::Exact);
     }
 }
 
@@ -391,8 +388,8 @@ fn exact_does_not_undo_an_applied_policy() {
         .unwrap()
         .with_timefix(TimeFix::Exact)
         .unwrap();
-    assert_eq!(fixed.followup().unwrap().stop(), &[1.0, 1.0]);
-    assert_eq!(fixed.timefix().unwrap(), TimeFix::default());
+    assert_eq!(fixed.followup().stop(), &[1.0, 1.0]);
+    assert_eq!(fixed.timefix(), TimeFix::default());
 }
 
 #[test]
@@ -404,10 +401,10 @@ fn applying_the_same_policy_twice_changes_nothing() {
         .unwrap()
         .with_timefix(TimeFix::default())
         .unwrap();
-    let before = once.followup().unwrap().stop().to_vec();
+    let before = once.followup().stop().to_vec();
     let twice = once.with_timefix(TimeFix::default()).unwrap();
-    assert_eq!(twice.followup().unwrap().stop(), &before[..]);
-    assert_eq!(twice.timefix().unwrap(), TimeFix::default());
+    assert_eq!(twice.followup().stop(), &before[..]);
+    assert_eq!(twice.timefix(), TimeFix::default());
 }
 
 #[test]
@@ -419,11 +416,11 @@ fn a_different_policy_is_applied_to_the_times_as_they_stand() {
         .unwrap()
         .with_timefix(TimeFix::default())
         .unwrap();
-    assert_eq!(first.followup().unwrap().stop(), &stop[..]);
+    assert_eq!(first.followup().stop(), &stop[..]);
     let loose = TimeFix::Aeq { tolerance: 1e-2 };
     let second = first.with_timefix(loose).unwrap();
-    assert_eq!(second.followup().unwrap().stop(), &[1.0, 1.0, 5.0]);
-    assert_eq!(second.timefix().unwrap(), loose);
+    assert_eq!(second.followup().stop(), &[1.0, 1.0, 5.0]);
+    assert_eq!(second.timefix(), loose);
 }
 
 #[test]
@@ -453,10 +450,10 @@ fn timefix_works_on_data_from_a_buffer_and_leaves_the_buffer_alone() {
         .build()
         .unwrap();
     let fixed = buf.as_data().with_timefix(TimeFix::default()).unwrap();
-    assert_eq!(fixed.followup().unwrap().stop(), &[1.0, 1.0, 3.0]);
+    assert_eq!(fixed.followup().stop(), &[1.0, 1.0, 3.0]);
     assert_eq!(fixed.stratum_levels().unwrap().to_vec(), [4, 9]);
     assert_eq!(
-        buf.as_data().followup().unwrap().stop()[1].to_bits(),
+        buf.as_data().followup().stop()[1].to_bits(),
         (1.0 + NEAR).to_bits()
     );
 }

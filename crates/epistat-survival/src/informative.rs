@@ -125,7 +125,7 @@ pub fn informative_sets(
 /// An input error when `x` does not have one row per row of the data, has no
 /// column or has a value that is not finite, and for interval-censored data.
 pub fn informative_strata(data: &SurvData<'_>, x: MatRef<'_, f64>) -> Result<InformativeSets> {
-    let status = data.followup()?.status();
+    let status = data.followup().status();
     check_lengths(&[("status", status.len()), ("x", x.nrows())])?;
     let case: Vec<bool> = status.iter().map(|&s| s != 0).collect();
     match data.stratum() {

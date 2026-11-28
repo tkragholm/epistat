@@ -695,7 +695,7 @@ fn with_expansion<T>(
     timefix: TimeFix,
     body: impl FnOnce(&Expansion<'_>, Option<&[u32]>) -> Result<T>,
 ) -> Result<T> {
-    if data.followup()?.start().is_some() {
+    if data.followup().start().is_some() {
         return Err(Error::unsupported(
             "start",
             "Fine-Gray follows every individual from time 0, so data with a start column is not supported",
@@ -704,7 +704,7 @@ fn with_expansion<T>(
     let code = i32::try_from(data.cause(cause)?.code())
         .expect("SurvData::cause checked that the code is a status");
     let fixed = data.clone().with_timefix(timefix)?;
-    let surv = fixed.followup()?;
+    let surv = fixed.followup();
     let index = fixed.used_index();
     let time = pick_used(surv.stop(), index.as_deref());
     let event = pick_used(surv.status(), index.as_deref());

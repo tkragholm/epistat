@@ -376,7 +376,7 @@ fn weighted_data<'a>(
         ));
     }
     refuse_non_finite(weights, "weights")?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let mut builder = SurvData::builder(surv.stop(), surv.status())
         .n_codes(surv.n_codes())
         .weight(weights)
@@ -472,7 +472,7 @@ pub fn baseline(
         .first()
         .ok_or_else(|| Error::no_information("fit: the baseline has no stratum"))?;
     let last_time = weighted
-        .followup()?
+        .followup()
         .stop()
         .iter()
         .zip(weights)

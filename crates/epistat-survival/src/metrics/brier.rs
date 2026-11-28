@@ -136,7 +136,7 @@ pub struct Brier {
 /// [`SurvData::followup`].
 pub fn event_times(data: &SurvData<'_>, timefix: TimeFix) -> Result<Vec<f64>> {
     let data = data.clone().with_timefix(timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let mut times: Vec<f64> = data
         .used_rows()
         .filter(|&r| surv.status()[r as usize] != 0)
@@ -185,7 +185,7 @@ pub fn estimate(
         }));
     }
     let data = data.clone().with_timefix(opts.timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     check_common_start(&data)?;
     if surv.n_codes() != 1 {
         return Err(Error::not_applicable(format!(

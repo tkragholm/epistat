@@ -568,7 +568,7 @@ pub fn fit(
         return Err(Error::no_information("x: the design has no columns"));
     }
     check_inputs(data, stratum, opts)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let code = match (opts.cause, surv.n_codes()) {
         (None, 1) => 1,
         (Some(code), _) => code,

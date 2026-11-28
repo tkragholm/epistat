@@ -88,13 +88,13 @@ pub fn crude_mortality(
     expected: &ExpectedHazard,
     level: Level,
 ) -> Result<Vec<CrudeMortality>> {
-    if data.followup()?.n_codes() != 1 {
+    if data.followup().n_codes() != 1 {
         return Err(Error::not_applicable(
             "the crude probabilities need a binary status of death from any cause",
         ));
     }
     let groups = rows_by_stratum(data, expected)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let (start, stop, status) = (surv.start(), surv.stop(), surv.status());
     let z = normal::quantile(level.upper_probability());
     groups

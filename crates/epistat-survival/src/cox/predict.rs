@@ -705,7 +705,7 @@ impl<'a> Model<'a> {
         }
         let variance: Vec<f64> = chosen.as_slice().iter().map(|v| v.unwrap_or(0.0)).collect();
         let data = m.data.clone().with_timefix(m.options.timefix)?;
-        let surv = data.followup()?;
+        let surv = data.followup();
         let code = match (m.options.cause, surv.n_codes()) {
             (None, 1) => 1,
             (Some(code), _) => code,
@@ -748,11 +748,11 @@ impl<'a> Model<'a> {
     }
 
     fn stop(&self) -> &[f64] {
-        self.data.followup().map_or(&[], |s| s.stop())
+        self.data.followup().stop()
     }
 
     fn start(&self) -> Option<&[f64]> {
-        self.data.followup().ok().and_then(|s| s.start())
+        self.data.followup().start()
     }
 
     /// The default hazard form follows the ties of the fit. Any rule other
@@ -1816,7 +1816,7 @@ pub fn predict_expected_martingale(model: &FittedModel<'_>) -> Result<Vec<f64>> 
         &ResidualOptions::new(CoxResidualKind::Martingale, model.options.clone()),
     )?;
     let data = model.data.clone().with_timefix(model.options.timefix)?;
-    let code = match (model.options.cause, data.followup()?.n_codes()) {
+    let code = match (model.options.cause, data.followup().n_codes()) {
         (None, 1) => 1,
         (Some(code), _) => code,
         (None, _) => {

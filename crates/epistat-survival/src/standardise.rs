@@ -470,7 +470,7 @@ pub fn standardise_cause_specific<'a>(
     opts: &StandardiseOptions,
 ) -> Result<Standardised> {
     let fixed = data.clone().with_timefix(csc.timefix)?;
-    let n_codes = fixed.followup()?.n_codes();
+    let n_codes = fixed.followup().n_codes();
     if n_codes < 2 {
         return Err(Error::not_applicable(
             "data: absolute risk needs competing causes, so the status needs at least two codes",

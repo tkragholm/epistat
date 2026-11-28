@@ -150,7 +150,7 @@ pub fn pseudo_ipcw(
         || data.stratum().is_some()
         || data.cluster().is_some()
         || data.id().is_some()
-        || data.followup()?.start().is_some()
+        || data.followup().start().is_some()
     {
         return Err(Error::not_applicable(
             "inverse probability of censoring weighting takes each row as a subject, \
@@ -172,7 +172,7 @@ pub fn pseudo_ipcw(
         }));
     }
     let data = data.clone().with_timefix(opts.timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let (stop, status) = (surv.stop(), surv.status());
     let n_codes = surv.n_codes();
     match opts.target {

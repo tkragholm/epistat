@@ -14,11 +14,11 @@
 #![expect(clippy::type_complexity, reason = "a local table of names and numbers")]
 
 use epistat_linalg::Mat;
-use epistat_survival::SurvData;
 use epistat_survival::survreg::{
     Distribution, SurvregFit, SurvregOptions, SurvregPredictOptions, SurvregPredictType,
     SurvregResidualKind, fit,
 };
+use epistat_survival::{AnyOutcome, SurvData};
 use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -173,7 +173,7 @@ fn columns(dataset: &str, d: &Dataset) -> Columns {
     c
 }
 
-fn build<'a>(c: &'a Columns, route: Route, r: &RFit) -> SurvData<'a> {
+fn build<'a>(c: &'a Columns, route: Route, r: &RFit) -> SurvData<'a, AnyOutcome> {
     match route {
         Route::Right => {
             let mut b = SurvData::builder(&c.time, &c.status);
@@ -183,7 +183,7 @@ fn build<'a>(c: &'a Columns, route: Route, r: &RFit) -> SurvData<'a> {
             if r.use_weights {
                 b = b.weight(&c.weight);
             }
-            b.build().unwrap()
+            b.build().unwrap().erase()
         }
         Route::Left | Route::IntervalBounds => {
             let mut b = SurvData::interval_builder(&c.lower, &c.upper);
@@ -193,7 +193,7 @@ fn build<'a>(c: &'a Columns, route: Route, r: &RFit) -> SurvData<'a> {
             if r.use_weights {
                 b = b.weight(&c.weight);
             }
-            b.build().unwrap()
+            b.build().unwrap().erase()
         }
         Route::IntervalStatus => {
             let mut b = SurvData::interval_status_builder(&c.time, &c.time2, &c.status);
@@ -203,7 +203,7 @@ fn build<'a>(c: &'a Columns, route: Route, r: &RFit) -> SurvData<'a> {
             if r.use_weights {
                 b = b.weight(&c.weight);
             }
-            b.build().unwrap()
+            b.build().unwrap().erase()
         }
     }
 }

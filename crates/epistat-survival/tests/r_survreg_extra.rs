@@ -47,12 +47,12 @@
 )]
 
 use epistat_linalg::Mat;
-use epistat_survival::SurvData;
 use epistat_survival::cox::Collapse;
 use epistat_survival::survreg::{
     DfbetaOptions, Distribution, SurvregOptions, SurvregPredictOptions, SurvregPredictType,
     SurvregResidualKind, TermsReference, fit,
 };
+use epistat_survival::{AnyOutcome, SurvData};
 use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -248,7 +248,7 @@ fn columns(dataset: &str, d: &Dataset) -> Columns {
 
 /// The data of the fit, with the clusters of `c` when the fit is clustered or
 /// `clustered` asks for them.
-fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit, clustered: bool) -> SurvData<'a> {
+fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit, clustered: bool) -> SurvData<'a, AnyOutcome> {
     if dataset == "lung" || dataset == "right" {
         let mut b = SurvData::builder(&c.time, &c.status);
         if r.use_strata {
@@ -263,7 +263,7 @@ fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit, clustered: bool) -> SurvDa
         if r.use_offset {
             b = b.offset(&c.offset);
         }
-        b.build().unwrap()
+        b.build().unwrap().erase()
     } else {
         let mut b = SurvData::interval_builder(&c.lower, &c.upper);
         if r.use_strata {
@@ -278,7 +278,7 @@ fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit, clustered: bool) -> SurvDa
         if r.use_offset {
             b = b.offset(&c.offset);
         }
-        b.build().unwrap()
+        b.build().unwrap().erase()
     }
 }
 

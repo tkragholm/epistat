@@ -29,10 +29,23 @@
 //! status for `mright` has the censoring level first and the events after it,
 //! which is the same numbering. A binary status of 0 and 1 is `n_codes = 1`.
 //! Left and interval censoring are the other kind of outcome,
-//! [`Outcome::Interval`], built by [`SurvData::interval_builder`] and
+//! [`IntervalCensored`] data, built by [`SurvData::interval_builder`] and
 //! [`SurvData::interval_status_builder`] and described in [`IntervalSurv`].
-//! The follow-up case is read through [`SurvData::followup`], which refuses
-//! interval-censored data, so an estimator of follow-up data cannot take it.
+//! The kind of outcome is the type parameter of [`SurvData`]: the default,
+//! [`Followup`], for the first four types, and [`IntervalCensored`] for the
+//! others. An estimator of follow-up data takes a `SurvData<'_>`, so passing
+//! it interval-censored data does not compile:
+//!
+//! ```compile_fail
+//! use epistat_linalg::Mat;
+//! use epistat_survival::{SurvData, cox};
+//!
+//! let (lower, upper) = ([1.0, 2.0], [2.0, f64::INFINITY]);
+//! let data = SurvData::interval_builder(&lower, &upper).build()?;
+//! let x = Mat::<f64>::zeros(2, 1);
+//! cox::fit(&data, x.as_ref(), &cox::CoxOptions::default())?;
+//! # Ok::<(), epistat_survival::Error>(())
+//! ```
 //!
 //! # Checks at build time
 //!
@@ -115,6 +128,7 @@
 //! copying the status column.
 
 use std::borrow::Cow;
+use std::marker::PhantomData;
 
 use epistat_core::InputError;
 
@@ -210,27 +224,74 @@ impl<'a> Surv<'a> {
         Ok(())
     }
 }
-/// The outcome of a survival dataset.
+/// A borrowed view of the outcome of a [`SurvData`] of either kind, for
+/// code that handles both, as `survreg` does.
 ///
 /// The enum is non-exhaustive so that a further kind of outcome can be added
 /// without breaking a caller's `match`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
-pub enum Outcome<'a> {
+pub enum Outcome<'s, 'a> {
     /// Risk intervals with an event status, as R's `right`, `counting`,
     /// `mright` and `mcounting` types.
-    Followup(Surv<'a>),
+    Followup(&'s Surv<'a>),
     /// Exact, right-, left- and interval-censored times, as R's `interval`
     /// and `interval2` types.
+    Interval(&'s IntervalSurv<'a>),
+}
+
+mod sealed {
+    pub trait Sealed {}
+}
+
+/// The kind of outcome a [`SurvData`] holds, its type parameter.
+///
+/// The trait is sealed: its implementations are [`Followup`],
+/// [`IntervalCensored`] and [`AnyOutcome`].
+pub trait OutcomeKind: sealed::Sealed + 'static {}
+
+/// Follow-up data: risk intervals with an event status, R's `right`,
+/// `counting`, `mright` and `mcounting`. The default kind of a [`SurvData`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Followup {}
+
+/// Interval-censored data: exact, right-, left- and interval-censored times,
+/// R's `interval` and `interval2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntervalCensored {}
+
+/// Data of either kind, decided at run time, for a caller such as a binding
+/// that builds the outcome from a choice it reads. Only an estimator that
+/// takes both kinds, as `survreg`, takes it directly; the others take the
+/// data back as its kind through [`SurvData::into_followup`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnyOutcome {}
+
+impl sealed::Sealed for Followup {}
+impl sealed::Sealed for IntervalCensored {}
+impl sealed::Sealed for AnyOutcome {}
+impl OutcomeKind for Followup {}
+impl OutcomeKind for IntervalCensored {}
+impl OutcomeKind for AnyOutcome {}
+
+/// The outcome columns. The variant always agrees with the kind of the
+/// [`SurvData`] that holds them, since each builder makes only its own and
+/// [`SurvData::into_followup`] and [`SurvData::into_interval`] check it.
+#[derive(Debug, Clone)]
+enum Stored<'a> {
+    Followup(Surv<'a>),
     Interval(IntervalSurv<'a>),
 }
 
 /// Survival data: an outcome and the columns that go with it.
 ///
-/// Build one with [`SurvData::builder`]. The columns are borrowed for `'a`.
-#[derive(Debug, Clone)]
-pub struct SurvData<'a> {
-    outcome: Outcome<'a>,
+/// Build one with [`SurvData::builder`], or for interval-censored times with
+/// [`SurvData::interval_builder`]. The columns are borrowed for `'a`. `K` is
+/// the kind of outcome, [`Followup`] unless the data was built as
+/// interval-censored.
+pub struct SurvData<'a, K: OutcomeKind = Followup> {
+    outcome: Stored<'a>,
+    kind: PhantomData<fn() -> K>,
     weight: Option<&'a [f64]>,
     offset: Option<&'a [f64]>,
     stratum: Option<Dense<'a>>,
@@ -239,6 +300,39 @@ pub struct SurvData<'a> {
     istate: Option<&'a [u32]>,
     n_rows: usize,
     n_used: usize,
+}
+
+impl<K: OutcomeKind> Clone for SurvData<'_, K> {
+    fn clone(&self) -> Self {
+        Self {
+            outcome: self.outcome.clone(),
+            weight: self.weight,
+            offset: self.offset,
+            stratum: self.stratum.clone(),
+            cluster: self.cluster.clone(),
+            id: self.id.clone(),
+            istate: self.istate,
+            n_rows: self.n_rows,
+            n_used: self.n_used,
+            kind: PhantomData,
+        }
+    }
+}
+
+impl<K: OutcomeKind> std::fmt::Debug for SurvData<'_, K> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SurvData")
+            .field("outcome", &self.outcome)
+            .field("weight", &self.weight)
+            .field("offset", &self.offset)
+            .field("stratum", &self.stratum)
+            .field("cluster", &self.cluster)
+            .field("id", &self.id)
+            .field("istate", &self.istate)
+            .field("n_rows", &self.n_rows)
+            .field("n_used", &self.n_used)
+            .finish()
+    }
 }
 
 impl<'a> SurvData<'a> {
@@ -260,41 +354,44 @@ impl<'a> SurvData<'a> {
         }
     }
 
-    /// The outcome, for code that handles every kind.
-    #[must_use]
-    pub fn outcome(&self) -> &Outcome<'a> {
-        &self.outcome
-    }
-
     /// The follow-up outcome.
-    ///
-    /// # Errors
-    ///
-    /// An input error when the outcome is interval-censored data, which a
-    /// follow-up estimator has no use for.
-    pub fn followup(&self) -> Result<&Surv<'a>> {
+    #[must_use]
+    pub fn followup(&self) -> &Surv<'a> {
         match &self.outcome {
-            Outcome::Followup(surv) => Ok(surv),
-            Outcome::Interval(_) => Err(Error::not_applicable(
-                "the outcome is interval-censored; this estimator needs follow-up data \
-                 (stop and status)"
-                    .to_owned(),
-            )),
+            Stored::Followup(surv) => surv,
+            Stored::Interval(_) => unreachable!("follow-up data holds follow-up columns"),
+        }
+    }
+}
+
+impl<'a, K: OutcomeKind> SurvData<'a, K> {
+    /// The outcome, for code that handles either kind.
+    #[must_use]
+    pub fn outcome(&self) -> Outcome<'_, 'a> {
+        match &self.outcome {
+            Stored::Followup(surv) => Outcome::Followup(surv),
+            Stored::Interval(surv) => Outcome::Interval(surv),
         }
     }
 
-    /// The interval-censored outcome.
-    ///
-    /// # Errors
-    ///
-    /// An input error when the outcome is follow-up data.
-    pub fn interval(&self) -> Result<&IntervalSurv<'a>> {
-        match &self.outcome {
-            Outcome::Interval(surv) => Ok(surv),
-            Outcome::Followup(_) => Err(Error::not_applicable(
-                "the outcome is follow-up data; this estimator needs interval-censored data"
-                    .to_owned(),
-            )),
+    /// The same data with its kind decided at run time.
+    #[must_use]
+    pub fn erase(self) -> SurvData<'a, AnyOutcome> {
+        self.into_kind()
+    }
+
+    fn into_kind<L: OutcomeKind>(self) -> SurvData<'a, L> {
+        SurvData {
+            outcome: self.outcome,
+            kind: PhantomData,
+            weight: self.weight,
+            offset: self.offset,
+            stratum: self.stratum,
+            cluster: self.cluster,
+            id: self.id,
+            istate: self.istate,
+            n_rows: self.n_rows,
+            n_used: self.n_used,
         }
     }
 
@@ -389,48 +486,7 @@ impl<'a> SurvData<'a> {
     }
 }
 
-impl<'a> SurvData<'a> {
-    /// Apply the tie policy to the follow-up times and return the data.
-    ///
-    /// The policy is that of `survival::aeqSurv`, see
-    /// [`fix_times`]. Only start and stop can change. When no tie is found
-    /// they stay borrowed, and when one is found they become owned, which
-    /// costs 8 bytes per row for each of the two columns (80 MB each at
-    /// 10^7) and a transient pooled copy for the search of up to 16 bytes
-    /// per row. Status, weights, the grouping codes and their level maps are
-    /// moved through untouched. The data is taken by value so that nothing
-    /// is cloned. Clone first to keep the original.
-    ///
-    /// [`TimeFix::Exact`] and a tolerance of zero return the data unchanged,
-    /// also for interval-censored data, to which no other policy applies.
-    /// The policy applied is recorded, see [`timefix`](Self::timefix), and
-    /// the same policy applied again returns at once without searching. A
-    /// different policy is applied to the times as they now stand.
-    ///
-    /// The result is the same on any number of threads.
-    ///
-    /// # Errors
-    ///
-    /// An input error as for [`fix_times`]: a negative or non-finite
-    /// tolerance, a sum of absolute times that overflows, or a row whose
-    /// start and stop become equal. Also when the outcome is
-    /// interval-censored and the policy is not [`TimeFix::Exact`]. The data
-    /// is consumed whether or not the call succeeds.
-    pub fn with_timefix(mut self, policy: TimeFix) -> Result<Self> {
-        match &mut self.outcome {
-            Outcome::Followup(surv) => surv.apply_timefix(policy)?,
-            Outcome::Interval(_) => {
-                if !matches!(policy, TimeFix::Exact | TimeFix::Aeq { tolerance: 0.0 }) {
-                    return Err(Error::not_applicable(
-                        "a tie policy applies to follow-up times, not to interval-censored data"
-                            .to_owned(),
-                    ));
-                }
-            }
-        }
-        Ok(self)
-    }
-
+impl<'a, K: OutcomeKind> SurvData<'a, K> {
     /// The same data with `offset` in place of its own, for a fit that
     /// recomputes the offset between fits.
     ///
@@ -438,27 +494,15 @@ impl<'a> SurvData<'a> {
     ///
     /// An input error when `offset` has another length than the data or a
     /// value that is not finite.
-    pub(crate) fn with_offset<'b>(&self, offset: &'b [f64]) -> Result<SurvData<'b>>
+    pub(crate) fn with_offset<'b>(&self, offset: &'b [f64]) -> Result<SurvData<'b, K>>
     where
         'a: 'b,
     {
         check_lengths(&[("data", self.n_rows), ("offset", offset.len())])?;
         checks::check_finite(offset, "offset")?;
-        let mut data: SurvData<'b> = self.clone();
+        let mut data: SurvData<'b, K> = self.clone();
         data.offset = Some(offset);
         Ok(data)
-    }
-
-    /// The tie policy applied so far, [`TimeFix::Exact`] when none.
-    ///
-    /// A result that depends on how ties were treated can report this, and a
-    /// caller that needs exact ties can check it.
-    ///
-    /// # Errors
-    ///
-    /// As for [`followup`](Self::followup).
-    pub fn timefix(&self) -> Result<TimeFix> {
-        Ok(self.followup()?.timefix())
     }
 
     /// The rows with positive weight, ascending, which are the rows a fit
@@ -480,6 +524,82 @@ impl<'a> SurvData<'a> {
     pub fn used_index(&self) -> Option<Vec<u32>> {
         (self.n_used < self.n_rows).then(|| self.used_rows().collect())
     }
+}
+
+impl<'a> SurvData<'a, AnyOutcome> {
+    /// The data as follow-up data.
+    ///
+    /// # Errors
+    ///
+    /// An input error when the outcome is interval-censored, which a
+    /// follow-up estimator has no use for.
+    pub fn into_followup(self) -> Result<SurvData<'a>> {
+        match self.outcome {
+            Stored::Followup(_) => Ok(self.into_kind()),
+            Stored::Interval(_) => Err(Error::not_applicable(
+                "the outcome is interval-censored; this estimator needs follow-up data \
+                 (stop and status)"
+                    .to_owned(),
+            )),
+        }
+    }
+
+    /// The data as interval-censored data.
+    ///
+    /// # Errors
+    ///
+    /// An input error when the outcome is follow-up data.
+    pub fn into_interval(self) -> Result<SurvData<'a, IntervalCensored>> {
+        match self.outcome {
+            Stored::Interval(_) => Ok(self.into_kind()),
+            Stored::Followup(_) => Err(Error::not_applicable(
+                "the outcome is follow-up data; this estimator needs interval-censored data"
+                    .to_owned(),
+            )),
+        }
+    }
+}
+
+impl<'a> SurvData<'a> {
+    /// Apply the tie policy to the follow-up times and return the data.
+    ///
+    /// The policy is that of `survival::aeqSurv`, see
+    /// [`fix_times`]. Only start and stop can change. When no tie is found
+    /// they stay borrowed, and when one is found they become owned, which
+    /// costs 8 bytes per row for each of the two columns (80 MB each at
+    /// 10^7) and a transient pooled copy for the search of up to 16 bytes
+    /// per row. Status, weights, the grouping codes and their level maps are
+    /// moved through untouched. The data is taken by value so that nothing
+    /// is cloned. Clone first to keep the original.
+    ///
+    /// [`TimeFix::Exact`] and a tolerance of zero return the data unchanged.
+    /// The policy applied is recorded, see [`timefix`](Self::timefix), and
+    /// the same policy applied again returns at once without searching. A
+    /// different policy is applied to the times as they now stand.
+    ///
+    /// The result is the same on any number of threads.
+    ///
+    /// # Errors
+    ///
+    /// An input error as for [`fix_times`]: a negative or non-finite
+    /// tolerance, a sum of absolute times that overflows, or a row whose
+    /// start and stop become equal. The data is consumed whether or not the
+    /// call succeeds.
+    pub fn with_timefix(mut self, policy: TimeFix) -> Result<Self> {
+        if let Stored::Followup(surv) = &mut self.outcome {
+            surv.apply_timefix(policy)?;
+        }
+        Ok(self)
+    }
+
+    /// The tie policy applied so far, [`TimeFix::Exact`] when none.
+    ///
+    /// A result that depends on how ties were treated can report this, and a
+    /// caller that needs exact ties can check it.
+    #[must_use]
+    pub fn timefix(&self) -> TimeFix {
+        self.followup().timefix()
+    }
 
     /// Status code `code` read as the event, for a cause-specific analysis.
     ///
@@ -490,7 +610,7 @@ impl<'a> SurvData<'a> {
     /// An input error when `code` is 0, which is censoring, or above
     /// `n_codes`.
     pub fn cause(&self, code: u32) -> Result<Cause<'a>> {
-        let surv = self.followup()?;
+        let surv = self.followup();
         match i32::try_from(code) {
             Ok(signed) if code != 0 && code <= surv.n_codes => Ok(Cause {
                 status: surv.status,
@@ -669,13 +789,14 @@ impl<'a> SurvDataBuilder<'a> {
         let c = self.columns;
         let checked = c.check()?;
         Ok(SurvData {
-            outcome: Outcome::Followup(Surv {
+            outcome: Stored::Followup(Surv {
                 start: c.start.map(Cow::Borrowed),
                 stop: Cow::Borrowed(c.stop),
                 status: c.status,
                 n_codes: c.n_codes,
                 timefix: TimeFix::Exact,
             }),
+            kind: PhantomData,
             weight: c.weight,
             offset: c.offset,
             stratum: checked.stratum,
@@ -729,13 +850,14 @@ impl SurvBuf {
     #[must_use]
     pub fn as_data(&self) -> SurvData<'_> {
         SurvData {
-            outcome: Outcome::Followup(Surv {
+            outcome: Stored::Followup(Surv {
                 start: self.start.as_deref().map(Cow::Borrowed),
                 stop: Cow::Borrowed(&self.stop),
                 status: &self.status,
                 n_codes: self.n_codes,
                 timefix: TimeFix::Exact,
             }),
+            kind: PhantomData,
             weight: self.weight.as_deref(),
             offset: self.offset.as_deref(),
             stratum: borrow_dense(self.stratum.as_ref()),

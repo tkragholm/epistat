@@ -526,7 +526,7 @@ fn curves(
     general: Option<&[Box<dyn Nuisance + '_>]>,
 ) -> Result<WeightedKm> {
     refuse_non_finite(times, "times")?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let code = match (surv.n_codes(), opts.cause) {
         (1, None | Some(1)) => 1,
         (1, Some(c)) => {

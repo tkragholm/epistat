@@ -447,7 +447,7 @@ pub struct AalenJohansenOptions {
 /// [`SurvData::with_timefix`], or `n_codes` does not fit an `i32`.
 pub fn estimate(data: &SurvData<'_>, opts: &AalenJohansenOptions) -> Result<Curves> {
     let data = data.clone().with_timefix(opts.timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let n_codes = i32::try_from(surv.n_codes())
         .map_err(|_| Error::out_of_range("n_codes must fit an i32 status"))?;
     let used = data.used_index();
@@ -629,7 +629,7 @@ pub(crate) fn variance_dfbeta(
     check_ascending(&v.horizons, "horizons", false)?;
     check_ascending(&v.influence_times, "influence_times", false)?;
     let data = data.clone().with_timefix(opts.timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let n_codes = i32::try_from(surv.n_codes())
         .map_err(|_| Error::out_of_range("n_codes must fit an i32 status"))?;
     let causes: Vec<i32> = (1..=n_codes).collect();
@@ -1164,7 +1164,7 @@ pub fn bootstrap(
     let data = data.clone().with_timefix(opts.timefix)?;
     let code = i32::try_from(data.cause(cause)?.code())
         .map_err(|_| Error::out_of_range("the cause must fit an i32 status"))?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     if surv.start().is_some() {
         return Err(Error::not_applicable(
             "the bootstrap takes no start times, everyone is at risk from a common origin",

@@ -66,7 +66,7 @@ impl ExpectedHazard {
         origins: &[&[f64]],
         factors: &[&[u32]],
     ) -> Result<Self> {
-        let surv = data.followup()?;
+        let surv = data.followup();
         let n = data.n_rows();
         let from_origin = {
             let mut b = SurvData::builder(surv.stop(), surv.status());
@@ -107,7 +107,7 @@ impl ExpectedHazard {
                 "row {row} has follow-up off the rate table, which has no expected hazard"
             )));
         }
-        let stop = walked.followup()?.stop();
+        let stop = walked.followup().stop();
         let horizon = any
             .iter()
             .zip(stop)

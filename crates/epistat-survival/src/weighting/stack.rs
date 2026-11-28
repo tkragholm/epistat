@@ -193,7 +193,7 @@ pub(super) fn with_weights(data: &SurvData<'_>, weight: Vec<f64>) -> Result<Surv
             "data: carries case weights, but the weights come from the weighting",
         ));
     }
-    let surv = data.followup()?;
+    let surv = data.followup();
     let mut builder = SurvBuf::builder(surv.stop().to_vec(), surv.status().to_vec())
         .n_codes(surv.n_codes())
         .weight(weight);

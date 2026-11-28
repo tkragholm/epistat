@@ -161,7 +161,7 @@ pub fn estimate(
         return Err(Error::from(InputError::Empty { what: "times" }));
     }
     let data = data.clone().with_timefix(opts.timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     if surv.start().is_some() {
         return counting(&data, times, opts);
     }
@@ -253,7 +253,7 @@ fn counting(
     times: Option<&[f64]>,
     opts: &RttrightOptions,
 ) -> Result<Rttright> {
-    let surv = data.followup()?;
+    let surv = data.followup();
     let (start, stop, status) = (
         surv.start().expect("counting data has a start column"),
         surv.stop(),

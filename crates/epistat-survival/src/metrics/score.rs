@@ -687,7 +687,7 @@ pub fn brier(
     let complement = match opts.predicted {
         Predicted::AbsoluteRisk => false,
         Predicted::EventFreeProbability => {
-            if core.sorted.kind.contains(&Kind::Competing) || data.followup()?.n_codes() > 1 {
+            if core.sorted.kind.contains(&Kind::Competing) || data.followup().n_codes() > 1 {
                 return Err(Error::not_applicable(
                     "event-free probabilities are for data with one event code; with competing \
                      risks give the absolute risk of the cause",

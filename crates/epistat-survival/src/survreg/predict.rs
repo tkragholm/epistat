@@ -11,7 +11,7 @@ use crate::check::refuse_non_finite_matrix;
 use crate::cox::residuals::Collapse;
 use crate::error::{Error, Result};
 use crate::order::{dense_index, dense_of_present};
-use crate::surv::SurvData;
+use crate::surv::{OutcomeKind, SurvData};
 
 /// What [`SurvregFit::predict`] returns for each row.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -430,9 +430,9 @@ impl SurvregFit {
     /// # Panics
     ///
     /// Never: the variance a displacement uses is present when it is asked for.
-    pub fn residuals(
+    pub fn residuals<K: OutcomeKind>(
         &self,
-        data: &SurvData<'_>,
+        data: &SurvData<'_, K>,
         x: MatRef<'_, f64>,
         kind: SurvregResidualKind,
         weighted: bool,
@@ -552,9 +552,9 @@ impl SurvregFit {
     /// An input error for data or a design that does not match the fit, for
     /// a `collapse` of another length than the data, and when the variance of
     /// the fit is not defined.
-    pub fn dfbeta(
+    pub fn dfbeta<K: OutcomeKind>(
         &self,
-        data: &SurvData<'_>,
+        data: &SurvData<'_, K>,
         x: MatRef<'_, f64>,
         options: &DfbetaOptions,
     ) -> Result<Dfbeta> {

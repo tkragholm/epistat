@@ -125,7 +125,7 @@ impl Baselines {
                 strata,
             });
         }
-        let surv = first.followup()?;
+        let surv = first.followup();
         let mut last_time = vec![f64::NEG_INFINITY; n_strata];
         let stratum = first.stratum();
         for i in first.used_rows() {
@@ -193,7 +193,7 @@ impl Influence {
     pub(crate) fn new(models: &[ModelInput<'_>], base: &Baselines) -> Result<Self> {
         let data = &models[0].data;
         let rows: Vec<usize> = data.used_rows().map(|i| i as usize).collect();
-        let stop = data.followup()?.stop();
+        let stop = data.followup().stop();
         let stratum: Vec<usize> = rows
             .iter()
             .map(|&i| data.stratum().map_or(0, |c| c[i] as usize))
@@ -202,7 +202,7 @@ impl Influence {
             .iter()
             .map(|&i| base.grid.partition_point(|&g| g <= stop[i]))
             .collect();
-        let count_le0: Vec<usize> = match data.followup()?.start() {
+        let count_le0: Vec<usize> = match data.followup().start() {
             Some(start) => rows
                 .iter()
                 .map(|&i| base.grid.partition_point(|&g| g <= start[i]))
@@ -255,7 +255,7 @@ fn train_model(
     let n = rows.len();
     let beta = &grid_model.beta;
     let event: Vec<bool> = {
-        let surv = model.data.followup()?;
+        let surv = model.data.followup();
         let code = model.options.cause.unwrap_or(1);
         let status = surv.status();
         rows.iter()
@@ -424,7 +424,7 @@ fn risk_sets(
     p: usize,
     times: impl DoubleEndedIterator<Item = f64> + ExactSizeIterator,
 ) -> Result<(Vec<f64>, Vec<f64>)> {
-    let surv = data.followup()?;
+    let surv = data.followup();
     let stop = surv.stop();
     let start = surv.start();
     let mut order: Vec<usize> = (0..rows.len()).filter(|&i| stratum[i] == s).collect();

@@ -428,7 +428,7 @@ pub fn fit(
     opts: &FlexParOptions,
 ) -> Result<FlexParFit> {
     check_inputs(data, x, bhazard, opts)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     if surv.n_codes() != 1 {
         return Err(Error::not_applicable(
             "flexpar needs a binary status: use SurvData::cause for competing events",

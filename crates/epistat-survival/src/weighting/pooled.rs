@@ -328,7 +328,7 @@ pub fn fit(
     options: &PooledOptions,
 ) -> Result<PooledIpcw> {
     let trunc = options.truncation.map(|b| (b.lower(), b.upper()));
-    let surv = data.followup()?;
+    let surv = data.followup();
     let n = data.n_rows();
     if let Some((lo, hi)) = trunc
         && !(0.0 <= lo && lo < hi && hi <= 1.0)

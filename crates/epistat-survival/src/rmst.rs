@@ -495,7 +495,7 @@ pub fn rmst2_regression(
             "the regression of the restricted mean takes no case weights",
         ));
     }
-    if data.followup()?.start().is_some() {
+    if data.followup().start().is_some() {
         return Err(Error::not_applicable(
             "the regression of the restricted mean takes no delayed entry",
         ));
@@ -515,7 +515,7 @@ pub fn rmst2_regression(
     }
     let (_, _, tau, tau_largest) = horizon(data, opts)?;
     let data = data.clone().with_timefix(opts.timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let arm_of = data
         .stratum()
         .ok_or_else(|| Error::missing("the arm is the stratum column"))?;

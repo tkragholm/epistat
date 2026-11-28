@@ -94,13 +94,13 @@ pub fn net_survival_test(
     {
         return Err(Error::options("the step must be finite and positive"));
     }
-    if data.followup()?.n_codes() != 1 {
+    if data.followup().n_codes() != 1 {
         return Err(Error::not_applicable(
             "the test needs a binary status of death from any cause",
         ));
     }
     let strata = rows_by_stratum(data, expected)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let (start, stop, status) = (surv.start(), surv.stop(), surv.status());
     let begin = |i: usize| start.map_or(0.0, |s| s[i]);
     let used: Vec<usize> = strata.iter().flatten().copied().collect();

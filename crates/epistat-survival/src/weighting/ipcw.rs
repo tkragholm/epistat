@@ -155,7 +155,7 @@ pub(super) fn fit_parts<'a>(
     model: CensoringModel<'a>,
     opts: &IpcwOptions,
 ) -> Result<(Ipcw, Parts<'a>)> {
-    let surv = data.followup()?;
+    let surv = data.followup();
     let n = data.n_rows();
     let fixed = {
         let mut builder =
@@ -167,8 +167,8 @@ pub(super) fn fit_parts<'a>(
     };
     let fixed = fixed.as_data().with_timefix(opts.timefix)?;
     let (start, stop) = (
-        fixed.followup()?.start().map(<[f64]>::to_vec),
-        fixed.followup()?.stop().to_vec(),
+        fixed.followup().start().map(<[f64]>::to_vec),
+        fixed.followup().stop().to_vec(),
     );
     let status = surv.status();
 

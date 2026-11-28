@@ -810,7 +810,7 @@ impl<'a> Prepared<'a> {
         let data = data.clone().with_timefix(timefix)?;
         let check = survcheck(&data)?;
         check.enforce(Policy::for_data(&data))?;
-        let surv = data.followup()?;
+        let surv = data.followup();
         let stop = surv.stop();
         let start = surv.start().ok_or_else(|| {
             Error::missing(
@@ -913,7 +913,7 @@ impl<'a> Prepared<'a> {
 
     /// The start, stop and weight of the rows used.
     fn columns(&self) -> Result<Columns<'_>> {
-        let surv = self.data.followup()?;
+        let surv = self.data.followup();
         let start = surv
             .start()
             .ok_or_else(|| Error::missing("multi-state estimates need a start column"))?;

@@ -81,7 +81,7 @@ pub(crate) fn rows_by_stratum(
             "the expected survival takes weights of 0 and 1 only, which select rows",
         ));
     }
-    let surv = data.followup()?;
+    let surv = data.followup();
     let (start, stop) = (surv.start(), surv.stop());
     let mut groups: Vec<Vec<usize>> = vec![Vec::new(); data.n_strata().max(1)];
     for row in data.used_rows() {
@@ -169,7 +169,7 @@ pub fn expected_survival(
     }
     check_ascending(times, "times", true)?;
     let groups = rows_by_stratum(data, expected)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let (start, stop) = (surv.start(), surv.stop());
     if !matches!(method, ExpectedMethod::Conditional)
         && let Some(s) = start

@@ -253,7 +253,7 @@ pub fn pyears(data: &SurvData<'_>, dims: &[Dimension<'_>], opts: &PyearsOptions)
     let mut offtable = 0.0;
     let n_rows = data.n_rows();
     {
-        let surv = data.followup()?;
+        let surv = data.followup();
         let status = surv.status();
         let weight = data.weight();
         let weight_of = |i: usize| weight.map_or(1.0, |w| w[i]);
@@ -319,7 +319,7 @@ impl<'d, 'x> Layout<'d, 'x> {
             return Err(Error::options("scale must be finite and positive"));
         }
         let data = data.clone().with_timefix(opts.timefix)?;
-        let surv = data.followup()?;
+        let surv = data.followup();
         let code = match opts.cause {
             _ if !needs_cause => 0,
             Some(code) => data.cause(code)?.code(),
@@ -459,7 +459,7 @@ impl Cursor<'_> {
         on_piece: &mut impl FnMut(usize, Option<usize>, f64),
         on_end: &mut impl FnMut(usize, Option<usize>),
     ) -> Result<()> {
-        let surv = data.followup()?;
+        let surv = data.followup();
         let stop = surv.stop();
         let start = surv.start();
         let factors = &self.factors;

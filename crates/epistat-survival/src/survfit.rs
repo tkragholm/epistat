@@ -469,7 +469,7 @@ impl Survfit {
 )]
 pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
     let data = data.clone().with_timefix(opts.timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     if surv.n_codes() != 1 {
         return Err(Error::not_applicable(format!(
             "survfit takes one event code and the data has {}; \
@@ -613,7 +613,7 @@ pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
 /// Whether some subject has more than one event row, which `survfit` takes as
 /// a reason for the jackknife variance.
 fn has_repeated_events(data: &SurvData<'_>) -> bool {
-    let (Some(id), Ok(surv)) = (data.id(), data.followup()) else {
+    let (Some(id), surv) = (data.id(), data.followup()) else {
         return false;
     };
     let mut seen = vec![false; data.n_ids()];

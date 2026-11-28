@@ -559,7 +559,7 @@ pub fn test(
     let data = data.clone().with_timefix(opts.timefix)?;
     let check = survcheck(&data)?;
     check.enforce(Policy::for_data(&data))?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let n_codes = surv.n_codes();
     if qualifying.is_empty() || grid.is_empty() {
         return Err(Error::options(

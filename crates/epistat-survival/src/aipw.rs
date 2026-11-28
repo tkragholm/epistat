@@ -521,7 +521,7 @@ impl Model {
         }
         check_ascending(times, "times", true)?;
         let fixed = data.clone().with_timefix(opts.timefix)?;
-        let surv = fixed.followup()?;
+        let surv = fixed.followup();
         if surv.start().is_some()
             || fixed.weight().is_some()
             || fixed.stratum().is_some()

@@ -19,7 +19,7 @@ fn bounds_give_the_kinds_and_status_columns_give_the_same_bounds() {
     let lower = [2.0, 3.0, -INF, 1.0];
     let upper = [INF, 3.0, 4.0, 2.5];
     let data = SurvData::interval_builder(&lower, &upper).build().unwrap();
-    let surv = data.interval().unwrap();
+    let surv = data.interval();
     assert_eq!(
         surv.kind(),
         [
@@ -40,30 +40,19 @@ fn bounds_give_the_kinds_and_status_columns_give_the_same_bounds() {
     let typed = SurvData::interval_status_builder(&time, &time2, &status)
         .build()
         .unwrap();
-    assert_eq!(typed.interval().unwrap().lower(), &lower);
-    assert_eq!(typed.interval().unwrap().upper(), &upper);
+    assert_eq!(typed.interval().lower(), &lower);
+    assert_eq!(typed.interval().upper(), &upper);
     assert_eq!((data.n_rows(), data.n_used()), (4, 4));
 }
 
 #[test]
-fn follow_up_estimators_refuse_interval_data() {
+fn erased_data_comes_back_only_as_its_own_kind() {
     let data = SurvData::interval_builder(&[1.0], &[2.0]).build().unwrap();
-    assert!(message(data.followup()).contains("interval-censored"));
-    assert!(message(data.cause(1)).contains("interval-censored"));
-    assert!(
-        message(
-            data.clone()
-                .with_timefix(epistat_survival::timefix::TimeFix::default())
-        )
-        .contains("tie policy")
-    );
-    assert!(
-        data.clone()
-            .with_timefix(epistat_survival::timefix::TimeFix::Exact)
-            .is_ok()
-    );
+    assert!(message(data.clone().erase().into_followup()).contains("interval-censored"));
+    assert!(data.erase().into_interval().is_ok());
     let follow = SurvData::builder(&[1.0], &[1]).build().unwrap();
-    assert!(message(follow.interval()).contains("follow-up"));
+    assert!(message(follow.clone().erase().into_interval()).contains("follow-up"));
+    assert!(follow.erase().into_followup().is_ok());
 }
 
 #[test]

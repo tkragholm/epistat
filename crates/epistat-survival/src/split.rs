@@ -158,7 +158,7 @@ impl Split {
 /// (see [`crate::timefix::fix_times`]), when `zero` is not finite, or when the
 /// data has no start column and a stop is not above `zero`.
 pub fn split(data: &SurvData<'_>, cuts: &[f64], options: &SplitOptions) -> Result<Split> {
-    let data = data.followup()?;
+    let data = data.followup();
     refuse_non_finite(cuts, "cuts")?;
     if !options.zero.is_finite() {
         return Err(Error::options("zero must be finite"));

@@ -451,7 +451,7 @@ struct Plan<'a> {
 impl<'a> Plan<'a> {
     fn new(data: &SurvData<'a>, designs: &[MatRef<'a, f64>], opts: &CscOptions) -> Result<Self> {
         let fixed = data.clone().with_timefix(opts.timefix)?;
-        let n_codes = fixed.followup()?.n_codes();
+        let n_codes = fixed.followup().n_codes();
         if n_codes < 2 {
             return Err(Error::not_applicable(
                 "data: absolute risk needs competing causes, so the status needs at least two codes",
@@ -531,7 +531,7 @@ impl<'a> Plan<'a> {
 /// The data with every event as the event, for the model of the time to any
 /// event.
 pub(crate) fn overall_data(data: &SurvData<'_>) -> Result<SurvBuf> {
-    let surv = data.followup()?;
+    let surv = data.followup();
     let status: Vec<i32> = surv.status().iter().map(|&s| i32::from(s != 0)).collect();
     let mut builder = SurvBuf::builder(surv.stop().to_vec(), status);
     if let Some(start) = surv.start() {
@@ -600,7 +600,7 @@ impl CauseSpecificCox<'_> {
         opts: &RiskOptions,
     ) -> Result<Context> {
         refuse_non_finite(times, "times")?;
-        let n_codes = self.data.followup()?.n_codes();
+        let n_codes = self.data.followup().n_codes();
         if cause == 0 || cause > n_codes {
             return Err(Error::out_of_range(format!(
                 "cause {cause} is outside 1..={n_codes}"

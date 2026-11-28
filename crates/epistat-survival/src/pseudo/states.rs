@@ -206,7 +206,7 @@ pub fn pseudo_states(
         )));
     }
     let data = data.clone().with_timefix(opts.timefix)?;
-    let n_states = data.followup()?.n_codes() as usize;
+    let n_states = data.followup().n_codes() as usize;
     let mut out = StatePseudo {
         times: times.to_vec(),
         width: 0,
@@ -322,7 +322,7 @@ pub fn pseudo_states(
 /// The rows of `rows` as a data set of their own, with the times already fixed
 /// and the grouping columns given by the caller's codes.
 fn subset(data: &SurvData<'_>, rows: &[u32]) -> Result<SurvBuf> {
-    let surv = data.followup()?;
+    let surv = data.followup();
     let pick = |v: &[f64]| rows.iter().map(|&r| v[r as usize]).collect::<Vec<f64>>();
     let codes = |dense: Option<&[u32]>, levels: Option<crate::surv::Levels<'_>>| {
         dense.map(|d| {
@@ -368,7 +368,7 @@ struct Stratum {
 
 /// The distinct stop times of the rows used, ascending.
 fn exit_times(data: &SurvData<'_>) -> Result<Vec<f64>> {
-    let stop = data.followup()?.stop();
+    let stop = data.followup().stop();
     let mut times: Vec<f64> = data.used_rows().map(|r| stop[r as usize]).collect();
     times.sort_by(f64::total_cmp);
     times.dedup_by(|a, b| a.total_cmp(b).is_eq());
@@ -531,7 +531,7 @@ struct Piece {
 fn hazards(data: &SurvData<'_>, grid: &[f64], at: &[f64], beyond: Vec<bool>) -> Result<Stratum> {
     let check = survcheck(data)?;
     check.enforce(Policy::for_data(data))?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let start = surv
         .start()
         .ok_or_else(|| Error::missing("multi-state estimates need the start of each interval"))?;

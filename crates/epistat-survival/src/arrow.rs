@@ -96,7 +96,7 @@ use arrow_array::types::UInt32Type;
 use arrow_array::{Array, Float64Array, Int32Array, RecordBatch, UInt32Array};
 
 use crate::error::{Error, Result};
-use crate::surv::{IntervalDataBuilder, SurvData, SurvDataBuilder};
+use crate::surv::{IntervalCensored, IntervalDataBuilder, SurvData, SurvDataBuilder};
 
 /// The column `name` of `batch`.
 ///
@@ -416,7 +416,7 @@ impl<'a> ArrowInterval<'a> {
     ///
     /// An input error for a column of the wrong type or with a null, and
     /// then for the first rule of [`IntervalDataBuilder::build`] that fails.
-    pub fn build(self) -> Result<SurvData<'a>> {
+    pub fn build(self) -> Result<SurvData<'a, IntervalCensored>> {
         self.builder()?.build()
     }
 

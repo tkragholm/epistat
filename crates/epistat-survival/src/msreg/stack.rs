@@ -14,7 +14,7 @@ use crate::timefix::TimeFix;
 /// The transitions of the rows of positive weight, sorted by the state left and
 /// the state entered.
 pub(super) fn observed(data: &SurvData<'_>, istate: &[u32]) -> Result<Vec<(u32, u32)>> {
-    let surv = data.followup()?;
+    let surv = data.followup();
     let status = surv.status();
     let mut seen = Vec::new();
     for row in data.used_rows() {
@@ -158,7 +158,7 @@ pub(super) fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &MsOptions) -> 
     refuse_non_finite_matrix(x, "x")?;
 
     let (data, istate) = resolve(data, opts.timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let n_states = surv.n_codes();
     let status = surv.status();
     let pairs = transitions_of(opts, &data, &istate, n_states)?;

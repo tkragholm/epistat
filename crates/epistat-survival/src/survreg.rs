@@ -239,7 +239,7 @@ pub use predict::{PredictOptions, PredictType, Prediction, ResidualKind};
 use crate::covariance;
 use crate::error::{Error, Result};
 use crate::ldl;
-use crate::surv::{IntervalKind, Outcome, SurvData};
+use crate::surv::{IntervalKind, Outcome, OutcomeKind, SurvData};
 
 /// The distribution of the error term, and with it the transformation of the
 /// times. See the [module documentation](self) for the list.
@@ -450,7 +450,10 @@ pub(super) struct Times {
 ///
 /// A time that a transformed distribution cannot take is NaN in `y1`, so that
 /// the caller can refuse it when the row is used.
-pub(super) fn times_of(data: &SurvData<'_>, distribution: Distribution) -> Result<Times> {
+pub(super) fn times_of<K: OutcomeKind>(
+    data: &SurvData<'_, K>,
+    distribution: Distribution,
+) -> Result<Times> {
     let n = data.n_rows();
     let mut times = match data.outcome() {
         Outcome::Followup(surv) => {
@@ -597,8 +600,8 @@ fn design_of(x: MatRef<'_, f64>, used: &[usize]) -> Design {
     clippy::too_many_lines,
     reason = "the steps of the fit read in order, each its own paragraph"
 )]
-pub fn fit(
-    data: &SurvData<'_>,
+pub fn fit<K: OutcomeKind>(
+    data: &SurvData<'_, K>,
     x: MatRef<'_, f64>,
     options: &SurvregOptions,
 ) -> Result<SurvregFit> {

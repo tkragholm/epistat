@@ -224,9 +224,10 @@ impl Policy {
     /// than one event code, and [`Policy::Report`] for a binary status.
     #[must_use]
     pub fn for_data(data: &SurvData<'_>) -> Self {
-        match data.followup() {
-            Ok(surv) if surv.n_codes() > 1 => Self::Strict,
-            _ => Self::Report,
+        if data.followup().n_codes() > 1 {
+            Self::Strict
+        } else {
+            Self::Report
         }
     }
 }
@@ -248,7 +249,7 @@ pub fn survcheck(data: &SurvData<'_>) -> Result<SurvCheck> {
     let ids = data.id().ok_or_else(|| {
         Error::missing("survcheck needs an id column to know which rows belong together".to_owned())
     })?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let (stop, start, status) = (surv.stop(), surv.start(), surv.status());
     let given = data.istate();
     let n = ids.len();

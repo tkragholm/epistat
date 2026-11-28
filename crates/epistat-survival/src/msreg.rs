@@ -407,7 +407,7 @@ pub fn observed_transitions(data: &SurvData<'_>, timefix: TimeFix) -> Result<Vec
 /// The data with the tie rule applied and the state each row starts in.
 fn resolve<'a>(data: &SurvData<'a>, timefix: TimeFix) -> Result<(SurvData<'a>, Vec<u32>)> {
     let data = data.clone().with_timefix(timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     if surv.n_codes() < 2 {
         return Err(Error::not_applicable(
             "the status has one code, so there is one transition and no multi-state model; \

@@ -164,7 +164,7 @@ pub struct OneSample {
 /// What the data must be for survdiff, and the rows it uses.
 fn prepare<'a>(data: &SurvData<'a>, opts: &SurvdiffOptions) -> Result<SurvData<'a>> {
     let data = data.clone().with_timefix(opts.timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     if surv.start().is_some() {
         return Err(Error::not_applicable(
             "survdiff is defined for right-censored data: leave the start column out",
@@ -237,7 +237,7 @@ pub fn test(data: &SurvData<'_>, group: &[u32], opts: &SurvdiffOptions) -> Resul
         return Err(Error::from(InputError::Empty { what: "group" }));
     }
     check_lengths(&[("time", data.n_rows()), ("group", group.len())])?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let time = surv.stop();
     let status = surv.status();
     let rho = opts.rho;
@@ -488,7 +488,7 @@ pub fn one_sample(
         ("time", data.n_rows()),
         ("expected_survival", expected_survival.len()),
     ])?;
-    let status = data.followup()?.status();
+    let status = data.followup().status();
     let rho = opts.rho;
     let mut observed = 0.0;
     let mut expected = 0.0;

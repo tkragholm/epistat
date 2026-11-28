@@ -454,7 +454,7 @@ pub fn excess_hazard(
         }
         check::finite_column("x", j, c)?;
     }
-    let surv = data.followup()?;
+    let surv = data.followup();
     if surv.n_codes() != 1 {
         return Err(Error::not_applicable(
             "the excess hazard model needs a binary status: use SurvData::cause",

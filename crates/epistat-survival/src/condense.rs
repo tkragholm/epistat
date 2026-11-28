@@ -120,7 +120,7 @@ pub fn condense(data: &SurvData<'_>, key: &[u64], options: &CondenseOptions) -> 
     let id = data
         .id()
         .ok_or_else(|| Error::missing("condense needs an id column"))?;
-    let data = data.followup()?;
+    let data = data.followup();
     let n = data.len();
     check_lengths(&[("status", n), ("key", key.len())])?;
     let start = data

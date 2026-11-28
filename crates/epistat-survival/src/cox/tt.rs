@@ -232,7 +232,7 @@ pub fn fit_tt(
     }
     refuse_non_finite_matrix(x, "x")?;
     let data = data.clone().with_timefix(opts.cox.timefix)?;
-    let surv = data.followup()?;
+    let surv = data.followup();
     let code = match (opts.cox.cause, surv.n_codes()) {
         (None, 1) => 1,
         (Some(code), _) => code,

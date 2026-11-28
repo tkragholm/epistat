@@ -190,7 +190,7 @@ fn split_rows_carry_input_columns_and_refit_as_follow_up() {
     let buf = got.to_surv_buf().unwrap();
     let back = buf.as_data();
     assert_eq!(back.n_rows(), got.row.len());
-    let follow = back.followup().unwrap();
+    let follow = back.followup();
     assert_eq!(follow.stop(), &got.stop[..]);
     assert_eq!(follow.start(), Some(&got.start[..]));
 }

@@ -43,7 +43,7 @@ pub(super) fn run(
         Target::RestrictedMean | Target::RestrictedTimeLost { .. }
     );
     let state = reading.target.cause().map_or(0, |c| c as usize);
-    let states = data.followup()?.n_codes() as usize + 1;
+    let states = data.followup().n_codes() as usize + 1;
     let horizon = at[k - 1];
     let grid: Vec<f64> = if integrate {
         let mut all: Vec<f64> = groups

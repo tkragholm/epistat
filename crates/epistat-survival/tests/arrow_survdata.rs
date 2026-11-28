@@ -236,7 +236,7 @@ fn columns_are_borrowed_not_copied() {
         .istate(&istate)
         .build()
         .unwrap();
-    let surv = data.followup().unwrap();
+    let surv = data.followup();
     assert!(std::ptr::eq(surv.stop().as_ptr(), stop.values().as_ptr()));
     assert!(std::ptr::eq(
         surv.status().as_ptr(),
@@ -267,7 +267,7 @@ fn columns_are_borrowed_not_copied() {
     let lo = Float64Array::from(s.stop.clone());
     let up = Float64Array::from(s.stop.iter().map(|t| t + 1.0).collect::<Vec<_>>());
     let data = interval(&lo, &up).build().unwrap();
-    let surv = data.interval().unwrap();
+    let surv = data.interval();
     assert!(std::ptr::eq(surv.lower().as_ptr(), lo.values().as_ptr()));
     assert!(std::ptr::eq(surv.upper().as_ptr(), up.values().as_ptr()));
 }
@@ -284,7 +284,7 @@ fn a_sliced_array_is_borrowed_at_its_offset() {
         .n_codes(3)
         .build()
         .unwrap();
-    let surv = data.followup().unwrap();
+    let surv = data.followup();
     assert_eq!(data.n_rows(), len);
     assert!(std::ptr::eq(
         surv.stop().as_ptr(),
@@ -303,7 +303,7 @@ fn a_sliced_array_is_borrowed_at_its_offset() {
     assert!(follow_up(&cut, &status_cut).n_codes(3).build().is_ok());
 }
 
-fn message(result: Result<SurvData<'_>, Error>) -> String {
+fn message<K: epistat_survival::OutcomeKind>(result: Result<SurvData<'_, K>, Error>) -> String {
     result.expect_err("an error").to_string()
 }
 
@@ -453,7 +453,7 @@ fn a_record_batch_is_read_by_column_name() {
         .build()
         .unwrap();
     assert_eq!(format!("{data:?}"), format!("{want:?}"));
-    let surv = data.followup().unwrap();
+    let surv = data.followup();
     let time = batch
         .column(0)
         .as_any()
