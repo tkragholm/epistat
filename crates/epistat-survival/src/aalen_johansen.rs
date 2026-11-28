@@ -794,8 +794,8 @@ pub(crate) fn variance_dfbeta(
 /// different clusters, a coincidence rather than a shared draw.
 ///
 /// `Shared` draws one weight vector over every cluster of the frame, numbered
-/// by their codes, normalises it over the whole frame, with the first seed of
-/// `cell_seeds`, and then reads it in each cell. Cells then share the weight of
+/// by their codes, normalises it over the whole frame, with the seed of cell 0,
+/// and then reads it in each cell. Cells then share the weight of
 /// a cluster they have in common, which is what an interaction between two
 /// cells needs. The two modes give different draws, not the same draws at a
 /// different cost.
