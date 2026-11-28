@@ -19,7 +19,9 @@ use crate::surv::SurvData;
 const BLOCK: usize = 1024;
 const WAVE: usize = 64;
 /// An interval whose fitted excess events fall below this share of its
-/// observed events is at the boundary, an excess hazard of 0.
+/// observed events during the iterations is fixed at the boundary, an excess
+/// hazard of 0, before the fit converges. The rule that decides the boundary
+/// at convergence is the slope of [`Pass::slope`].
 const BOUNDARY: f64 = 1e-10;
 
 /// The settings of [`excess_hazard`].
@@ -69,10 +71,17 @@ pub struct ExcessFit {
     /// is at risk, and minus infinity for an interval at the boundary.
     pub coefficients: Vec<Option<f64>>,
     /// Whether the estimate of the parameter is at the boundary of an excess
-    /// hazard of 0, where the log likelihood increases without bound as the
-    /// log excess hazard goes to minus infinity: an interval without events, or
-    /// one whose fitted excess events fell below `1e-10` of its events. The
-    /// other parameters are fitted with these fixed at 0 excess hazard.
+    /// hazard of 0, where the log likelihood increases towards its supremum
+    /// as the log excess hazard goes to minus infinity. The log likelihood is
+    /// concave in the excess hazard `exp(alpha_k)` of an interval, so its
+    /// maximum over excess hazards of at least 0 is at 0 exactly when its
+    /// derivative there, `sum y exp(x'beta) (d / d* - 1)` over the records of
+    /// the interval with the other parameters at their estimates, is not
+    /// positive. That holds for an interval without events, and for one whose
+    /// deaths are few for its expected deaths. The fit fixes an interval at
+    /// the boundary when it converges with that derivative not positive, or
+    /// earlier when its fitted excess events fall below `1e-10` of its
+    /// events, and fits the other parameters with these at 0 excess hazard.
     pub at_bound: Vec<bool>,
     /// The inverse of the Fisher information at the estimate, `None` in the
     /// rows and columns of an interval without person-time or at the boundary,
@@ -123,6 +132,12 @@ struct Pass {
     observed: Vec<f64>,
     /// The fitted excess events of each interval parameter.
     excess: Vec<f64>,
+    /// For each interval parameter, the derivative of the log likelihood in
+    /// the excess hazard `exp(alpha_k)` at an excess hazard of 0, the
+    /// covariates at their current values: `sum y exp(x'beta) (d / d* - 1)`
+    /// over the records of the interval, plus infinity for a record with an
+    /// event and no expected events. Only a pass with derivatives forms it.
+    slope: Vec<f64>,
 }
 
 impl Pass {
@@ -134,6 +149,7 @@ impl Pass {
             info: vec![0.0; q * q],
             observed: vec![0.0; q * q],
             excess: vec![0.0; n_int],
+            slope: vec![0.0; n_int],
         }
     }
 
@@ -150,6 +166,9 @@ impl Pass {
             *x += y;
         }
         for (x, y) in self.excess.iter_mut().zip(&b.excess) {
+            *x += y;
+        }
+        for (x, y) in self.slope.iter_mut().zip(&b.slope) {
             *x += y;
         }
     }
@@ -216,6 +235,20 @@ impl Setup<'_> {
                     2.0 * mu
                 };
                 t.excess[s] += rate;
+                if derivatives {
+                    let mut covariates = 0.0;
+                    for (j, col) in self.x.iter().enumerate() {
+                        covariates += theta[n_int + j] * col[row];
+                    }
+                    let at_zero = y * covariates.exp();
+                    t.slope[s] += if d == 0.0 {
+                        -at_zero
+                    } else if dstar > 0.0 {
+                        at_zero * (d / dstar - 1.0)
+                    } else {
+                        f64::INFINITY
+                    };
+                }
                 if derivatives && rate > 0.0 {
                     for (j, col) in self.x.iter().enumerate() {
                         z[n_int + j] = col[row];
@@ -575,8 +608,28 @@ pub fn excess_hazard(
             })?;
         }
         if finishing {
-            converged = true;
-            break;
+            // The log likelihood is concave in each excess hazard, so the
+            // maximum over an excess hazard of at least 0 is at 0 exactly when
+            // the slope there is not positive. A free interval that converged
+            // with such a slope has slid towards minus infinity on the log
+            // scale, where its score vanishes; it is fixed at the boundary and
+            // the others are fitted again.
+            let mut moved = false;
+            for s in 0..n_int {
+                if !fixed[s] && current.slope[s] <= 0.0 {
+                    fixed[s] = true;
+                    theta[s] = f64::NEG_INFINITY;
+                    moved = true;
+                }
+            }
+            if !moved {
+                converged = true;
+                break;
+            }
+            current = setup.pass(&units, &theta, true).ok_or_else(|| {
+                Error::undefined("likelihood", "the model is undefined at the boundary")
+            })?;
+            continue;
         }
         if !accepted {
             break;
