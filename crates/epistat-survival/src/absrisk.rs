@@ -696,9 +696,12 @@ impl CauseSpecificCox<'_> {
                 }
                 let value = eta.exp();
                 if !value.is_finite() {
-                    return Err(Error::undefined(format!(
-                        "new designs: the risk score of row {r} in model {m} is not finite"
-                    )));
+                    return Err(Error::undefined(
+                        "risk score",
+                        format!(
+                            "new designs: the risk score of row {r} in model {m} is not finite"
+                        ),
+                    ));
                 }
                 theta.push(value);
             }

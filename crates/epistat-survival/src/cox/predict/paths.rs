@@ -198,7 +198,10 @@ pub fn survfit_paths(
             let eta = m.dot_beta(&z) + paths.offset.map_or(0.0, |o| o[i]) - baseline.offset_centre;
             let theta = eta.exp();
             if !theta.is_finite() {
-                return Err(Error::undefined("the risk score of a row is not finite"));
+                return Err(Error::undefined(
+                    "risk score",
+                    "the risk score of a row is not finite",
+                ));
             }
             let s = strata[i];
             let base = &baseline.strata[s];

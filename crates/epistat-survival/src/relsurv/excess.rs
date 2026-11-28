@@ -505,9 +505,12 @@ pub fn excess_hazard(
             theta[s] = ((events[k] - dstar[k]).max(0.5) / years[k]).ln();
         }
     }
-    let mut current = setup
-        .pass(&units, &theta, true)
-        .ok_or_else(|| Error::undefined("the model is undefined at the starting values"))?;
+    let mut current = setup.pass(&units, &theta, true).ok_or_else(|| {
+        Error::undefined(
+            "likelihood",
+            "the model is undefined at the starting values",
+        )
+    })?;
     let mut converged = false;
     let mut iterations = 0;
     for _ in 0..opts.max_iterations {
@@ -521,9 +524,9 @@ pub fn excess_hazard(
             }
         }
         if moved {
-            current = setup
-                .pass(&units, &theta, true)
-                .ok_or_else(|| Error::undefined("the model is undefined at the boundary"))?;
+            current = setup.pass(&units, &theta, true).ok_or_else(|| {
+                Error::undefined("likelihood", "the model is undefined at the boundary")
+            })?;
         }
         // Newton's step where the observed information is positive definite,
         // which converges quadratically near the maximum, and Fisher scoring
@@ -567,9 +570,9 @@ pub fn excess_hazard(
             alpha *= 0.5;
         }
         if accepted {
-            current = setup
-                .pass(&units, &theta, true)
-                .ok_or_else(|| Error::undefined("the model is undefined at the estimate"))?;
+            current = setup.pass(&units, &theta, true).ok_or_else(|| {
+                Error::undefined("likelihood", "the model is undefined at the estimate")
+            })?;
         }
         if finishing {
             converged = true;

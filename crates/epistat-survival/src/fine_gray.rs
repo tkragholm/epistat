@@ -697,6 +697,7 @@ fn with_expansion<T>(
 ) -> Result<T> {
     if data.followup()?.start().is_some() {
         return Err(Error::unsupported(
+            "start",
             "Fine-Gray follows every individual from time 0, so data with a start column is not supported",
         ));
     }
@@ -811,6 +812,7 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FineGrayOptions) -> R
     }
     if opts.ties == Ties::Exact && data.cluster().is_some() {
         return Err(Error::unsupported(
+            "ties",
             "ties: the exact method has no cluster-robust variance",
         ));
     }
@@ -874,6 +876,7 @@ fn exact(
 ) -> Result<CoxModelFit> {
     if expansion.weight.iter().any(|&w| w - 1.0 != 0.0) {
         return Err(Error::unsupported(
+            "weight",
             "weight: the exact method supports case weights of 1 only",
         ));
     }

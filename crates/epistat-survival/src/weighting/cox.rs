@@ -178,12 +178,18 @@ fn fit_iptw(
         .covariance
         .as_slice()
         .iter()
-        .map(|c| c.ok_or_else(|| Error::undefined("the covariance of the fit is undefined")))
+        .map(|c| {
+            c.ok_or_else(|| {
+                Error::undefined("covariance", "the covariance of the fit is undefined")
+            })
+        })
         .collect::<Result<_>>()?;
     let residuals = score_residuals(&weighted, x, &model.coefficients, opts)?;
     let residuals: Vec<Vec<f64>> = residuals
         .into_iter()
-        .map(|r| r.ok_or_else(|| Error::undefined("a score residual is undefined")))
+        .map(|r| {
+            r.ok_or_else(|| Error::undefined("score residual", "a score residual is undefined"))
+        })
         .collect::<Result<_>>()?;
 
     let k = iptw.n_params();
@@ -312,12 +318,18 @@ fn fit_general(
         .covariance
         .as_slice()
         .iter()
-        .map(|c| c.ok_or_else(|| Error::undefined("the covariance of the fit is undefined")))
+        .map(|c| {
+            c.ok_or_else(|| {
+                Error::undefined("covariance", "the covariance of the fit is undefined")
+            })
+        })
         .collect::<Result<_>>()?;
     let residuals = score_residuals(&weighted, x, &model.coefficients, opts)?;
     let residuals: Vec<Vec<f64>> = residuals
         .into_iter()
-        .map(|r| r.ok_or_else(|| Error::undefined("a score residual is undefined")))
+        .map(|r| {
+            r.ok_or_else(|| Error::undefined("score residual", "a score residual is undefined"))
+        })
         .collect::<Result<_>>()?;
     let a = Mat::from_fn(n, p, |row, j| residuals[j][row]);
     let mut known = Mat::<f64>::zeros(prepared.n_units, p);

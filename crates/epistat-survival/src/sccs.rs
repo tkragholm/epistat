@@ -517,7 +517,8 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
     let mut info0 = start.info.clone();
     let pivots = ldl::factorise(&mut info0, n_cols, opts.alias_tolerance);
     if !pivots.clean {
-        return Err(Error::undefined(
+        return Err(Error::not_positive_definite(
+            "information",
             "the information is not positive semi-definite",
         ));
     }
@@ -575,7 +576,10 @@ pub fn fit(data: &SccsData<'_>, x: MatRef<'_, f64>, opts: &SccsOptions) -> Resul
     let mut factored = current.info.clone();
     let pivots = ldl::factorise(&mut factored, p, opts.alias_tolerance);
     if !pivots.clean || pivots.rank != p {
-        return Err(Error::undefined("the information is not positive definite"));
+        return Err(Error::not_positive_definite(
+            "information",
+            "the information is not positive definite",
+        ));
     }
     let mut last = current.score.clone();
     ldl::solve(&factored, p, &mut last);
@@ -727,7 +731,10 @@ fn newton_step(sums: &Sums, p: usize, tolerance: f64) -> Result<Vec<f64>> {
     let mut factored = sums.info.clone();
     let pivots = ldl::factorise(&mut factored, p, tolerance);
     if !pivots.clean || pivots.rank != p {
-        return Err(Error::undefined("the information is not positive definite"));
+        return Err(Error::not_positive_definite(
+            "information",
+            "the information is not positive definite",
+        ));
     }
     let mut step = sums.score.clone();
     ldl::solve(&factored, p, &mut step);

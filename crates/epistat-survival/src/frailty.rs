@@ -625,10 +625,14 @@ struct Problem<'a> {
 
 fn failure(f: Failure) -> Error {
     match f {
-        Failure::NotFinite => Error::undefined("a risk score or a risk-set total is not finite"),
-        Failure::Information => {
-            Error::undefined("the penalised information is not positive definite at a trial point")
-        }
+        Failure::NotFinite => Error::undefined(
+            "risk score",
+            "a risk score or a risk-set total is not finite",
+        ),
+        Failure::Information => Error::not_positive_definite(
+            "information",
+            "the penalised information is not positive definite at a trial point",
+        ),
     }
 }
 
@@ -946,11 +950,14 @@ fn profile_by_score(
         )?),
         None if search.marginal(smallest)? <= c0 => None,
         None => {
-            return Err(Error::undefined(format!(
-                "theta: the score of the profile at theta = 0 is not positive, but the profile \
+            return Err(Error::undefined(
+                "theta",
+                format!(
+                    "theta: the score of the profile at theta = 0 is not positive, but the profile \
                  is higher at theta = {smallest:e} than at 0, so its maximum near 0 is not \
                  resolved"
-            )));
+                ),
+            ));
         }
     };
     let (chosen, status) = match theta_hat {
@@ -1111,6 +1118,7 @@ fn profile(search: &mut Search<'_, '_>, tolerance: f64) -> Result<(usize, ThetaS
 fn check_options(opts: &FrailtyOptions, data: &SurvData<'_>) -> Result<()> {
     if opts.ties == Ties::Exact {
         return Err(Error::unsupported(
+            "ties",
             "ties: the frailty model supports Breslow and Efron ties only",
         ));
     }
@@ -1332,7 +1340,8 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FrailtyOptions) -> Re
         Theta::Profile => profile(&mut search, opts.theta_tolerance)?,
     };
     if estimated && status != ThetaStatus::Boundary && singletons(&cluster, g as usize) {
-        return Err(Error::undefined(
+        return Err(Error::not_identified(
+            "theta",
             "theta: every cluster has one row, so the data do not identify theta, and the \
              profile is not on the boundary",
         ));

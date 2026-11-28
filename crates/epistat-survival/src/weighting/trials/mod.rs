@@ -939,6 +939,7 @@ pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Re
     }
     if cov.as_slice().iter().any(Option::is_none) {
         return Err(Error::undefined(
+            "covariance",
             "outcome model: the covariance is not defined",
         ));
     }

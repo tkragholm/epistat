@@ -920,7 +920,12 @@ fn increment(
     e1: &[f64],
 ) -> Result<Increment> {
     let p = s1.len();
-    let bad = || Error::undefined("the sum of the risk scores of a risk set is not positive");
+    let bad = || {
+        Error::undefined(
+            "risk set",
+            "the sum of the risk scores of a risk set is not positive",
+        )
+    };
     match kind {
         CoxHazardType::Breslow => {
             if !(s0 > 0.0 && s0.is_finite()) {
@@ -1067,6 +1072,7 @@ fn build_baseline(
             let theta = eta.exp();
             if !theta.is_finite() {
                 return Err(Error::undefined(
+                    "risk score",
                     "the risk score of a row is not finite; the offset or the coefficients are too large",
                 ));
             }
@@ -1477,7 +1483,10 @@ pub fn predict(
                 let eta = m.dot_beta(&z) + offset.map_or(0.0, |o| o[i] - baseline.offset_centre);
                 let theta = eta.exp();
                 if !theta.is_finite() {
-                    return Err(Error::undefined("the risk score of a row is not finite"));
+                    return Err(Error::undefined(
+                        "risk score",
+                        "the risk score of a row is not finite",
+                    ));
                 }
                 let begin = starts.as_ref().map_or(f64::NEG_INFINITY, |s| s[i]);
                 let (increment, variance, k1, k2) =
@@ -1718,7 +1727,10 @@ pub fn survfit(
         let eta = m.dot_beta(&z) + newdata.offset.map_or(0.0, |o| o[i]) - baseline.offset_centre;
         let theta = eta.exp();
         if !theta.is_finite() {
-            return Err(Error::undefined("the risk score of a row is not finite"));
+            return Err(Error::undefined(
+                "risk score",
+                "the risk score of a row is not finite",
+            ));
         }
         let base = &baseline.strata[s];
         let n = base.time.len();

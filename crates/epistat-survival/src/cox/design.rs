@@ -702,6 +702,7 @@ fn with_input<R>(
 fn check_exact(data: &SurvData<'_>) -> Result<()> {
     if data.cluster().is_some() {
         return Err(Error::unsupported(
+            "ties",
             "ties: the exact method has no cluster-robust variance",
         ));
     }
@@ -709,6 +710,7 @@ fn check_exact(data: &SurvData<'_>) -> Result<()> {
         && weight.iter().any(|&w| w > 0.0 && w - 1.0 != 0.0)
     {
         return Err(Error::unsupported(
+            "weight",
             "weight: the exact method supports case weights of 1 only",
         ));
     }
@@ -2230,6 +2232,7 @@ pub fn score_residuals(
 ) -> Result<Vec<Option<Vec<f64>>>> {
     if opts.ties == Ties::Exact {
         return Err(Error::unsupported(
+            "ties",
             "ties: score residuals are not available for the exact method",
         ));
     }

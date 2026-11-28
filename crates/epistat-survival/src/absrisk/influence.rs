@@ -280,9 +280,10 @@ fn train_model(
         .collect();
     let weighted_risk: Vec<f64> = risk.iter().zip(weight).map(|(r, w)| r * w).collect();
     if risk.iter().any(|v| !v.is_finite() || *v <= 0.0) {
-        return Err(Error::undefined(format!(
-            "model {m}: a risk score of the fit is not finite"
-        )));
+        return Err(Error::undefined(
+            "risk score",
+            format!("model {m}: a risk score of the fit is not finite"),
+        ));
     }
     let v = covariance(model, m)?;
     let options = CoxOptions {

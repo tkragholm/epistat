@@ -526,6 +526,7 @@ impl Model {
             || fixed.cluster().is_some()
         {
             return Err(Error::unsupported(
+                "data",
                 "data: entry times, case weights, strata and clusters are not supported",
             ));
         }

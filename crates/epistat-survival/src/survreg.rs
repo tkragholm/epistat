@@ -456,6 +456,7 @@ pub(super) fn times_of(data: &SurvData<'_>, distribution: Distribution) -> Resul
         Outcome::Followup(surv) => {
             if surv.start().is_some() {
                 return Err(Error::unsupported(
+                    "start",
                     "survreg takes times from the origin; delayed entry is not supported"
                         .to_owned(),
                 ));
