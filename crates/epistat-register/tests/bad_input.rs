@@ -6,8 +6,10 @@ use epistat_core::Classify;
 use epistat_register::exposure::{
     Assumption, Dispensings, DoseRule, Periods, Stock, Supply, exposure_periods,
 };
+use epistat_register::lexis::{Cuts, split_at};
 use epistat_register::pre2dup::{GlobalParameters, GroupParameters, Purchases, drug_use_periods};
-use epistat_register::wtd::{Family, fit_wtd};
+use epistat_register::spans::merge_sorted_spans;
+use epistat_register::wtd::{Family, WaitingTime, fit_wtd, waiting_times};
 use epistat_register::{CodeItemProblem, CrosswalkProblem, Error, PedigreeProblem};
 use epistat_testkit::{BadInput, assert_codes_unique, assert_rejects_bad_input_with_codes};
 
@@ -176,4 +178,52 @@ fn the_codes_are_unique() {
     ];
     assert_codes_unique("register", &errors);
     assert_eq!(Error::MissingYears(vec![]).code(), "register.missing_years");
+}
+
+/// A column of days spoiled as `bad` spoils a column; NaN and infinities have
+/// no counterpart among days.
+fn days(bad: BadInput, good: &[i64]) -> Option<Vec<i64>> {
+    let mut column = good.to_vec();
+    match bad {
+        BadInput::Empty => column.clear(),
+        BadInput::Mismatched => {
+            column.pop();
+        }
+        BadInput::Unsorted => column.reverse(),
+        BadInput::Nan | BadInput::Infinite => return None,
+    }
+    Some(column)
+}
+
+#[test]
+fn the_day_columns_refuse_a_wrong_length() {
+    let new_key = [true, false, false, true];
+    let start = [0_i64, 10, 20, 5];
+    let end = [8_i64, 15, 30, 9];
+    let length = |_: BadInput| "input.length";
+    assert_rejects_bad_input_with_codes("merge_sorted_spans", length, |bad| {
+        matches!(bad, BadInput::Empty | BadInput::Mismatched).then(|| {
+            let end = days(bad, &end).expect("a day column");
+            merge_sorted_spans(&new_key, &start, &end, 0)
+        })
+    });
+    assert_rejects_bad_input_with_codes("split_at", length, |bad| {
+        matches!(bad, BadInput::Empty | BadInput::Mismatched).then(|| {
+            let end = days(bad, &end).expect("a day column");
+            split_at(&start, &end, &[Cuts::CalendarYears])
+        })
+    });
+}
+
+#[test]
+fn waiting_times_refuse_bad_offsets_and_days() {
+    let offsets = [0_usize, 2, 4];
+    let day = [3_i64, 40, 10, 200];
+    assert_rejects_bad_input_with_codes("waiting_times", BadInput::code, |bad| {
+        let day = days(bad, &day)?;
+        // The days of a person need no order: the first and last in the
+        // window are found by scanning.
+        matches!(bad, BadInput::Mismatched)
+            .then(|| waiting_times(&offsets, &day, 0, 365, WaitingTime::Forward))
+    });
 }

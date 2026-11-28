@@ -381,7 +381,8 @@ pub struct Selection {
 ///
 /// # Errors
 ///
-/// The error of a full-sample fit or of a fold.
+/// [`Error::Input`] for a Tweedie power that is not finite; the error of a
+/// full-sample fit or of a fold.
 pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelComparison, Error> {
     let x = data.x();
     let y = data.y_column();
@@ -508,13 +509,14 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for fewer than 2 folds or more folds than rows; the error
-/// of a fold's fit.
+/// [`Error::Input`] for fewer than 2 folds or more folds than rows, or a power
+/// that is not finite; the error of a fold's fit.
 pub fn cross_validate(
     data: &CostData<'_>,
     powers: &[f64],
     options: &CrossValidationOptions,
 ) -> Result<CrossValidation, Error> {
+    check::finite("powers", powers)?;
     let n = data.n_rows();
     if options.folds < 2 || options.folds > n {
         return Err(crate::error::domain(
@@ -642,8 +644,10 @@ pub fn cross_validate(
 ///
 /// # Errors
 ///
-/// [`Error::Unsupported`] for data with weights.
+/// [`Error::Unsupported`] for data with weights, and [`Error::Input`] for a
+/// power that is not finite.
 pub fn select(data: &CostData<'_>, powers: &[f64]) -> Result<Selection, Error> {
+    check::finite("powers", powers)?;
     if data.weights().is_some() {
         return Err(Error::Unsupported {
             what: "weights in the selection, whose fits are unweighted",
@@ -728,8 +732,10 @@ fn classic_park_test(x: MatRef<'_, f64>, y: MatRef<'_, f64>) -> Option<ParkTest>
 }
 
 /// Tweedie fits of `data` at each power with default options, with in-sample
-/// metrics and quasi-likelihood criteria; a power whose fit fails is left out.
+/// metrics and quasi-likelihood criteria; a power whose fit fails is left out,
+/// and a power that is not finite is an input error.
 fn tweedie_candidates(data: &CostData<'_>, powers: &[f64]) -> Result<Vec<TweedieCandidate>, Error> {
+    check::finite("powers", powers)?;
     let (x, y) = (data.x(), data.y_column());
     let mut candidates = Vec::new();
     for &power in powers {

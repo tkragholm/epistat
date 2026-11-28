@@ -9,7 +9,9 @@
 
 use epistat_causal::aipw::{AipwInput, AipwOptions, aipw};
 use epistat_causal::balance::cbps::{CbpsInput, CbpsOptions, cbps};
-use epistat_causal::balance::entropy::{EntropyInput, EntropyOptions, entropy_balance};
+use epistat_causal::balance::entropy::{
+    EntropyInput, EntropyOptions, balance_columns, entropy_balance,
+};
 use epistat_causal::tmle::survival::{SurvivalInput, SurvivalOptions, tmle_survival};
 use epistat_causal::tmle::{TmleOptions, tmle};
 use epistat_core::Classify;
@@ -232,4 +234,19 @@ fn an_empty_treatment_is_an_empty_input() {
     };
     let error = aipw(&input, &AipwOptions::default()).unwrap_err();
     assert_eq!(error.code(), "input.empty");
+}
+
+#[test]
+fn the_balance_columns_refuse_a_bad_design() {
+    assert_rejects_bad_input_with_codes("balance_columns", BadInput::code, |bad| {
+        matches!(bad, BadInput::Nan | BadInput::Infinite).then(|| {
+            let spoilt = bad.column(&[0.5])[0];
+            let covariates = Mat::from_fn(
+                N,
+                2,
+                |i, j| if (i, j) == (7, 1) { spoilt } else { x(i + j) },
+            );
+            balance_columns(covariates.as_ref(), 2, true)
+        })
+    });
 }

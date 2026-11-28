@@ -8,8 +8,9 @@
 use epistat_core::Bootstrap;
 use epistat_sequences::positionwise::{self, silhouette};
 use epistat_sequences::{
-    Distance, FitSettings, NullModel, Panel, Restarts, fit_typology, indel_for, null_sequences,
-    null_silhouettes, partition_agreement, refit_agreements, substitution_costs, transition_costs,
+    Distance, FitSettings, NullModel, Panel, Restarts, condensed, fit_typology, indel_for,
+    null_sequences, null_silhouettes, partition_agreement, refit_agreements, substitution_costs,
+    transition_costs,
 };
 use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
 
@@ -137,5 +138,29 @@ fn a_panel_refuses_a_ragged_or_empty_shape() {
     assert_eq!(
         Distance::named("lcs").unwrap_err().code(),
         "sequences.unknown_distance"
+    );
+}
+
+#[test]
+fn the_cluster_sums_and_the_triangle_refuse_bad_input() {
+    let panel = panel();
+    assert_rejects_bad_input_with_codes("positionwise::cluster_distance_sums", code, |bad| {
+        weights(bad).map(|w| positionwise::cluster_distance_sums(&panel, &w, &LABELS, 2))
+    });
+    let lengths = [4_u32; 5];
+    let substitution = [0.0_f32, 1.0, 2.0, 1.0, 0.0, 1.0, 2.0, 1.0, 0.0];
+    assert_rejects_bad_input_with_codes(
+        "condensed",
+        |_| "input.length",
+        |bad| {
+            matches!(bad, BadInput::Empty | BadInput::Mismatched).then(|| {
+                let short = if bad == BadInput::Empty {
+                    &lengths[..0]
+                } else {
+                    &lengths[..4]
+                };
+                condensed(&ENCODED, short, &substitution, 3, 1.0).map(|matrix| matrix.len())
+            })
+        },
     );
 }
