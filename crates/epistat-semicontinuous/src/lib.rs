@@ -16,8 +16,9 @@
 //! Each module explains its method. The data views check their columns once
 //! ([`data`]); a bootstrap builds the view of the full sample once and refits it
 //! under many weight columns with [`CostData::with_weights`], or, for designs of
-//! indicator columns, with the compact designs of [`prepared`]. Every function
-//! returns the one [`Error`].
+//! indicator columns, with the compact designs of [`prepared`], a supported API
+//! for bootstraps that refit one design many times. Every function returns
+//! the one [`Error`].
 //!
 //! The fits use their own IRLS with fused multiply-add, so results are the same
 //! on any number of threads but can differ between platforms in the last bits.

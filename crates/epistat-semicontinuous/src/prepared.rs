@@ -1,5 +1,8 @@
 //! Repeated gamma and two-part fits of one design under different weights.
 //!
+//! This is a supported API: the route for a bootstrap that refits one compact
+//! design under many weight vectors.
+//!
 //! A fractional-random-weight bootstrap fits the same rows thousands of times with only
 //! the weights changing. The types here read the design once into a compact form: for
 //! each row the columns that hold a 1, and the values of the few columns that are not

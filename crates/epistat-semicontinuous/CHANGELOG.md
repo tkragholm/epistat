@@ -6,7 +6,7 @@ First release of `epistat-semicontinuous`, which continues `semicontinuous_model
 
 ### Added
 
-- `two_part::fit`, `two_part::bootstrap`, `percentile_intervals`, `summary` and `wald_intervals`: the two-part model, a logit for any positive outcome and a gamma regression with log link for the positive ones, with prior weights, ridge and elastic-net penalties, warm starts, and model-based, robust or cluster-robust standard errors. Compact designs refit one design under many weight vectors for a fractional-random-weight bootstrap.
+- `two_part::fit`, `two_part::bootstrap`, `percentile_intervals`, `summary` and `wald_intervals`: the two-part model, a logit for any positive outcome and a gamma regression with log link for the positive ones, with prior weights, ridge and elastic-net penalties, warm starts, and model-based, robust or cluster-robust standard errors. Compact designs in `prepared`, a supported API, refit one design under many weight vectors for a fractional-random-weight bootstrap.
 - `tweedie::fit`: the Tweedie GLM with log link by quasi-likelihood, in agreement with R's `glm` and `statmod::tweedie`.
 - `lognormal::fit`: log-normal regression with Duan's smearing retransformation.
 - `mtp::fit`: the marginalised two-part model for panels, fitted by MCMC with correlated subject effects.
