@@ -30,7 +30,7 @@
 #[path = "../tests/common/trial_panel.rs"]
 mod trial_panel;
 use chrono::{Days, NaiveDate};
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_matching::CbpsConfig;
 use epistat_matching::abadie_imbens::{AbadieImbensData, AbadieImbensSpec, abadie_imbens};
 use epistat_matching::effects::{
@@ -967,7 +967,7 @@ fn run_effects<R: CovariateRecord>(input: &Inputs<R>, reps: usize, boot: bool) -
             bootstrap(
                 &sample,
                 &spec,
-                &BootstrapSpec::new(Bootstrap::new(BOOT_REPLICATES, 11)),
+                &BootstrapSpec::new(Bootstrap::new(BOOT_REPLICATES, Seed(11))),
             )
             .expect("bootstrap");
         } else {

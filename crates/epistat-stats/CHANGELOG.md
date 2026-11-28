@@ -19,6 +19,7 @@ The distribution functions move into a `dist` module, the epidemiological method
 - `moments`, `mean`, `variance` and `mean_sd` over those lanes, with `Divisor`.
 - `logistic`, `expit`, `logit`, `log1p_exp` and `log_expit`.
 - `wald`, an estimate with its Wald interval and p-value for a given `Level` and `Scale`.
+- `coefficients`, the coefficient table of a fit (epistat-core's `Coefficients`) from its coefficients and covariance, with normal or t intervals and p-values. Each fit's `Tidy::coefficients` builds its table with it.
 - `weighted::effective_sample_size`, `weighted::WeightLimits` (clip weights at quantiles or values, with the preset `P99`) and `weighted::ProbabilityBounds`.
 - `Error`, which implements `Classify`.
 - Distribution objects in `dist`: `Normal`, `StudentT`, `ChiSquared`, `FisherF`, `Gamma` (made with `with_rate` or `with_scale`), `Beta`, `Poisson` and `Binomial`. Each checks its parameters once and refuses one outside the domain with `Error::Input`, where the free functions return NaN, and has `pdf` or `pmf`, `ln_pdf` or `ln_pmf`, `cdf`, `sf`, `ln_cdf`, `ln_sf`, `quantile` and `isf`. The methods call the free functions, so they give the same bits. `isf` is the quantile of the upper tail, R's `lower.tail = FALSE`, so `Normal::STANDARD.isf(1e-17)` is 8.49 where `quantile(1.0 - 1e-17)` is infinite. They are tested against R's d, p and q functions.

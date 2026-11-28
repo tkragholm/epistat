@@ -284,7 +284,7 @@ fn sup_t(a: &[f64], p: usize, level: Level, draws: Bootstrap) -> Result<f64, Err
         .map_init(
             || vec![0.0; p],
             |z, r| {
-                Stream::seeded(replicate_seed(seed, r)).fill_normals(z);
+                Stream::seeded(replicate_seed(seed.value(), r)).fill_normals(z);
                 (0..m)
                     .map(|k| lanes::dot(&a[k * p..(k + 1) * p], z).abs())
                     .fold(0.0, f64::max)

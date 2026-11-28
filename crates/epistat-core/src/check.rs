@@ -27,6 +27,7 @@
 //! | [`csr_offsets`] | offsets that are not a layout of the rows | `Empty`, `Domain`, `Unsorted`, `Length` |
 //! | [`constant_within`] | a value that changes within a unit | `NotConstant` |
 //! | [`fits_u32`] | a count above `u32::MAX` | `TooLarge` |
+//! | [`CaseWeights::new`](crate::CaseWeights::new) | a weight [`weights`] refuses, or weights all zero | `NotFinite`, `Domain`, `Empty`, `AllZero` |
 //!
 //! The checks are written for each argument once, where it enters, and an
 //! estimator does not repeat them on input a validated view already holds.
@@ -42,7 +43,8 @@ use crate::error::{Classify, ErrorKind};
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub enum InputError {
-    /// An argument has `found` rows or entries where `expected` were needed.
+    /// `input.length`: an argument has `found` rows or entries where
+    /// `expected` were needed.
     Length {
         /// The argument.
         what: &'static str,
@@ -51,13 +53,13 @@ pub enum InputError {
         /// The length it has.
         found: usize,
     },
-    /// An argument has no rows where at least one is needed.
+    /// `input.empty`: an argument has no rows where at least one is needed.
     Empty {
         /// The argument.
         what: &'static str,
     },
-    /// An argument holds NaN or an infinity at `row`, and in `column` when
-    /// the argument has several.
+    /// `input.not_finite`: an argument holds NaN or an infinity at `row`, and
+    /// in `column` when the argument has several.
     NotFinite {
         /// The argument.
         what: &'static str,
@@ -66,7 +68,8 @@ pub enum InputError {
         /// The column of that row, for an argument of several columns.
         column: Option<usize>,
     },
-    /// An argument's value lies outside the set it must lie in.
+    /// `input.domain`: an argument's value lies outside the set it must lie
+    /// in.
     Domain {
         /// The argument.
         what: &'static str,
@@ -77,8 +80,8 @@ pub enum InputError {
         /// The row of the value, for an argument with one value per row.
         row: Option<usize>,
     },
-    /// An argument's value is not below the limit the call sets for it, such
-    /// as a lag that must be below the number of periods.
+    /// `input.not_below`: an argument's value is not below the limit the call
+    /// sets for it, such as a lag that must be below the number of periods.
     NotBelow {
         /// The argument.
         what: &'static str,
@@ -87,30 +90,31 @@ pub enum InputError {
         /// The limit the value must lie below.
         limit: f64,
     },
-    /// Row `row` of an argument sorts before row `row - 1`.
+    /// `input.unsorted`: row `row` of an argument sorts before row `row - 1`.
     Unsorted {
         /// The argument.
         what: &'static str,
         /// The first such row.
         row: usize,
     },
-    /// Row `row` of an argument repeats row `row - 1` where the rows must be
-    /// distinct.
+    /// `input.duplicate`: row `row` of an argument repeats row `row - 1`
+    /// where the rows must be distinct.
     Duplicate {
         /// The argument.
         what: &'static str,
         /// The first such row.
         row: usize,
     },
-    /// An argument that must be constant within a unit takes two values in
-    /// unit `unit`.
+    /// `input.not_constant`: an argument that must be constant within a unit
+    /// takes two values in unit `unit`.
     NotConstant {
         /// The argument.
         what: &'static str,
         /// The unit, as its code.
         unit: u32,
     },
-    /// An argument has more entries than its index type can number.
+    /// `input.too_large`: an argument has more entries than its index type
+    /// can number.
     TooLarge {
         /// The argument.
         what: &'static str,
@@ -118,6 +122,21 @@ pub enum InputError {
         limit: u64,
         /// The count given.
         found: u64,
+    },
+    /// `input.all_zero`: an argument whose values may be zero is zero in
+    /// every row, as case weights that leave no row in the fit.
+    AllZero {
+        /// The argument.
+        what: &'static str,
+    },
+    /// `input.percentage`: a proportion in `(0, 1)`, such as a confidence
+    /// level, was given as a percentage between 1 and 100, as `95` for
+    /// `0.95`.
+    Percentage {
+        /// The argument.
+        what: &'static str,
+        /// The value given.
+        value: f64,
     },
 }
 
@@ -173,6 +192,12 @@ impl fmt::Display for InputError {
                     "{what} has {found} entries, more than the {limit} allowed"
                 )
             }
+            Self::AllZero { what } => write!(f, "{what} are zero in every row"),
+            Self::Percentage { what, value } => write!(
+                f,
+                "{what} is {value}, outside (0, 1); as a proportion, {value}% is {}",
+                value / 100.0
+            ),
         }
     }
 }
@@ -195,6 +220,8 @@ impl Classify for InputError {
             Self::Duplicate { .. } => "input.duplicate",
             Self::NotConstant { .. } => "input.not_constant",
             Self::TooLarge { .. } => "input.too_large",
+            Self::AllZero { .. } => "input.all_zero",
+            Self::Percentage { .. } => "input.percentage",
         }
     }
 }
@@ -266,7 +293,8 @@ pub fn finite_column(what: &'static str, column: usize, values: &[f64]) -> Resul
 }
 
 /// Case weights: every weight finite and not negative. A weight of 0 is
-/// allowed.
+/// allowed. [`CaseWeights`](crate::CaseWeights) runs this check and also
+/// refuses weights that are all zero.
 ///
 /// # Errors
 ///

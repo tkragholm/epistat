@@ -11,7 +11,7 @@
 //! | [`weighted`] | weighted means and variances with reliability weights, effective sample size, weight limits |
 //! | [`moments`] | the mean, variance and standard deviation over fixed lanes |
 //! | [`logistic`] | the logistic function, the logit and their logs |
-//! | [`wald`] | an estimate with its Wald interval and p-value |
+//! | [`wald`], [`coefficients`] | an estimate with its Wald interval and p-value, and a fit's coefficient table |
 //! | [`likelihood`] | log-sum-exp, softmax and information criteria |
 //! | [`mcmc`] | autocorrelation, effective sample size and split R-hat |
 //! | [`cluster`] | k-means from given centres |
@@ -51,4 +51,4 @@ mod wald;
 pub mod weighted;
 
 pub use error::Error;
-pub use wald::wald;
+pub use wald::{coefficients, wald};

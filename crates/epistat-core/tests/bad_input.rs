@@ -2,7 +2,9 @@
 //! error codes are unique. Uses the helpers of `epistat-testkit`.
 
 use epistat_core::{InputError, check};
-use epistat_testkit::{BadInput, assert_codes_unique, assert_rejects_bad_input_with_codes};
+use epistat_testkit::{
+    BadInput, assert_codes_documented, assert_codes_unique, assert_rejects_bad_input_with_codes,
+};
 
 #[test]
 fn column_checks_reject_bad_columns() {
@@ -55,6 +57,12 @@ fn the_codes_of_input_error_are_unique() {
             value: 1.0,
             limit: 1.0,
         },
+        InputError::AllZero { what: "a" },
+        InputError::Percentage {
+            what: "a",
+            value: 95.0,
+        },
     ];
     assert_codes_unique("input", &errors);
+    assert_codes_documented(include_str!("../src/check.rs"), &errors);
 }

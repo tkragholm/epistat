@@ -7,7 +7,7 @@ use std::time::Duration;
 use criterion::{
     BenchmarkGroup, Criterion, SamplingMode, criterion_group, criterion_main, measurement::WallTime,
 };
-use epistat_core::{Bootstrap, Covariance, EventStudy};
+use epistat_core::{Bootstrap, Covariance, EventStudy, Seed};
 use epistat_honestdid::honest::{
     self, Calibration, Directions, HonestOptions, JointMethod, JointPathOptions, Restriction,
     RmBound, Target,
@@ -92,7 +92,7 @@ fn bench_summaries(criterion: &mut Criterion) {
                             &study,
                             &target,
                             &restriction,
-                            &HonestOptions::new(Bootstrap::new(1_000, 0)),
+                            &HonestOptions::new(Bootstrap::new(1_000, Seed(0))),
                         )
                         .expect("summary");
                     }
@@ -115,13 +115,13 @@ fn bench_joint_regions(criterion: &mut Criterion) {
     let basis: Vec<Vec<f64>> = (0..n_post)
         .map(|i| (0..n_post).map(|j| f64::from(u8::from(i == j))).collect())
         .collect();
-    let gaussian = Calibration::Gaussian(Bootstrap::new(20_000, 42));
+    let gaussian = Calibration::Gaussian(Bootstrap::new(20_000, Seed(42)));
     for (name, options) in [
         (
             "joint_path",
             JointPathOptions {
                 calibration: gaussian,
-                ..JointPathOptions::new(Bootstrap::new(1_000, 0))
+                ..JointPathOptions::new(Bootstrap::new(1_000, Seed(0)))
             },
         ),
         (
@@ -129,7 +129,7 @@ fn bench_joint_regions(criterion: &mut Criterion) {
             JointPathOptions {
                 directions: Directions::Weights(basis),
                 calibration: gaussian,
-                ..JointPathOptions::new(Bootstrap::new(1_000, 0))
+                ..JointPathOptions::new(Bootstrap::new(1_000, Seed(0)))
             },
         ),
         (
@@ -137,7 +137,7 @@ fn bench_joint_regions(criterion: &mut Criterion) {
             JointPathOptions {
                 method: JointMethod::Flci,
                 calibration: gaussian,
-                ..JointPathOptions::new(Bootstrap::new(1_000, 0))
+                ..JointPathOptions::new(Bootstrap::new(1_000, Seed(0)))
             },
         ),
     ] {

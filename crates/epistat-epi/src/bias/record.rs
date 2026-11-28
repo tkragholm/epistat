@@ -106,7 +106,7 @@ where
     );
     let mut reclassified = vec![false; recorded.len()];
     for r in 0..opts.bootstrap.replicates {
-        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed, r as u64));
+        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed.value(), r as u64));
         let mut parameters = [f64::NAN; 4];
         let fitted = (|| {
             let s_e = se.draw(&mut stream)?;
@@ -185,7 +185,7 @@ where
 mod tests {
     use super::*;
     use crate::bias::{Dist, Misclass, correct_exposure};
-    use epistat_core::{Bootstrap, Level};
+    use epistat_core::{Bootstrap, Level, Seed};
 
     #[expect(
         clippy::cast_possible_truncation,
@@ -237,7 +237,7 @@ mod tests {
             &Pair::Same(Dist::Constant(1.0)),
             &Pair::Same(Dist::Constant(1.0)),
             &ProbOptions {
-                bootstrap: Bootstrap::new(10, 3),
+                bootstrap: Bootstrap::new(10, Seed(3)),
                 random_error: false,
                 level: Level::alpha(0.05).unwrap(),
             },
@@ -281,7 +281,7 @@ mod tests {
             &Pair::Same(Dist::Constant(0.85)),
             &Pair::Same(Dist::Constant(0.97)),
             &ProbOptions {
-                bootstrap: Bootstrap::new(400, 9),
+                bootstrap: Bootstrap::new(400, Seed(9)),
                 random_error: true,
                 level: Level::alpha(0.05).unwrap(),
             },

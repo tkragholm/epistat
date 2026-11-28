@@ -9,14 +9,19 @@
 //! | item | what it is |
 //! |---|---|
 //! | [`Level`] | a confidence level, kept as the confidence or alpha the caller gave |
-//! | [`Interval`], [`Estimate`], [`Scale`], [`Contrast`] | how an estimator reports a number |
+//! | [`Interval`], [`Coverage`], [`Estimate`], [`Scale`], [`Contrast`] | how an estimator reports a number |
+//! | [`Coefficients`], [`Term`], [`Glance`], [`Tidy`] | a fit's coefficient table and summary, and the trait fits implement |
 //! | [`Covariance`] | a covariance matrix that knows its dimension |
+//! | [`Matrix`] | a rectangular matrix of results, row-major |
+//! | [`Test`], [`Reference`] | a test statistic, its degrees of freedom and p-value |
 //! | [`EventStudy`] | event-study coefficients, their covariance and the reference period |
-//! | [`Bootstrap`] | the replicates and root seed of a randomised call |
+//! | [`Bootstrap`], [`Seed`] | the replicates and root seed of a randomised call |
 //! | [`Estimand`] | the population an average treatment effect is averaged over |
 //! | [`Codes`] | labels as dense `u32` codes in sorted order, and back |
 //! | [`Panel`] | the validated unit-and-period key of person-period data |
+//! | [`Permutation`] | a reordering of rows, applied to each column alike |
 //! | [`day`], [`Day`] | civil dates as `i64` days since 1970-01-01, and one such date |
+//! | [`CaseWeights`], [`WeightKind`] | a checked column of case weights and what they mean |
 //! | [`check`], [`InputError`] | the input checks every estimator shares |
 //! | [`ErrorKind`], [`Classify`] | what kind of failure an error is, and its stable code |
 //!
@@ -32,23 +37,34 @@
 pub mod bootstrap;
 pub mod check;
 pub mod codes;
+pub mod coefficients;
 pub mod covariance;
 pub mod day;
 pub mod error;
 pub mod estimand;
 pub mod estimate;
 pub mod event_study;
+mod format;
+pub mod hypothesis;
 pub mod level;
+pub mod matrix;
 pub mod panel;
+pub mod permutation;
+pub mod weights;
 
-pub use bootstrap::Bootstrap;
+pub use bootstrap::{Bootstrap, Seed};
 pub use check::InputError;
 pub use codes::Codes;
+pub use coefficients::{Coefficients, EffectScale, Glance, Term, Tidy, TidyRow, VarianceKind};
 pub use covariance::Covariance;
 pub use day::Day;
 pub use error::{Classify, ErrorKind};
 pub use estimand::Estimand;
-pub use estimate::{Contrast, Estimate, Interval, Scale};
+pub use estimate::{Contrast, Coverage, Estimate, Interval, Scale};
 pub use event_study::EventStudy;
+pub use hypothesis::{Reference, Test};
 pub use level::Level;
+pub use matrix::Matrix;
 pub use panel::Panel;
+pub use permutation::Permutation;
+pub use weights::{CaseWeights, WeightKind};

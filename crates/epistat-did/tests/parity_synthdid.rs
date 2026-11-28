@@ -30,7 +30,7 @@
 //! one; a standard error of `B` replicates that each differ by at most `d`
 //! differs by at most `2 sqrt(B) d`.
 
-use epistat_core::{Bootstrap, Codes, Estimate, Panel};
+use epistat_core::{Bootstrap, Codes, Estimate, Panel, Seed};
 use epistat_did::{
     Error, StaggeredPanel, SynthDid, SynthDidOptions, SynthDraws, SynthFit, SynthReplicates,
     SynthUndefined, SynthVariance, SynthWeights, synthdid,
@@ -451,7 +451,7 @@ fn given(method: &str, draws: &[Vec<usize>]) -> SynthVariance {
 }
 
 fn seeded(method: &str, replicates: usize, seed: u64) -> SynthVariance {
-    let draws = SynthDraws::Seeded(Bootstrap::new(replicates, seed));
+    let draws = SynthDraws::Seeded(Bootstrap::new(replicates, Seed(seed)));
     if method == "placebo" {
         SynthVariance::Placebo(draws)
     } else {

@@ -9,7 +9,7 @@
 //! run `GOLDEN_PRINT=1 cargo test -p epistat-sequences --test fingerprint -- --nocapture`
 //! on that target and paste the printed constant.
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_sequences::positionwise::{self, Panel};
 use epistat_sequences::{
     Attempt, Distance, FitSettings, NullModel, Restarts, condensed, fit_typology, indel_for,
@@ -144,7 +144,7 @@ fn fingerprint() -> u64 {
                 &weights,
                 model,
                 settings(distance),
-                Bootstrap::new(5, 23),
+                Bootstrap::new(5, Seed(23)),
             )
             .unwrap();
             h = silhouettes.iter().fold(h, |h, &s| h.option_f64(s));

@@ -1,4 +1,4 @@
-use epistat_core::{Bootstrap, Classify, InputError};
+use epistat_core::{Bootstrap, Classify, InputError, Seed};
 use epistat_linalg::MatRef;
 
 use super::*;
@@ -283,7 +283,7 @@ fn singleton_clusters_reproduce_the_cells_own_standard_errors() {
 fn the_bands_and_the_pretest_read_the_estimated_cells() {
     let fit = staggered(0.3).fit(false, &universal()).unwrap();
     let bands = fit
-        .bands(Level::default(), Bootstrap::new(199, 20_261_127))
+        .bands(Level::default(), Bootstrap::new(199, Seed(20_261_127)))
         .unwrap();
     assert_eq!(bands.cells.len(), 6);
     assert!(bands.critical_value.is_finite() && bands.critical_value > 0.0);
@@ -312,7 +312,7 @@ fn without_the_influence_function_the_aggregations_refuse() {
     );
     assert_eq!(fit.pretest().unwrap_err(), Error::NoInfluence);
     assert_eq!(
-        fit.bands(Level::default(), Bootstrap::new(9, 1))
+        fit.bands(Level::default(), Bootstrap::new(9, Seed(1)))
             .unwrap_err(),
         Error::NoInfluence
     );
@@ -664,7 +664,7 @@ fn invalid_input_and_options_are_refused() {
             ..universal()
         },
         AttGtOptions {
-            bootstrap: Some(Bootstrap::new(0, 1)),
+            bootstrap: Some(Bootstrap::new(0, Seed(1))),
             ..universal()
         },
     ] {
@@ -684,7 +684,7 @@ fn invalid_input_and_options_are_refused() {
         (
             true,
             AttGtOptions {
-                bootstrap: Some(Bootstrap::new(9, 1)),
+                bootstrap: Some(Bootstrap::new(9, Seed(1))),
                 ..universal()
             },
         ),

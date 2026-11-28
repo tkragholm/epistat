@@ -71,7 +71,7 @@ pub fn bootstrap(
     let ones = Mat::from_fn(n, 1, |_, _| 1.0);
     let weights = data.weights_column().unwrap_or(ones.as_ref());
 
-    let mut rng = Stream::seeded(draws.seed);
+    let mut rng = Stream::seeded(draws.seed.value());
     let mut betas_logit = Vec::with_capacity(draws.replicates);
     let mut betas_gamma = Vec::with_capacity(draws.replicates);
     let mut failures = 0;

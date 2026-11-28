@@ -12,9 +12,9 @@
 
 mod gformula_sim;
 
-use epistat_causal::Bootstrap;
 use epistat_causal::Level;
 use epistat_causal::gformula::{GFormulaOptions, IntervalMethod, gformula};
+use epistat_causal::{Bootstrap, Seed};
 use epistat_testkit::Fingerprint;
 use gformula_sim::{complete, covariates, flatten, interventions, simulate};
 
@@ -59,7 +59,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
         (
             "survival, each person once, bootstrap",
             GFormulaOptions {
-                bootstrap: Some(Bootstrap::new(8, SEED)),
+                bootstrap: Some(Bootstrap::new(8, Seed(SEED))),
                 ..recorded
             },
         ),
@@ -67,7 +67,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
             "survival, 2500 simulated, normal limits",
             GFormulaOptions {
                 simulated: Some(2_500),
-                bootstrap: Some(Bootstrap::new(5, SEED)),
+                bootstrap: Some(Bootstrap::new(5, Seed(SEED))),
                 interval: IntervalMethod::Normal,
                 reference: 2,
                 ..recorded
@@ -92,7 +92,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
     let data = end.data(&baseline, &tv);
     let outcome = end.binary_end();
     let options = GFormulaOptions {
-        bootstrap: Some(Bootstrap::new(4, SEED)),
+        bootstrap: Some(Bootstrap::new(4, Seed(SEED))),
         ..recorded
     };
     let g = gformula(&data, &covariates(), &outcome, &interventions(), &options).unwrap();

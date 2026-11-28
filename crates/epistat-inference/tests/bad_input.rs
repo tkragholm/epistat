@@ -5,7 +5,7 @@
 //! inside), so `Unsorted` is not tried, and a kind an entry point accepts is
 //! not tried either: a replicate that is infinite is a valid draw.
 
-use epistat_core::{Bootstrap, Level};
+use epistat_core::{Bootstrap, Level, Seed};
 use epistat_inference::Clusters;
 use epistat_inference::bootstrap;
 use epistat_inference::curve::{Band, contrast_curve};
@@ -88,20 +88,26 @@ fn influence_and_bootstraps_refuse_bad_columns() {
         })
     });
     assert_rejects_bad_input_with_codes("bootstrap::multiplier", single, |bad| {
-        one(bad).then(|| bootstrap::multiplier(0.0, &bad.column(&VALUES), Bootstrap::new(5, 1)))
+        one(bad)
+            .then(|| bootstrap::multiplier(0.0, &bad.column(&VALUES), Bootstrap::new(5, Seed(1))))
     });
     // The per-cluster columns are resampled as they are, NaN included: the
     // function is Study III's and keeps its 0.3 behaviour.
     assert_rejects_bad_input_with_codes("bootstrap::cluster_totals", several, |bad| {
         matches!(bad, BadInput::Empty | BadInput::Mismatched).then(|| {
-            bootstrap::cluster_totals(&[&VALUES, &bad.column(&VALUES)], Bootstrap::new(5, 1))
+            bootstrap::cluster_totals(&[&VALUES, &bad.column(&VALUES)], Bootstrap::new(5, Seed(1)))
         })
     });
     assert_rejects_bad_input_with_codes("multiplier_bands", single, |bad| {
         one(bad).then(|| {
             let column = bad.column(&VALUES);
             let influence = Mat::from_fn(column.len(), 1, |i, _| column[i]);
-            multiplier_bands(influence.as_ref(), None, alpha(), Bootstrap::new(5, 1))
+            multiplier_bands(
+                influence.as_ref(),
+                None,
+                alpha(),
+                Bootstrap::new(5, Seed(1)),
+            )
         })
     });
 }
@@ -199,7 +205,7 @@ fn curves_bands_and_clusters_refuse_bad_input() {
             let covariance = Mat::from_fn(column.len(), column.len(), |i, j| {
                 if i == j { column[i] } else { 0.0 }
             });
-            sup_t_from_covariance(covariance.as_ref(), alpha(), Bootstrap::new(5, 1))
+            sup_t_from_covariance(covariance.as_ref(), alpha(), Bootstrap::new(5, Seed(1)))
         })
     });
     let unit = [0_u32, 0, 1, 1, 2, 2];

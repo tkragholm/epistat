@@ -99,15 +99,16 @@ pub fn multiplier(estimate: f64, psi: &[f64], bootstrap: Bootstrap) -> Result<Ve
         .for_each(|(block, chunk)| {
             let first = (block * LANES) as u64;
             if chunk.len() == LANES {
-                let mut streams: [Stream; LANES] =
-                    std::array::from_fn(|l| Stream::seeded(replicate_seed(seed, first + l as u64)));
+                let mut streams: [Stream; LANES] = std::array::from_fn(|l| {
+                    Stream::seeded(replicate_seed(seed.value(), first + l as u64))
+                });
                 let sums = rademacher_sums(psi, &mut streams);
                 for (slot, sum) in chunk.iter_mut().zip(sums) {
                     *slot = estimate + sum / n;
                 }
             } else {
                 for (l, slot) in chunk.iter_mut().enumerate() {
-                    let mut stream = Stream::seeded(replicate_seed(seed, first + l as u64));
+                    let mut stream = Stream::seeded(replicate_seed(seed.value(), first + l as u64));
                     *slot = estimate + rademacher_sum(psi, &mut stream) / n;
                 }
             }
@@ -147,7 +148,7 @@ pub fn cluster_totals(columns: &[&[f64]], bootstrap: Bootstrap) -> Result<Vec<f6
         .par_chunks_mut(width)
         .enumerate()
         .for_each(|(r, row)| {
-            let counts = resample_counts(clusters, replicate_seed(seed, r as u64));
+            let counts = resample_counts(clusters, replicate_seed(seed.value(), r as u64));
             for (slot, column) in row.iter_mut().zip(columns) {
                 *slot = lanes::sum_map2(&counts, column, |k, v| f64::from(k) * v);
             }
@@ -165,12 +166,13 @@ pub fn cluster_totals(columns: &[&[f64]], bootstrap: Bootstrap) -> Result<Vec<f6
 /// `0..bootstrap.replicates`.
 #[must_use]
 pub fn unit_counts_of(n: usize, bootstrap: Bootstrap, replicate: usize) -> Vec<u32> {
-    resample_counts(n, replicate_seed(bootstrap.seed, replicate as u64))
+    resample_counts(n, replicate_seed(bootstrap.seed.value(), replicate as u64))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::Seed;
     use epistat_testkit::assert_same_on_threads;
 
     #[test]
@@ -178,9 +180,11 @@ mod tests {
         let psi: Vec<f64> = (0..5_000).map(|i| f64::from(i % 13) - 6.0).collect();
         let columns: Vec<f64> = (0..300).map(|i| f64::from(i % 5)).collect();
         assert_same_on_threads(|| {
-            let mut out = multiplier(1.0, &psi, Bootstrap::new(500, 42)).unwrap();
-            out.extend(cluster_totals(&[&columns, &columns], Bootstrap::new(200, 7)).unwrap());
-            let bootstrap = Bootstrap::new(50, 3);
+            let mut out = multiplier(1.0, &psi, Bootstrap::new(500, Seed(42))).unwrap();
+            out.extend(
+                cluster_totals(&[&columns, &columns], Bootstrap::new(200, Seed(7))).unwrap(),
+            );
+            let bootstrap = Bootstrap::new(50, Seed(3));
             let counts: Vec<Vec<u32>> = (0..bootstrap.replicates)
                 .into_par_iter()
                 .map(|r| unit_counts_of(37, bootstrap, r))
@@ -193,10 +197,10 @@ mod tests {
     #[test]
     fn a_cluster_total_matches_its_resample_counts() {
         let values = [1.0, 10.0, 100.0];
-        let totals = cluster_totals(&[&values], Bootstrap::new(3, 5)).unwrap();
+        let totals = cluster_totals(&[&values], Bootstrap::new(3, Seed(5))).unwrap();
         for (r, &total) in totals.iter().enumerate() {
             let counts = resample_counts(3, replicate_seed(5, r as u64));
-            assert_eq!(unit_counts_of(3, Bootstrap::new(3, 5), r), counts);
+            assert_eq!(unit_counts_of(3, Bootstrap::new(3, Seed(5)), r), counts);
             let expected: f64 = counts
                 .iter()
                 .zip(values)
@@ -209,7 +213,7 @@ mod tests {
     #[test]
     fn multiplier_replicates_centre_on_the_estimate() {
         let psi = vec![1.0; 64];
-        let draws = multiplier(3.0, &psi, Bootstrap::new(2_000, 1)).unwrap();
+        let draws = multiplier(3.0, &psi, Bootstrap::new(2_000, Seed(1))).unwrap();
         let mean = draws.iter().sum::<f64>() / 2_000.0;
         assert!((mean - 3.0).abs() < 0.01);
     }
@@ -233,7 +237,7 @@ mod tests {
                         0.25 + rademacher_sum(&psi, &mut stream) / n as f64
                     })
                     .collect();
-                let bootstrap = Bootstrap::new(replicates, 3);
+                let bootstrap = Bootstrap::new(replicates, Seed(3));
                 assert_same_on_threads(|| multiplier(0.25, &psi, bootstrap).unwrap());
                 let got = multiplier(0.25, &psi, bootstrap).unwrap();
                 let bits = |v: &[f64]| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();

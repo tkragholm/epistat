@@ -162,6 +162,40 @@ impl EventStudy {
     pub fn post_periods(&self) -> &[i64] {
         &self.relative_periods[self.n_pre()..]
     }
+
+    /// Whether the relative periods, with the reference among them, are
+    /// consecutive integers, each one more than the one before.
+    ///
+    /// HonestDiD's restrictions compare neighbouring periods, so they read a
+    /// gap as two adjacent periods. An event study of periods -3, -2, 0 and 1
+    /// with reference -1 is consecutive; one of -4, -2 and 0 is not.
+    ///
+    /// ```
+    /// use epistat_core::{Covariance, EventStudy};
+    ///
+    /// let v = Covariance::from_values(2, &[1.0, 0.0, 0.0, 1.0])?;
+    /// assert!(EventStudy::new(vec![0.1, 0.2], v.clone(), vec![-2, 0], -1)?.is_consecutive());
+    /// assert!(!EventStudy::new(vec![0.1, 0.2], v, vec![-3, 0], -1)?.is_consecutive());
+    /// # Ok::<(), epistat_core::InputError>(())
+    /// ```
+    #[must_use]
+    pub fn is_consecutive(&self) -> bool {
+        let n_pre = self.n_pre();
+        let (pre, post) = self.relative_periods.split_at(n_pre);
+        let steps = |periods: &[i64]| {
+            periods
+                .windows(2)
+                .all(|w| w[1].checked_sub(w[0]) == Some(1))
+        };
+        steps(pre)
+            && steps(post)
+            && pre
+                .last()
+                .is_none_or(|&p| self.reference.checked_sub(p) == Some(1))
+            && post
+                .first()
+                .is_none_or(|&p| p.checked_sub(self.reference) == Some(1))
+    }
 }
 
 #[cfg(test)]
@@ -200,6 +234,23 @@ mod tests {
             EventStudy::new(vec![0.0; 5], identity(5), vec![-5, -4, -2, -1, 0], -3).unwrap();
         assert_eq!(study.pre_periods(), &[-5, -4]);
         assert_eq!(study.post_periods(), &[-2, -1, 0]);
+    }
+
+    #[test]
+    fn consecutive_periods_include_the_reference() {
+        let study = |periods: Vec<i64>, reference| {
+            let n = periods.len();
+            EventStudy::new(vec![0.0; n], identity(n), periods, reference).unwrap()
+        };
+        assert!(study(vec![-3, -2, 0, 1], -1).is_consecutive());
+        assert!(study(vec![0, 1, 2], -1).is_consecutive());
+        assert!(study(vec![-2], -1).is_consecutive());
+        assert!(study(vec![-5, -4, -2, -1, 0], -3).is_consecutive());
+        assert!(!study(vec![-4, -2, 0], -1).is_consecutive());
+        assert!(!study(vec![-3, 0, 1], -1).is_consecutive());
+        assert!(!study(vec![-2, 0, 2], -1).is_consecutive());
+        assert!(!study(vec![1, 2], -1).is_consecutive());
+        assert!(!study(vec![i64::MIN, 0], -1).is_consecutive());
     }
 
     #[test]

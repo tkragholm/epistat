@@ -326,6 +326,50 @@ pub fn assert_codes_unique<E: Classify>(prefix: &str, errors: &[E]) {
     }
 }
 
+/// Checks that every error's code is written in the documentation of its
+/// variant, as `` `prefix.name` `` in backticks, in `source`, the text of the
+/// file that declares the error type (`include_str!` of it).
+///
+/// The check reads the `///` lines of `source`; a code that none of them
+/// names fails with the code. Writing each code at the start of its
+/// variant's doc keeps the two next to each other.
+///
+/// ```
+/// use epistat_core::{Classify, ErrorKind};
+/// use epistat_testkit::assert_codes_documented;
+///
+/// enum Error {
+///     /// `demo.singular`: the design is singular.
+///     Singular,
+/// }
+///
+/// impl Classify for Error {
+///     fn kind(&self) -> ErrorKind { ErrorKind::Numerical }
+///     fn code(&self) -> &'static str { "demo.singular" }
+/// }
+///
+/// let source = "enum Error {\n    /// `demo.singular`: the design is singular.\n    Singular,\n}";
+/// assert_codes_documented(source, &[Error::Singular]);
+/// ```
+///
+/// # Panics
+///
+/// When a code is not named in a doc comment of `source`.
+pub fn assert_codes_documented<E: Classify>(source: &str, errors: &[E]) {
+    let documented: Vec<&str> = source
+        .lines()
+        .filter_map(|line| line.trim_start().strip_prefix("///"))
+        .collect();
+    for error in errors {
+        let code = error.code();
+        let quoted = format!("`{code}`");
+        assert!(
+            documented.iter().any(|line| line.contains(&quoted)),
+            "code {code:?} is not named in a doc comment"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

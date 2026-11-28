@@ -160,7 +160,7 @@ pub(super) fn sup_t_critical_value(
     epistat_inference::simultaneous::sup_t_from_covariance(
         matrix.as_ref(),
         level,
-        epistat_core::Bootstrap::new(simulation_draws, simulation_seed),
+        epistat_core::Bootstrap::new(simulation_draws, epistat_core::Seed(simulation_seed)),
     )
     .map_err(EngineError::Inference)
 }

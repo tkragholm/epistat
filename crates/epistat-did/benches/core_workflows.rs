@@ -1,5 +1,5 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_did::att_gt::{self, AttGtOptions, Design, Estimator};
 use epistat_did::did_cc::{self, Assumption, CrossFitting, DidCcOptions};
 use epistat_did::two_period::{self, NuisanceOptions, TwoPeriodOptions};
@@ -265,7 +265,7 @@ fn bench_did_cc(criterion: &mut Criterion) {
             tolerance: 1e-6,
             ..NuisanceOptions::default()
         },
-        bootstrap: Some(Bootstrap::new(19, 17_431)),
+        bootstrap: Some(Bootstrap::new(19, Seed(17_431))),
         cross_fitting: Some(CrossFitting { folds: 4, seed: 17 }),
         ..DidCcOptions::default()
     };

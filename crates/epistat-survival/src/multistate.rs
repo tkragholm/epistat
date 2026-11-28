@@ -1076,7 +1076,7 @@ pub fn bootstrap(
         .as_deref()
         .ok_or_else(|| Error::missing("the bootstrap needs a cluster column"))?;
     let seeds: Vec<u64> = (0..bootstrap.replicates as u64)
-        .map(|r| replicate_seed(bootstrap.seed, r))
+        .map(|r| replicate_seed(bootstrap.seed.value(), r))
         .collect();
     let values = bootstrap_rows(
         rows,

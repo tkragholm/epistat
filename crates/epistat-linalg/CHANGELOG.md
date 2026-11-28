@@ -14,6 +14,7 @@ The crate has one error type with stable codes, adds restricted and natural cubi
 
 ### Added
 
+- `convert`, copies between faer's matrices and epistat-core's `Matrix` and `Covariance`: `to_matrix`, `to_mat`, `covariance_from_mat` and `covariance_to_mat`. Results hold the core types so that they do not depend on faer's version.
 - `basis::RestrictedCubic`, a restricted cubic spline in Harrell's form, with `RcsScale` for the scaling, as `Hmisc::rcspline.eval`.
 - `basis::NaturalSpline`, a natural cubic spline, as `splines::ns`, with prediction at new values and `count_outside` for values beyond the boundary.
 - `basis::harrell_knots` and `basis::natural_spline_knots`, the knot rules of those splines.

@@ -34,6 +34,9 @@
 //!   rule to the solution.
 //! - [`basis`] holds the polynomial, B-spline, restricted cubic spline and
 //!   natural cubic spline bases, Harrell's knot rules and design matrices.
+//! - [`convert`] copies between faer's matrices and epistat-core's
+//!   [`Matrix`](epistat_core::Matrix) and [`Covariance`](epistat_core::Covariance),
+//!   the types results hold.
 //! - [`eigen`] holds a Jacobi eigendecomposition of a small symmetric matrix and
 //!   the generalised inverse and its quadratic form.
 //!
@@ -71,6 +74,7 @@
 pub mod basis;
 mod blocks;
 pub mod cholesky;
+pub mod convert;
 pub mod design;
 pub mod eigen;
 mod error;

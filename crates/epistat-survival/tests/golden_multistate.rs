@@ -24,7 +24,7 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_rng::Stream;
 use epistat_survival::lowlevel::integrate;
 use epistat_survival::multistate::{MultistateOptions, bootstrap, estimate};
@@ -499,7 +499,7 @@ fn bootstrap_case(
 ) {
     let buf = p.buf(weights, Some(clusters.to_vec()), states).unwrap();
     let data = buf.as_data();
-    let seeds = Bootstrap::new(6, 500);
+    let seeds = Bootstrap::new(6, Seed(500));
     for (label, horizons) in [("curves", vec![]), ("restricted", vec![2.0, 7.5, 30.0])] {
         let out = bootstrap(&data, times, &horizons, 0.5, seeds, &options(None)).unwrap();
         check(&format!("{name}/{label}"), &out.values);
@@ -510,12 +510,20 @@ fn bootstrap_case(
         times,
         &[4.0],
         0.0,
-        Bootstrap::new(1, 77),
+        Bootstrap::new(1, Seed(77)),
         &options(None),
     )
     .unwrap();
     check(&format!("{name}/single seed"), &single.values);
-    let none = bootstrap(&data, times, &[], 0.0, Bootstrap::new(0, 0), &options(None)).unwrap();
+    let none = bootstrap(
+        &data,
+        times,
+        &[],
+        0.0,
+        Bootstrap::new(0, Seed(0)),
+        &options(None),
+    )
+    .unwrap();
     check(&format!("{name}/no seeds"), &none.values);
 }
 
@@ -568,7 +576,7 @@ fn bootstrap_refusals() {
     let p = process(20, 13, false, false, false);
     let ones = ones_of(&p);
     let times = event_times(&p);
-    let seeds = Bootstrap::new(2, 1);
+    let seeds = Bootstrap::new(2, Seed(1));
     let clustered = p.buf(&ones, Some(p.person.clone()), 3).unwrap();
     check_text(
         "refuse/initial given",

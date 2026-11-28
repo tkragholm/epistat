@@ -39,7 +39,7 @@
 #[path = "common/switching.rs"]
 mod switching;
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_did::{Dcdh, DcdhOptions, DcdhSwitchers, DcdhTerm, SwitchingPanel, dcdh};
 use epistat_linalg::{Attempt, Mat, Method, solve};
 use epistat_testkit::{Tolerance, load_json};
@@ -1024,7 +1024,7 @@ fn bootstrap_matches_did_multiplegt_dyn() {
         let panel = full.panel();
         let bootstrap = |replicates: usize, seed: u64| {
             let options = DcdhOptions {
-                bootstrap: Some(Bootstrap::new(replicates, seed)),
+                bootstrap: Some(Bootstrap::new(replicates, Seed(seed))),
                 ..cfg
             };
             dcdh::estimate(&panel, &options)

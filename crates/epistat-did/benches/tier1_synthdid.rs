@@ -23,7 +23,7 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_did::{StaggeredPanel, SynthDidOptions, SynthDraws, SynthVariance, synthdid};
 
 const SEED: u64 = 20_261_125;
@@ -125,7 +125,10 @@ fn main() {
         "synthdid_placebo_t20" => (
             "sdid20",
             SynthDidOptions {
-                variance: SynthVariance::Placebo(SynthDraws::Seeded(Bootstrap::new(20, SEED))),
+                variance: SynthVariance::Placebo(SynthDraws::Seeded(Bootstrap::new(
+                    20,
+                    Seed(SEED),
+                ))),
                 ..SynthDidOptions::default()
             },
         ),

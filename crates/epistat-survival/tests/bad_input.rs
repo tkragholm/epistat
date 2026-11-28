@@ -5,10 +5,10 @@
 //! entry point has no argument for, such as an unsorted column where the order
 //! of the rows does not matter, is not tried.
 
-use epistat_core::Bootstrap;
 use epistat_core::Classify;
 use epistat_core::Level;
 use epistat_core::Panel;
+use epistat_core::{Bootstrap, Seed};
 use epistat_linalg::Mat;
 use epistat_survival::aalen_johansen::{self, AalenJohansenOptions, AalenJohansenVarianceOptions};
 use epistat_survival::absrisk::{CauseSpecificCox, CscOptions, NewRows, RiskOptions};
@@ -1008,7 +1008,7 @@ fn tests_and_weights_refuse_bad_columns() {
             &[1],
             2,
             grid,
-            Bootstrap::new(5, 1),
+            Bootstrap::new(5, Seed(1)),
             &MarkovOptions::default(),
         )
         .map(|_| ())
@@ -2243,7 +2243,7 @@ fn bootstraps_and_variances_refuse_bad_columns() {
         &times,
         &[3.0, 6.0],
         0.0,
-        Bootstrap::new(3, 1),
+        Bootstrap::new(3, Seed(1)),
         &MultistateOptions::default(),
     )
     .unwrap();
@@ -2254,7 +2254,7 @@ fn bootstraps_and_variances_refuse_bad_columns() {
                 &col(bad, &times),
                 &[],
                 0.0,
-                Bootstrap::new(3, 1),
+                Bootstrap::new(3, Seed(1)),
                 &MultistateOptions::default(),
             )
             .map(|_| ())
@@ -2268,7 +2268,7 @@ fn bootstraps_and_variances_refuse_bad_columns() {
                 &times,
                 &horizons,
                 0.0,
-                Bootstrap::new(3, 1),
+                Bootstrap::new(3, Seed(1)),
                 &MultistateOptions::default(),
             )
             .map(|_| ())

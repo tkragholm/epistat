@@ -1,7 +1,7 @@
 //! The solver counts in the summaries and the diagnostics of the optimisation
 //! surface: a deterministic call reports the same counts each time.
 
-use epistat_core::{Bootstrap, Covariance, EventStudy};
+use epistat_core::{Bootstrap, Covariance, EventStudy, Seed};
 use epistat_honestdid::honest::{
     self, Calibration, Directions, HonestOptions, JointPathOptions, Restriction, Surface, Target,
 };
@@ -24,7 +24,7 @@ fn counts_are_reported_and_repeat() {
             &study,
             &Target::Weights(vec![1.0, 0.0]),
             &restriction,
-            &HonestOptions::new(Bootstrap::new(1_000, 0)),
+            &HonestOptions::new(Bootstrap::new(1_000, Seed(0))),
         )
         .expect("smoothness summary")
     };
@@ -38,8 +38,8 @@ fn counts_are_reported_and_repeat() {
 
     let options = JointPathOptions {
         directions: Directions::Surface(Surface::new(250, 1729)),
-        calibration: Calibration::Gaussian(Bootstrap::new(20_000, 42)),
-        ..JointPathOptions::new(Bootstrap::new(1_000, 0))
+        calibration: Calibration::Gaussian(Bootstrap::new(20_000, Seed(42))),
+        ..JointPathOptions::new(Bootstrap::new(1_000, Seed(0)))
     };
     let run = || {
         honest::joint_path(&study, &restriction, &options)

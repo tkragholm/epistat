@@ -205,7 +205,7 @@ pub fn probabilistic_misclass_rates(
         opts.random_error,
     );
     for r in 0..opts.bootstrap.replicates {
-        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed, r as u64));
+        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed.value(), r as u64));
         let mut parameters = [f64::NAN; 4];
         let corrected = (|| {
             let s_e = se.draw(&mut stream)?;
@@ -239,7 +239,7 @@ pub fn probabilistic_misclass_rates(
 mod tests {
     use super::*;
     use crate::bias::Dist;
-    use epistat_core::{Bootstrap, Level};
+    use epistat_core::{Bootstrap, Level, Seed};
     use epistat_testkit::Tolerance;
 
     const TRUE: PersonTime2 = PersonTime2 {
@@ -302,7 +302,7 @@ mod tests {
             &Pair::Independent([Dist::Constant(0.9), Dist::Constant(0.85)]),
             &Pair::Independent([Dist::Constant(0.99), Dist::Constant(0.98)]),
             &ProbOptions {
-                bootstrap: Bootstrap::new(20, 1),
+                bootstrap: Bootstrap::new(20, Seed(1)),
                 random_error: false,
                 level: Level::alpha(0.05).unwrap(),
             },

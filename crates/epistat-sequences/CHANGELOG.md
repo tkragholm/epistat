@@ -13,7 +13,7 @@ This release gives the crate one typed `Error`, returns `None` where a measure i
 - `refit_agreements` returns `Vec<AgreementPair>`, with `AgreementPair = Option<(Option<f64>, Option<f64>)>`. The outer `None` means the replicate had too few sequences of positive weight to be refitted.
 - Cluster labels are `u32` in `silhouette`, `partition_agreement`, `refit_agreements` and `Agreement::correspondence`. Convert `i64` labels with `u32::try_from`.
 - `FitSettings` holds `restarts: usize` instead of a closure of the seed, so it has no lifetime and is `Copy`. Each fit draws its restarts with `Restarts::from_seed(seed, restarts)`. Explicit seed lists remain available on the k-medoids functions through `Restarts::from_seeds`. The `RestartSeeds` type is removed.
-- `null_silhouettes` takes `bootstrap: Bootstrap` in place of a seed and a replicate count. Write `Bootstrap::new(replicates, seed)`. Replicate `r` draws from `replicate_seed(seed, r)`, as before.
+- `null_silhouettes` takes `bootstrap: Bootstrap` in place of a seed and a replicate count. Write `Bootstrap::new(replicates, Seed(seed))`. Replicate `r` draws from `replicate_seed(seed, r)`, as before.
 - `transition_costs`, `substitution_costs` and `indel_for` return `Result<_, Error>` and check the number of weights, the symbol range and the table size, where they indexed out of range or truncated.
 - The fields of `Panel` are read through `count()`, `length()` and `alphabet()`.
 - `Attempt` and `Agreement` are `#[non_exhaustive]`.

@@ -189,7 +189,7 @@ pub const fn derive(base: u64, path: &[u64]) -> u64 {
 #[must_use]
 pub fn replicate_seeds(bootstrap: Bootstrap) -> Vec<u64> {
     (0..bootstrap.replicates as u64)
-        .map(|replicate| replicate_seed(bootstrap.seed, replicate))
+        .map(|replicate| replicate_seed(bootstrap.seed.value(), replicate))
         .collect()
 }
 
@@ -417,6 +417,7 @@ pub fn rademacher_sums<const L: usize>(values: &[f64], streams: &mut [Stream; L]
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::Seed;
 
     #[cfg(feature = "rand")]
     #[test]
@@ -476,12 +477,15 @@ mod tests {
 
     #[test]
     fn replicate_seeds_are_the_seeds_of_each_replicate() {
-        let seeds = replicate_seeds(Bootstrap::new(5, 42));
+        let seeds = replicate_seeds(Bootstrap::new(5, Seed(42)));
         assert_eq!(seeds.len(), 5);
         for (r, &seed) in seeds.iter().enumerate() {
             assert_eq!(seed, replicate_seed(42, r as u64));
         }
-        assert_eq!(replicate_seeds(Bootstrap::new(0, 42)), Vec::<u64>::new());
+        assert_eq!(
+            replicate_seeds(Bootstrap::new(0, Seed(42))),
+            Vec::<u64>::new()
+        );
     }
 
     #[test]

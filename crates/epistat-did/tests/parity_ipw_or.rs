@@ -17,7 +17,7 @@
 //! the same bound applies to it relative to its own size; it is checked
 //! against `1e-9`.
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_did::TwoPeriodData;
 use epistat_did::two_period::{self, Estimator, NuisanceOptions, TwoPeriod, TwoPeriodOptions};
 use epistat_linalg::MatRef;
@@ -177,7 +177,7 @@ fn the_interval_is_analytic_by_default() {
     let boot = panel(
         &reference.panel,
         &TwoPeriodOptions {
-            bootstrap: Some(Bootstrap::new(199, 17_431)),
+            bootstrap: Some(Bootstrap::new(199, Seed(17_431))),
             ..options(Estimator::InverseProbabilityWeighting)
         },
     );

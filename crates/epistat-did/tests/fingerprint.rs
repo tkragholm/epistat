@@ -11,7 +11,7 @@
 
 use std::fmt::Debug;
 
-use epistat_core::{Bootstrap, Level};
+use epistat_core::{Bootstrap, Level, Seed};
 use epistat_did::att_gt::{
     self, Aggte, AggteOptions, AggteType, AggteWeights, AttGt, AttGtOptions, BasePeriod,
     ComparisonGroup, Design, Estimator, NuisanceOptions, UnbalancedPanel,
@@ -487,7 +487,7 @@ fn att_gt_options(comparison_group: ComparisonGroup, base_period: BasePeriod) ->
             legacy_repeated_cross_section: true,
             ..NuisanceOptions::default()
         },
-        bootstrap: Some(Bootstrap::new(999, 17_431)),
+        bootstrap: Some(Bootstrap::new(999, Seed(17_431))),
         ..AttGtOptions::default()
     }
 }
@@ -514,7 +514,7 @@ fn two_period_options(estimator: two_period::Estimator) -> TwoPeriodOptions {
             ..NuisanceOptions::default()
         },
         level: Level::default(),
-        bootstrap: Some(Bootstrap::new(999, 17_431)),
+        bootstrap: Some(Bootstrap::new(999, Seed(17_431))),
     }
 }
 
@@ -524,7 +524,7 @@ fn did_cc_options(assumption: Assumption) -> DidCcOptions {
     DidCcOptions {
         assumption,
         nuisance: two_period_options(two_period::Estimator::DoublyRobust).nuisance,
-        bootstrap: Some(Bootstrap::new(999, 17_431)),
+        bootstrap: Some(Bootstrap::new(999, Seed(17_431))),
         ..DidCcOptions::default()
     }
 }
@@ -772,7 +772,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
         aggte_digest(&aggregate(
             &clustered,
             AggteOptions {
-                bootstrap: Some(Bootstrap::new(999, 20_261_124)),
+                bootstrap: Some(Bootstrap::new(999, Seed(20_261_124))),
                 band: att_gt::Band::Uniform,
                 ..dynamic
             },
@@ -800,7 +800,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
         numbers.extend([int(group), int(time)]);
     }
     out.push(("pretrend_wald", hash_numbers(&numbers)));
-    let bands = Bootstrap::new(999, 20_261_122);
+    let bands = Bootstrap::new(999, Seed(20_261_122));
     for (name, fit) in [
         ("mboot_bands", &fitted),
         ("mboot_bands_clustered", &clustered),
@@ -971,7 +971,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
         &TripleDidOptions {
             nuisance: nuisance_options,
             level: Level::default(),
-            bootstrap: Some(Bootstrap::new(999, 17_431)),
+            bootstrap: Some(Bootstrap::new(999, Seed(17_431))),
         },
     )
     .expect("triple differences");

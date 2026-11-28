@@ -3,12 +3,12 @@
 
 mod gformula_sim;
 
-use epistat_causal::Bootstrap;
 use epistat_causal::gformula::Competing;
 use epistat_causal::gformula::{
     Action, Covariate, CovariateKind, GFormula, GFormulaOptions, History, IntervalMethod,
     Intervention, Otherwise, Outcome, PersonPeriods, Restriction, Rule, Term, gformula,
 };
+use epistat_causal::{Bootstrap, Seed};
 use epistat_causal::{Error, Panel};
 use epistat_core::{Classify, ErrorKind};
 use gformula_sim::{A, L, Sim, Z, complete, covariates, flatten, interventions, simulate};
@@ -160,7 +160,7 @@ fn the_seed_moves_only_simulated_values() {
 fn bootstrap_limits_follow_the_method() {
     let sim = simulate(400, 3, 6);
     let options = GFormulaOptions {
-        bootstrap: Some(Bootstrap::new(30, SEED)),
+        bootstrap: Some(Bootstrap::new(30, Seed(SEED))),
         interval: IntervalMethod::Normal,
         ..GFormulaOptions::new(SEED)
     };

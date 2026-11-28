@@ -77,7 +77,7 @@ pub(super) fn run(
     let replicates: Vec<Vec<Option<f64>>> = (0..draws.replicates)
         .into_par_iter()
         .map(|r| {
-            let counts = resample_counts(units.len(), replicate_seed(draws.seed, r as u64));
+            let counts = resample_counts(units.len(), replicate_seed(draws.seed.value(), r as u64));
             let rows: Vec<usize> = (0..n).filter(|&i| counts[index[i]] > 0).collect();
             let scale: Vec<f64> = rows.iter().map(|&i| f64::from(counts[index[i]])).collect();
             let columns = data.select(&rows, Some(&scale));

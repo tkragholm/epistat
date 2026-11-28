@@ -8,7 +8,7 @@
 //! gives, and the test asserts them only on that target. Elsewhere it computes them
 //! and, when `EPISTAT_HASH_OUT` is set, appends them to that file. Print them with
 //! `GOLDEN_PRINT=1 cargo test --test estimator_fingerprints -- --nocapture`.
-use epistat_core::{Bootstrap, Interval, Level};
+use epistat_core::{Bootstrap, Interval, Level, Seed};
 use epistat_linalg::Mat;
 use epistat_rng::Stream as Draws;
 use epistat_semicontinuous::compare::{CompareOptions, ModelComparison, ModelFitMetrics};
@@ -327,7 +327,7 @@ fn bootstrap(out: &mut Golden, input: &Fixture) {
     let result = two_part::bootstrap(
         &input.data(),
         &TwoPartOptions::default(),
-        Bootstrap::new(25, 7),
+        Bootstrap::new(25, Seed(7)),
         Some(50),
     )
     .expect("bootstrap");

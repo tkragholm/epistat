@@ -449,7 +449,7 @@ impl SynthVariance {
         let draws = |d: &'a SynthDraws| match d {
             SynthDraws::Seeded(b) => Draws::Seeded {
                 replications: b.replicates,
-                seed: b.seed,
+                seed: b.seed.value(),
             },
             SynthDraws::Given(given) => Draws::Given(given),
         };

@@ -171,7 +171,7 @@ fn run_dcdh(n: usize, method: &str) {
     let mut lines = Lines::default();
     if method == "dcdh_bootstrap" {
         let options = DcdhOptions {
-            bootstrap: Some(epistat_core::Bootstrap::new(50, 1)),
+            bootstrap: Some(epistat_core::Bootstrap::new(50, epistat_core::Seed(1))),
             ..config
         };
         let (times, r) = common::timed(common::reps(), || {

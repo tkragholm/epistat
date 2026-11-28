@@ -722,7 +722,7 @@ pub fn null_silhouettes(
     }
     check_restarts(settings)?;
     each_replicate(bootstrap.replicates, settings.distance, |replicate| {
-        let seed = replicate_seed(bootstrap.seed, replicate as u64);
+        let seed = replicate_seed(bootstrap.seed.value(), replicate as u64);
         let drawn = nulls::null_sequences(panel, weights, model, seed)?;
         let (encoded, merged, alphabet) = collapse(&drawn, panel.length, weights, panel.alphabet);
         if merged.len() < settings.k {
@@ -821,7 +821,7 @@ mod tests {
         transition_costs,
     };
     use crate::{nulls, positionwise};
-    use epistat_core::Bootstrap;
+    use epistat_core::{Bootstrap, Seed};
     use epistat_rng::replicate_seed;
 
     #[test]
@@ -916,7 +916,7 @@ mod tests {
                 &weights,
                 NullModel::FirstOrderMarkov,
                 settings(distance, 2),
-                Bootstrap::new(3, 7),
+                Bootstrap::new(3, Seed(7)),
             )
             .unwrap();
             assert_eq!(silhouettes.len(), 3);
@@ -925,7 +925,7 @@ mod tests {
                 &weights,
                 NullModel::FirstOrderMarkov,
                 settings(distance, 2),
-                Bootstrap::new(3, 7),
+                Bootstrap::new(3, Seed(7)),
             )
             .unwrap();
             let bits = |values: &[Option<f64>]| -> Vec<Option<u64>> {
@@ -939,7 +939,7 @@ mod tests {
                 &weights,
                 NullModel::StateIndependence,
                 settings(Distance::Hamming, 0),
-                Bootstrap::new(1, 1),
+                Bootstrap::new(1, Seed(1)),
             )
             .is_err()
         );
@@ -951,7 +951,7 @@ mod tests {
                 &negative,
                 NullModel::StateIndependence,
                 settings(Distance::Hamming, 2),
-                Bootstrap::new(1, 1),
+                Bootstrap::new(1, Seed(1)),
             )
             .is_err()
         );
@@ -1026,7 +1026,8 @@ mod tests {
             restarts: 3,
             max_iterations: 10,
         };
-        let got = null_silhouettes(&panel, &weights, model, given, Bootstrap::new(4, 7)).unwrap();
+        let got =
+            null_silhouettes(&panel, &weights, model, given, Bootstrap::new(4, Seed(7))).unwrap();
         let by_hand: Vec<Option<f64>> = (0..4u64)
             .map(|r| {
                 let seed = replicate_seed(7, r);

@@ -264,7 +264,7 @@ fn config(options: &PretrendOptions) -> Result<PretrendConfig, Error> {
         threshold: options.threshold,
         abs_tol: options.tolerance,
         shifts: options.shifts.replicates,
-        seed: options.shifts.seed,
+        seed: options.shifts.seed.value(),
     };
     engine::validate_config(&config)?;
     Ok(config)

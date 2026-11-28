@@ -1,5 +1,5 @@
 use super::*;
-use epistat_core::{Bootstrap, InputError, Level};
+use epistat_core::{Bootstrap, InputError, Level, Seed};
 use epistat_linalg::{Mat, MatRef};
 
 use crate::error::InternalDidError as PortedDidError;
@@ -125,7 +125,7 @@ fn drdid_estimates_att_with_covariates() {
     let change = [9.0, 8.0, 7.0, 6.0, 5.0, 4.0];
     let x = [1.0, 0.0, 1.0, 1.0, 0.0, 1.0];
     let options = TwoPeriodOptions {
-        bootstrap: Some(Bootstrap::new(199, 42)),
+        bootstrap: Some(Bootstrap::new(199, Seed(42))),
         ..doubly_robust()
     };
     let fit = dr_panel(&treated, &change, Some(&x), &options).expect("estimate drdid");

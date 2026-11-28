@@ -11,7 +11,7 @@
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::markov::{MarkovOptions, test};
@@ -58,7 +58,7 @@ fn markov_test_does_not_depend_on_the_number_of_threads() {
         .build()
         .unwrap();
     let grid = [0.3, 0.9, 1.6, 2.4, 3.5, 4.8, 6.1];
-    let seeds = Bootstrap::new(33, 77);
+    let seeds = Bootstrap::new(33, Seed(77));
     // Exact ties: the times carry rounding noise, and the comparison is
     // between thread counts.
     let opts = MarkovOptions {

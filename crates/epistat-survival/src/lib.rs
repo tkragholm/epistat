@@ -197,7 +197,7 @@ pub mod timefix;
 pub mod tmerge;
 pub mod weighting;
 
-pub use epistat_core::{Bootstrap, Covariance, Level};
+pub use epistat_core::{Bootstrap, Covariance, Level, Seed};
 pub use error::{Error, Result};
 pub use surv::{
     Cause, IntervalDataBuilder, IntervalKind, IntervalSurv, Levels, Outcome, Surv, SurvBuf,

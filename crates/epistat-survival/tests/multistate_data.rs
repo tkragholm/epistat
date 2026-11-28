@@ -11,7 +11,7 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::multistate::{MultistateOptions, bootstrap, estimate};
@@ -220,7 +220,7 @@ fn bootstrap_reports_its_shape() {
         let ascending = event_times(&p);
         let mut descending = ascending.clone();
         descending.reverse();
-        let seeds = Bootstrap::new(6, 500);
+        let seeds = Bootstrap::new(6, Seed(500));
         let options = MultistateOptions {
             timefix: if integer {
                 TimeFix::default()
@@ -329,7 +329,17 @@ fn the_data_are_checked_before_estimating() {
     // Clean data: a gap is allowed, so is nothing else to report.
     let good = build(&cols, &start, Some(&istate), Some(&id), &ones);
     assert!(estimate(&good, &times, &options).is_ok());
-    assert!(bootstrap(&good, &times, &[], 0.0, Bootstrap::new(2, 1), &options).is_ok());
+    assert!(
+        bootstrap(
+            &good,
+            &times,
+            &[],
+            0.0,
+            Bootstrap::new(2, Seed(1)),
+            &options
+        )
+        .is_ok()
+    );
 
     let message = |result: Result<_, epistat_survival::Error>| match result {
         Ok(()) => "ok".to_owned(),
@@ -388,7 +398,7 @@ fn the_data_are_checked_before_estimating() {
         ..MultistateOptions::default()
     };
     assert!(
-        message(bootstrap(&good, &times, &[], 0.0, Bootstrap::new(1, 1), &given).map(|_| ()))
+        message(bootstrap(&good, &times, &[], 0.0, Bootstrap::new(1, Seed(1)), &given).map(|_| ()))
             .contains("in each replicate")
     );
     let no_cluster = SurvData::builder(&stop, &status)
@@ -405,7 +415,7 @@ fn the_data_are_checked_before_estimating() {
                 &times,
                 &[],
                 0.0,
-                Bootstrap::new(1, 1),
+                Bootstrap::new(1, Seed(1)),
                 &options
             )
             .map(|_| ())

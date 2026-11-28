@@ -42,6 +42,8 @@
 //! 1. Hinnant H. chrono-Compatible Low-Level Date Algorithms.
 //!    howardhinnant.github.io/date_algorithms.html
 
+use crate::check::InputError;
+
 /// The days from 1960-01-01, the day 0 of SAS dates, to 1970-01-01, the day 0
 /// of Unix days: a SAS day `s` is the Unix day `s - SAS_OFFSET_DAYS`.
 pub const SAS_OFFSET_DAYS: i64 = 3_653;
@@ -265,6 +267,142 @@ impl Day {
             None => None,
         }
     }
+
+    /// The days from `earlier` to this day, negative when `earlier` is
+    /// later; `day - earlier` is the same.
+    #[must_use]
+    pub const fn days_since(self, earlier: Self) -> i64 {
+        // Both counts lie within the years of an i32, about 7.8e11 days from
+        // the epoch, so the difference cannot overflow.
+        self.0 - earlier.0
+    }
+
+    /// The day `years` calendar years later, as [`add_years`] gives it under
+    /// the rule `leap` for 29 February, or `None` outside [`Day::MIN`] to
+    /// [`Day::MAX`].
+    #[must_use]
+    pub const fn checked_add_years(self, years: i64, leap: LeapBirthday) -> Option<Self> {
+        let (y, _, _) = self.to_civil();
+        match y.checked_add(years) {
+            Some(target) if target >= Self::MIN_YEAR && target <= Self::MAX_YEAR => {
+                Some(Self(add_years(self.0, years, leap)))
+            }
+            _ => None,
+        }
+    }
+
+    /// The day `months` calendar months later, as [`add_months`] gives it, or
+    /// `None` outside [`Day::MIN`] to [`Day::MAX`].
+    #[must_use]
+    pub const fn checked_add_months(self, months: i64) -> Option<Self> {
+        let (y, m, _) = self.to_civil();
+        let Some(index) = (y * 12 + (m - 1)).checked_add(months) else {
+            return None;
+        };
+        let target = index.div_euclid(12);
+        if target < Self::MIN_YEAR || target > Self::MAX_YEAR {
+            return None;
+        }
+        Some(Self(add_months(self.0, months)))
+    }
+
+    /// The day of an Arrow `Date32` value, days since 1970-01-01 as an
+    /// `i32`; every such value is a `Day`.
+    #[must_use]
+    pub const fn from_unix_days_i32(days: i32) -> Self {
+        Self(days as i64)
+    }
+
+    /// The days since 1970-01-01 as an `i32`, Arrow's `Date32`, or `None` for
+    /// a day more than about 5.8 million years from 1970.
+    #[must_use]
+    pub const fn unix_days_i32(self) -> Option<i32> {
+        if self.0 < i32::MIN as i64 || self.0 > i32::MAX as i64 {
+            None
+        } else {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the count was checked to fit an i32"
+            )]
+            let days = self.0 as i32;
+            Some(days)
+        }
+    }
+
+    /// A column of days since 1970-01-01 as days.
+    ///
+    /// ```
+    /// use epistat_core::Day;
+    ///
+    /// let days = Day::from_unix_column(&[0, 19_782])?;
+    /// assert_eq!(days[1].to_string(), "2024-02-29");
+    /// assert_eq!(Day::to_unix_column(&days), [0, 19_782]);
+    /// assert!(Day::from_unix_column(&[0, i64::MAX]).is_err());
+    /// # Ok::<(), epistat_core::InputError>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`InputError::Domain`] at the first count outside [`Day::MIN`] to
+    /// [`Day::MAX`], with its row.
+    pub fn from_unix_column(days: &[i64]) -> Result<Vec<Self>, InputError> {
+        column(days, Self::from_unix_days, UNIX_DOMAIN)
+    }
+
+    /// A column of SAS dates, days since 1960-01-01, as days.
+    ///
+    /// # Errors
+    ///
+    /// [`InputError::Domain`] at the first count outside [`Day::MIN`] to
+    /// [`Day::MAX`], with its row.
+    pub fn from_sas_column(days: &[i64]) -> Result<Vec<Self>, InputError> {
+        column(
+            days,
+            Self::from_sas_days,
+            "the SAS days of the years of an i32",
+        )
+    }
+
+    /// A column of Arrow `Date32` values as days.
+    #[must_use]
+    pub fn from_unix_column_i32(days: &[i32]) -> Vec<Self> {
+        days.iter().map(|&d| Self::from_unix_days_i32(d)).collect()
+    }
+
+    /// The days since 1970-01-01 of each day, the column the estimators take.
+    #[must_use]
+    pub fn to_unix_column(days: &[Self]) -> Vec<i64> {
+        days.iter().map(|day| day.0).collect()
+    }
+}
+
+const UNIX_DOMAIN: &str = "the Unix days of the years of an i32";
+
+fn column(
+    days: &[i64],
+    convert: impl Fn(i64) -> Option<Day>,
+    domain: &'static str,
+) -> Result<Vec<Day>, InputError> {
+    days.iter()
+        .enumerate()
+        .map(|(row, &d)| {
+            convert(d).ok_or(InputError::Domain {
+                what: "day",
+                value: d as f64,
+                domain,
+                row: Some(row),
+            })
+        })
+        .collect()
+}
+
+impl core::ops::Sub for Day {
+    type Output = i64;
+
+    /// The days from `earlier` to `self`, [`Day::days_since`].
+    fn sub(self, earlier: Self) -> i64 {
+        self.days_since(earlier)
+    }
 }
 
 impl core::fmt::Display for Day {
@@ -285,14 +423,14 @@ impl core::fmt::Debug for Day {
 }
 
 impl TryFrom<i64> for Day {
-    type Error = crate::InputError;
+    type Error = InputError;
 
     /// The day of a Unix day count.
     fn try_from(days: i64) -> Result<Self, Self::Error> {
-        Self::from_unix_days(days).ok_or(crate::InputError::Domain {
+        Self::from_unix_days(days).ok_or(InputError::Domain {
             what: "day",
             value: days as f64,
-            domain: "the Unix days of the years of an i32",
+            domain: UNIX_DOMAIN,
             row: None,
         })
     }
@@ -357,6 +495,46 @@ mod tests {
             "Day(2000-01-01)"
         );
         assert!(Day::from_civil(1999, 12, 31) < Day::from_civil(2000, 1, 1));
+    }
+
+    #[test]
+    fn days_subtract_and_add_calendar_units() {
+        let day = Day::from_civil(2000, 2, 29).expect("a date");
+        let later = Day::from_civil(2019, 3, 1).expect("a date");
+        assert_eq!(later - day, 6_940);
+        assert_eq!(day.days_since(later), -6_940);
+        assert_eq!(day.checked_add_years(19, LeapBirthday::March1), Some(later));
+        assert_eq!(
+            day.checked_add_months(12).map(Day::to_civil),
+            Some((2001, 2, 28))
+        );
+        assert_eq!(Day::MAX.checked_add_years(1, LeapBirthday::March1), None);
+        assert_eq!(Day::MIN.checked_add_months(-1), None);
+        assert_eq!(Day::MAX.checked_add_months(i64::MAX), None);
+        assert_eq!(
+            Day::MAX - Day::MIN,
+            Day::MAX.unix_days() - Day::MIN.unix_days()
+        );
+    }
+
+    #[test]
+    fn columns_convert_with_the_epoch_named() {
+        let days = Day::from_sas_column(&[0, SAS_OFFSET_DAYS]).unwrap();
+        assert_eq!(days[0].to_string(), "1960-01-01");
+        assert_eq!(Day::to_unix_column(&days), [-SAS_OFFSET_DAYS, 0]);
+        assert_eq!(
+            Day::from_unix_column(&[1, i64::MIN]),
+            Err(InputError::Domain {
+                what: "day",
+                value: i64::MIN as f64,
+                domain: UNIX_DOMAIN,
+                row: Some(1)
+            })
+        );
+        let date32 = Day::from_unix_column_i32(&[i32::MIN, 0, i32::MAX]);
+        assert_eq!(date32[1].unix_days(), 0);
+        assert_eq!(date32[2].unix_days_i32(), Some(i32::MAX));
+        assert_eq!(Day::MAX.unix_days_i32(), None);
     }
 
     #[test]

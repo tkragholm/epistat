@@ -174,7 +174,7 @@ mod history;
 mod prepare;
 mod simulate;
 
-use epistat_core::{Bootstrap, Level, Panel};
+use epistat_core::{Bootstrap, Level, Panel, Seed};
 use epistat_inference::interval::{self, Percentile};
 use epistat_rng::replicate_seed;
 use rayon::prelude::*;
@@ -690,11 +690,13 @@ pub fn gformula(
         options.keep_simulated,
     )?;
 
-    let bootstrap = options.bootstrap.unwrap_or(Bootstrap::new(0, options.seed));
+    let bootstrap = options
+        .bootstrap
+        .unwrap_or(Bootstrap::new(0, Seed(options.seed)));
     let replicates: Vec<Option<Vec<Vec<f64>>>> = (0..bootstrap.replicates)
         .into_par_iter()
         .map(|b| -> Result<Option<Vec<Vec<f64>>>> {
-            let seed = replicate_seed(bootstrap.seed, b as u64 + 1);
+            let seed = replicate_seed(bootstrap.seed.value(), b as u64 + 1);
             let counts: Vec<f64> = epistat_rng::resample_counts(n, replicate_seed(seed, 0))
                 .into_iter()
                 .map(f64::from)

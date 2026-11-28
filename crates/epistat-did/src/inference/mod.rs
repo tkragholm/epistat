@@ -101,7 +101,7 @@ pub(crate) fn multiplier_bootstrap_ci(
     let Ok(mut draws) = epistat_inference::bootstrap::multiplier(
         estimate,
         influence_function,
-        epistat_core::Bootstrap::new(bootstrap.reps, bootstrap.seed),
+        epistat_core::Bootstrap::new(bootstrap.reps, epistat_core::Seed(bootstrap.seed)),
     ) else {
         return (f64::NAN, f64::NAN);
     };

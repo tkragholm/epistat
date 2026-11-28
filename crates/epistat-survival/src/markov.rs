@@ -637,7 +637,7 @@ pub fn test(
         event: &event,
     };
     let seeds: Vec<u64> = (0..bootstrap.replicates as u64)
-        .map(|r| replicate_seed(bootstrap.seed, r))
+        .map(|r| replicate_seed(bootstrap.seed.value(), r))
         .collect();
     let done = run(&stays, grid, qualifying.len(), &seeds)?;
     let width = qualifying.len();

@@ -16,11 +16,12 @@
 //! in the lexicographic order. Units are `u32` codes, as
 //! [`Codes`](crate::Codes) gives them, and periods are `i64` (years, months
 //! or days). Periods need not be consecutive. [`Panel::sort_order`] gives the
-//! permutation that sorts unsorted input.
+//! [`Permutation`] that sorts unsorted input.
 
 use core::ops::Range;
 
 use crate::check::{self, InputError};
+use crate::permutation::Permutation;
 
 /// Unit codes and periods, sorted by unit then period, no pair repeated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,31 +56,18 @@ impl<'a> Panel<'a> {
         Ok(Self { unit, period })
     }
 
-    /// The rows of `unit` and `period` in sorted order: position `k` of the
-    /// result is the row that comes `k`-th. Rows with equal unit and period
-    /// keep their input order, which [`Panel::new`] then refuses.
+    /// The order that sorts the rows of `unit` and `period` by unit, then
+    /// period: position `k` of the result is the row that comes `k`-th. Rows
+    /// with equal unit and period keep their input order, which
+    /// [`Panel::new`] then refuses. [`Permutation::apply`] puts each column
+    /// of the table in this order and refuses a column of another length.
     ///
     /// # Errors
     ///
     /// [`InputError::Length`] when the columns differ in length and
     /// [`InputError::TooLarge`] for more rows than a `u32` row number holds.
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "the number of rows was checked to fit a u32"
-    )]
-    pub fn sort_order(unit: &[u32], period: &[i64]) -> Result<Vec<u32>, InputError> {
-        check::same_length("period", unit.len(), period.len())?;
-        let limit = u64::from(u32::MAX) + 1;
-        if unit.len() as u64 > limit {
-            return Err(InputError::TooLarge {
-                what: "unit",
-                limit,
-                found: unit.len() as u64,
-            });
-        }
-        let mut order: Vec<u32> = (0..unit.len()).map(|row| row as u32).collect();
-        order.sort_by_key(|&row| (unit[row as usize], period[row as usize]));
-        Ok(order)
+    pub fn sort_order(unit: &[u32], period: &[i64]) -> Result<Permutation, InputError> {
+        Permutation::sorting(unit, period)
     }
 
     /// The unit code of each row.
@@ -188,9 +176,9 @@ mod tests {
         let unit = [3, 0, 3, 0, 0];
         let period = [2000, 2001, 1999, 2001, 1990];
         let order = Panel::sort_order(&unit, &period).unwrap();
-        assert_eq!(order, vec![4, 1, 3, 2, 0]);
-        let sorted_unit: Vec<u32> = order.iter().map(|&r| unit[r as usize]).collect();
-        let sorted_period: Vec<i64> = order.iter().map(|&r| period[r as usize]).collect();
+        assert_eq!(order, [4, 1, 3, 2, 0]);
+        let sorted_unit = order.apply(&unit).unwrap();
+        let sorted_period = order.apply(&period).unwrap();
         // Rows 1 and 3 repeat a pair, so the sorted key is still refused.
         assert_eq!(
             Panel::new(&sorted_unit, &sorted_period),
