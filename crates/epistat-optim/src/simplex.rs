@@ -95,7 +95,7 @@
 //!     vec![1.0, 0.0],
 //!     vec![0.0, 1.0],
 //! ];
-//! let mut lp = DenseSimplex::new(&columns, &[4.0, 6.0]);
+//! let mut lp = DenseSimplex::new(&columns, &[4.0, 6.0]).unwrap();
 //! lp.set_cost(&[3.0, 2.0, 0.0, 0.0]);
 //! lp.solve().unwrap();
 //! assert!((lp.objective() - 12.0).abs() < 1e-9);
@@ -108,6 +108,8 @@
 //! 2. Bland RG. New finite pivoting rules for the simplex method. Math Oper Res.
 //!    1977;2(2):103-7.
 //! 3. Chvátal V. Linear Programming. New York: W. H. Freeman; 1983.
+
+use epistat_core::check;
 
 use crate::Error;
 
@@ -203,16 +205,24 @@ impl DenseSimplex {
     /// Builds a solver for the columns of `A` and the right-hand side `g`.
     /// `columns[j]` is column `j` of `A`, each of length `g.len()`. The cost
     /// vector starts at zero.
-    #[must_use]
-    pub fn new(columns: &[Vec<f64>], g: &[f64]) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] when there are no columns or `g` is empty, a column
+    /// is not of the length of `g`, or an entry of `A` or `g` is not finite.
+    pub fn new(columns: &[Vec<f64>], g: &[f64]) -> Result<Self, Error> {
         let m = g.len();
         let n = columns.len();
+        check::non_empty("columns", n)?;
+        check::non_empty("g", m)?;
+        check::finite("g", g)?;
         let mut a = Vec::with_capacity(m * n);
-        for column in columns {
-            debug_assert_eq!(column.len(), m);
+        for (j, column) in columns.iter().enumerate() {
+            check::same_length("column", m, column.len())?;
+            check::finite_column("columns", j, column)?;
             a.extend_from_slice(column);
         }
-        Self {
+        Ok(Self {
             m,
             n,
             a,
@@ -239,7 +249,7 @@ impl DenseSimplex {
             a_scale: 1.0,
             cost_scale: 1.0,
         }
-        .scaled()
+        .scaled())
     }
 
     fn scaled(mut self) -> Self {
@@ -945,7 +955,7 @@ mod tests {
             let m = range(&mut rng, 2, 9);
             let n = range(&mut rng, m, m + 24);
             let (columns, g, c) = random_feasible_problem(&mut rng, m, n);
-            let mut lp = DenseSimplex::new(&columns, &g);
+            let mut lp = DenseSimplex::new(&columns, &g).unwrap();
             lp.set_cost(&c);
             lp.solve().unwrap_or_else(|e| panic!("trial {trial}: {e}"));
             assert_optimal(&mut lp, &columns, &g, &c);
@@ -960,7 +970,7 @@ mod tests {
             let n = range(&mut rng, m, 8);
             let (columns, g, c) = random_feasible_problem(&mut rng, m, n);
             let reference = brute_force(&columns, &g, &c);
-            let mut lp = DenseSimplex::new(&columns, &g);
+            let mut lp = DenseSimplex::new(&columns, &g).unwrap();
             lp.set_cost(&c);
             match (lp.solve(), reference) {
                 (Ok(()), Some(reference)) => assert!(
@@ -983,13 +993,13 @@ mod tests {
             let n = range(&mut rng, m + 2, m + 20);
             let (columns, g, c1) = random_feasible_problem(&mut rng, m, n);
             let c2 = bounded_cost(&mut rng, &columns, m);
-            let mut warm = DenseSimplex::new(&columns, &g);
+            let mut warm = DenseSimplex::new(&columns, &g).unwrap();
             warm.set_cost(&c1);
             warm.solve().unwrap();
             warm.set_cost(&c2);
             warm.solve().unwrap();
             assert_optimal(&mut warm, &columns, &g, &c2);
-            let mut cold = DenseSimplex::new(&columns, &g);
+            let mut cold = DenseSimplex::new(&columns, &g).unwrap();
             cold.set_cost(&c2);
             cold.solve().unwrap();
             assert!((warm.objective() - cold.objective()).abs() < 1e-9);
@@ -1003,9 +1013,9 @@ mod tests {
             let m = range(&mut rng, 2, 8);
             let n = range(&mut rng, m + 2, m + 20);
             let (columns, g, _) = random_feasible_problem(&mut rng, m, n);
-            let mut with_memory = DenseSimplex::new(&columns, &g);
+            let mut with_memory = DenseSimplex::new(&columns, &g).unwrap();
             with_memory.set_memory(4);
-            let mut without = DenseSimplex::new(&columns, &g);
+            let mut without = DenseSimplex::new(&columns, &g).unwrap();
             for _ in 0..20 {
                 let c = bounded_cost(&mut rng, &columns, m);
                 with_memory.set_cost(&c);
@@ -1022,7 +1032,7 @@ mod tests {
     fn reports_infeasibility() {
         // Columns all in the positive orthant cannot reach a negative g.
         let columns = vec![vec![1.0, 0.0], vec![0.0, 1.0], vec![1.0, 1.0]];
-        let mut lp = DenseSimplex::new(&columns, &[-1.0, 1.0]);
+        let mut lp = DenseSimplex::new(&columns, &[-1.0, 1.0]).unwrap();
         lp.set_cost(&[1.0, 1.0, 1.0]);
         assert_eq!(lp.solve(), Err(Error::Infeasible));
     }
@@ -1031,7 +1041,7 @@ mod tests {
     fn reports_unboundedness() {
         // λ_1 - λ_2 = 1 with both free to grow, and a cost that rewards it.
         let columns = vec![vec![1.0], vec![-1.0]];
-        let mut lp = DenseSimplex::new(&columns, &[1.0]);
+        let mut lp = DenseSimplex::new(&columns, &[1.0]).unwrap();
         lp.set_cost(&[1.0, 1.0]);
         assert_eq!(lp.solve(), Err(Error::Unbounded));
     }
@@ -1050,7 +1060,7 @@ mod tests {
             vec![1.0, 0.0],
             vec![0.0, 1.0],
         ];
-        let mut lp = DenseSimplex::new(&columns, &[4.0, 6.0]);
+        let mut lp = DenseSimplex::new(&columns, &[4.0, 6.0]).unwrap();
         lp.set_cost(&[3.0, 2.0, 0.0, 0.0]);
         lp.solve().unwrap();
         assert!((lp.objective() - 12.0).abs() < 1e-9);
@@ -1079,7 +1089,7 @@ mod tests {
             let mut g = vec![0.0; m];
             g[0] = 1.0;
             // Random costs can be unbounded, which is accepted here.
-            let mut lp = DenseSimplex::new(&columns, &g);
+            let mut lp = DenseSimplex::new(&columns, &g).unwrap();
             let mut solved = false;
             for _ in 0..100 {
                 let c: Vec<f64> = (0..n).map(|_| rng.uniform(-1.0, 1.0)).collect();
@@ -1112,7 +1122,7 @@ mod tests {
             vec![1.0, 0.0, 1.0],
             vec![1.0, 0.0, -1.0],
         ];
-        let mut lp = DenseSimplex::new(&columns, &[1.0, 0.0, 0.0]);
+        let mut lp = DenseSimplex::new(&columns, &[1.0, 0.0, 0.0]).unwrap();
         let c = [0.5, 0.5, 0.0, 0.0, 0.0, 0.0];
         lp.set_cost(&c);
         lp.solve().unwrap();

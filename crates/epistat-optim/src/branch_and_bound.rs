@@ -262,6 +262,7 @@ impl Default for Options {
 }
 
 /// How the search ended.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     /// The incumbent is optimal: no open node could beat it.
@@ -275,6 +276,7 @@ pub enum Status {
 }
 
 /// The result of [`solve`].
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Solution {
     /// The values of the columns, the binary ones exactly 0 or 1.
@@ -360,7 +362,14 @@ pub fn solve(program: &MixedBinaryProgram<'_>, options: &Options) -> Result<Solu
 }
 
 fn validate(program: &MixedBinaryProgram<'_>) -> Result<(), Error> {
-    let n = program.cost.len();
+    let (n, m) = (program.cost.len(), program.rows);
+    check::same_length("columns", n.saturating_mul(m), program.columns.len())?;
+    check::same_length("col_lo", n, program.col_lo.len())?;
+    check::same_length("col_hi", n, program.col_hi.len())?;
+    check::same_length("row_lo", m, program.row_lo.len())?;
+    check::same_length("row_hi", m, program.row_hi.len())?;
+    check::finite("columns", program.columns)?;
+    check::finite("cost", program.cost)?;
     check::same_length("binary", n, program.binary.len())?;
     if !program.integer.is_empty() {
         check::same_length("integer", n, program.integer.len())?;

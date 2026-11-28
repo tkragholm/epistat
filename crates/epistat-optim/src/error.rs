@@ -164,11 +164,7 @@ mod tests {
             Error::NonFinite { x: 0.5 },
             Error::Unordered,
         ];
-        let mut codes: Vec<&str> = all.iter().map(Classify::code).collect();
-        codes.sort_unstable();
-        codes.dedup();
-        assert_eq!(codes.len(), all.len());
-        assert!(codes.iter().all(|c| c.starts_with("optim.")));
+        epistat_testkit::assert_codes_unique("optim", &all);
         assert_eq!(Error::NoSignChange.kind(), ErrorKind::Input);
         assert_eq!(Error::Infeasible.kind(), ErrorKind::Numerical);
         let input = domain("tol", -1.0, "(0, inf)");

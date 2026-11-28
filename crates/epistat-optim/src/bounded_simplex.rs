@@ -1724,7 +1724,7 @@ mod tests {
                 .iter()
                 .map(|c| c.iter().zip(&y).map(|(a, y)| a * y).sum::<f64>() - rng.uniform(0.0, 1.0))
                 .collect();
-            let mut primal = DenseSimplex::new(&columns, &g);
+            let mut primal = DenseSimplex::new(&columns, &g).unwrap();
             primal.set_cost(&cost);
             let Ok(()) = primal.solve() else { continue };
             let flat: Vec<f64> = columns.iter().flatten().copied().collect();
@@ -1769,7 +1769,7 @@ mod tests {
                 .iter()
                 .map(|c| c.iter().zip(&y).map(|(a, y)| a * y).sum::<f64>() - rng.uniform(0.0, 1.0))
                 .collect();
-            let mut primal = DenseSimplex::new(&columns, &g);
+            let mut primal = DenseSimplex::new(&columns, &g).unwrap();
             primal.set_cost(&cost);
             let Ok(()) = primal.solve() else { continue };
             let optimum = primal.objective();

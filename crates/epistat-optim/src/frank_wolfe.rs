@@ -90,6 +90,7 @@ pub struct FrankWolfeOptions {
 }
 
 /// The result of [`SimplexLeastSquares::solve`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrankWolfeSolution {
     /// The last iterate, on the simplex.
@@ -102,6 +103,7 @@ pub struct FrankWolfeSolution {
 }
 
 /// An iterate with the product `A x` that the steps update.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct FrankWolfeState {
     /// The iterate.
