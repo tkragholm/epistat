@@ -322,6 +322,12 @@ impl<'a, T> From<&'a Vec<T>> for Col<'a, T> {
     }
 }
 
+impl<'a, T, const N: usize> From<&'a [T; N]> for Col<'a, T> {
+    fn from(values: &'a [T; N]) -> Self {
+        Self::new(values)
+    }
+}
+
 impl<T: Copy + Default> Col<'_, T> {
     /// A column of `rows`, copied: the values into a vector, in which a null
     /// row holds `T::default()`, and the nulls into a bitmap. A caller with
@@ -369,6 +375,24 @@ impl<T: Copy + Default> From<&[Option<T>]> for Col<'_, T> {
 /// Copies the rows, as [`Col::from_options`].
 impl<T: Copy + Default> From<&Vec<Option<T>>> for Col<'_, T> {
     fn from(rows: &Vec<Option<T>>) -> Self {
+        Self::from_options(rows)
+    }
+}
+
+/// Copies the rows, as [`Col::from_options`], so an array literal such as
+/// `&[Some(1.0), None]` converts as a slice does.
+///
+/// ```
+/// use epistat_core::Col;
+///
+/// fn nulls<'a>(column: impl Into<Col<'a, f64>>) -> usize {
+///     column.into().null_count()
+/// }
+/// assert_eq!(nulls(&[Some(1.0), None, Some(3.0)]), 1);
+/// assert_eq!(nulls(&[1.0, 2.0]), 0);
+/// ```
+impl<T: Copy + Default, const N: usize> From<&[Option<T>; N]> for Col<'_, T> {
+    fn from(rows: &[Option<T>; N]) -> Self {
         Self::from_options(rows)
     }
 }
