@@ -82,23 +82,12 @@
 
 use std::f64::consts::PI;
 
-use epistat_core::InputError;
+use epistat_core::{InputError, check};
 
 use crate::{Error, Stream};
 
-const POSITIVE: &str = "(0, inf)";
-
 fn positive(value: f64, what: &'static str) -> Result<(), Error> {
-    if value > 0.0 && value.is_finite() {
-        Ok(())
-    } else {
-        Err(Error::Input(InputError::Domain {
-            what,
-            value,
-            domain: POSITIVE,
-            row: None,
-        }))
-    }
+    Ok(check::positive(what, value)?)
 }
 
 impl Stream {
@@ -217,14 +206,7 @@ impl Stream {
     ///
     /// [`Error`] when `p` is not in `[0, 1]`.
     pub fn binomial(&mut self, n: u64, p: f64) -> Result<u64, Error> {
-        if !(0.0..=1.0).contains(&p) {
-            return Err(Error::Input(InputError::Domain {
-                what: "p",
-                value: p,
-                domain: "[0, 1]",
-                row: None,
-            }));
-        }
+        check::probability("p", p)?;
         let (mut n, mut p) = (n, p);
         let mut k = 0_u64;
         while n > 10 {
@@ -270,8 +252,8 @@ impl Stream {
     /// # Errors
     ///
     /// [`Error`] when `dim` is 0, `scale_cholesky` does not hold `dim`
-    /// squared values, its diagonal is not positive and finite, or `df` is not
-    /// above `dim - 1`.
+    /// squared values, an entry below its diagonal is not finite, its
+    /// diagonal is not positive and finite, or `df` is not above `dim - 1`.
     pub fn wishart(
         &mut self,
         df: f64,
@@ -371,6 +353,18 @@ fn check_wishart(df: f64, scale_cholesky: &[f64], dim: usize) -> Result<(), Erro
             domain: "(dim - 1, inf)",
             row: None,
         }));
+    }
+    for row in 0..dim {
+        for col in 0..row {
+            let at = row * dim + col;
+            if !scale_cholesky[at].is_finite() {
+                return Err(Error::Input(InputError::NotFinite {
+                    what: "scale_cholesky",
+                    row: at,
+                    column: None,
+                }));
+            }
+        }
     }
     for i in 0..dim {
         positive(scale_cholesky[i * dim + i], "diagonal of scale_cholesky")?;
