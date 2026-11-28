@@ -18,6 +18,7 @@
 mod ccw_run;
 
 use epistat_core::Bootstrap;
+use epistat_core::Panel;
 use epistat_linalg::Mat;
 use epistat_survival::weighting::clone::{
     Adherence, CloneInput, DeviationModel, Strategy, clone_censor, deviation_weights,
@@ -73,8 +74,7 @@ fn the_rules_of_the_strategies_on_a_small_data_set() {
         false,
     ];
     let input = CloneInput {
-        id: &id,
-        period: &period,
+        panel: Panel::new(&id, &period).unwrap(),
         treatment: &treatment,
         outcome: &outcome,
         covariates: &[],
@@ -129,12 +129,12 @@ fn the_rules_of_the_strategies_on_a_small_data_set() {
         adherence: Adherence::None,
     }];
     assert!(clone_censor(&input, &long).is_err());
-    // Rows that are not in order are an error.
-    let bad_period = [0, 2, 0, 1, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1];
+    // A person whose periods skip one is an error.
+    let bad_period = [0, 1, 3, 4, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1];
     assert!(
         clone_censor(
             &CloneInput {
-                period: &bad_period,
+                panel: Panel::new(&id, &bad_period).unwrap(),
                 ..input
             },
             &strategies

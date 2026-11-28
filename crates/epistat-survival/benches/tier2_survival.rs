@@ -37,6 +37,7 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
+use epistat_core::Panel;
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::aipw::{AipwCensoring, AipwSurvOptions, AipwSurvSpec, Estimator, aipw_cox};
@@ -176,7 +177,7 @@ fn main() {
         "trial_msm" => {
             let t = Table::read(&common::data_path("trial", n));
             let rows = t.len();
-            let id: Vec<u64> = t.ints("id");
+            let id: Vec<u32> = t.ints("id");
             let period: Vec<i64> = t.ints("period");
             let a = t.flags("a");
             let am1 = t.flags("am1");
@@ -211,8 +212,7 @@ fn main() {
             });
             let y: Vec<bool> = src.iter().map(|&(_, r)| outcome[r]).collect();
             let data = PersonPeriod {
-                id: &id,
-                period: &period,
+                panel: Panel::new(&id, &period).unwrap(),
                 treatment: &a,
                 previous: &am1,
             };
@@ -227,7 +227,7 @@ fn main() {
                     &data,
                     &w.weight,
                     &TrialRows {
-                        id: &tid,
+                        unit: &tid,
                         trial_period: &tstart,
                         follow_up: &tfollow,
                     },
@@ -237,7 +237,7 @@ fn main() {
                     design: design.as_ref(),
                     outcome: &y,
                     weight: &tw,
-                    person: &tid,
+                    unit: &tid,
                 })
                 .expect("msm")
             });
@@ -251,7 +251,7 @@ fn main() {
         "ccw" => {
             let t = Table::read(&common::data_path("ccw", n));
             let rows = t.len();
-            let id: Vec<u64> = t.ints("id");
+            let id: Vec<u32> = t.ints("id");
             let period: Vec<i64> = t.ints("period");
             let a = t.flags("a");
             let outcome = t.flags("outcome");
@@ -266,8 +266,7 @@ fn main() {
             let (times, msm) = common::timed(common::reps(), || {
                 let c = clone_censor(
                     &CloneInput {
-                        id: &id,
-                        period: &period,
+                        panel: Panel::new(&id, &period).unwrap(),
                         treatment: &a,
                         outcome: &outcome,
                         covariates: &[],
@@ -296,12 +295,12 @@ fn main() {
                 });
                 let y: Vec<bool> = keep.iter().map(|&i| c.outcome[i]).collect();
                 let wt: Vec<f64> = keep.iter().map(|&i| w.weight[i]).collect();
-                let person: Vec<u64> = keep.iter().map(|&i| u64::from(c.person[i])).collect();
+                let person: Vec<u32> = keep.iter().map(|&i| c.person[i]).collect();
                 fit_msm(MsmInput {
                     design: design.as_ref(),
                     outcome: &y,
                     weight: &wt,
-                    person: &person,
+                    unit: &person,
                 })
                 .expect("msm")
             });
@@ -316,7 +315,7 @@ fn main() {
             let (id, period, a, am1, l, x1, outcome) = {
                 let t = Table::read_sized(&common::data_path("trial", n));
                 (
-                    t.ints::<u64>("id"),
+                    t.ints::<u32>("id"),
                     t.ints::<i64>("period"),
                     t.flags("a"),
                     t.flags("am1"),
@@ -343,8 +342,7 @@ fn main() {
             let start: Vec<usize> = (0..rows).collect();
             let m: usize = end.iter().zip(&start).map(|(e, s)| e - s).sum();
             let data = PersonPeriod {
-                id: &id,
-                period: &period,
+                panel: Panel::new(&id, &period).unwrap(),
                 treatment: &a,
                 previous: &am1,
             };
@@ -385,7 +383,7 @@ fn main() {
                     &["id", "period", "a", "outcome", "l", "l0"],
                 );
                 (
-                    t.ints::<u64>("id"),
+                    t.ints::<u32>("id"),
                     t.ints::<i64>("period"),
                     t.flags("a"),
                     t.flags("outcome"),
@@ -404,8 +402,7 @@ fn main() {
             let (times, msm) = common::timed(common::reps(), || {
                 let c = clone_censor(
                     &CloneInput {
-                        id: &id,
-                        period: &period,
+                        panel: Panel::new(&id, &period).unwrap(),
                         treatment: &a,
                         outcome: &outcome,
                         covariates: &[],

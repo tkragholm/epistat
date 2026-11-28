@@ -8,6 +8,7 @@
 use epistat_core::Bootstrap;
 use epistat_core::Classify;
 use epistat_core::Level;
+use epistat_core::Panel;
 use epistat_linalg::Mat;
 use epistat_survival::aalen_johansen::{self, AalenJohansenOptions, AalenJohansenVarianceOptions};
 use epistat_survival::absrisk::{CauseSpecificCox, CscOptions, NewRows, RiskOptions};
@@ -144,6 +145,8 @@ const EMPTY_AS_LENGTH: &[&str] = &[
     "survreg::fit",
     "trials::switch_weights case_weight",
     "trials::switch_weights denominator",
+    "trials::switch_weights id",
+    "trials::switch_weights period",
     "yates::wald_tests covariance",
     "yates::yates coefficients",
     "yates::yates covariance",
@@ -1975,7 +1978,7 @@ fn self_controlled_and_multistate_regressions_refuse_bad_columns() {
 
 #[test]
 fn trial_weights_refuse_bad_columns() {
-    let id = [0_u64, 0, 0, 1, 1, 1];
+    let id = [0_u32, 0, 0, 1, 1, 1];
     let period = [0_i64, 1, 2, 0, 1, 2];
     let treatment = [false, false, true, true, true, false];
     let previous = [false, false, false, true, true, true];
@@ -1991,20 +1994,12 @@ fn trial_weights_refuse_bad_columns() {
         numerator: numerator.as_ref(),
         denominator: denominator.as_ref(),
     };
-    let data = |id: &'static [u64], period: &'static [i64]| PersonPeriod {
-        id,
-        period,
-        treatment: &treatment,
-        previous: &previous,
-    };
-    let _ = data;
     rejects("trials::switch_weights treatment", |bad| {
         let treatment = shortened(bad, &treatment);
         lengths(bad).then(|| {
             trials::switch_weights(
                 &PersonPeriod {
-                    id: &id,
-                    period: &period,
+                    panel: Panel::new(&id, &period).unwrap(),
                     treatment: &treatment,
                     previous: &previous,
                 },
@@ -2017,33 +2012,39 @@ fn trial_weights_refuse_bad_columns() {
     rejects("trials::switch_weights id", |bad| {
         let id = shortened(bad, &id);
         lengths(bad).then(|| {
-            trials::switch_weights(
-                &PersonPeriod {
-                    id: &id,
-                    period: &period,
-                    treatment: &treatment,
-                    previous: &previous,
-                },
-                &model,
-                &WeightRows::default(),
-            )
-            .map(|_| ())
+            Panel::new(&id, &period)
+                .map_err(Error::from)
+                .and_then(|panel| {
+                    trials::switch_weights(
+                        &PersonPeriod {
+                            panel,
+                            treatment: &treatment,
+                            previous: &previous,
+                        },
+                        &model,
+                        &WeightRows::default(),
+                    )
+                })
+                .map(|_| ())
         })
     });
     rejects("trials::switch_weights period", |bad| {
         let period = shortened(bad, &period);
         lengths(bad).then(|| {
-            trials::switch_weights(
-                &PersonPeriod {
-                    id: &id,
-                    period: &period,
-                    treatment: &treatment,
-                    previous: &previous,
-                },
-                &model,
-                &WeightRows::default(),
-            )
-            .map(|_| ())
+            Panel::new(&id, &period)
+                .map_err(Error::from)
+                .and_then(|panel| {
+                    trials::switch_weights(
+                        &PersonPeriod {
+                            panel,
+                            treatment: &treatment,
+                            previous: &previous,
+                        },
+                        &model,
+                        &WeightRows::default(),
+                    )
+                })
+                .map(|_| ())
         })
     });
     rejects("trials::switch_weights denominator", |bad| {
@@ -2051,8 +2052,7 @@ fn trial_weights_refuse_bad_columns() {
         unordered(bad).then(|| {
             trials::switch_weights(
                 &PersonPeriod {
-                    id: &id,
-                    period: &period,
+                    panel: Panel::new(&id, &period).unwrap(),
                     treatment: &treatment,
                     previous: &previous,
                 },
@@ -2070,8 +2070,7 @@ fn trial_weights_refuse_bad_columns() {
         unordered(bad).then(|| {
             trials::switch_weights(
                 &PersonPeriod {
-                    id: &id,
-                    period: &period,
+                    panel: Panel::new(&id, &period).unwrap(),
                     treatment: &treatment,
                     previous: &previous,
                 },
@@ -2140,7 +2139,7 @@ fn control_sampling_and_clones_refuse_bad_columns() {
             .map(|_| ())
         })
     });
-    let id = [0_u64, 0, 0, 1, 1, 1];
+    let id = [0_u32, 0, 0, 1, 1, 1];
     let period = [0_i64, 1, 2, 0, 1, 2];
     let treatment = [false, true, true, false, false, true];
     let outcome = [false, false, false, false, false, true];
@@ -2158,8 +2157,7 @@ fn control_sampling_and_clones_refuse_bad_columns() {
         lengths(bad).then(|| {
             clone::clone_censor(
                 &CloneInput {
-                    id: &id,
-                    period: &period,
+                    panel: Panel::new(&id, &period).unwrap(),
                     treatment: &treatment,
                     outcome: &outcome,
                     covariates: &[&covariate],
@@ -2174,8 +2172,7 @@ fn control_sampling_and_clones_refuse_bad_columns() {
         unordered(bad).then(|| {
             clone::clone_censor(
                 &CloneInput {
-                    id: &id,
-                    period: &period,
+                    panel: Panel::new(&id, &period).unwrap(),
                     treatment: &treatment,
                     outcome: &outcome,
                     covariates: &[&covariate],
