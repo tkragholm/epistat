@@ -80,6 +80,7 @@ All of these are removed in the next release that breaks the API.
 
 ### Results
 
+- The p-values of the Wald, score and likelihood ratio tests of `cox::fit` and `fine_gray::fit`, and the boundary test and profile interval of theta in `frailty`, change by at most 2.1e-14 relative (on p-values near 1e-65; at most 6.6e-15 on p-values above 1e-6), because the chi-square tail and quantile in `epistat-stats` are computed by a new method.
 - `cox::fit` and the fits built on it (`clogit`, stratified fits, `weighting::cox::fit`): a stratum of 2^14 rows or more is summed in blocks, so coefficients, covariances and log-likelihoods of fits of 2e4 to 2e5 rows change by 4 to 214 machine epsilons relative, at most about 5e-14. Fits with fewer rows per stratum are unchanged.
 - `cox::fit` with many columns: the LDL' factorisation is a left-looking loop. In a test design with 18 columns the worst change is 1.4e-15 relative for the plain fit and 1.9e-13 for a fit with every option. Other pinned Cox, Fine-Gray and `survreg` fits do not change.
 - `fine_gray::fit`: the sweep over event times changes coefficients and standard errors by at most 1.3e-14 relative. A fit on data with strata now uses them as censoring strata, which changes the result by more than rounding.
