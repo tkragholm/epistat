@@ -8,9 +8,12 @@
 //! distribution objects of `dist` refuse a parameter that is NaN or infinite
 //! with a domain error.
 
+use epistat_core::CaseWeights;
 use epistat_stats::cluster::{KMeansAlgorithm, kmeans};
 use epistat_stats::dist::{Beta, ChiSquared, FisherF, Gamma, Normal, Poisson, StudentT};
-use epistat_stats::weighted::{ProbabilityBounds, WeightLimits, effective_sample_size, try_mean};
+use epistat_stats::weighted::{
+    ProbabilityBounds, WeightLimits, effective_sample_size, try_mean, try_variance,
+};
 use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
 
 const WEIGHTS: [f64; 6] = [1.0, 0.5, 2.0, 1.5, 0.25, 1.0];
@@ -18,6 +21,20 @@ const WEIGHTS: [f64; 6] = [1.0, 0.5, 2.0, 1.5, 0.25, 1.0];
 /// The code of a bad column that stands alone.
 fn single(bad: BadInput) -> &'static str {
     bad.code()
+}
+
+/// The code of a bad column among several: an empty column differs in length
+/// from the others, so it is a length error.
+fn several(bad: BadInput) -> &'static str {
+    match bad {
+        BadInput::Empty => "input.length",
+        other => other.code(),
+    }
+}
+
+/// The kinds that spoil one of several columns; order does not matter.
+fn columns(bad: BadInput) -> bool {
+    !matches!(bad, BadInput::Unsorted)
 }
 
 /// The kinds that spoil the one column an entry point takes.
@@ -32,15 +49,18 @@ fn weights_are_refused_when_empty_or_not_finite() {
         matches!(bad, BadInput::Nan | BadInput::Infinite)
             .then(|| effective_sample_size(&bad.column(&WEIGHTS)))
     });
-    assert_rejects_bad_input_with_codes("try_mean weights", single, |bad| {
-        matches!(
-            bad,
-            BadInput::Nan | BadInput::Infinite | BadInput::Mismatched
-        )
-        .then(|| try_mean(&WEIGHTS, Some(&bad.column(&WEIGHTS))))
+    assert_rejects_bad_input_with_codes("CaseWeights", single, |bad| {
+        one(bad).then(|| CaseWeights::new(&bad.column(&WEIGHTS)).map(|_| ()))
     });
+    let weights = CaseWeights::new(&WEIGHTS).unwrap();
     assert_rejects_bad_input_with_codes("try_mean values", single, |bad| {
         one(bad).then(|| try_mean(&bad.column(&WEIGHTS), None))
+    });
+    assert_rejects_bad_input_with_codes("try_mean weighted values", several, |bad| {
+        columns(bad).then(|| try_mean(&bad.column(&WEIGHTS), Some(weights)))
+    });
+    assert_rejects_bad_input_with_codes("try_variance values", several, |bad| {
+        columns(bad).then(|| try_variance(&bad.column(&WEIGHTS), Some(weights)))
     });
     assert_rejects_bad_input_with_codes("WeightLimits::apply", single, |bad| {
         one(bad).then(|| WeightLimits::P99.apply(&bad.column(&WEIGHTS)))

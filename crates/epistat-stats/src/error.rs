@@ -42,6 +42,14 @@ pub enum Error {
         /// The decimals each term is rounded to.
         places: u32,
     },
+    /// `stats.non_positive_divisor`: the divisor `what` is zero or negative,
+    /// as the divisor `W - sum(w^2) / W` of a weighted variance is when one
+    /// row carries all the weight.
+    #[error("{what} is not positive")]
+    NonPositiveDivisor {
+        /// The divisor.
+        what: &'static str,
+    },
 }
 
 impl Classify for Error {
@@ -50,7 +58,8 @@ impl Classify for Error {
             Self::Input(e) => e.kind(),
             Self::EmptyCluster { .. }
             | Self::FixedPointRounding { .. }
-            | Self::FixedPointOverflow { .. } => ErrorKind::Numerical,
+            | Self::FixedPointOverflow { .. }
+            | Self::NonPositiveDivisor { .. } => ErrorKind::Numerical,
         }
     }
 
@@ -60,6 +69,7 @@ impl Classify for Error {
             Self::EmptyCluster { .. } => "stats.empty_cluster",
             Self::FixedPointRounding { .. } => "stats.fixed_point_rounding",
             Self::FixedPointOverflow { .. } => "stats.fixed_point_overflow",
+            Self::NonPositiveDivisor { .. } => "stats.non_positive_divisor",
         }
     }
 }
@@ -86,6 +96,11 @@ mod tests {
         assert_eq!(rounding.code(), "stats.fixed_point_rounding");
         let overflow = Error::FixedPointOverflow { places: 15 };
         assert_eq!(overflow.code(), "stats.fixed_point_overflow");
-        epistat_testkit::assert_codes_unique("stats", &[empty, rounding, overflow]);
+        let divisor = Error::NonPositiveDivisor {
+            what: "the divisor",
+        };
+        assert_eq!(divisor.code(), "stats.non_positive_divisor");
+        assert_eq!(divisor.to_string(), "the divisor is not positive");
+        epistat_testkit::assert_codes_unique("stats", &[empty, rounding, overflow, divisor]);
     }
 }
