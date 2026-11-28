@@ -274,7 +274,7 @@ pub(super) fn fit_parts<'a>(
                 options: &cox_opts,
             },
             &BaselineOptions {
-                centring: Centring::Given(&zero),
+                centring: Centring::Given(zero.clone()),
                 hazard: None,
                 variance: CoxVariance::Model,
             },

@@ -194,7 +194,7 @@ fn input_checks() {
         &data,
         x.as_ref(),
         &MsOptions {
-            terms: MsTerms::Custom(&terms),
+            terms: MsTerms::Custom(terms.to_vec()),
             ..MsOptions::default()
         },
     )

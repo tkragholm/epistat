@@ -430,7 +430,7 @@ fn cox_model(
             options: &options,
         },
         &BaselineOptions {
-            centring: Centring::Given(&zero),
+            centring: Centring::Given(zero.clone()),
             hazard: Some(CoxHazardType::Breslow),
             variance: CoxVariance::Model,
         },

@@ -115,7 +115,7 @@ pub struct PathCurves {
 pub fn survfit_paths(
     model: &FittedModel<'_>,
     paths: &PathData<'_>,
-    opts: &CoxSurvfitOptions<'_>,
+    opts: &CoxSurvfitOptions,
 ) -> Result<PathCurves> {
     let m = Model::new(model, opts.variance)?;
     let rows = paths.x.nrows();

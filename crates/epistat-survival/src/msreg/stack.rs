@@ -47,14 +47,14 @@ pub(super) fn observed(data: &SurvData<'_>, istate: &[u32]) -> Result<Vec<(u32, 
 
 /// The transitions of the model: the caller's, checked, or those observed.
 fn transitions_of(
-    opts: &MsOptions<'_>,
+    opts: &MsOptions,
     data: &SurvData<'_>,
     istate: &[u32],
     n_states: u32,
 ) -> Result<Vec<(u32, u32)>> {
     // The rows are checked whichever transitions are asked for.
     let seen = observed(data, istate)?;
-    let Some(given) = opts.transitions else {
+    let Some(given) = opts.transitions.as_deref() else {
         return Ok(seen);
     };
     let mut list = given.to_vec();
@@ -88,14 +88,14 @@ fn transitions_of(
 }
 
 /// The terms of the model, checked against the covariates and the transitions.
-fn terms_of(opts: &MsOptions<'_>, n_columns: usize, n_transitions: usize) -> Result<Vec<MsTerm>> {
+fn terms_of(opts: &MsOptions, n_columns: usize, n_transitions: usize) -> Result<Vec<MsTerm>> {
     let all: Vec<usize> = (0..n_transitions).collect();
-    let terms = match opts.terms {
+    let terms = match &opts.terms {
         MsTerms::Separate => (0..n_columns)
             .flat_map(|c| (0..n_transitions).map(move |k| MsTerm::covariate(c, &[k])))
             .collect(),
         MsTerms::Common => (0..n_columns).map(|c| MsTerm::covariate(c, &all)).collect(),
-        MsTerms::Custom(terms) => terms.to_vec(),
+        MsTerms::Custom(terms) => terms.clone(),
     };
     let mut covered = vec![false; (n_columns + 1) * n_transitions];
     for (t, term) in terms.iter().enumerate() {
@@ -128,15 +128,15 @@ fn terms_of(opts: &MsOptions<'_>, n_columns: usize, n_transitions: usize) -> Res
 }
 
 /// The baseline group of each transition as a dense index.
-fn groups_of(opts: &MsOptions<'_>, n_transitions: usize) -> Result<Vec<usize>> {
-    let codes: Vec<u32> = match opts.baseline {
+fn groups_of(opts: &MsOptions, n_transitions: usize) -> Result<Vec<usize>> {
+    let codes: Vec<u32> = match &opts.baseline {
         MsBaseline::Separate => (0..n_transitions)
             .map(|k| u32::try_from(k).expect("a transition count is below u32::MAX"))
             .collect(),
         MsBaseline::Shared => vec![0; n_transitions],
         MsBaseline::Groups(codes) => {
             check_lengths(&[("transitions", n_transitions), ("baseline", codes.len())])?;
-            codes.to_vec()
+            codes.clone()
         }
     };
     let mut sorted = codes.clone();
@@ -148,11 +148,7 @@ fn groups_of(opts: &MsOptions<'_>, n_transitions: usize) -> Result<Vec<usize>> {
         .collect())
 }
 
-pub(super) fn fit(
-    data: &SurvData<'_>,
-    x: MatRef<'_, f64>,
-    opts: &MsOptions<'_>,
-) -> Result<MsModel> {
+pub(super) fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &MsOptions) -> Result<MsModel> {
     let rows = data.n_rows();
     if x.nrows() == 0 && rows > 0 {
         return Err(Error::from(InputError::Empty { what: "x" }));

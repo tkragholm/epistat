@@ -101,7 +101,7 @@ fn predictions_and_curves() {
                     for reference in [Reference::Strata, Reference::Sample, Reference::Zero] {
                         let o = CoxPredictOptions {
                             reference: Some(reference),
-                            ..popts
+                            ..popts.clone()
                         };
                         let p = predict(&fitted, kind, newdata, &o).unwrap();
                         out.extend(&p.fit);

@@ -74,19 +74,19 @@ use crate::timefix::TimeFix;
 use epistat_core::InputError;
 
 /// How the rows are divided into groups.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
-pub enum Groups<'a> {
+pub enum Groups {
     /// This many groups of about equal size, from the quantiles of the
     /// predictions. At least 1.
     Quantiles(usize),
     /// The cut points, which must cover every prediction.
-    Breaks(&'a [f64]),
+    Breaks(Vec<f64>),
 }
 
 /// What [`estimate`] takes besides the data, the predictions and the time.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CalibrationOptions<'a> {
+#[derive(Debug, Clone, PartialEq)]
+pub struct CalibrationOptions {
     /// The rule that makes times equal when they differ by rounding error,
     /// applied to the data first. `Exact`: `plotCalibration` applies none.
     pub timefix: TimeFix,
@@ -94,13 +94,13 @@ pub struct CalibrationOptions<'a> {
     pub cause: u32,
     /// How the groups are formed. Without a default: the number of groups has
     /// no principled value.
-    pub groups: Groups<'a>,
+    pub groups: Groups,
 }
 
-impl<'a> CalibrationOptions<'a> {
+impl CalibrationOptions {
     /// The options with the given groups and the defaults of the others.
     #[must_use]
-    pub fn new(groups: Groups<'a>) -> Self {
+    pub fn new(groups: Groups) -> Self {
         Self {
             timefix: TimeFix::Exact,
             cause: 1,
@@ -161,7 +161,7 @@ pub fn estimate(
     data: &SurvData<'_>,
     risk: &[f64],
     time: f64,
-    opts: &CalibrationOptions<'_>,
+    opts: &CalibrationOptions,
 ) -> Result<Calibration> {
     let sorted = sort_rows(data, opts.timefix, opts.cause)?;
     if !time.is_finite() {
@@ -203,8 +203,8 @@ pub fn estimate(
     let mut distinct = values.clone();
     distinct.dedup();
 
-    let mut breaks: Vec<f64> = match opts.groups {
-        Groups::Quantiles(q) => {
+    let mut breaks: Vec<f64> = match &opts.groups {
+        &Groups::Quantiles(q) => {
             if q == 0 {
                 return Err(Error::options("the number of groups must be at least 1"));
             }
@@ -221,7 +221,7 @@ pub fn estimate(
                     column: None,
                 }));
             }
-            b.to_vec()
+            b.clone()
         }
     };
     breaks.sort_by(f64::total_cmp);

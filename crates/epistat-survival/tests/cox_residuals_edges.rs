@@ -208,7 +208,7 @@ fn zph_refuses_invalid_terms_and_a_log_of_zero() {
         vec![vec![0, 0]],
     ] {
         let opts = ZphOptions {
-            groups: Some(&groups),
+            groups: Some(groups.clone()),
             ..ZphOptions::default()
         };
         assert!(

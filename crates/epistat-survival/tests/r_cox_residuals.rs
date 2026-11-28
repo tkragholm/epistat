@@ -853,7 +853,7 @@ fn check_zph(s: &Setup<'_>, worst: &mut Worst) {
         let opts = ZphOptions {
             cox: s.opts(),
             transform: zph_transform(&z.transform),
-            groups: groups.as_deref(),
+            groups: groups.clone(),
             singledf: z.singledf,
         };
         let got = zph(&s.data(), s.x.as_ref(), &s.fit, &opts).unwrap();

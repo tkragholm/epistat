@@ -88,7 +88,7 @@ fn residuals_and_zph() {
                 let opts = ZphOptions {
                     cox: cox.clone(),
                     transform,
-                    groups: Some(&groups),
+                    groups: Some(groups.to_vec()),
                     singledf: false,
                 };
                 let got = zph(&data, x.as_ref(), &model, &opts).unwrap();

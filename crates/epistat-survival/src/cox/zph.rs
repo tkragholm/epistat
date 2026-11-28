@@ -111,20 +111,20 @@ pub enum ZphTransform {
 
 /// What [`zph`] takes besides the data, the design and the fit.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ZphOptions<'a> {
+pub struct ZphOptions {
     /// The options of the fit, which must be those it was made with.
     pub cox: CoxOptions,
     /// The transform of time. `Km`, as in `cox.zph`.
     pub transform: ZphTransform,
     /// The terms, each a set of columns of the design. `None` makes one term of
     /// each column. A column may be in one term only.
-    pub groups: Option<&'a [Vec<usize>]>,
+    pub groups: Option<Vec<Vec<usize>>>,
     /// Test a term of several columns as its one linear predictor, `singledf`
     /// of `cox.zph`.
     pub singledf: bool,
 }
 
-impl Default for ZphOptions<'_> {
+impl Default for ZphOptions {
     fn default() -> Self {
         Self {
             cox: CoxOptions::default(),
@@ -393,7 +393,7 @@ pub fn zph(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
     fit: &CoxModelFit,
-    opts: &ZphOptions<'_>,
+    opts: &ZphOptions,
 ) -> Result<CoxZph> {
     let columns = x.ncols();
     check_lengths(&[
@@ -410,7 +410,7 @@ pub fn zph(
         return Err(Error::no_information("the data have no event"));
     }
     let p = prep.p;
-    let (terms, term_columns) = terms_of(opts.groups, &prep.keep, columns)?;
+    let (terms, term_columns) = terms_of(opts.groups.as_deref(), &prep.keep, columns)?;
     let nterm = terms.len();
     let coefficient: Vec<f64> = prep
         .keep

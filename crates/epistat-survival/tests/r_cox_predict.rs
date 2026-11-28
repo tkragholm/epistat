@@ -192,7 +192,7 @@ fn flatten(m: &[Vec<f64>]) -> epistat_survival::Covariance {
 }
 
 /// The reference curves are R's with `censor = FALSE`, at the event times.
-fn at_events() -> CoxSurvfitOptions<'static> {
+fn at_events() -> CoxSurvfitOptions {
     CoxSurvfitOptions {
         censor_times: false,
         ..CoxSurvfitOptions::default()
@@ -302,7 +302,7 @@ fn predictions_match_r() {
         };
 
         // The means.
-        let means = reference_means(&fitted, Centring::Coxph).unwrap();
+        let means = reference_means(&fitted, &Centring::Coxph).unwrap();
         note(
             "means",
             worst_deviation(

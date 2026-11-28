@@ -23,7 +23,7 @@ fn with_coefficients(mut model: CoxModelFit, beta: &[f64], variance: &[f64]) -> 
     model
 }
 
-fn kp() -> CoxSurvfitOptions<'static> {
+fn kp() -> CoxSurvfitOptions {
     CoxSurvfitOptions {
         curve_type: CurveType::KalbfleischPrentice,
         ..CoxSurvfitOptions::default()
@@ -107,7 +107,7 @@ fn tied_increment_solves_the_estimating_equation() {
     // The curve of a row with risk 1 relative to the centre.
     let centre = epistat_survival::cox::predict::reference_means(
         &fitted,
-        epistat_survival::cox::predict::Centring::Given(&[0.0]),
+        &epistat_survival::cox::predict::Centring::Given(vec![0.0]),
     )
     .unwrap();
     assert_eq!(centre, [0.0]);
@@ -117,7 +117,7 @@ fn tied_increment_solves_the_estimating_equation() {
         &fitted,
         &new,
         &CoxSurvfitOptions {
-            centring: epistat_survival::cox::predict::Centring::Given(&[0.0]),
+            centring: epistat_survival::cox::predict::Centring::Given(vec![0.0]),
             ..kp()
         },
     )
@@ -265,7 +265,7 @@ fn refusals() {
         options: &opts,
     };
     let new = NewData::new(x.as_ref().subrows(0, 1));
-    let bad = |o: CoxSurvfitOptions<'_>| survfit(&fitted, &new, &o).map(|_| ());
+    let bad = |o: CoxSurvfitOptions| survfit(&fitted, &new, &o).map(|_| ());
     // The hazard form has no meaning for the product-limit curve.
     assert!(
         bad(CoxSurvfitOptions {

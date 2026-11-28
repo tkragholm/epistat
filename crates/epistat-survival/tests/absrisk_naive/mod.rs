@@ -67,7 +67,7 @@ pub fn model_pieces(
     let base = basehaz(
         &fitted,
         &BaselineOptions {
-            centring: Centring::Given(&zero),
+            centring: Centring::Given(zero.clone()),
             ..BaselineOptions::default()
         },
     )

@@ -82,7 +82,7 @@ fn refused_input() {
             &var,
             &[level, level],
             &YatesOptions {
-                centre: Some(&centre),
+                centre: Some(centre.to_vec()),
                 ..opts
             }
         )

@@ -186,7 +186,7 @@ fn fits_match_coxph() {
             .collect();
         let opts = MsOptions {
             ties: ties_of(&r.ties),
-            terms: MsTerms::Custom(&terms),
+            terms: MsTerms::Custom(terms.clone()),
             baseline: if r.baseline == "shared" {
                 MsBaseline::Shared
             } else {

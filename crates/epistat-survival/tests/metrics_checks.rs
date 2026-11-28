@@ -275,7 +275,7 @@ fn calibration_by_hand_and_its_refusals() {
         &data,
         &risk,
         5.0,
-        &CalibrationOptions::new(Groups::Breaks(&[0.0, 0.3, 1.0])),
+        &CalibrationOptions::new(Groups::Breaks(vec![0.0, 0.3, 1.0])),
     )
     .unwrap();
     assert_eq!(got.groups.len(), 2);
@@ -293,7 +293,7 @@ fn calibration_by_hand_and_its_refusals() {
         &data,
         &risk,
         10.5,
-        &CalibrationOptions::new(Groups::Breaks(&[0.0, 0.3, 1.0])),
+        &CalibrationOptions::new(Groups::Breaks(vec![0.0, 0.3, 1.0])),
     )
     .unwrap();
     assert!(late.groups.iter().all(|g| g.observed.is_none()));
@@ -301,7 +301,8 @@ fn calibration_by_hand_and_its_refusals() {
     let o = |g| CalibrationOptions::new(g);
     let e = calibration::estimate(&data, &risk, 5.0, &o(Groups::Quantiles(0))).unwrap_err();
     assert!(e.to_string().contains("at least 1"));
-    let e = calibration::estimate(&data, &risk, 5.0, &o(Groups::Breaks(&[0.2, 1.0]))).unwrap_err();
+    let e =
+        calibration::estimate(&data, &risk, 5.0, &o(Groups::Breaks(vec![0.2, 1.0]))).unwrap_err();
     assert!(e.to_string().contains("cover every predicted risk"));
     let e = calibration::estimate(&data, &risk[..3], 5.0, &o(Groups::Quantiles(2))).unwrap_err();
     assert!(e.to_string().contains("risk has length 3, expected 11"));
