@@ -387,7 +387,10 @@ fn check_inputs(
         check::weights("bhazard", h)?;
     }
     if data.n_strata() > 0 {
-        return Err(Error::unsupported("strata are not supported by flexpar"));
+        return Err(Error::unsupported(
+            "stratum",
+            "strata are not supported by flexpar",
+        ));
     }
     refuse_non_finite_matrix(x, "x")
 }
@@ -541,7 +544,7 @@ pub fn fit(
     };
     let theta0 = start::starting_values(&design, opts.scale, stop, start, event, weight);
     let best = maximise(&model, &theta0, opts.tolerance, opts.max_iterations).ok_or_else(|| {
-        Error::undefined("the model is undefined at the starting values: the derivative of the spline is not positive at every event")
+        Error::undefined("starting values", "the model is undefined at the starting values: the derivative of the spline is not positive at every event")
     })?;
 
     let null_log_likelihood = if data.offset().is_some() {

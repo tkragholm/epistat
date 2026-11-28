@@ -15,6 +15,7 @@ mod treatment_sim;
 
 use epistat_core::Estimand;
 use epistat_linalg::Mat;
+use epistat_stats::weighted::ProbabilityBounds;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::cox as wcox;
@@ -106,7 +107,9 @@ fn fields() -> Vec<(String, Vec<f64>)> {
             },
             s.design.as_ref(),
             stabilise.then(|| numerator.as_ref()),
-            &PooledOptions { truncation: trunc },
+            &PooledOptions {
+                truncation: trunc.map(|(l, u): (f64, f64)| ProbabilityBounds::new(l, u).unwrap()),
+            },
         )
         .unwrap();
         out.push((format!("{name}/weight"), w.weight.clone()));

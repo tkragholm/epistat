@@ -958,8 +958,8 @@ mod tests {
         for col in 0..n {
             let mut values = betas.iter().map(|b| b[(col, 0)]).collect::<Vec<_>>();
             values.sort_by(f64::total_cmp);
-            let lower = crate::utils::calculate_quantile(&values, alpha / 2.0).unwrap();
-            let upper = crate::utils::calculate_quantile(&values, 1.0 - alpha / 2.0).unwrap();
+            let lower = epistat_stats::quantile::type7(&values, alpha / 2.0).unwrap();
+            let upper = epistat_stats::quantile::type7(&values, 1.0 - alpha / 2.0).unwrap();
             intervals.push((lower, upper));
         }
         intervals

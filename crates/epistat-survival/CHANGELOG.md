@@ -22,6 +22,10 @@ This release moves the crate onto the shared types of the epistat crates (`Level
 - `weighting::iptw::Estimand` is removed and `IptwOptions::estimand` is `epistat_core::Estimand`. The enum is non-exhaustive, so a match needs a wildcard arm. `Ato` and `Atm` are refused.
 - `fine_gray::Rows::event` is `FineGrayRows::status`. `Tmerge::tstart` and `Tmerge::tstop` are `start` and `stop`.
 - The `influence` fields of the concordance, the AIPW and the prediction scores are `epistat_inference::Influence` on the per-unit scale, not `Vec<f64>` on the dfbeta scale. The values are n times the old ones for the concordance. Cluster them with `Clusters::per_row` or by position, since a person-coded `Clusters` is refused with `KeyMismatch`.
+- `Error::Unsupported` and `Error::Undefined` are struct variants with `what` (the option, column or quantity) and `message`. An information or covariance that is not positive definite is `Error::NotPositiveDefinite { matrix, .. }` (code `survival.not_positive_definite`), and a parameter the data do not identify, such as a frailty variance with singleton clusters, is `Error::NotIdentified { what, .. }` (code `survival.not_identified`). Kinds and messages are unchanged.
+- `weighting::trials::PersonPeriod`, `weighting::trials::ProtocolPanel` and `weighting::clone::CloneInput` take a `panel: epistat_core::Panel` in place of their `id: &[u64]` and `period: &[i64]` fields: write `panel: Panel::new(&unit, &period)?` with `u32` unit codes (`epistat_core::Codes::from_labels` turns ids into codes in sorted order). The order of the rows is checked by `Panel::new`. `TrialRows::id` is `unit: &[u32]`, `MsmInput::person` is `unit: &[u32]`, and `PersonCounts`, `bootstrap_trials` and `Cloned::ids` take and give `u32` units. Results do not change for codes in the order of the ids.
+- `AipwSurvOptions::truncation` and `PooledOptions::truncation` are `Option<epistat_stats::weighted::ProbabilityBounds>`, built with `ProbabilityBounds::new(lower, upper)?`, in place of `Option<(f64, f64)>`.
+- `lexis::rates::LinCi` and `ExpCi` have an `unestimable` field, and `Rates` has `separated` and `n_separated`; `n_used` no longer counts the pieces a separated column leaves out.
 - `lowlevel::advance` and `lowlevel::integrate` refuse slices of different lengths, an initial distribution of the wrong length and a horizon before the origin, where the 0.3.0 functions advanced the shorter slice, panicked or returned zeros.
 
 ### Added
@@ -41,6 +45,9 @@ This release moves the crate onto the shared types of the epistat crates (`Level
 - `Error::Counted`, `Classify` for `Error` with stable `survival.*` codes, and re-exports of `Bootstrap`, `Covariance` and `Level` at the crate root.
 
 ### Changed
+
+- `lexis::rates::fit_rates` finds the columns that are 0 on every piece with events and of one sign on the others, such as the indicator of a group without events. Their coefficients and every contrast with weight on them are `None`, with the reason in `Unestimable`, and the other coefficients are fitted on the pieces where those columns are 0, the limit `glm` approaches. Data without any event are an error. Fits without such a column are unchanged.
+- `relsurv::excess_hazard` fixes an interval at the boundary of an excess hazard of 0 when the fit converges with the derivative of the log likelihood in that excess hazard at 0 not positive, and reports it in `at_bound`. Fits that collapsed towards 0 without reaching the old share-of-events rule were reported inside the boundary, with a coefficient near -26 to -34. Fits that do not reach the boundary are unchanged.
 
 - Fine-Gray is fitted by a sweep over the event times, not on the expanded rows, so memory no longer grows with the weighted-row expansion. `fine_gray::fit`, `rows` and `risk_rows` use the stratum of the data as the censoring stratum (`crr`'s `cengroup`). `n_rows` and `n_used` count the rows of the data, as `cox::fit` does.
 - Large Cox strata (2^14 rows or more) are swept in parallel blocks of event times, and rows are prepared in parallel. Results are the same on 1, 3 and 8 threads.

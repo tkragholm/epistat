@@ -13,6 +13,7 @@
 //! were recorded. Elsewhere the test computes them and, when `EPISTAT_HASH_OUT`
 //! is set, appends them to that file.
 
+use epistat_core::Panel;
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::weighting::clone::{
@@ -32,7 +33,7 @@ fn expit(x: f64) -> f64 {
 /// Person-period rows with a covariate that depends on the earlier treatment,
 /// a persistent treatment and an outcome that ends the follow-up.
 struct Periods {
-    id: Vec<u64>,
+    id: Vec<u32>,
     period: Vec<i64>,
     a: Vec<bool>,
     am1: Vec<bool>,
@@ -68,7 +69,7 @@ fn periods(n: usize, length: usize, seed: u64) -> Periods {
             let a = rng.uniform() < pa;
             let y = rng.uniform()
                 < expit(-3.0 - 0.6 * f64::from(u8::from(a)) + 0.4 * l + 0.05 * p as f64);
-            d.id.push(u64::try_from(id).unwrap());
+            d.id.push(u32::try_from(id).unwrap());
             d.period.push(i64::try_from(p).unwrap());
             d.a.push(a);
             d.am1.push(prev);
@@ -100,8 +101,7 @@ fn trial_msm_both(d: &Periods) -> (Msm, Msm) {
     let den = Mat::from_fn(rows, 3, |i, j| [1.0, d.l[i], d.x1[i]][j]);
     let num = Mat::from_fn(rows, 2, |i, j| [1.0, d.x1[i]][j]);
     let data = PersonPeriod {
-        id: &d.id,
-        period: &d.period,
+        panel: Panel::new(&d.id, &d.period).unwrap(),
         treatment: &d.a,
         previous: &d.am1,
     };
@@ -136,7 +136,7 @@ fn trial_msm_both(d: &Periods) -> (Msm, Msm) {
         &data,
         &w.weight,
         &TrialRows {
-            id: &tid,
+            unit: &tid,
             trial_period: &tstart,
             follow_up: &tfollow,
         },
@@ -152,7 +152,7 @@ fn trial_msm_both(d: &Periods) -> (Msm, Msm) {
         design: design.as_ref(),
         outcome: &y,
         weight: &tw,
-        person: &tid,
+        unit: &tid,
     })
     .unwrap();
     // The same trials as spans: each starts at a row and runs to the last row
@@ -198,8 +198,7 @@ fn ccw_both(d: &Periods) -> (Msm, Msm) {
     ];
     let c = clone_censor(
         &CloneInput {
-            id: &d.id,
-            period,
+            panel: Panel::new(&d.id, period).unwrap(),
             treatment: &d.a,
             outcome: &d.outcome,
             covariates: &[],
@@ -228,12 +227,12 @@ fn ccw_both(d: &Periods) -> (Msm, Msm) {
     });
     let y: Vec<bool> = keep.iter().map(|&i| c.outcome[i]).collect();
     let wt: Vec<f64> = keep.iter().map(|&i| w.weight[i]).collect();
-    let person: Vec<u64> = keep.iter().map(|&i| u64::from(c.person[i])).collect();
+    let person: Vec<u32> = keep.iter().map(|&i| c.person[i]).collect();
     let full = fit_msm(MsmInput {
         design: design.as_ref(),
         outcome: &y,
         weight: &wt,
-        person: &person,
+        unit: &person,
     })
     .unwrap();
     // The weights again from designs formed row by row, which must be the
@@ -339,8 +338,7 @@ fn rows_formed_by_blocks_give_the_bits_of_rows_built_in_full() {
 fn spans_are_checked() {
     let d = periods(30, 6, 5);
     let data = PersonPeriod {
-        id: &d.id,
-        period: &d.period,
+        panel: Panel::new(&d.id, &d.period).unwrap(),
         treatment: &d.a,
         previous: &d.am1,
     };

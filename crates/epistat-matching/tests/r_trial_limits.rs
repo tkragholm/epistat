@@ -14,6 +14,7 @@
 #[path = "common/trial_panel.rs"]
 mod trial_panel;
 use chrono::{Days, NaiveDate};
+use epistat_core::Panel;
 use epistat_linalg::Mat;
 use epistat_matching::{BaseRecord, TrialColumns, TrialOptions, expand_trial_columns};
 use epistat_survival::weighting::trials::{
@@ -23,7 +24,7 @@ use epistat_survival::weighting::trials::{
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
-use trial_panel::{PanelPeriod, PanelPerson, PanelRows, persons};
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows};
 
 #[derive(Deserialize)]
 struct PanelJson {
@@ -86,7 +87,7 @@ fn day(period: i64) -> NaiveDate {
         .expect("a date")
 }
 
-/// The panel of the persons, in the order of their rows.
+/// The panel of the in the order of their rows.
 fn panel(p: &PanelJson) -> Vec<PanelPerson<BaseRecord>> {
     let mut panel: Vec<PanelPerson<BaseRecord>> = Vec::new();
     for i in 0..p.id.len() {
@@ -147,16 +148,14 @@ fn weights(
     }
     let treatment = cols.known_treatment().expect("known treatment");
     let chosen = protocol_rows(&ProtocolPanel {
-        id: &cols.person,
-        period: &cols.period,
+        panel: Panel::new(&cols.unit, &cols.period).expect("sorted"),
         treatment: &treatment,
         eligible: &cols.eligible,
         outcome: &cols.event,
     })
     .expect("rows");
     let data = PersonPeriod {
-        id: &cols.person,
-        period: &cols.period,
+        panel: Panel::new(&cols.unit, &cols.period).expect("sorted"),
         treatment: &treatment,
         previous: &chosen.previous,
     };
@@ -226,7 +225,7 @@ fn weights(
         &data,
         &row_weight,
         &TrialRows {
-            id: &persons(t),
+            unit: &t.unit,
             trial_period: &t.trial_period,
             follow_up: &t.follow_up_time,
         },
@@ -287,7 +286,7 @@ fn truncated_weights_agree_with_trial_emulation() {
             design: design.as_ref(),
             outcome: &t.outcome,
             weight: &limited,
-            person: &persons(&t),
+            unit: &t.unit,
         })
         .expect("outcome model");
         let what = &a.analysis_weights;

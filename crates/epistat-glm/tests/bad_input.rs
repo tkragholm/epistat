@@ -1,17 +1,29 @@
 //! Every entry point meets an empty column, a NaN, an infinity and a column of
-//! the wrong length with an `Input` error, not a panic. No entry point here
-//! takes sorted input, so the unsorted kind is not tried.
+//! the wrong length with an `Input` error carrying the code of the shared
+//! check, not a panic. No entry point here takes sorted input, so the unsorted
+//! kind is not tried.
 
-use epistat_glm::park::{classic_park_test, modified_park_test};
+use epistat_glm::park::{classic_park_test, modified_park_test, modified_park_test_with};
 use epistat_glm::{
     ElasticNet, Family, Feols, FixedEffects, Gee, GeeData, Glm, GlmData, Link, Multinom,
-    MultinomData, NegBin, Ordinal, OrdinalData, OrdinalLink, Singletons, brant, robust_covariance,
+    MultinomData, NegBin, Ordinal, OrdinalData, OrdinalLink, Singletons, between_within, brant,
+    robust_covariance,
 };
 use epistat_glm::{RiskScale, SandwichType, risk_regression};
+use epistat_inference::Clusters;
 use epistat_linalg::Mat;
-use epistat_testkit::{BadInput, assert_rejects_bad_input};
+use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
 
 const N: usize = 24;
+
+/// The code of the shared check for each kind of bad column. The design
+/// fixes the number of rows, so an empty column beside it is a length error.
+fn code(bad: BadInput) -> &'static str {
+    match bad {
+        BadInput::Empty => "input.length",
+        other => other.code(),
+    }
+}
 
 fn design() -> Mat<f64> {
     Mat::from_fn(N, 2, |i, j| if j == 0 { 1.0 } else { (i % 7) as f64 / 3.0 })
@@ -43,7 +55,9 @@ fn the_glm_views_refuse_bad_columns() {
     let x = design();
     let (y, w) = (counts(), weights());
     for which in ["x", "y", "weights", "offset"] {
-        assert_rejects_bad_input(&format!("GlmData {which}"), |bad| {
+        // The design fixes the number of rows: an empty design is empty.
+        let code = |bad: BadInput| if which == "x" { bad.code() } else { code(bad) };
+        assert_rejects_bad_input_with_codes(&format!("GlmData {which}"), code, |bad| {
             if bad == BadInput::Unsorted {
                 return None;
             }
@@ -77,7 +91,7 @@ fn the_models_refuse_bad_columns() {
     let category: Vec<u32> = (0..N).map(|i| u32::try_from(i % 3).unwrap()).collect();
     let class: Vec<usize> = (0..N).map(|i| i % 3).collect();
     let skip = |bad: BadInput| bad == BadInput::Unsorted;
-    assert_rejects_bad_input("Glm::fit", |bad| {
+    assert_rejects_bad_input_with_codes("Glm::fit", code, |bad| {
         (!skip(bad)).then(|| {
             let y = bad.column(&y);
             GlmData::builder(x.as_ref(), &y)
@@ -85,7 +99,7 @@ fn the_models_refuse_bad_columns() {
                 .and_then(|d| Glm::new(Family::Poisson, Link::Log).fit(&d))
         })
     });
-    assert_rejects_bad_input("NegBin::fit", |bad| {
+    assert_rejects_bad_input_with_codes("NegBin::fit", code, |bad| {
         (!skip(bad)).then(|| {
             let y = bad.column(&y);
             GlmData::builder(x.as_ref(), &y)
@@ -93,7 +107,7 @@ fn the_models_refuse_bad_columns() {
                 .and_then(|d| NegBin::new().fit(&d))
         })
     });
-    assert_rejects_bad_input("ElasticNet::fit", |bad| {
+    assert_rejects_bad_input_with_codes("ElasticNet::fit", code, |bad| {
         (!skip(bad)).then(|| {
             let y = bad.column(&y);
             GlmData::builder(x.as_ref(), &y)
@@ -101,7 +115,7 @@ fn the_models_refuse_bad_columns() {
                 .and_then(|d| ElasticNet::new(Family::Gaussian, 0.1, 0.5).fit(&d))
         })
     });
-    assert_rejects_bad_input("Gee::fit", |bad| {
+    assert_rejects_bad_input_with_codes("Gee::fit", code, |bad| {
         (!skip(bad)).then(|| {
             let y = bad.column(&y);
             GeeData::builder(x.as_ref(), &y, &cluster)
@@ -116,7 +130,7 @@ fn the_models_refuse_bad_columns() {
                 })
         })
     });
-    assert_rejects_bad_input("Ordinal::fit", |bad| {
+    assert_rejects_bad_input_with_codes("Ordinal::fit", BadInput::code, |bad| {
         (!skip(bad)).then(|| {
             let x = spoiled(bad);
             let z = Mat::from_fn(x.nrows(), 1, |i, _| x[(i, 1)]);
@@ -125,7 +139,7 @@ fn the_models_refuse_bad_columns() {
                 .and_then(|d| Ordinal::new(OrdinalLink::Logit).fit(&d))
         })
     });
-    assert_rejects_bad_input("brant", |bad| {
+    assert_rejects_bad_input_with_codes("brant", BadInput::code, |bad| {
         (!skip(bad)).then(|| {
             let x = spoiled(bad);
             let z = Mat::from_fn(x.nrows(), 1, |i, _| x[(i, 1)]);
@@ -134,7 +148,7 @@ fn the_models_refuse_bad_columns() {
                 .and_then(|d| brant(&d))
         })
     });
-    assert_rejects_bad_input("Multinom::fit", |bad| {
+    assert_rejects_bad_input_with_codes("Multinom::fit", BadInput::code, |bad| {
         (!skip(bad)).then(|| {
             let x = spoiled(bad);
             MultinomData::builder(x.as_ref(), &class, 3)
@@ -142,7 +156,7 @@ fn the_models_refuse_bad_columns() {
                 .and_then(|d| Multinom::default().fit(&d))
         })
     });
-    assert_rejects_bad_input("risk_regression", |bad| {
+    assert_rejects_bad_input_with_codes("risk_regression", code, |bad| {
         (!skip(bad)).then(|| {
             let b = bad.column(&b);
             GlmData::builder(x.as_ref(), &b)
@@ -154,7 +168,7 @@ fn the_models_refuse_bad_columns() {
     let fit = model
         .fit(&GlmData::builder(x.as_ref(), &y).build().unwrap())
         .unwrap();
-    assert_rejects_bad_input("robust_covariance", |bad| {
+    assert_rejects_bad_input_with_codes("robust_covariance", code, |bad| {
         (!skip(bad)).then(|| {
             let y = bad.column(&y);
             robust_covariance(&model, &fit, x.as_ref(), &y, None, SandwichType::Hc0)
@@ -169,19 +183,42 @@ fn feols_and_the_park_tests_refuse_bad_columns() {
     let unit: Vec<u32> = (0..N).map(|i| u32::try_from(i / 4).unwrap()).collect();
     let fe = FixedEffects::new(&[&unit], None, Singletons::Keep).unwrap();
     let z = Mat::from_fn(N, 1, |i, _| x[(i, 1)]);
-    assert_rejects_bad_input("Feols::fit", |bad| {
+    assert_rejects_bad_input_with_codes("Feols::fit", code, |bad| {
         (bad != BadInput::Unsorted).then(|| Feols::default().fit(z.as_ref(), &bad.column(&y), &fe))
     });
-    assert_rejects_bad_input("FixedEffects::new", |bad| {
+    assert_rejects_bad_input_with_codes("FixedEffects::new", code, |bad| {
         (bad != BadInput::Unsorted)
             .then(|| FixedEffects::new(&[&unit], Some(&bad.column(&weights())), Singletons::Keep))
     });
     let fitted: Vec<f64> = (0..N).map(|i| 1.0 + i as f64).collect();
-    assert_rejects_bad_input("modified_park_test", |bad| {
+    assert_rejects_bad_input_with_codes("modified_park_test", code, |bad| {
         matches!(bad, BadInput::Mismatched)
             .then(|| modified_park_test(&fitted, &bad.column(&y), None))
     });
-    assert_rejects_bad_input("classic_park_test", |bad| {
+    assert_rejects_bad_input_with_codes("classic_park_test", code, |bad| {
         matches!(bad, BadInput::Mismatched).then(|| classic_park_test(&fitted, &bad.column(&y)))
+    });
+}
+
+#[test]
+fn the_park_controls_and_the_between_within_split_refuse_a_wrong_length() {
+    let y = counts();
+    let fitted: Vec<f64> = (0..N).map(|i| 1.0 + i as f64).collect();
+    let length = |_: BadInput| "input.length";
+    assert_rejects_bad_input_with_codes("modified_park_test_with", length, |bad| {
+        matches!(bad, BadInput::Mismatched).then(|| {
+            modified_park_test_with(
+                Glm::new(Family::Gamma, Link::Log),
+                &fitted,
+                &bad.column(&y),
+                None,
+            )
+        })
+    });
+    let x = design();
+    let short: Vec<u32> = (0..N - 1).map(|i| u32::try_from(i / 4).unwrap()).collect();
+    let clusters = Clusters::from_codes(&short);
+    assert_rejects_bad_input_with_codes("between_within", length, |bad| {
+        matches!(bad, BadInput::Mismatched).then(|| between_within(x.as_ref(), &clusters))
     });
 }

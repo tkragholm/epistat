@@ -37,12 +37,14 @@
 
 use super::IdOrder;
 use super::sweep::RiskSetSweep;
-use crate::matching::{
-    CandidatePoolRequest, Constraint, ConstraintGroup, DateDistance, DistanceChannel,
-    DistanceConfig, DistanceMetric, MatchEngine, ReplacementConstraint, RoleIndexedRecord,
-    ScoreTable, SelectionStrategy, UsedControlsVec, build_outcome, build_strata_values,
-    finalize_estimand_diagnostics, intern_unique, ratio::RatioPolicy, refused_outcome,
+use crate::constraints::{
+    Constraint, ConstraintGroup, ReplacementConstraint, UsedControlsVec, build_strata_values,
     unique_value,
+};
+use crate::matching::{
+    CandidatePoolRequest, DateDistance, DistanceChannel, DistanceConfig, DistanceMetric,
+    MatchEngine, RoleIndexedRecord, ScoreTable, SelectionStrategy, build_outcome,
+    finalize_estimand_diagnostics, intern_unique, ratio::RatioPolicy, refused_outcome,
 };
 use crate::overlap::{Overlap, finite_bounds};
 use crate::types::{
@@ -1156,14 +1158,11 @@ fn cases_by_comparing_ids<R: RoleIndexedRecord>(
         .collect_vec()
 }
 
-/// `NaiveDate::num_days_from_ce` of 1970-01-01.
-const UNIX_EPOCH_DAYS_FROM_CE: i32 = 719_163;
-
 fn is_case_before_age_limit<R: RoleIndexedRecord>(row: &R, age_limit_years: u8) -> bool {
     let Some(event_date) = row.event_date() else {
         return false;
     };
-    let day = |date: NaiveDate| i64::from(date.num_days_from_ce() - UNIX_EPOCH_DAYS_FROM_CE);
+    let day = |date: NaiveDate| i64::from(date.num_days_from_ce() - crate::UNIX_EPOCH_DAYS_FROM_CE);
     // An event before birth is below any age limit.
     age_in_years(
         day(row.birth_date()),

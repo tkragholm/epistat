@@ -35,7 +35,9 @@
 //! 1. White IR, Royston P. Imputing missing covariate values for the Cox
 //!    model. Stat Med. 2009;28(15):1982-98.
 
-use crate::error::{ImputeError, Result};
+use epistat_core::{InputError, check};
+
+use crate::error::{Result, length};
 
 /// How the hazard of a time with tied events is formed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,17 +54,32 @@ pub enum Ties {
 ///
 /// # Errors
 ///
-/// [`ImputeError::Survival`] for times of different length than the status,
-/// a time that is negative or not finite, and a status other than 0 and 1.
+/// [`Error::Input`](crate::Error::Input): no rows
+/// ([`InputError::Empty`]), a status of a different length than the times
+/// ([`InputError::Length`]), a time that is not finite
+/// ([`InputError::NotFinite`]) or negative, or a status other than 0 and 1
+/// ([`InputError::Domain`], with its row).
 pub fn nelson_aalen(time: &[f64], status: &[i32], ties: Ties) -> Result<Vec<f64>> {
-    if time.len() != status.len() {
-        return Err(ImputeError::Survival("time and status differ in length"));
+    check::non_empty("time", time.len())?;
+    length("status", time.len(), status.len())?;
+    check::finite("time", time)?;
+    if let Some(row) = time.iter().position(|&t| t < 0.0) {
+        return Err(InputError::Domain {
+            what: "time",
+            value: time[row],
+            domain: "[0, inf)",
+            row: Some(row),
+        }
+        .into());
     }
-    if time.iter().any(|t| !(t.is_finite() && *t >= 0.0)) {
-        return Err(ImputeError::Survival("a time is negative or not finite"));
-    }
-    if status.iter().any(|&s| s != 0 && s != 1) {
-        return Err(ImputeError::Survival("a status is not 0 or 1"));
+    if let Some(row) = status.iter().position(|&s| s != 0 && s != 1) {
+        return Err(InputError::Domain {
+            what: "status",
+            value: f64::from(status[row]),
+            domain: "{0, 1}",
+            row: Some(row),
+        }
+        .into());
     }
     let n = time.len();
     let mut order: Vec<usize> = (0..n).collect();

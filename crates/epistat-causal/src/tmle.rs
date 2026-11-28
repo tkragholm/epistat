@@ -343,7 +343,8 @@ fn logit(p: f64) -> f64 {
     (p / (1.0 - p)).ln()
 }
 
-/// R's `plogis`.
+/// R's `plogis`, in its single form `1 / (1 + exp(-x))`; `stats::logistic::expit`
+/// takes `exp(x) / (1 + exp(x))` below zero, which moves the last bits.
 fn plogis(x: f64) -> f64 {
     1.0 / (1.0 + (-x).exp())
 }

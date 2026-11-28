@@ -95,6 +95,7 @@ impl CoxCens {
         }
         if spec.options.ties == Ties::Exact {
             return Err(Error::unsupported(
+                "ties",
                 "the censoring model cannot use the exact ties method: its score residuals \
                  are not available",
             ));
@@ -123,7 +124,10 @@ impl CoxCens {
             .iter()
             .map(|c| {
                 c.ok_or_else(|| {
-                    Error::undefined("the censoring model has an aliased or diverging coefficient")
+                    Error::not_identified(
+                        "coefficient",
+                        "the censoring model has an aliased or diverging coefficient",
+                    )
                 })
             })
             .collect::<Result<_>>()?;
@@ -138,6 +142,7 @@ impl CoxCens {
             .collect();
         if q.iter().any(|v| !v.is_finite() || *v <= 0.0) {
             return Err(Error::undefined(
+                "risk score",
                 "a risk score of the censoring model is not finite",
             ));
         }
@@ -302,7 +307,12 @@ fn influence_of_coefficients(
         .as_slice()
         .iter()
         .map(|c| {
-            c.ok_or_else(|| Error::undefined("the censoring model's covariance is not defined"))
+            c.ok_or_else(|| {
+                Error::undefined(
+                    "covariance",
+                    "the censoring model's covariance is not defined",
+                )
+            })
         })
         .collect::<Result<_>>()?;
     let mut out = vec![0.0; n * p];

@@ -11,7 +11,8 @@
 
 mod common;
 
-use common::simulate;
+use common::{simulate, view};
+use epistat_core::Covariance;
 use epistat_glm::{Family, Link};
 use epistat_mixed::{Criterion, Glmm, Lmm};
 use epistat_testkit::Fingerprint;
@@ -115,17 +116,23 @@ fn mixed_model_bits_are_recorded() {
         for (shape, slope) in [("intercept", None), ("slope", Some(&d.slope[..]))] {
             let fit = Lmm::new(criterion)
                 .fit(
-                    d.x.as_ref(),
-                    &d.y,
-                    &d.cluster,
-                    slope,
-                    Some(&d.weights),
-                    Some(&d.offset),
+                    &view(
+                        d.x.as_ref(),
+                        &d.y,
+                        &d.cluster,
+                        slope,
+                        Some(&d.weights),
+                        Some(&d.offset),
+                    )
+                    .unwrap(),
                 )
                 .unwrap();
             let name = format!("lmm/{label}/{shape}");
             check(&format!("{name}/beta"), &fit.beta);
-            check(&format!("{name}/beta_covariance"), &fit.beta_covariance);
+            check(
+                &format!("{name}/beta_covariance"),
+                &entries(&fit.beta_covariance),
+            );
             check(&format!("{name}/theta"), &fit.theta);
             check(
                 &format!("{name}/sigma criterion"),
@@ -143,18 +150,22 @@ fn mixed_model_bits_are_recorded() {
         for nodes in [1, 9] {
             let fit = Glmm::new(family, link, nodes)
                 .fit(
-                    d.x.as_ref(),
-                    &d.y,
-                    &d.cluster,
-                    Some(&d.weights),
-                    Some(&d.offset),
+                    &view(
+                        d.x.as_ref(),
+                        &d.y,
+                        &d.cluster,
+                        None,
+                        Some(&d.weights),
+                        Some(&d.offset),
+                    )
+                    .unwrap(),
                 )
                 .unwrap();
             let name = format!("glmm/{kind}/{nodes}");
             check(&format!("{name}/beta"), &fit.beta);
             check(
                 &format!("{name}/beta_covariance"),
-                fit.beta_covariance.as_ref().unwrap(),
+                &entries(fit.beta_covariance.as_ref().unwrap()),
             );
             check(
                 &format!("{name}/theta se loglik"),
@@ -164,4 +175,13 @@ fn mixed_model_bits_are_recorded() {
             check(&format!("{name}/mode_variances"), &fit.mode_variances);
         }
     }
+}
+
+/// The entries of a covariance, every one defined.
+fn entries(covariance: &Covariance) -> Vec<f64> {
+    covariance
+        .as_slice()
+        .iter()
+        .map(|v| v.expect("a defined entry"))
+        .collect()
 }

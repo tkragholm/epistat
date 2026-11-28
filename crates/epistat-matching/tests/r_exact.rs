@@ -30,6 +30,7 @@ use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{SubclassedUnits, exact_match_subclasses};
 
+use epistat_testkit::Tolerance;
 use r_reference::{Versions, reference as load_reference, unit_id as id};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
@@ -133,9 +134,10 @@ fn rescaled(treat: &[f64], weights: &[Option<f64>]) -> Vec<f64> {
 /// seven.
 const WEIGHT_TOLERANCE: f64 = 1e-12;
 
-fn close(got: f64, expected: f64) -> bool {
-    (got - expected).abs() <= WEIGHT_TOLERANCE * expected.abs().max(1.0)
-}
+/// `WEIGHT_TOLERANCE` relative to the reference, or absolute below 1.
+const WEIGHTS: Tolerance = Tolerance::exact()
+    .rel(WEIGHT_TOLERANCE)
+    .abs(WEIGHT_TOLERANCE);
 
 /// Kept units, subclasses and weights equal MatchIt's on every run, and
 /// MatchIt's refusal is ours.
@@ -198,13 +200,13 @@ fn subclasses_and_weights_match_matchit() {
                     "{label}: dropped {idx}"
                 );
                 assert!(
-                    close(scaled[idx], r_weights[idx]),
+                    WEIGHTS.accepts(scaled[idx], r_weights[idx]),
                     "{label}: rescaled weight of {idx}: {} against {}",
                     scaled[idx],
                     r_weights[idx]
                 );
                 assert!(
-                    close(unscaled[idx].unwrap_or(0.0), r_unscaled[idx]),
+                    WEIGHTS.accepts(unscaled[idx].unwrap_or(0.0), r_unscaled[idx]),
                     "{label}: unscaled weight of {idx}"
                 );
             }

@@ -8,6 +8,7 @@
 use epistat_core::Bootstrap;
 use epistat_core::Classify;
 use epistat_core::Level;
+use epistat_core::Panel;
 use epistat_linalg::Mat;
 use epistat_survival::aalen_johansen::{self, AalenJohansenOptions, AalenJohansenVarianceOptions};
 use epistat_survival::absrisk::{CauseSpecificCox, CscOptions, NewRows, RiskOptions};
@@ -144,6 +145,8 @@ const EMPTY_AS_LENGTH: &[&str] = &[
     "survreg::fit",
     "trials::switch_weights case_weight",
     "trials::switch_weights denominator",
+    "trials::switch_weights id",
+    "trials::switch_weights period",
     "yates::wald_tests covariance",
     "yates::yates coefficients",
     "yates::yates covariance",
@@ -1975,7 +1978,7 @@ fn self_controlled_and_multistate_regressions_refuse_bad_columns() {
 
 #[test]
 fn trial_weights_refuse_bad_columns() {
-    let id = [0_u64, 0, 0, 1, 1, 1];
+    let id = [0_u32, 0, 0, 1, 1, 1];
     let period = [0_i64, 1, 2, 0, 1, 2];
     let treatment = [false, false, true, true, true, false];
     let previous = [false, false, false, true, true, true];
@@ -1991,20 +1994,12 @@ fn trial_weights_refuse_bad_columns() {
         numerator: numerator.as_ref(),
         denominator: denominator.as_ref(),
     };
-    let data = |id: &'static [u64], period: &'static [i64]| PersonPeriod {
-        id,
-        period,
-        treatment: &treatment,
-        previous: &previous,
-    };
-    let _ = data;
     rejects("trials::switch_weights treatment", |bad| {
         let treatment = shortened(bad, &treatment);
         lengths(bad).then(|| {
             trials::switch_weights(
                 &PersonPeriod {
-                    id: &id,
-                    period: &period,
+                    panel: Panel::new(&id, &period).unwrap(),
                     treatment: &treatment,
                     previous: &previous,
                 },
@@ -2017,33 +2012,39 @@ fn trial_weights_refuse_bad_columns() {
     rejects("trials::switch_weights id", |bad| {
         let id = shortened(bad, &id);
         lengths(bad).then(|| {
-            trials::switch_weights(
-                &PersonPeriod {
-                    id: &id,
-                    period: &period,
-                    treatment: &treatment,
-                    previous: &previous,
-                },
-                &model,
-                &WeightRows::default(),
-            )
-            .map(|_| ())
+            Panel::new(&id, &period)
+                .map_err(Error::from)
+                .and_then(|panel| {
+                    trials::switch_weights(
+                        &PersonPeriod {
+                            panel,
+                            treatment: &treatment,
+                            previous: &previous,
+                        },
+                        &model,
+                        &WeightRows::default(),
+                    )
+                })
+                .map(|_| ())
         })
     });
     rejects("trials::switch_weights period", |bad| {
         let period = shortened(bad, &period);
         lengths(bad).then(|| {
-            trials::switch_weights(
-                &PersonPeriod {
-                    id: &id,
-                    period: &period,
-                    treatment: &treatment,
-                    previous: &previous,
-                },
-                &model,
-                &WeightRows::default(),
-            )
-            .map(|_| ())
+            Panel::new(&id, &period)
+                .map_err(Error::from)
+                .and_then(|panel| {
+                    trials::switch_weights(
+                        &PersonPeriod {
+                            panel,
+                            treatment: &treatment,
+                            previous: &previous,
+                        },
+                        &model,
+                        &WeightRows::default(),
+                    )
+                })
+                .map(|_| ())
         })
     });
     rejects("trials::switch_weights denominator", |bad| {
@@ -2051,8 +2052,7 @@ fn trial_weights_refuse_bad_columns() {
         unordered(bad).then(|| {
             trials::switch_weights(
                 &PersonPeriod {
-                    id: &id,
-                    period: &period,
+                    panel: Panel::new(&id, &period).unwrap(),
                     treatment: &treatment,
                     previous: &previous,
                 },
@@ -2070,8 +2070,7 @@ fn trial_weights_refuse_bad_columns() {
         unordered(bad).then(|| {
             trials::switch_weights(
                 &PersonPeriod {
-                    id: &id,
-                    period: &period,
+                    panel: Panel::new(&id, &period).unwrap(),
                     treatment: &treatment,
                     previous: &previous,
                 },
@@ -2140,7 +2139,7 @@ fn control_sampling_and_clones_refuse_bad_columns() {
             .map(|_| ())
         })
     });
-    let id = [0_u64, 0, 0, 1, 1, 1];
+    let id = [0_u32, 0, 0, 1, 1, 1];
     let period = [0_i64, 1, 2, 0, 1, 2];
     let treatment = [false, true, true, false, false, true];
     let outcome = [false, false, false, false, false, true];
@@ -2158,8 +2157,7 @@ fn control_sampling_and_clones_refuse_bad_columns() {
         lengths(bad).then(|| {
             clone::clone_censor(
                 &CloneInput {
-                    id: &id,
-                    period: &period,
+                    panel: Panel::new(&id, &period).unwrap(),
                     treatment: &treatment,
                     outcome: &outcome,
                     covariates: &[&covariate],
@@ -2174,8 +2172,7 @@ fn control_sampling_and_clones_refuse_bad_columns() {
         unordered(bad).then(|| {
             clone::clone_censor(
                 &CloneInput {
-                    id: &id,
-                    period: &period,
+                    panel: Panel::new(&id, &period).unwrap(),
                     treatment: &treatment,
                     outcome: &outcome,
                     covariates: &[&covariate],
@@ -2277,4 +2274,70 @@ fn bootstraps_and_variances_refuse_bad_columns() {
             .map(|_| ())
         })
     });
+}
+
+/// What the methods do not offer is refused with `Error::Unsupported`, which
+/// names the option or column that asks for it, under the code
+/// `survival.unsupported` and the kind `Unsupported`, with the message the
+/// refusal always had.
+#[test]
+fn refused_options_are_typed() {
+    use epistat_core::ErrorKind;
+    use epistat_survival::cox::Ties;
+    fn refused<T: Debug>(result: Result<T, Error>, option: &str, message: &str) {
+        let error = result.unwrap_err();
+        assert_eq!(error.code(), "survival.unsupported", "{error:?}");
+        assert_eq!(error.kind(), ErrorKind::Unsupported);
+        let Error::Unsupported { what, .. } = &error else {
+            panic!("not Unsupported: {error:?}");
+        };
+        assert_eq!(*what, option);
+        assert_eq!(error.to_string(), format!("not available: {message}"));
+    }
+    let x = column(&COVARIATE);
+    let exact = CoxOptions {
+        ties: Ties::Exact,
+        ..CoxOptions::default()
+    };
+    let clustered = SurvBuf::builder(STOP.to_vec(), STATUS.to_vec())
+        .cluster(GROUP.to_vec())
+        .build()
+        .unwrap();
+    refused(
+        cox::fit(&clustered.as_data(), x.as_ref(), &exact),
+        "ties",
+        "ties: the exact method has no cluster-robust variance",
+    );
+    let weighted = SurvBuf::builder(STOP.to_vec(), STATUS.to_vec())
+        .weight(WEIGHT.to_vec())
+        .build()
+        .unwrap();
+    refused(
+        cox::fit(&weighted.as_data(), x.as_ref(), &exact),
+        "weight",
+        "weight: the exact method supports case weights of 1 only",
+    );
+    let delayed = SurvBuf::builder(STOP.to_vec(), CAUSE.to_vec())
+        .start(START.to_vec())
+        .n_codes(2)
+        .build()
+        .unwrap();
+    refused(
+        fine_gray::fit(&delayed.as_data(), x.as_ref(), &FineGrayOptions::new(1)),
+        "start",
+        "Fine-Gray follows every individual from time 0, so data with a start column is \
+         not supported",
+    );
+    refused(
+        frailty::fit(
+            &clustered.as_data(),
+            x.as_ref(),
+            &FrailtyOptions {
+                ties: Ties::Exact,
+                ..FrailtyOptions::default()
+            },
+        ),
+        "ties",
+        "ties: the frailty model supports Breslow and Efron ties only",
+    );
 }

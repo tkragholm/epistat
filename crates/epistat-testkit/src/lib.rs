@@ -29,4 +29,6 @@ pub use invalid::{
 };
 pub use reference::{load_json, na_f64, na_f64_vec};
 pub use threads::{POOLS, assert_same_on_pools, assert_same_on_threads, on_threads};
-pub use tolerance::{Tolerance, assert_close, assert_within_standard_errors, ulps_apart};
+pub use tolerance::{
+    Tolerance, assert_close, assert_close_to, assert_within_standard_errors, ulps_apart,
+};

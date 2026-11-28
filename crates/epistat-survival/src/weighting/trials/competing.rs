@@ -119,7 +119,7 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
         ("outcome", n),
         ("competing", competing.len()),
         ("weight", input.weight.len()),
-        ("person", input.person.len()),
+        ("unit", input.unit.len()),
     ])?;
     if let Some(r) = (0..n).find(|&r| input.outcome[r] && competing[r]) {
         return Err(Error::inconsistent(format!(
@@ -131,21 +131,21 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
     let design = Mat::from_fn(rows.len(), p, |i, j| input.design[(rows[i], j)]);
     let outcome: Vec<bool> = rows.iter().map(|&r| input.outcome[r]).collect();
     let weight: Vec<f64> = rows.iter().map(|&r| input.weight[r]).collect();
-    let person: Vec<u64> = rows.iter().map(|&r| input.person[r]).collect();
+    let unit: Vec<u32> = rows.iter().map(|&r| input.unit[r]).collect();
     let event = fit_msm(MsmInput {
         design: design.as_ref(),
         outcome: &outcome,
         weight: &weight,
-        person: &person,
+        unit: &unit,
     })?;
     let competing_fit = fit_msm(MsmInput {
         design: input.design,
         outcome: competing,
         weight: input.weight,
-        person: input.person,
+        unit: input.unit,
     })?;
 
-    let clusters = Clusters::from_labels_first_seen(input.person)?;
+    let clusters = Clusters::from_labels_first_seen(input.unit)?;
     let g = clusters.count();
     let of = clusters.of();
     let mut u = vec![0.0; g * p];

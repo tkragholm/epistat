@@ -2,26 +2,35 @@
 //!
 //! [`Constraint`] is one rule on a pair and [`ConstraintGroup`] a list of
 //! them, as a tuple, an array, a `Vec` or [`Chained`] groups. The rules here
-//! are built from field names and values: equal sex, a birth-date window, a
+//! are built from field names and values: equal strata, a date window, a
 //! caliper on a numeric field, being alive or resident on the index date, and
 //! the exclusion of pairs that share a value. [`ExactMatchConstraint`] and
 //! [`CaliperConstraint`] are the rules a job adds for its exact matches and its
 //! distance caliper.
 
-use crate::matching::{
-    CachedSlot, FieldValueSource, MatchingRecord, RefusesFromDate, ResidenceSpellSource,
-    RoleIndexedRecord, SlotCache, StatusRule, StatusRuleKind, caliper_allows,
-};
-pub use crate::matching::{
+mod rules;
+
+pub use rules::{
     CaliperConstraint, Chained, Constraint, ConstraintContext, ConstraintGroup,
     ExactMatchConstraint,
 };
+pub(crate) use rules::{
+    FieldValueSource, NoSelfMatchConstraint, RefusesFromDate, ReplacementConstraint,
+    ResidenceSpellSource, StatusRule, StatusRuleKind, UniqueKeyConstraint, UsedControlsVec,
+    build_strata_values, caliper_allows, unique_value,
+};
+
+use crate::matching::{CachedSlot, MatchingRecord, RoleIndexedRecord, SlotCache};
 use chrono::NaiveDate;
 use std::marker::PhantomData;
 
-/// Constraint that ensures case and control have the same value for a categorical field.
+/// Equal values of one key of the strata map, refused under `gender_mismatch`.
 ///
-/// The `same_as_case` constructors use the "sex" key of the strata map.
+/// This is [`ExactMatchConstraint::on_key`] with that reason.
+#[deprecated(
+    note = "use ExactMatchConstraint::on_key(key), with .allowing_unknown() for allow_unknown \
+            and .with_reason(\"gender_mismatch\") to keep the reason"
+)]
 pub struct GenderMatch {
     /// The strata key whose values must agree.
     pub key: String,
@@ -29,28 +38,24 @@ pub struct GenderMatch {
     pub allow_unknown: bool,
 }
 
+#[expect(deprecated, reason = "the released constraint, kept for one release")]
 impl GenderMatch {
-    /// Create a constraint that requires the same sex as the case, read from
-    /// the "sex" strata key. A pair is refused when either unit has no value.
+    /// The "sex" key; a pair is refused when either unit has no value.
     #[must_use]
     pub fn same_as_case() -> Self {
-        Self {
-            key: "sex".to_string(),
-            allow_unknown: false,
-        }
+        Self::on_key("sex")
     }
 
-    /// As [`Self::same_as_case`], but a pair where either unit has no value is
-    /// allowed.
+    /// The "sex" key; a pair where either unit has no value is allowed.
     #[must_use]
     pub fn same_as_case_or_unknown() -> Self {
         Self {
-            key: "sex".to_string(),
             allow_unknown: true,
+            ..Self::on_key("sex")
         }
     }
 
-    /// Create a constraint for a custom strata key.
+    /// A key of the caller's; a pair is refused when either unit has no value.
     #[must_use]
     pub fn on_key(key: impl Into<String>) -> Self {
         Self {
@@ -60,18 +65,14 @@ impl GenderMatch {
     }
 }
 
+#[expect(deprecated, reason = "the released constraint, kept for one release")]
 impl<R: MatchingRecord> Constraint<R> for GenderMatch {
     fn reason(&self) -> &'static str {
         "gender_mismatch"
     }
 
     fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
-        let case_val = case.stratum(&self.key);
-        let control_val = control.stratum(&self.key);
-        match (case_val, control_val) {
-            (Some(c), Some(ctrl)) => c == ctrl,
-            _ => self.allow_unknown,
-        }
+        rules::key_agrees(case, control, &self.key, self.allow_unknown)
     }
 }
 
@@ -180,7 +181,7 @@ pub(crate) fn sample_sd(values: &[f64]) -> Option<f64> {
 ///
 /// It is a choice of the caller, with [`Self::Refuse`] as the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum MissingPolicy {
+pub enum CaliperMissing {
     /// Refuse the pair. An unverifiable constraint has not been satisfied.
     ///
     /// The default: a caliper is a claim about how close two records are, and
@@ -199,6 +200,10 @@ pub enum MissingPolicy {
     MatchMissing,
 }
 
+/// The released name of [`CaliperMissing`].
+#[deprecated(note = "use CaliperMissing")]
+pub type MissingPolicy = CaliperMissing;
+
 /// Constraint that ensures a numeric field is within a certain caliper window.
 ///
 /// This is a generic version of [`DateWindow`] that works on any numeric value.
@@ -206,7 +211,7 @@ pub struct Caliper<R, F> {
     selector: F,
     window: f64,
     reason: &'static str,
-    missing: MissingPolicy,
+    missing: CaliperMissing,
     _marker: std::marker::PhantomData<R>,
 }
 
@@ -220,14 +225,14 @@ where
             selector,
             window,
             reason: "caliper_mismatch",
-            missing: MissingPolicy::Refuse,
+            missing: CaliperMissing::Refuse,
             _marker: std::marker::PhantomData,
         }
     }
 
     /// Choose what happens when a record does not carry the value.
     #[must_use]
-    pub const fn on_missing(mut self, policy: MissingPolicy) -> Self {
+    pub const fn on_missing(mut self, policy: CaliperMissing) -> Self {
         self.missing = policy;
         self
     }
@@ -304,7 +309,7 @@ where
             (self.selector)(case),
             (self.selector)(control),
             self.window,
-            self.missing == MissingPolicy::MatchMissing,
+            self.missing == CaliperMissing::MatchMissing,
         )
     }
 
@@ -326,7 +331,7 @@ where
             reason: self.reason,
             source: self,
             window: self.window,
-            match_missing: self.missing == MissingPolicy::MatchMissing,
+            match_missing: self.missing == CaliperMissing::MatchMissing,
         }))
     }
 }
@@ -523,6 +528,61 @@ impl ResidenceSpell {
     pub fn contains(&self, date: NaiveDate) -> bool {
         self.from.is_none_or(|from| from <= date) && self.to.is_none_or(|to| date < to)
     }
+
+    /// The periods of each person of a register's residence spells, for
+    /// [`MustBeResidentInSpells`].
+    ///
+    /// The register's days count from 1970-01-01 and its last day of a spell
+    /// is a day of residence, so a spell from day `a` to day `b` is the period
+    /// from `a` up to but not including `b + 1`. A person with no spell is
+    /// resident on every date in the register, so their entry is `None`, not
+    /// an empty list, which would refuse them on every date.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`](crate::Error::Input) when the offsets are not a layout
+    /// of the spells or `to` is not as long as `from`, and
+    /// [`Error::DateOutOfRange`](crate::Error::DateOutOfRange) for a day that
+    /// is not a calendar date, naming the column and the spell.
+    pub fn from_register(
+        spells: &epistat_register::residence::Spells,
+    ) -> Result<Vec<Option<Vec<Self>>>, crate::Error> {
+        let rows = spells.from.len();
+        epistat_core::check::same_length("to", rows, spells.to.len())?;
+        epistat_core::check::csr_offsets("person offsets", &spells.person_offsets, rows)?;
+        let date = |column: &str, row: usize, day: i64, shift: i64| {
+            day.checked_add(shift)
+                .and_then(|day| i32::try_from(day).ok())
+                .and_then(|day| day.checked_add(crate::UNIX_EPOCH_DAYS_FROM_CE))
+                .and_then(NaiveDate::from_num_days_from_ce_opt)
+                .ok_or_else(|| crate::Error::DateOutOfRange {
+                    column: column.to_string(),
+                    row,
+                })
+        };
+        spells
+            .person_offsets
+            .windows(2)
+            .map(|range| {
+                if range[0] == range[1] {
+                    return Ok(None);
+                }
+                (range[0]..range[1])
+                    .map(|row| {
+                        Ok(Self {
+                            from: spells.from[row]
+                                .map(|day| date("from", row, day, 0))
+                                .transpose()?,
+                            to: spells.to[row]
+                                .map(|day| date("to", row, day, 1))
+                                .transpose()?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(Some)
+            })
+            .collect()
+    }
 }
 
 /// Constraint that ensures the control is resident at the case's index date,
@@ -591,7 +651,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::matching::{ConstraintContext, UsedControlsVec};
+    use crate::constraints::{ConstraintContext, UsedControlsVec};
     use crate::types::{BaseRecord, ControlIdx};
     use rapidhash::RapidHashMap;
     use rustc_hash::FxHashSet;
@@ -599,8 +659,66 @@ mod tests {
     use crate::{date, record};
 
     #[test]
-    fn gender_match_constraint_requires_exact_strata_match() {
-        let constraint = GenderMatch::same_as_case();
+    fn register_spells_become_half_open_periods() {
+        let mut spells = epistat_register::residence::Spells::default();
+        spells.person_offsets = vec![0, 2, 2, 3];
+        spells.from = vec![None, Some(10), Some(-1)];
+        spells.to = vec![Some(4), None, Some(-1)];
+        let periods = ResidenceSpell::from_register(&spells).unwrap();
+        let day = |d: i64| {
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .unwrap()
+                .checked_add_signed(chrono::TimeDelta::days(d))
+                .unwrap()
+        };
+        assert_eq!(
+            periods,
+            vec![
+                Some(vec![
+                    ResidenceSpell {
+                        from: None,
+                        to: Some(day(5)),
+                    },
+                    ResidenceSpell {
+                        from: Some(day(10)),
+                        to: None,
+                    },
+                ]),
+                None,
+                Some(vec![ResidenceSpell {
+                    from: Some(day(-1)),
+                    to: Some(day(0)),
+                }]),
+            ]
+        );
+        let first = periods[0].as_deref().unwrap();
+        assert!(first.iter().any(|s| s.contains(day(4))));
+        assert!(!first.iter().any(|s| s.contains(day(5))));
+
+        let mut bad = epistat_register::residence::Spells::default();
+        bad.person_offsets = vec![0, 2];
+        bad.from = vec![None];
+        bad.to = vec![None];
+        assert!(matches!(
+            ResidenceSpell::from_register(&bad),
+            Err(crate::Error::Input(_))
+        ));
+        let mut far = epistat_register::residence::Spells::default();
+        far.person_offsets = vec![0, 1];
+        far.from = vec![Some(i64::MAX)];
+        far.to = vec![None];
+        assert_eq!(
+            ResidenceSpell::from_register(&far),
+            Err(crate::Error::DateOutOfRange {
+                column: "from".into(),
+                row: 0
+            })
+        );
+    }
+
+    #[test]
+    fn exact_match_on_a_key_requires_equal_values() {
+        let constraint = ExactMatchConstraint::on_key("sex");
         let mut case = record("case", date(2010, 1, 1));
         case.strata.insert("sex".to_string(), "M".to_string());
 
@@ -630,8 +748,8 @@ mod tests {
     }
 
     #[test]
-    fn gender_match_can_allow_unknown() {
-        let constraint = GenderMatch::same_as_case_or_unknown();
+    fn exact_match_on_a_key_can_allow_unknown() {
+        let constraint = ExactMatchConstraint::on_key("sex").allowing_unknown();
         let mut case = record("case", date(2010, 1, 1));
         case.strata.insert("sex".to_string(), "M".to_string());
 
@@ -653,6 +771,55 @@ mod tests {
         };
 
         assert!(constraint.allows(&case, &control_no_gender, &ctx));
+        assert!(!ExactMatchConstraint::on_key("sex").allows(&case, &control_no_gender, &ctx));
+    }
+
+    #[test]
+    #[expect(
+        deprecated,
+        reason = "the released wrapper is checked against its successor"
+    )]
+    fn gender_match_is_exact_match_on_a_key_with_its_reason() {
+        let mut case = record("case", date(2010, 1, 1));
+        case.strata.insert("sex".to_string(), "M".to_string());
+        let mut control_f = record("control_f", date(2010, 1, 3));
+        control_f.strata.insert("sex".to_string(), "F".to_string());
+        let control_none = record("control_none", date(2010, 1, 2));
+        let criteria = crate::types::MatchingCriteria::default();
+        let used_controls = UsedControlsVec::with_capacity(0);
+        let used_unique = FxHashSet::default();
+        let unique_interner = RapidHashMap::default();
+        let ctx = ConstraintContext {
+            criteria: &criteria,
+            used_controls: &used_controls,
+            used_unique: &used_unique,
+            unique_interner: &unique_interner,
+            control_idx: ControlIdx::new(0),
+            case_strata_values: None,
+            control_strata_values: None,
+        };
+        for (old, new) in [
+            (
+                GenderMatch::same_as_case(),
+                ExactMatchConstraint::on_key("sex"),
+            ),
+            (
+                GenderMatch::same_as_case_or_unknown(),
+                ExactMatchConstraint::on_key("sex").allowing_unknown(),
+            ),
+        ] {
+            let new = new.with_reason("gender_mismatch");
+            assert_eq!(
+                Constraint::<BaseRecord>::reason(&old),
+                Constraint::<BaseRecord>::reason(&new)
+            );
+            for control in [&case, &control_f, &control_none] {
+                assert_eq!(
+                    old.allows(&case, control, &ctx),
+                    new.allows(&case, control, &ctx)
+                );
+            }
+        }
     }
 
     #[test]
@@ -830,7 +997,7 @@ mod named_caliper_tests {
     /// `Caliper::allows` ignores its context, since the constraint compares
     /// two records and nothing else, but the trait's signature requires one.
     fn allows_field<R: MatchingRecord>(field: &str, case: &R, control: &R, window: f64) -> bool {
-        use crate::matching::UsedControlsVec;
+        use crate::constraints::UsedControlsVec;
         use crate::types::{ControlIdx, MatchingCriteria, UniqueValueId};
         use rapidhash::RapidHashMap;
         use rustc_hash::FxHashSet;
@@ -1014,9 +1181,9 @@ mod named_caliper_tests {
         case: &R,
         control: &R,
         window: f64,
-        policy: MissingPolicy,
+        policy: CaliperMissing,
     ) -> bool {
-        use crate::matching::UsedControlsVec;
+        use crate::constraints::UsedControlsVec;
         use crate::types::{ControlIdx, MatchingCriteria, UniqueValueId};
         use rapidhash::RapidHashMap;
         use rustc_hash::FxHashSet;
@@ -1049,7 +1216,7 @@ mod named_caliper_tests {
             &record("a", None),
             &record("b", None),
             1.0,
-            MissingPolicy::MatchMissing,
+            CaliperMissing::MatchMissing,
         ));
     }
 
@@ -1057,7 +1224,7 @@ mod named_caliper_tests {
     fn one_missing_and_one_present_is_refused_under_either_policy() {
         // The comparison a caliper exists to prevent, and neither policy allows
         // it: "unknown matches unknown" is not "unknown matches anything".
-        for policy in [MissingPolicy::Refuse, MissingPolicy::MatchMissing] {
+        for policy in [CaliperMissing::Refuse, CaliperMissing::MatchMissing] {
             assert!(!allows_with_policy(
                 "parent_birth_year",
                 &record("a", None),
@@ -1084,14 +1251,14 @@ mod named_caliper_tests {
             &record("a", Some(1980.0)),
             &record("b", Some(1996.0)),
             1.0,
-            MissingPolicy::MatchMissing,
+            CaliperMissing::MatchMissing,
         ));
         assert!(allows_with_policy(
             "parent_birth_year",
             &record("a", Some(1980.0)),
             &record("b", Some(1981.0)),
             1.0,
-            MissingPolicy::MatchMissing,
+            CaliperMissing::MatchMissing,
         ));
     }
 

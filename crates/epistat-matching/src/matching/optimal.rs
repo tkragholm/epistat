@@ -78,7 +78,6 @@
 //!    Graphical Statistics* 15, 609-627.
 //! 3. The documentation of `optmatch::fullmatch` (Hansen), version 0.10.8.
 
-use super::constraints::{ConstraintContext, ConstraintGroup, UsedControlsVec};
 use super::distance::{DistanceConfig, DistanceMetric};
 use super::engine::{build_outcome, finalize_estimand_diagnostics, to_f64};
 use super::exact::{SubclassedUnits, unit_ids};
@@ -86,6 +85,7 @@ use super::index::StrataValues;
 use super::records::MatchingRecord;
 use super::subclassification::build_subclass_summaries;
 use crate::Error;
+use crate::constraints::{ConstraintContext, ConstraintGroup, UsedControlsVec};
 use crate::types::{
     ControlIdx, Estimand, MatchDiagnostics, MatchOutcome, MatchedPair, MatchingCriteria,
 };

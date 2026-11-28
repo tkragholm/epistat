@@ -62,7 +62,6 @@ pub use config::*;
 pub use cross_validation::{CrossValidation, cross_validation_folds};
 pub use encoding::CovariateMatrix;
 
-use super::constraints::ConstraintGroup;
 use super::distance::{DistanceConfig, ScoreTable, VectorTable};
 use super::engine::{
     DiscardedUnits, StandardMatchRequest, match_standard, match_standard_with_discard,
@@ -70,6 +69,7 @@ use super::engine::{
 use super::records::{CovariateRecord, MatchingRecord};
 use super::selection::SelectionStrategy;
 use crate::Error;
+use crate::constraints::ConstraintGroup;
 use crate::overlap::{Overlap, finite_bounds};
 use crate::types::{
     CommonSupport, DistanceCaliper, Estimand, MatchOutcome, MatchRatio, MatchingCriteria,

@@ -40,10 +40,11 @@
 //! likelihood integrated cluster by cluster by `integrate()` at a relative
 //! tolerance of `1e-13` to better than `1e-8` relative in every case.
 
+use epistat_core::Covariance;
 use epistat_glm::{Family, Link};
-use epistat_linalg::Mat;
+use epistat_linalg::{Mat, MatRef};
 use epistat_mixed::quadrature::gauss_hermite;
-use epistat_mixed::{Glmm, GlmmFit};
+use epistat_mixed::{Error, Glmm, GlmmFit, MixedData};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -154,11 +155,15 @@ fn design(case: &Case) -> Mat<f64> {
 fn evaluate(case: &Case, x: &Mat<f64>, nodes: usize, par: &[f64]) -> GlmmFit {
     model(case, nodes)
         .evaluate(
-            x.as_ref(),
-            &case.y,
-            &case.cluster,
-            Some(&case.weights),
-            Some(&case.offset),
+            &view(
+                x.as_ref(),
+                &case.y,
+                &case.cluster,
+                None,
+                Some(&case.weights),
+                Some(&case.offset),
+            )
+            .unwrap(),
             par[0],
             &par[1..],
         )
@@ -279,7 +284,7 @@ fn fixed_parameters_match_glmer() {
                         Some(inv[0].sqrt()),
                     )
                 };
-                let dc = deviation(got.beta_covariance.as_ref().unwrap(), &cov_beta);
+                let dc = deviation(&entries(got.beta_covariance.as_ref().unwrap()), &cov_beta);
                 assert!(
                     dc < 1e-6,
                     "{} nAGQ {}: covariance deviates by {dc:e}",
@@ -315,11 +320,15 @@ fn the_optimum_matches_glmer() {
         for entry in &case.fits {
             let fit = model(case, entry.nodes)
                 .fit(
-                    x.as_ref(),
-                    &case.y,
-                    &case.cluster,
-                    Some(&case.weights),
-                    Some(&case.offset),
+                    &view(
+                        x.as_ref(),
+                        &case.y,
+                        &case.cluster,
+                        None,
+                        Some(&case.weights),
+                        Some(&case.offset),
+                    )
+                    .unwrap(),
                 )
                 .unwrap();
             assert_eq!(
@@ -396,7 +405,7 @@ fn the_optimum_matches_glmer() {
             assert!(deviation(&[fit.log_likelihood], &[reported]) < 1e-9);
             let dm = deviation(&fit.modes, &entry.modes)
                 .max(deviation(&fit.mode_variances, &entry.mode_var));
-            let dv = deviation(fit.beta_covariance.as_ref().unwrap(), &entry.vcov);
+            let dv = deviation(&entries(fit.beta_covariance.as_ref().unwrap()), &entry.vcov);
             eprintln!("    modes {dm:e}, vcov {dv:e}");
             assert!(
                 dm < 1e-5 && dv < 5e-5,
@@ -433,4 +442,35 @@ fn quadrature_with_25_nodes_is_the_integral() {
             );
         }
     }
+}
+
+/// The data view of the given columns.
+fn view<'a>(
+    x: MatRef<'a, f64>,
+    y: &'a [f64],
+    groups: &'a [u32],
+    slope: Option<&'a [f64]>,
+    weights: Option<&'a [f64]>,
+    offset: Option<&'a [f64]>,
+) -> Result<MixedData<'a>, Error> {
+    let mut data = MixedData::builder(x, y, groups);
+    if let Some(slope) = slope {
+        data = data.slope(slope);
+    }
+    if let Some(weights) = weights {
+        data = data.weights(weights);
+    }
+    if let Some(offset) = offset {
+        data = data.offset(offset);
+    }
+    data.build()
+}
+
+/// The entries of a covariance, every one defined.
+fn entries(covariance: &Covariance) -> Vec<f64> {
+    covariance
+        .as_slice()
+        .iter()
+        .map(|v| v.expect("a defined entry"))
+        .collect()
 }

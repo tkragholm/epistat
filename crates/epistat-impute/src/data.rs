@@ -1,4 +1,6 @@
-use crate::error::{ImputeError, Result};
+use epistat_core::{InputError, check};
+
+use crate::error::{Error, Result, length};
 
 /// A set of flags, one bit per row, that marks the missing cells of a column.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -134,49 +136,45 @@ impl Incomplete {
     ///
     /// # Errors
     ///
-    /// [`ImputeError::Length`] when the columns or masks differ in length,
-    /// [`ImputeError::Levels`] for a categorical column with fewer than two
-    /// levels, and [`ImputeError::Value`] for an observed value that is not
-    /// finite, a binary value other than 0 and 1, or a code outside the
-    /// levels.
+    /// [`Error::Input`] for no columns or no rows
+    /// ([`InputError::Empty`]), columns or masks that differ in length
+    /// ([`InputError::Length`]) and an observed continuous value that is not
+    /// finite ([`InputError::NotFinite`], with its row and column);
+    /// [`Error::Levels`] for a categorical column with fewer than two levels,
+    /// and [`Error::Value`] for an observed binary value other than 0 and 1
+    /// or a code outside the levels.
     pub fn new(columns: Vec<Column>, missing: &[Vec<bool>]) -> Result<Self> {
-        if missing.len() != columns.len() {
-            return Err(ImputeError::Length {
-                what: "missing",
-                expected: columns.len(),
-                found: missing.len(),
-            });
-        }
+        check::non_empty("columns", columns.len())?;
+        length("missing", columns.len(), missing.len())?;
         let rows = columns.first().map_or(0, Column::len);
+        check::non_empty("columns", rows)?;
         for (j, (column, flags)) in columns.iter().zip(missing).enumerate() {
-            if column.len() != rows {
-                return Err(ImputeError::Length {
-                    what: "column",
-                    expected: rows,
-                    found: column.len(),
-                });
-            }
-            if flags.len() != rows {
-                return Err(ImputeError::Length {
-                    what: "missing mask",
-                    expected: rows,
-                    found: flags.len(),
-                });
-            }
+            length("columns", rows, column.len())?;
+            length("missing", rows, flags.len())?;
             let levels = column.levels();
             if matches!(column, Column::Nominal { .. } | Column::Ordered { .. }) && levels < 2 {
-                return Err(ImputeError::Levels { column: j, levels });
+                return Err(Error::Levels { column: j, levels });
             }
             for row in (0..rows).filter(|&r| !flags[r]) {
                 let ok = match column {
-                    Column::Continuous(v) => v[row].is_finite(),
+                    Column::Continuous(v) => {
+                        if !v[row].is_finite() {
+                            return Err(InputError::NotFinite {
+                                what: "columns",
+                                row,
+                                column: Some(j),
+                            }
+                            .into());
+                        }
+                        true
+                    }
                     Column::Binary(v) => v[row] <= 1,
                     Column::Nominal { codes, levels } | Column::Ordered { codes, levels } => {
                         (codes[row] as usize) < *levels
                     }
                 };
                 if !ok {
-                    return Err(ImputeError::Value { column: j, row });
+                    return Err(Error::Value { column: j, row });
                 }
             }
         }

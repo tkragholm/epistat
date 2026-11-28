@@ -3,7 +3,9 @@
 //!
 //! [`impute`](crate::impute) calls these with draws from its streams. They are
 //! public so that a test can inject the draws and compare an intermediate
-//! result with `mice`'s, which is how the methods are checked.
+//! result with `mice`'s, which is how the methods are checked, and hidden from
+//! the documentation: they are not part of the API and may change in any
+//! release.
 //!
 //! # Linear model
 //!
@@ -62,21 +64,17 @@
 //!    in multiple imputation of incomplete categorical variables. Comput Stat
 //!    Data Anal. 2010;54(10):2267-75.
 
-#![expect(
-    deprecated,
-    reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
-)]
-
 use std::ops::Range;
 
-use epistat_glm::{Family, Glm, Link, Multinom};
+use epistat_glm::{Family, Glm, GlmData, Link, Multinom, MultinomData};
 use epistat_linalg::cholesky::{Pivot, cholesky_lower};
 use epistat_linalg::design::{independent_columns, select_columns};
 use epistat_linalg::{Mat, MatRef};
 
-use crate::error::{ImputeError, Result};
+use crate::error::{Error, Result, length};
 
 /// Least squares of an outcome on a design, for the parameter draw.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct LinearFit {
     /// The coefficients, 0 for an aliased column.
@@ -104,20 +102,20 @@ impl LinearFit {
 ///
 /// # Errors
 ///
-/// [`ImputeError::TooFewObserved`] when `x` has no more rows than columns, and
+/// [`Error::TooFewObserved`] when `x` has no more rows than columns, and
 /// the regression's own errors.
 pub fn linear_fit(x: MatRef<'_, f64>, y: &[f64], column: usize) -> Result<LinearFit> {
     let (n, p) = (x.nrows(), x.ncols());
     if n <= p {
-        return Err(ImputeError::TooFewObserved {
+        return Err(Error::TooFewObserved {
             column,
             observed: n,
             parameters: p,
         });
     }
-    let fit = Glm::new(Family::Gaussian, Link::Identity).fit_slices(x, y, None, None, None)?;
+    let fit = Glm::new(Family::Gaussian, Link::Identity).fit(&GlmData::builder(x, y).build()?)?;
     if !fit.converged {
-        return Err(ImputeError::NotConverged { column });
+        return Err(Error::NotConverged { column });
     }
     let active: Vec<bool> = fit.coefficients.iter().map(Option::is_some).collect();
     let covariance = unscaled_covariance(fit.covariance.as_slice(), &active, fit.dispersion);
@@ -147,6 +145,7 @@ fn unscaled_covariance(full: &[Option<f64>], active: &[bool], dispersion: Option
 }
 
 /// A draw of the regression parameters: `mice:::.norm.draw`.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParameterDraw {
     /// `beta*`, 0 for an aliased column.
@@ -161,8 +160,8 @@ pub struct ParameterDraw {
 ///
 /// # Errors
 ///
-/// [`ImputeError::Length`] when `z` is not as long as the active columns,
-/// [`ImputeError::Covariance`] when `V` has no Cholesky factor.
+/// [`Error::Input`] when `z` is not as long as the active columns,
+/// [`Error::Covariance`] when `V` has no Cholesky factor.
 pub fn draw_linear(
     fit: &LinearFit,
     chi_square: f64,
@@ -192,8 +191,8 @@ pub fn draw_linear(
 ///
 /// # Errors
 ///
-/// [`ImputeError::Length`] for a `z` of the wrong length and
-/// [`ImputeError::Covariance`] when `V` has no Cholesky factor.
+/// [`Error::Input`] for a `z` of the wrong length and
+/// [`Error::Covariance`] when `V` has no Cholesky factor.
 pub fn draw_coefficients(
     coefficients: &[f64],
     active: &[bool],
@@ -203,15 +202,8 @@ pub fn draw_coefficients(
     column: usize,
 ) -> Result<Vec<f64>> {
     let k = active.iter().filter(|&&a| a).count();
-    if z.len() != k {
-        return Err(ImputeError::Length {
-            what: "z",
-            expected: k,
-            found: z.len(),
-        });
-    }
-    let lower =
-        cholesky_lower(covariance, k, Pivot::Strict).ok_or(ImputeError::Covariance { column })?;
+    length("z", k, z.len())?;
+    let lower = cholesky_lower(covariance, k, Pivot::Strict).ok_or(Error::Covariance { column })?;
     let mut out = vec![0.0; coefficients.len()];
     let mut a = 0;
     for (j, slot) in out.iter_mut().enumerate() {
@@ -239,10 +231,10 @@ impl SortedDonors {
     ///
     /// # Errors
     ///
-    /// [`ImputeError::NotFinite`] for a value that is not finite.
+    /// [`Error::NotFinite`] for a value that is not finite.
     pub fn new(predicted: &[f64], column: usize) -> Result<Self> {
         if predicted.iter().any(|v| !v.is_finite()) {
-            return Err(ImputeError::NotFinite { column });
+            return Err(Error::NotFinite { column });
         }
         let mut order: Vec<usize> = (0..predicted.len()).collect();
         order.sort_unstable_by(|&a, &b| predicted[a].total_cmp(&predicted[b]).then(a.cmp(&b)));
@@ -330,6 +322,7 @@ fn position_from_uniform(u: f64, count: usize) -> usize {
 
 /// The rows `mice:::augment` adds to the predictors of a logistic or
 /// multinomial model.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Augmentation {
     /// The predictor values of the added rows, `rows` by `p`, row-major.
@@ -410,6 +403,7 @@ pub(crate) fn augmentation_of<C: AsRef<[f64]>>(x: &[C], outcomes: &[f64]) -> Opt
 }
 
 /// A logistic regression, for the parameter draw.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct LogisticFit {
     /// The coefficients, 0 for an aliased column.
@@ -424,17 +418,17 @@ pub struct LogisticFit {
 ///
 /// # Errors
 ///
-/// [`ImputeError::NotConverged`] and the regression's own errors.
+/// [`Error::NotConverged`] and the regression's own errors.
 pub fn logistic_fit(
     x: MatRef<'_, f64>,
     y: &[f64],
     weights: &[f64],
     column: usize,
 ) -> Result<LogisticFit> {
-    let fit =
-        Glm::new(Family::Binomial, Link::Logit).fit_slices(x, y, Some(weights), None, None)?;
+    let data = GlmData::builder(x, y).weights(weights).build()?;
+    let fit = Glm::new(Family::Binomial, Link::Logit).fit(&data)?;
     if !fit.converged {
-        return Err(ImputeError::NotConverged { column });
+        return Err(Error::NotConverged { column });
     }
     let p = x.ncols();
     let active: Vec<bool> = fit.coefficients.iter().map(Option::is_some).collect();
@@ -442,9 +436,8 @@ pub fn logistic_fit(
     let mut covariance = Vec::with_capacity(keep.len() * keep.len());
     for &i in &keep {
         for &j in &keep {
-            covariance.push(
-                fit.covariance.as_slice()[i * p + j].ok_or(ImputeError::Covariance { column })?,
-            );
+            covariance
+                .push(fit.covariance.as_slice()[i * p + j].ok_or(Error::Covariance { column })?);
         }
     }
     Ok(LogisticFit {
@@ -455,6 +448,7 @@ pub fn logistic_fit(
 }
 
 /// A multinomial regression, for the parameter draw.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct MultinomialFit {
     /// The number of classes.
@@ -485,11 +479,13 @@ pub fn multinomial_fit(
 ) -> Result<MultinomialFit> {
     let p = x.ncols();
     let active = independent_columns(x, weights, None, 1e-8)
-        .map_err(|e| ImputeError::Glm(epistat_glm::Error::Design(e)))?;
+        .map_err(|e| Error::Glm(epistat_glm::Error::Design(e)))?;
     let reduced = select_columns(x, &active);
-    let fit = Multinom::default()
-        .fit_slices(reduced.as_ref(), y, classes, Some(weights))
-        .map_err(ImputeError::Multinom)?;
+    let data = MultinomData::builder(reduced.as_ref(), y, classes)
+        .weights(weights)
+        .build()
+        .map_err(Error::Multinom)?;
+    let fit = Multinom::default().fit(&data).map_err(Error::Multinom)?;
     let pa = reduced.ncols();
     let mut coefficients = vec![0.0; (classes - 1) * p];
     for class in 0..classes - 1 {
@@ -525,13 +521,7 @@ impl MultinomialFit {
         let p = self.columns;
         let pa = self.active.iter().filter(|&&a| a).count();
         let q = (self.classes - 1) * pa;
-        if z.len() != q {
-            return Err(ImputeError::Length {
-                what: "z",
-                expected: q,
-                found: z.len(),
-            });
-        }
+        length("z", q, z.len())?;
         let compact: Vec<f64> = (0..self.classes - 1)
             .flat_map(|class| (0..p).filter(|&j| self.active[j]).map(move |j| (class, j)))
             .map(|(class, j)| self.coefficients[class * p + j])

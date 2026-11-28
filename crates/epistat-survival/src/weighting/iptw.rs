@@ -311,7 +311,7 @@ fn fit_with(
             })
         })
         .collect::<Option<Vec<f64>>>()
-        .ok_or_else(|| Error::unsupported(format!("estimand {}", opts.estimand)))?;
+        .ok_or_else(|| Error::unsupported("estimand", format!("estimand {}", opts.estimand)))?;
     let group = |treated: bool| {
         WeightSummary::new(
             weights

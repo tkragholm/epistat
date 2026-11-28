@@ -6,15 +6,20 @@
 //! not tried either: a replicate that is infinite is a valid draw.
 
 use epistat_core::{Bootstrap, Level};
+use epistat_inference::Clusters;
 use epistat_inference::bootstrap;
+use epistat_inference::curve::{Band, contrast_curve};
 use epistat_inference::influence::{ClusterRule, Influence};
 use epistat_inference::interval::{self, Percentile};
 use epistat_inference::multiplicity::{Adjustment, adjust};
-use epistat_inference::pooling::{d2, rubin};
-use epistat_inference::sandwich::meat_from;
-use epistat_inference::simultaneous::multiplier_bands;
+use epistat_inference::pooling::{
+    NegativeRiv, Transform, d1, d2, d3, rubin, rubin_transformed, rubin_vector,
+};
+use epistat_inference::sandwich::{meat, meat_from};
+use epistat_inference::simultaneous::{multiplier_bands, sup_t_from_covariance};
 use epistat_inference::wald::wald;
 use epistat_linalg::Mat;
+use epistat_linalg::basis::Polynomial;
 use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
 
 const VALUES: [f64; 6] = [0.4, -1.2, 0.3, 2.1, -0.7, 0.9];
@@ -134,4 +139,81 @@ fn pooling_and_tests_refuse_bad_columns() {
                 .then(|| meat_from(x.as_ref(), Some(&bad.column(&VARIANCES)), None))
         },
     );
+}
+
+#[test]
+fn vector_pooling_and_scales_refuse_bad_columns() {
+    let estimates = |column: &[f64]| Mat::from_fn(column.len(), 1, |i, _| column[i]);
+    let one_by_one = Mat::from_fn(1, 1, |_, _| 0.2);
+    let covariances = vec![one_by_one.as_ref(); VALUES.len()];
+    assert_rejects_bad_input_with_codes("rubin_vector", single, |bad| {
+        columns(bad).then(|| rubin_vector(estimates(&bad.column(&VALUES)).as_ref(), &covariances))
+    });
+    assert_rejects_bad_input_with_codes("d1", single, |bad| {
+        columns(bad).then(|| {
+            d1(
+                estimates(&bad.column(&VALUES)).as_ref(),
+                &covariances,
+                None,
+                None,
+            )
+        })
+    });
+    assert_rejects_bad_input_with_codes("d3", single, |bad| {
+        columns(bad).then(|| d3(&bad.column(&VARIANCES), &VARIANCES, 1, NegativeRiv::Keep))
+    });
+    assert_rejects_bad_input_with_codes("rubin_transformed", several, |bad| {
+        columns(bad)
+            .then(|| rubin_transformed(&VARIANCES, &bad.column(&VARIANCES), Transform::Log, None))
+    });
+}
+
+#[test]
+fn curves_bands_and_clusters_refuse_bad_input() {
+    let basis = Polynomial { degree: 1 };
+    let covariance = Mat::from_fn(2, 2, |i, j| if i == j { 0.1 } else { 0.02 });
+    assert_rejects_bad_input_with_codes("contrast_curve coefficients", several, |bad| {
+        one(bad).then(|| {
+            contrast_curve(
+                &basis,
+                &[0.0, 0.5, 1.0],
+                0.0,
+                &bad.column(&[0.3, -0.1]),
+                covariance.as_ref(),
+                alpha(),
+                Band::Pointwise,
+            )
+        })
+    });
+    let mut sorted = VALUES;
+    sorted.sort_by(f64::total_cmp);
+    assert_rejects_bad_input_with_codes("percentile_sorted", single, |bad| {
+        matches!(bad, BadInput::Empty | BadInput::Nan | BadInput::Unsorted)
+            .then(|| interval::percentile_sorted(&bad.column(&sorted), alpha(), Percentile::Type7))
+    });
+    // A variance that is not positive and finite is a numerical error, so only
+    // an empty covariance is tried.
+    assert_rejects_bad_input_with_codes("sup_t_from_covariance", single, |bad| {
+        (bad == BadInput::Empty).then(|| {
+            let column = bad.column(&VARIANCES);
+            let covariance = Mat::from_fn(column.len(), column.len(), |i, j| {
+                if i == j { column[i] } else { 0.0 }
+            });
+            sup_t_from_covariance(covariance.as_ref(), alpha(), Bootstrap::new(5, 1))
+        })
+    });
+    let unit = [0_u32, 0, 1, 1, 2, 2];
+    let cluster = [0_u32, 0, 0, 0, 1, 1];
+    assert_rejects_bad_input_with_codes("Clusters::per_unit", several, |bad| {
+        matches!(bad, BadInput::Mismatched).then(|| Clusters::per_unit(&unit, &cluster[..5]))
+    });
+    assert_rejects_bad_input_with_codes("Clusters::per_row", single, |bad| {
+        (bad == BadInput::Empty).then(|| Clusters::per_row(&[]))
+    });
+    let x = Mat::from_fn(6, 2, |i, j| if j == 0 { 1.0 } else { VALUES[i] });
+    let short = Clusters::per_row(&cluster[..5]).unwrap();
+    assert_rejects_bad_input_with_codes("meat clusters", several, |bad| {
+        matches!(bad, BadInput::Mismatched)
+            .then(|| meat(x.as_ref(), |i| VARIANCES[i], Some(&short)))
+    });
 }

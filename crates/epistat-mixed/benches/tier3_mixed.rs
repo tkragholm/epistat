@@ -29,8 +29,8 @@ mod common;
 
 use common::{Lines, Rng, Table, Writer};
 use epistat_glm::{Family, Link};
-use epistat_linalg::Mat;
-use epistat_mixed::{Criterion, Glmm, Lmm};
+use epistat_linalg::{Mat, MatRef};
+use epistat_mixed::{Criterion, Error, Glmm, Lmm, MixedData};
 
 const SEED: u64 = 20_261_223;
 
@@ -100,7 +100,7 @@ fn main() {
             let xt = Mat::from_fn(rows, 4, |i, j| [1.0, x1[i], x2[i], table.col("t")[i]][j]);
             let (times, fit) = common::timed(common::reps(), || {
                 Lmm::new(Criterion::Reml)
-                    .fit(xt.as_ref(), table.col("yg"), &cluster, slope, None, None)
+                    .fit(&view(xt.as_ref(), table.col("yg"), &cluster, slope, None, None).unwrap())
                     .expect("lmer")
             });
             lines.push_all("theta", &fit.theta);
@@ -117,7 +117,9 @@ fn main() {
             };
             let (times, fit) = common::timed(common::reps(), || {
                 Glmm::new(family, link, nodes)
-                    .fit(x.as_ref(), table.col(response), &cluster, None, None)
+                    .fit(
+                        &view(x.as_ref(), table.col(response), &cluster, None, None, None).unwrap(),
+                    )
                     .expect("glmer")
             });
             lines.push_all("theta", &[fit.theta]);
@@ -127,4 +129,26 @@ fn main() {
         }
     };
     common::finish(&method, n, &times, &lines);
+}
+
+/// The data view of the given columns.
+fn view<'a>(
+    x: MatRef<'a, f64>,
+    y: &'a [f64],
+    groups: &'a [u32],
+    slope: Option<&'a [f64]>,
+    weights: Option<&'a [f64]>,
+    offset: Option<&'a [f64]>,
+) -> Result<MixedData<'a>, Error> {
+    let mut data = MixedData::builder(x, y, groups);
+    if let Some(slope) = slope {
+        data = data.slope(slope);
+    }
+    if let Some(weights) = weights {
+        data = data.weights(weights);
+    }
+    if let Some(offset) = offset {
+        data = data.offset(offset);
+    }
+    data.build()
 }

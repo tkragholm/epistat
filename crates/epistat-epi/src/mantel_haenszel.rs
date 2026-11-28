@@ -602,7 +602,10 @@ fn informative(strata: &[PersonTime2]) -> Vec<(f64, f64, f64)> {
 /// The probability `p = 1 / (1 + exp(-eta))` that an event of a stratum is
 /// in the exposed arm, and `1 - p`, each formed without subtracting.
 fn arm_probabilities(eta: f64) -> (f64, f64) {
-    (1.0 / (1.0 + (-eta).exp()), 1.0 / (1.0 + eta.exp()))
+    (
+        epistat_stats::logistic::expit(eta),
+        epistat_stats::logistic::expit(-eta),
+    )
 }
 
 /// The analogue of the Breslow-Day test for rate ratios: that the rate ratio

@@ -682,6 +682,7 @@ mod tests {
     use super::*;
     use crate::types::BaseRecord;
     use chrono::NaiveDate;
+    use epistat_testkit::{Tolerance, assert_close_to};
 
     fn record(id: &str) -> BaseRecord {
         BaseRecord::new(
@@ -690,9 +691,7 @@ mod tests {
         )
     }
 
-    fn assert_close(value: f64, expected: f64) {
-        assert!((value - expected).abs() < 1e-12);
-    }
+    const CLOSE: Tolerance = Tolerance::exact().abs(1e-12);
 
     fn weights(outcome: &SubclassificationOutcome) -> HashMap<String, f64> {
         let (ids, values) = outcome.weights_sorted();
@@ -1000,8 +999,18 @@ mod tests {
             "{:?}",
             outcome.dropped_ids()
         );
-        assert_close(*weights(&outcome).get("a1").expect("anchor weight"), 1.0);
-        assert_close(*weights(&outcome).get("c1").expect("candidate weight"), 1.0);
+        assert_close_to(
+            "weight",
+            *weights(&outcome).get("a1").expect("anchor weight"),
+            1.0,
+            CLOSE,
+        );
+        assert_close_to(
+            "weight",
+            *weights(&outcome).get("c1").expect("candidate weight"),
+            1.0,
+            CLOSE,
+        );
     }
 
     #[test]
@@ -1061,12 +1070,42 @@ mod tests {
         )
         .expect("valid subclassification settings");
 
-        assert_close(*weights(&outcome).get("a1").expect("a1 weight"), 1.5);
-        assert_close(*weights(&outcome).get("a2").expect("a2 weight"), 1.5);
-        assert_close(*weights(&outcome).get("c1").expect("c1 weight"), 3.0);
-        assert_close(*weights(&outcome).get("a3").expect("a3 weight"), 3.0);
-        assert_close(*weights(&outcome).get("c2").expect("c2 weight"), 1.5);
-        assert_close(*weights(&outcome).get("c3").expect("c3 weight"), 1.5);
+        assert_close_to(
+            "weight",
+            *weights(&outcome).get("a1").expect("a1 weight"),
+            1.5,
+            CLOSE,
+        );
+        assert_close_to(
+            "weight",
+            *weights(&outcome).get("a2").expect("a2 weight"),
+            1.5,
+            CLOSE,
+        );
+        assert_close_to(
+            "weight",
+            *weights(&outcome).get("c1").expect("c1 weight"),
+            3.0,
+            CLOSE,
+        );
+        assert_close_to(
+            "weight",
+            *weights(&outcome).get("a3").expect("a3 weight"),
+            3.0,
+            CLOSE,
+        );
+        assert_close_to(
+            "weight",
+            *weights(&outcome).get("c2").expect("c2 weight"),
+            1.5,
+            CLOSE,
+        );
+        assert_close_to(
+            "weight",
+            *weights(&outcome).get("c3").expect("c3 weight"),
+            1.5,
+            CLOSE,
+        );
     }
 
     #[test]
@@ -1096,7 +1135,7 @@ mod tests {
         .expect("valid subclassification settings");
         // The pooled median is 0.3, and both units scored 0.3 are in the upper
         // subclass.
-        assert_close(outcome.quantile_cuts[1], 0.3);
+        assert_close_to("weight", outcome.quantile_cuts[1], 0.3, CLOSE);
         assert_eq!(assigned(&outcome)["a1"], 0);
         assert_eq!(assigned(&outcome)["c1"], 0);
         assert_eq!(assigned(&outcome)["a2"], 1);

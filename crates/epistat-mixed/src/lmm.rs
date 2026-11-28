@@ -80,8 +80,10 @@
 //!
 //! # Determinism
 //!
-//! Clusters are summed in blocks of [`BLOCK`] clusters, each block in order,
-//! and the blocks in order, so results do not depend on the number of threads.
+//! Clusters are summed in blocks of 512 clusters, each block in order, and
+//! the blocks in order, so results do not depend on the number of threads.
+//! The block size is fixed and part of the bits of a fit: a different size
+//! would sum in a different order and move the last bits.
 //!
 //! # References
 //!
@@ -90,16 +92,23 @@
 //! 2. Bates D, Mächler M, Bolker B, Walker S. Fitting linear mixed-effects
 //!    models using lme4. J Stat Softw. 2015;67(1):1-48.
 
+use epistat_core::{Covariance, check};
+use epistat_linalg::cholesky::{Pivot, cholesky_lower};
+use epistat_linalg::small::{
+    cholesky_inverse, cholesky_solve, forward_solve, log_det_from_cholesky,
+};
 use epistat_linalg::{MatRef, matvec_into, weighted_gram, weighted_xtz};
 use epistat_optim::bfgs::Bfgs;
 use rayon::prelude::*;
 
-use crate::MixedError;
+use crate::error::{iterations, tolerance};
 use crate::groups::Groups;
-use crate::small;
+use crate::{Error, MixedData};
 
-/// Clusters per block of a parallel sum.
-pub const BLOCK: usize = 512;
+/// Clusters per block of a parallel sum. The sums of a block are taken in
+/// cluster order and the blocks are added in order, so the block size fixes
+/// the order of every sum and is part of the bits of a fit.
+pub(crate) const BLOCK: usize = 512;
 
 /// `lme4`'s tolerance below which a diagonal entry of `Λ` counts as zero.
 const SINGULAR: f64 = 1e-4;
@@ -114,6 +123,8 @@ pub enum Criterion {
 }
 
 /// A linear mixed model and its fitting controls.
+///
+/// The default is `lmer`'s: REML, with tolerance `1e-8` and 200 iterations.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Lmm {
     /// The criterion.
@@ -140,7 +151,14 @@ impl Lmm {
     }
 }
 
+impl Default for Lmm {
+    fn default() -> Self {
+        Self::new(Criterion::Reml)
+    }
+}
+
 /// How the optimisation ended.
+#[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Convergence {
     /// BFGS iterations, summed over the interior and boundary fits.
@@ -150,20 +168,22 @@ pub struct Convergence {
 }
 
 /// A fitted linear mixed model.
+#[non_exhaustive]
 #[derive(Clone, Debug)]
 pub struct LmmFit {
     /// The fixed effects.
     pub beta: Vec<f64>,
-    /// Their covariance `σ² M^{-1}`, row-major `p x p`.
-    pub beta_covariance: Vec<f64>,
+    /// Their covariance `σ² M^{-1}`, `p x p`; an entry that is not finite is
+    /// `None`.
+    pub beta_covariance: Covariance,
     /// The residual standard deviation `σ`.
     pub sigma: f64,
     /// `lme4`'s `θ`, the lower triangle of `Λ` by columns, with a
     /// non-negative diagonal.
     pub theta: Vec<f64>,
-    /// The covariance `σ² ΛΛ'` of the random effects, row-major `q x q`, the
-    /// intercept first.
-    pub random_covariance: Vec<f64>,
+    /// The covariance `σ² ΛΛ'` of the random effects, `q x q`, the intercept
+    /// first; an entry that is not finite is `None`.
+    pub random_covariance: Covariance,
     /// The criterion: `-2` times the REML log likelihood (`REMLcrit`) or
     /// `-2` times the log likelihood (`deviance`).
     pub criterion: f64,
@@ -171,7 +191,7 @@ pub struct LmmFit {
     pub log_likelihood: f64,
     /// The gradient of the criterion with respect to `θ`.
     pub gradient: Vec<f64>,
-    /// The cluster labels, increasing; the order of the modes.
+    /// The group labels, increasing; the order of the modes.
     pub groups: Vec<u32>,
     /// The conditional modes `b_i`, row-major `G x q`.
     pub modes: Vec<f64>,
@@ -190,32 +210,21 @@ pub struct LmmFit {
 }
 
 impl Lmm {
-    /// Fits the model.
-    ///
-    /// `x` is the `n x p` design of the fixed effects, `cluster` the
-    /// cluster label of each row, `slope` the variable of a random slope,
-    /// `weights` positive prior weights (1 when `None`) and `offset` a known
-    /// part of the mean.
+    /// Fits the model to `data`, with a random slope when the data have one.
+    /// The prior weights must be positive and the offset is a known part of
+    /// the mean.
     ///
     /// # Errors
     ///
-    /// See [`MixedError`].
-    pub fn fit(
-        &self,
-        x: MatRef<'_, f64>,
-        y: &[f64],
-        cluster: &[u32],
-        slope: Option<&[f64]>,
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-    ) -> Result<LmmFit, MixedError> {
-        if !(self.tolerance.is_finite() && self.tolerance > 0.0) {
-            return Err(MixedError::Control("the tolerance"));
-        }
-        if self.max_iterations == 0 {
-            return Err(MixedError::Control("the iteration limit"));
-        }
-        let problem = Problem::new(x, y, cluster, slope, weights, offset, self.criterion)?;
+    /// [`Error::Input`] for a tolerance that is not positive and finite, an
+    /// iteration limit of 0, or a weight that is not positive;
+    /// [`Error::TooFewRows`] and [`Error::RankDeficient`] for a design whose
+    /// fixed effects are not identified; [`Error::NotFiniteStart`] when the
+    /// criterion is not finite at the start.
+    pub fn fit(&self, data: &MixedData<'_>) -> Result<LmmFit, Error> {
+        tolerance(self.tolerance)?;
+        iterations(self.max_iterations)?;
+        let problem = Problem::new(data, self.criterion)?;
         let q = problem.q;
         let k = q * (q + 1) / 2;
         let diagonal: &[usize] = if q == 1 { &[0] } else { &[0, 2] };
@@ -260,23 +269,14 @@ impl Lmm {
     ///
     /// # Errors
     ///
-    /// See [`MixedError`]; [`MixedError::Parameters`] when `theta` does not
-    /// have 1 entry (no slope) or 3 (a slope), all finite.
-    pub fn evaluate(
-        &self,
-        x: MatRef<'_, f64>,
-        y: &[f64],
-        cluster: &[u32],
-        slope: Option<&[f64]>,
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-        theta: &[f64],
-    ) -> Result<LmmFit, MixedError> {
-        let problem = Problem::new(x, y, cluster, slope, weights, offset, self.criterion)?;
+    /// As [`Lmm::fit`] for the data, and [`Error::Input`] when `theta` does
+    /// not have 1 entry (no slope) or 3 (a slope), or has one that is not
+    /// finite.
+    pub fn evaluate(&self, data: &MixedData<'_>, theta: &[f64]) -> Result<LmmFit, Error> {
+        let problem = Problem::new(data, self.criterion)?;
         let k = problem.q * (problem.q + 1) / 2;
-        if theta.len() != k || theta.iter().any(|t| !t.is_finite()) {
-            return Err(MixedError::Parameters(k));
-        }
+        check::same_length("theta", k, theta.len())?;
+        check::finite("theta", theta)?;
         problem.at(theta)
     }
 
@@ -287,7 +287,7 @@ impl Lmm {
         problem: &Problem<'_>,
         theta: &mut [f64],
         free: &[bool],
-    ) -> Result<(f64, usize, bool), MixedError> {
+    ) -> Result<(f64, usize, bool), Error> {
         let index: Vec<usize> = (0..theta.len()).filter(|&j| free[j]).collect();
         let nu = problem.nu();
         if index.is_empty() {
@@ -319,7 +319,7 @@ impl Lmm {
             },
             None,
         );
-        let minimum = result.map_err(|_| MixedError::NotFiniteStart)?;
+        let minimum = result.map_err(|_| Error::NotFiniteStart)?;
         for (&j, &v) in index.iter().zip(&minimum.x) {
             theta[j] = v;
         }
@@ -338,7 +338,7 @@ impl Lmm {
         problem: &Problem<'_>,
         theta: &mut [f64],
         index: &[usize],
-    ) -> Result<bool, MixedError> {
+    ) -> Result<bool, Error> {
         let k = index.len();
         let norm = |v: &[f64]| v.iter().map(|x| x * x).sum::<f64>().sqrt();
         let mut gradient: Vec<f64> = {
@@ -359,9 +359,11 @@ impl Lmm {
                     hessian[a * k + b] = (gp[l] - gm[l]) / (2.0 * h);
                 }
             }
-            let Some(step) = small::solve_symmetric(&hessian, k, &gradient) else {
+            let Some(factor) = cholesky_lower(&hessian, k, Pivot::Strict) else {
                 return Ok(false);
             };
+            let mut step = gradient.clone();
+            cholesky_solve(&factor, k, &mut step)?;
             let scale = norm(&index.iter().map(|&j| theta[j]).collect::<Vec<_>>()).max(1.0);
             if norm(&step) <= self.tolerance * scale {
                 return Ok(true);
@@ -482,74 +484,36 @@ struct Cluster {
 }
 
 impl<'a> Problem<'a> {
-    fn new(
-        x: MatRef<'a, f64>,
-        y: &[f64],
-        cluster: &[u32],
-        slope: Option<&'a [f64]>,
-        weights: Option<&[f64]>,
-        offset: Option<&[f64]>,
-        criterion: Criterion,
-    ) -> Result<Self, MixedError> {
+    fn new(data: &MixedData<'a>, criterion: Criterion) -> Result<Self, Error> {
+        let (x, y, slope, offset) = (data.x(), data.y(), data.slope(), data.offset());
         let (n, p) = (x.nrows(), x.ncols());
-        check("y", n, y.len())?;
-        check("cluster", n, cluster.len())?;
-        if let Some(s) = slope {
-            check("slope", n, s.len())?;
-        }
-        if let Some(w) = weights {
-            check("weights", n, w.len())?;
-        }
-        if let Some(o) = offset {
-            check("offset", n, o.len())?;
-        }
-        if p == 0 {
-            return Err(MixedError::Size("the design has no columns"));
-        }
-        if n <= p {
-            return Err(MixedError::Size(
-                "there must be more rows than coefficients",
-            ));
-        }
-        for j in 0..p {
-            if let Some(row) = (0..n).find(|&i| !x[(i, j)].is_finite()) {
-                return Err(MixedError::NotFinite { what: "x", row });
+        check_size(n, p)?;
+        let w: Vec<f64> = match data.weights() {
+            Some(weights) => {
+                check::positive_weights("weights", weights)?;
+                weights.to_vec()
             }
-        }
-        finite("y", y)?;
-        if let Some(s) = slope {
-            finite("slope", s)?;
-        }
-        if let Some(o) = offset {
-            finite("offset", o)?;
-        }
-        let w: Vec<f64> = weights.map_or_else(|| vec![1.0; n], <[f64]>::to_vec);
-        if let Some((row, &value)) = w
-            .iter()
-            .enumerate()
-            .find(|&(_, &v)| !(v.is_finite() && v > 0.0))
-        {
-            return Err(MixedError::Weight { row, value });
-        }
+            None => vec![1.0; n],
+        };
         let y: Vec<f64> = match offset {
             Some(o) => y.iter().zip(o).map(|(a, b)| a - b).collect(),
             None => y.to_vec(),
         };
         let q = if slope.is_some() { 2 } else { 1 };
-        let groups = Groups::new(cluster);
+        let groups = Groups::new(data.groups());
         let count = groups.count();
 
-        let gram = weighted_gram(x, &w).map_err(|_| MixedError::RankDeficient)?;
+        let gram = weighted_gram(x, &w).map_err(|_| Error::RankDeficient)?;
         let sxx: Vec<f64> = (0..p * p).map(|k| gram[(k / p, k % p)]).collect();
-        let xty = weighted_xtz(x, &w, &y).map_err(|_| MixedError::RankDeficient)?;
+        let xty = weighted_xtz(x, &w, &y).map_err(|_| Error::RankDeficient)?;
         let sxy: Vec<f64> = (0..p).map(|k| xty[(k, 0)]).collect();
         // R's QR rank test, a pivot below 1e-7 of its column's norm, on the
         // Cholesky factor of X'WX.
-        let factor = small::cholesky(&sxx, p).ok_or(MixedError::RankDeficient)?;
+        let factor = cholesky_lower(&sxx, p, Pivot::Strict).ok_or(Error::RankDeficient)?;
         for k in 0..p {
             let pivot = factor[k * p + k];
             if pivot * pivot < 1e-14 * sxx[k * p + k] {
-                return Err(MixedError::RankDeficient);
+                return Err(Error::RankDeficient);
             }
         }
         let mut yy = 0.0;
@@ -666,7 +630,7 @@ impl<'a> Problem<'a> {
     }
 
     /// The criterion at `theta`, with its gradient when `gradient` is set.
-    fn evaluate(&self, theta: &[f64], gradient: bool) -> Result<Evaluation, MixedError> {
+    fn evaluate(&self, theta: &[f64], gradient: bool) -> Result<Evaluation, Error> {
         let (q, p, count) = (self.q, self.p, self.groups.count());
         let lam = lambda(theta, q);
         let blocks = count.div_ceil(BLOCK);
@@ -722,14 +686,13 @@ impl<'a> Problem<'a> {
                 m_mat[k * p + j] = m_mat[j * p + k];
             }
         }
-        let r = small::cholesky(&m_mat, p).ok_or(MixedError::RankDeficient)?;
+        let r = cholesky_lower(&m_mat, p, Pivot::Strict).ok_or(Error::RankDeficient)?;
         let mut beta = m.clone();
-        small::forward(&r, p, &mut beta);
-        small::backward(&r, p, &mut beta);
+        cholesky_solve(&r, p, &mut beta)?;
         for j in 0..p {
             r2 -= m[j] * beta[j];
         }
-        let criterion = self.criterion(log_det, &r, r2);
+        let criterion = self.criterion(log_det, &r, r2)?;
         let k = q * (q + 1) / 2;
         let mut grad = vec![0.0; k];
         if gradient {
@@ -740,11 +703,11 @@ impl<'a> Problem<'a> {
                     let mut cmat = vec![0.0; q * p];
                     let mut y_col = vec![0.0; p * q];
                     for i in b * BLOCK..((b + 1) * BLOCK).min(count) {
-                        self.gradient_terms(i, &lam, &beta, &r, &mut cmat, &mut y_col, &mut acc);
+                        self.gradient_terms(i, &lam, &beta, &r, &mut cmat, &mut y_col, &mut acc)?;
                     }
-                    acc
+                    Ok(acc)
                 })
-                .collect();
+                .collect::<Result<_, Error>>()?;
             let mut acc = [0.0; 9];
             for part in &parts {
                 for (a, v) in acc.iter_mut().zip(part) {
@@ -769,13 +732,13 @@ impl<'a> Problem<'a> {
     }
 
     /// The criterion from `Σ ln|A_i|`, the factor of `M` and `r²`.
-    fn criterion(&self, log_det: f64, r: &[f64], r2: f64) -> f64 {
+    fn criterion(&self, log_det: f64, r: &[f64], r2: f64) -> Result<f64, Error> {
         let nu = self.nu();
         let mut d = log_det + nu * (1.0 + (2.0 * std::f64::consts::PI * r2 / nu).ln()) - self.log_w;
         if self.reml {
-            d += small::log_det(r, self.p);
+            d += log_det_from_cholesky(r, self.p)?;
         }
-        d
+        Ok(d)
     }
 
     /// Adds cluster `i`'s terms of the three gradient sums to `acc`: entries
@@ -789,7 +752,7 @@ impl<'a> Problem<'a> {
         cmat: &mut [f64],
         y_col: &mut [f64],
         acc: &mut [f64; 9],
-    ) {
+    ) -> Result<(), Error> {
         let (q, p) = (self.q, self.p);
         let cl = self.cluster(i, lam, cmat);
         let s = &self.s[i * q * q..(i + 1) * q * q];
@@ -846,7 +809,7 @@ impl<'a> Problem<'a> {
             for a in 0..q {
                 let column = &mut y_col[a * p..(a + 1) * p];
                 column.copy_from_slice(&f[a * p..(a + 1) * p]);
-                small::forward(r, p, column);
+                forward_solve(r, p, column)?;
             }
             let mut qm = [0.0; 4];
             for a in 0..q {
@@ -872,10 +835,11 @@ impl<'a> Problem<'a> {
                 acc[6 + kk] += -2.0 * bq[b * q + a] + 2.0 * sk[a * q + b];
             }
         }
+        Ok(())
     }
 
     /// Everything a fit reports, at `theta`.
-    fn at(&self, theta: &[f64]) -> Result<LmmFit, MixedError> {
+    fn at(&self, theta: &[f64]) -> Result<LmmFit, Error> {
         let (n, p, q, count) = (self.n, self.p, self.q, self.groups.count());
         let e = self.evaluate(theta, true)?;
         let lam = lambda(theta, q);
@@ -964,10 +928,10 @@ impl<'a> Problem<'a> {
         for v in &rss_parts {
             r2 += v;
         }
-        let criterion = self.criterion(e.log_det, &e.r, r2);
+        let criterion = self.criterion(e.log_det, &e.r, r2)?;
         let sigma2 = r2 / self.nu();
-        let inverse = small::inverse(&e.r, p);
-        let beta_covariance = inverse.iter().map(|v| sigma2 * v).collect();
+        let inverse = cholesky_inverse(&e.r, p)?;
+        let beta_covariance: Vec<f64> = inverse.iter().map(|v| sigma2 * v).collect();
         for v in &mut covariances {
             *v *= sigma2;
         }
@@ -988,10 +952,10 @@ impl<'a> Problem<'a> {
         let singular = theta[0] == 0.0 || (q == 2 && theta[2] == 0.0);
         Ok(LmmFit {
             beta: e.beta,
-            beta_covariance,
+            beta_covariance: covariance(p, &beta_covariance)?,
             sigma: sigma2.sqrt(),
             theta: theta.to_vec(),
-            random_covariance,
+            random_covariance: covariance(q, &random_covariance)?,
             criterion,
             log_likelihood: -criterion / 2.0,
             gradient: e.gradient,
@@ -1020,21 +984,18 @@ fn mul(a: &[f64], b: &[f64], q: usize) -> [f64; 4] {
     out
 }
 
-pub(crate) fn check(what: &'static str, expected: usize, found: usize) -> Result<(), MixedError> {
-    if expected == found {
-        Ok(())
-    } else {
-        Err(MixedError::Length {
-            what,
-            expected,
-            found,
-        })
+/// A design with columns and more rows than columns.
+pub(crate) fn check_size(rows: usize, coefficients: usize) -> Result<(), Error> {
+    check::non_empty("the columns of x", coefficients)?;
+    if rows <= coefficients {
+        return Err(Error::TooFewRows { rows, coefficients });
     }
+    Ok(())
 }
 
-pub(crate) fn finite(what: &'static str, values: &[f64]) -> Result<(), MixedError> {
-    match values.iter().position(|v| !v.is_finite()) {
-        Some(row) => Err(MixedError::NotFinite { what, row }),
-        None => Ok(()),
-    }
+/// The covariance of side `dim` with the row-major `values`, an entry that is
+/// not finite undefined.
+pub(crate) fn covariance(dim: usize, values: &[f64]) -> Result<Covariance, Error> {
+    let values = values.iter().map(|v| v.is_finite().then_some(*v)).collect();
+    Ok(Covariance::new(dim, values)?)
 }

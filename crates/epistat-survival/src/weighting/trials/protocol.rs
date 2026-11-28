@@ -1,17 +1,18 @@
 //! The rows that the models of the per-protocol weights are fitted on, as
 //! `TrialEmulation` chooses them.
 
+use epistat_core::Panel;
+
 use crate::check::check_lengths;
-use crate::error::{Error, Result};
+use crate::error::Result;
 
 /// The panel of a sequential trial emulation in columns: one row per person and
 /// period, ordered by person and then period.
 #[derive(Debug, Clone, Copy)]
 pub struct ProtocolPanel<'a> {
-    /// The person of each row. The rows of a person are next to each other.
-    pub id: &'a [u64],
-    /// The period of each row, increasing within a person.
-    pub period: &'a [i64],
+    /// The person (the unit) and the period of each row, sorted by person and
+    /// then period, each pair once.
+    pub panel: Panel<'a>,
     /// The treatment in the period.
     pub treatment: &'a [bool],
     /// Whether the person is eligible for a trial that starts in the period.
@@ -59,37 +60,21 @@ pub struct ProtocolRows {
 ///
 /// # Errors
 ///
-/// An input error for columns of different lengths and rows that are not
-/// ordered by person and period.
+/// An input error for columns of another length than the panel.
 pub fn protocol_rows(panel: &ProtocolPanel<'_>) -> Result<ProtocolRows> {
-    let n = panel.id.len();
+    let n = panel.panel.len();
+    let unit = panel.panel.unit();
     check_lengths(&[
-        ("id", n),
-        ("period", panel.period.len()),
+        ("panel", n),
         ("treatment", panel.treatment.len()),
         ("eligible", panel.eligible.len()),
         ("outcome", panel.outcome.len()),
     ])?;
-    for i in 1..n {
-        if panel.id[i] < panel.id[i - 1] {
-            return Err(Error::order(format!(
-                "id: the rows of a person must be next to each other and ordered, row {i}"
-            )));
-        }
-        if panel.id[i] == panel.id[i - 1] && panel.period[i] <= panel.period[i - 1] {
-            return Err(Error::order(format!(
-                "period: row {i} is not after the row before it for person {}",
-                panel.id[i]
-            )));
-        }
-    }
     let mut fitted = vec![false; n];
     let mut previous = vec![false; n];
     let mut start = 0;
     while start < n {
-        let end = (start..n)
-            .find(|&i| panel.id[i] != panel.id[start])
-            .unwrap_or(n);
+        let end = (start..n).find(|&i| unit[i] != unit[start]).unwrap_or(n);
         previous[start + 1..end].copy_from_slice(&panel.treatment[start..end - 1]);
         if let Some(first) = (start..end).find(|&i| panel.eligible[i]) {
             previous[first] = false;
@@ -156,8 +141,7 @@ mod tests {
         let e: Vec<bool> = eligible.iter().map(|&v| v == 1).collect();
         let o: Vec<bool> = outcome.iter().map(|&v| v == 1).collect();
         protocol_rows(&ProtocolPanel {
-            id: &id,
-            period: &period,
+            panel: Panel::new(&id, &period).expect("sorted"),
             treatment: &t,
             eligible: &e,
             outcome: &o,
@@ -204,15 +188,14 @@ mod tests {
     }
 
     #[test]
-    fn unordered_rows_are_errors() {
-        let id = [2, 1];
-        let period = [0, 0];
+    fn columns_of_another_length_than_the_panel_are_errors() {
+        let id = [1, 1];
+        let period = [0, 1];
         let b = [false, false];
         assert!(
             protocol_rows(&ProtocolPanel {
-                id: &id,
-                period: &period,
-                treatment: &b,
+                panel: Panel::new(&id, &period).expect("sorted"),
+                treatment: &b[..1],
                 eligible: &b,
                 outcome: &b,
             })

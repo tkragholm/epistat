@@ -4,6 +4,9 @@ description = "Two-part, Tweedie, log-normal and marginalised two-part models fo
 keywords = ["two-part", "tweedie", "lognormal", "statistics", "costs"]
 categories = ["mathematics", "science"]
 readme = "README.md"
+# The R references, and the scripts that write them, are read only by this
+# repository's tests, so they stay out of the package.
+exclude = ["tests/r/", "tests/reference/"]
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true

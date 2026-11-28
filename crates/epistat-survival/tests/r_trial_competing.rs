@@ -27,7 +27,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct Rows {
-    id: Vec<u64>,
+    id: Vec<u32>,
     a: Vec<f64>,
     t: Vec<f64>,
     x: Vec<f64>,
@@ -90,7 +90,7 @@ fn the_two_models_and_the_risks_agree_with_r() {
         design: design.as_ref(),
         outcome: &y,
         weight: &d.w,
-        person: &d.id,
+        unit: &d.id,
     };
     let fit = fit_msm_competing(&input, &competing).expect("fits");
     assert!(worst(&fit.event.coefficients, &r.event_coef, 1.0) < 1e-10);
@@ -165,7 +165,7 @@ fn a_row_with_both_events_is_an_error() {
                 design: design.as_ref(),
                 outcome: &y,
                 weight: &w,
-                person: &person,
+                unit: &person,
             },
             &d
         )

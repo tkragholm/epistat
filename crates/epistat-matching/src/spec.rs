@@ -33,12 +33,14 @@ pub use wiring::{CardinalityMatch, CardinalitySpec, FitFuncSpec, GeneticSpec, Lo
 
 use crate::Error;
 use crate::TrialMatching;
-use crate::constraints::{AntiExact, GenderMatch, MustBeAlive, MustBeResident, caliper_on_field};
+use crate::constraints::{
+    AntiExact, Chained, ExactMatchConstraint, MustBeAlive, MustBeResident, caliper_on_field,
+};
 use crate::matching::{
-    Assignment, CbpsConfig, CbpsMethod, CemBinning, CemRule, CemVariable, Chained,
-    CovariateEncodingConfig, CovariateRecord, DeterministicSelection, DistanceConfig,
-    ElasticNetCvConfig, ElasticNetLogisticConfig, EuclideanPreparationConfig, EuclideanScale,
-    FineBalance, FullMatchConfig, GeneticOutcome, LambdaRule, LogisticRegressionConfig,
+    Assignment, CbpsConfig, CbpsMethod, CemBinning, CemRule, CemVariable, CovariateEncodingConfig,
+    CovariateRecord, DeterministicSelection, DistanceConfig, ElasticNetCvConfig,
+    ElasticNetLogisticConfig, EuclideanPreparationConfig, EuclideanScale, FineBalance,
+    FullMatchConfig, GeneticOutcome, LambdaRule, LogisticRegressionConfig,
     MahalanobisCovarianceStrategy, MahalanobisPreparationConfig, MahalanobisTransform, MatchJob,
     MatchOrder, MatchingRecord, MissingValuePolicy, NearestBirthDateSelection, NearestSelection,
     OptimalRequest, PairDistanceMatrix, PropensityEstimator, PropensityLink, PropensityScoreConfig,
@@ -1571,11 +1573,7 @@ impl MatchSpec {
             self.method,
             MatchMethod::Random | MatchMethod::LowestIndex | MatchMethod::NearestBirthDate
         ) {
-            return Err(Error::option(
-                "method",
-                "risk-set matching chooses among the units at risk; \
-                 use random, lowest_index or nearest_birth_date",
-            ));
+            return Err(risk_set_method_error());
         }
         if !matches!(
             self.distance,
@@ -2016,8 +2014,8 @@ where
     S: SelectionStrategy<R> + Clone + Send + Sync,
 {
     let spec = plan.spec;
-    let sex: Vec<GenderMatch> = if spec.match_sex {
-        vec![GenderMatch::on_key(spec.sex_key.clone())]
+    let sex: Vec<ExactMatchConstraint> = if spec.match_sex {
+        vec![sex_match(&spec.sex_key)]
     } else {
         Vec::new()
     };
@@ -2124,7 +2122,10 @@ where
                 controls: candidates,
             },
         ) => run_standard(spec, anchors, candidates),
-        (MatchMode::RiskSet, SpecInput::RiskSet { cohort }) => run_risk_set(spec, cohort, None),
+        (MatchMode::RiskSet, SpecInput::RiskSet { cohort }) => Ok(SpecOutput::Pairs {
+            outcome: Box::new(run_risk_set(spec, cohort, None)?),
+            propensity: None,
+        }),
         (MatchMode::ExposureDensity, SpecInput::RiskSet { cohort }) => {
             run_exposure_density(spec, cohort)
         }
@@ -2256,8 +2257,8 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
                 false,
             )?;
             let calipers = field_calipers(spec, anchors, candidates, None)?;
-            let sex: Vec<GenderMatch> = if spec.match_sex {
-                vec![GenderMatch::on_key(spec.sex_key.clone())]
+            let sex: Vec<ExactMatchConstraint> = if spec.match_sex {
+                vec![sex_match(&spec.sex_key)]
             } else {
                 Vec::new()
             };
@@ -2673,10 +2674,8 @@ fn run_exposure_density<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     cohort: &[RoleTransitionRecord<R>],
 ) -> Result<SpecOutput, Error> {
-    let SpecOutput::Pairs { outcome, .. } = run_risk_set(spec, cohort, None)? else {
-        unreachable!("risk-set matching returns pairs")
-    };
-    let sets = exposure_density_sets(cohort, *outcome)
+    let outcome = run_risk_set(spec, cohort, None)?;
+    let sets = exposure_density_sets(cohort, outcome)
         .map_err(|error| Error::option("cohort", error.to_string()))?;
     Ok(SpecOutput::ExposureDensity(Box::new(sets)))
 }
@@ -2691,10 +2690,7 @@ fn run_trials<R: MatchingRecord + CovariateRecord>(
             mode: MatchMode::RiskSet,
             ..spec.clone()
         };
-        match run_risk_set(&in_trial, pool.records(), pool.id_order())? {
-            SpecOutput::Pairs { outcome, .. } => Ok(*outcome),
-            _ => unreachable!("risk-set matching returns pairs"),
-        }
+        run_risk_set(&in_trial, pool.records(), pool.id_order())
     })
     .map_err(|error| match error {
         Error::Trial { source, .. } => *source,
@@ -2703,11 +2699,13 @@ fn run_trials<R: MatchingRecord + CovariateRecord>(
     Ok(SpecOutput::Trials(Box::new(outcome)))
 }
 
+/// The pairs of risk-set matching of `cohort`, which exposure density and
+/// each sequential trial also match by.
 fn run_risk_set<R: MatchingRecord + CovariateRecord>(
     spec: &MatchSpec,
     cohort: &[RoleTransitionRecord<R>],
     id_order: Option<&IdOrder>,
-) -> Result<SpecOutput, Error> {
+) -> Result<MatchOutcome, Error> {
     check_scores_cover(&spec.distance, cohort.iter().map(MatchingRecord::id))?;
     let distance = match &spec.distance {
         DistanceSpec::Date { caliper } => {
@@ -2728,8 +2726,8 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         }
     };
 
-    let sex: Vec<GenderMatch> = if spec.match_sex {
-        vec![GenderMatch::on_key(spec.sex_key.clone())]
+    let sex: Vec<ExactMatchConstraint> = if spec.match_sex {
+        vec![sex_match(&spec.sex_key)]
     } else {
         Vec::new()
     };
@@ -2782,7 +2780,7 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
     if let Some(distance) = distance {
         job = job.with_distance_config(distance);
     }
-    let outcome = match spec.method {
+    match spec.method {
         MatchMethod::Random => job
             .with_strategy(RandomSelection::seeded(spec.root_seed()?))
             .run(),
@@ -2796,12 +2794,20 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         | MatchMethod::Optimal
         | MatchMethod::Full
         | MatchMethod::Genetic
-        | MatchMethod::Cardinality => {
-            unreachable!("rejected by validation")
-        }
-    };
-    Ok(SpecOutput::Pairs {
-        outcome: Box::new(outcome?),
-        propensity: None,
-    })
+        | MatchMethod::Cardinality => Err(risk_set_method_error()),
+    }
+}
+
+/// The error for a method that risk-set matching cannot choose by.
+fn risk_set_method_error() -> Error {
+    Error::option(
+        "method",
+        "risk-set matching chooses among the units at risk; \
+         use random, lowest_index or nearest_birth_date",
+    )
+}
+
+/// Equal sex on `key`, counted under the reason of `MatchJob::with_gender_match`.
+fn sex_match(key: &str) -> ExactMatchConstraint {
+    ExactMatchConstraint::on_key(key).with_reason("gender_mismatch")
 }

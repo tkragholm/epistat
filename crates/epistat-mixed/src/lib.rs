@@ -2,6 +2,10 @@
 //! `lme4` fits them, with results that do not depend on the number of
 //! threads.
 //!
+//! Both take their data as one [`MixedData`] view: the design, the response,
+//! the group of each row, and optionally the variable of a random slope,
+//! prior weights and an offset.
+//!
 //! - [`Lmm`] fits a linear mixed model with a random intercept and
 //!   optionally one random slope, by REML or ML, as `lme4::lmer`. With one
 //!   grouping factor every matrix of `lme4`'s formulation is block diagonal,
@@ -27,13 +31,14 @@
 //! random-effects system that `lme4` uses.
 #![warn(missing_docs)]
 
+mod data;
 mod error;
 pub mod glmm;
 mod groups;
 pub mod lmm;
 pub mod quadrature;
-mod small;
 
-pub use error::MixedError;
+pub use data::{MixedData, MixedDataBuilder};
+pub use error::Error;
 pub use glmm::{Glmm, GlmmFit};
 pub use lmm::{Convergence, Criterion, Lmm, LmmFit};

@@ -8,14 +8,14 @@ use crate::error::{Error, Result};
 /// How often each person is drawn in one resample of the persons with
 /// replacement, for the case weights of a bootstrap replicate.
 ///
-/// The persons are the distinct ids, in increasing order, and the counts of
+/// The persons are the distinct unit codes of the ids, in increasing order, and the counts of
 /// replicate `r` of a [`Bootstrap`] are those of
 /// `epistat_inference::bootstrap::unit_counts_of`, that is
 /// `resample_counts(n, replicate_seed(seed, r))`, so a replicate depends on
 /// the root seed, its number and the set of ids only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersonCounts {
-    persons: Vec<u64>,
+    persons: Vec<u32>,
     counts: Vec<u32>,
 }
 
@@ -23,7 +23,7 @@ impl PersonCounts {
     /// The counts of the distinct ids of `ids` in replicate `replicate` of
     /// `bootstrap`, the counts [`bootstrap_trials`] gives that replicate.
     #[must_use]
-    pub fn draw(ids: &[u64], bootstrap: Bootstrap, replicate: usize) -> Self {
+    pub fn draw(ids: &[u32], bootstrap: Bootstrap, replicate: usize) -> Self {
         let persons = distinct(ids);
         let counts =
             epistat_inference::bootstrap::unit_counts_of(persons.len(), bootstrap, replicate);
@@ -32,7 +32,7 @@ impl PersonCounts {
 
     /// The persons, in increasing order.
     #[must_use]
-    pub fn persons(&self) -> &[u64] {
+    pub fn persons(&self) -> &[u32] {
         &self.persons
     }
 
@@ -45,7 +45,7 @@ impl PersonCounts {
     /// The count of the person `id`, `None` for an id that was not among the
     /// persons drawn from.
     #[must_use]
-    pub fn count(&self, id: u64) -> Option<u32> {
+    pub fn count(&self, id: u32) -> Option<u32> {
         self.persons
             .binary_search(&id)
             .ok()
@@ -59,7 +59,7 @@ impl PersonCounts {
     /// # Errors
     ///
     /// An input error for an id that was not among the persons drawn from.
-    pub fn case_weights(&self, ids: &[u64]) -> Result<Vec<f64>> {
+    pub fn case_weights(&self, ids: &[u32]) -> Result<Vec<f64>> {
         ids.iter()
             .map(|&id| {
                 self.count(id).map(f64::from).ok_or_else(|| {
@@ -70,7 +70,7 @@ impl PersonCounts {
     }
 }
 
-fn distinct(ids: &[u64]) -> Vec<u64> {
+fn distinct(ids: &[u32]) -> Vec<u32> {
     let mut persons = ids.to_vec();
     persons.sort_unstable();
     persons.dedup();
@@ -101,7 +101,7 @@ fn distinct(ids: &[u64]) -> Vec<u64> {
 /// results do not depend on the number of threads; they are in replicate
 /// order.
 pub fn bootstrap_trials<T: Send>(
-    ids: &[u64],
+    ids: &[u32],
     bootstrap: Bootstrap,
     analysis: impl Fn(&PersonCounts) -> Result<T> + Sync,
 ) -> Vec<Result<T>> {

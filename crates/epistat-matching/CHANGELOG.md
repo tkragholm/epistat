@@ -2,7 +2,7 @@
 
 ## [0.3.0] - unreleased
 
-This release gives the crate one `Error`, a smaller public surface, case and control naming throughout, and the shared `Estimand`, `Bootstrap` and `Level` types. Nothing that 0.2.0 computed changes in value.
+This release gives the crate one `Error`, a smaller public surface, case and control naming throughout, and the shared `Estimand`, `Bootstrap` and `Level` types. Nothing that 0.2.0 computed changes in value, apart from the last bits of the effect bootstrap.
 
 ### Breaking changes
 
@@ -20,6 +20,7 @@ This release gives the crate one `Error`, a smaller public surface, case and con
 - 72 result and reason types are `#[non_exhaustive]`, among them `MatchDiagnostics`, the outcome, balance, subclass, weight, genetic, cardinality, propensity and trial types. Build a `MatchOutcome` from pairs made elsewhere with `MatchOutcome::from_pairs(pairs, estimand)`.
 - The unused `reporting` module and feature, `KsTest` and the two-sample Kolmogorov-Smirnov test (it is in `epistat-epi`), and the projected balance rows are removed.
 - The minimum supported Rust version is 1.89. The `nightly` feature is removed.
+- The constraint rules are in one `constraints` module. `ExactMatchConstraint` is no longer a unit struct: write `ExactMatchConstraint::REQUIRED_STRATA` for the rule on the criteria's required strata, and `ExactMatchConstraint::on_key(key)` for one key. `MatchJob::with_gender_match` adds `ExactMatchConstraint::on_key("sex")`, so its type parameter names that type instead of `GenderMatch`.
 
 ### Added
 
@@ -27,6 +28,9 @@ This release gives the crate one `Error`, a smaller public surface, case and con
 - Diagnostics and the subclass, full and quick outcomes list the ids of the units that common-support trimming leaves out (`TrimmedUnits`).
 - `match_trials_with` takes `TrialMatching` with `PeriodDates::PerPerson` for each person's own period dates and `PeriodStrata` for strata that change between trials.
 - One-call sensitivity values for matched sets: the signed rank test, the m-statistic and its interval, the Mantel-Haenszel test for binary outcomes, Gehan's test for censored times, and the gamma at which the Hodges-Lehmann bound reaches a value.
+- `ExactMatchConstraint::on_key`, `allowing_unknown` and `with_reason`, the rule `GenderMatch` was, for any strata key.
+- An `Option` of a constraint is a constraint group; `None` allows every pair.
+- `ResidenceSpell::from_register` turns `epistat_register`'s residence spells into the periods `MustBeResidentInSpells` reads, with `None` for a person without spells.
 - `CompleteDataDf` lets the caller choose the complete-data degrees of freedom in `pool_effects`.
 - `Classify` and stable `matching.*` error codes. `MatchJob`'s constraints have a `check()` that refuses a negative or non-finite caliper or date window before matching.
 - A field caliper in standard deviations works with `reestimate`.
@@ -45,6 +49,9 @@ All of these are removed in the next release that breaks the API.
 - `UnitRole::Anchor` and `UnitRole::Candidate` (use `UnitRole::Case` and `UnitRole::Control`).
 - `MatchWeightMethod::AnchorUnitCandidateFractional` and `CandidateUnitAnchorFractional` (use `CaseUnitControlFractional` and `ControlUnitCaseFractional`).
 - `effective_sample_size` (use `epistat_stats::weighted::effective_sample_size` on a slice).
+- `constraints::GenderMatch` (use `ExactMatchConstraint::on_key(key)`, with `.allowing_unknown()` for `allow_unknown` and `.with_reason("gender_mismatch")` to keep the reason it is counted under).
+- `constraints::MissingPolicy` (use `CaliperMissing`, the same enum).
+- `effects::cluster_resamples` (use `epistat_rng::resample_counts(n, epistat_rng::replicate_seed(seed, r))`, the same draws as counts).
 - The spec keys `min_anchors` and `min_candidates` are still read, as aliases of the case and control names.
 
 ### Removed
@@ -59,7 +66,7 @@ All of these are removed in the next release that breaks the API.
 
 ### Results
 
-No released result changes.
+The effect bootstrap draws its replicates as counts with `epistat_rng::resample_counts`. The pairs drawn are those of 0.2.0, but a replicate's rows are grouped by pair rather than in the order of the draws, so the refitted model sums them in another order and the last bits of the replicates, their standard error and the intervals can change. No other released result changes.
 
 ## [0.2.0] - 2026-11-22
 

@@ -94,10 +94,8 @@
 
 use super::order_statistics::{CountTree, Fenwick, Tally, WaveletMatrix};
 use super::{AtRiskSpan, IdOrder};
-use crate::constraints::ResidenceSpell;
-use crate::matching::{
-    CandidateIndex, RoleIndexedRecord, StatusRule, StatusRuleKind, caliper_allows,
-};
+use crate::constraints::{ResidenceSpell, StatusRule, StatusRuleKind, caliper_allows};
+use crate::matching::{CandidateIndex, RoleIndexedRecord};
 use chrono::{Datelike, NaiveDate};
 use rustc_hash::FxHashMap;
 use std::ops::Range;
@@ -443,7 +441,6 @@ impl RiskSetSweep {
         let mut value_rules = 0_usize;
         for StatusRule(kind) in rules {
             let (reason, rule) = match kind {
-                StatusRuleKind::AllowsAll => continue,
                 StatusRuleKind::RefusesFrom { reason, source } => {
                     let dates: Vec<i32> = cohort
                         .iter()
@@ -1326,11 +1323,11 @@ mod tests {
         order: usize,
         replace: bool,
     ) -> MatchOutcome {
-        use crate::constraints::{MissingPolicy, caliper_on_field};
+        use crate::constraints::{CaliperMissing, caliper_on_field};
         let missing = if order == 1 {
-            MissingPolicy::MatchMissing
+            CaliperMissing::MatchMissing
         } else {
-            MissingPolicy::Refuse
+            CaliperMissing::Refuse
         };
         let calipers = || vec![caliper_on_field::<Member>("parent_year", 2.0).on_missing(missing)];
         let base = MatchJob::new_transition(people, seed)

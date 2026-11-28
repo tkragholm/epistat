@@ -9,10 +9,12 @@
 
 mod common;
 
-use common::simulate;
+use common::{simulate, view};
+use epistat_core::{Classify, InputError};
 use epistat_glm::{Family, Link};
 use epistat_linalg::Mat;
-use epistat_mixed::{Criterion, Glmm, Lmm, MixedError};
+use epistat_mixed::{Criterion, Error, Glmm, Lmm};
+use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
 
 fn largest(v: &[f64]) -> f64 {
     v.iter().fold(0.0_f64, |m, x| m.max(x.abs()))
@@ -32,12 +34,15 @@ fn the_lmm_gradient_is_the_derivative_of_the_criterion() {
             let at = |t: &[f64]| {
                 model
                     .evaluate(
-                        d.x.as_ref(),
-                        &d.y,
-                        &d.cluster,
-                        slope,
-                        Some(&d.weights),
-                        Some(&d.offset),
+                        &view(
+                            d.x.as_ref(),
+                            &d.y,
+                            &d.cluster,
+                            slope,
+                            Some(&d.weights),
+                            Some(&d.offset),
+                        )
+                        .unwrap(),
                         t,
                     )
                     .unwrap()
@@ -75,11 +80,15 @@ fn the_glmm_gradient_is_the_derivative_of_the_likelihood() {
             let at = |p: &[f64]| {
                 model
                     .evaluate(
-                        d.x.as_ref(),
-                        &d.y,
-                        &d.cluster,
-                        Some(&d.weights),
-                        Some(&d.offset),
+                        &view(
+                            d.x.as_ref(),
+                            &d.y,
+                            &d.cluster,
+                            None,
+                            Some(&d.weights),
+                            Some(&d.offset),
+                        )
+                        .unwrap(),
                         p[0],
                         &p[1..],
                     )
@@ -111,16 +120,19 @@ fn absent_weights_and_offset_are_ones_and_zeros() {
     let (ones, zeros) = (vec![1.0; d.y.len()], vec![0.0; d.y.len()]);
     let model = Lmm::new(Criterion::Reml);
     let a = model
-        .fit(d.x.as_ref(), &d.y, &d.cluster, Some(&d.slope), None, None)
+        .fit(&view(d.x.as_ref(), &d.y, &d.cluster, Some(&d.slope), None, None).unwrap())
         .unwrap();
     let b = model
         .fit(
-            d.x.as_ref(),
-            &d.y,
-            &d.cluster,
-            Some(&d.slope),
-            Some(&ones),
-            Some(&zeros),
+            &view(
+                d.x.as_ref(),
+                &d.y,
+                &d.cluster,
+                Some(&d.slope),
+                Some(&ones),
+                Some(&zeros),
+            )
+            .unwrap(),
         )
         .unwrap();
     assert_eq!(a.beta, b.beta);
@@ -130,10 +142,20 @@ fn absent_weights_and_offset_are_ones_and_zeros() {
     let (ones, zeros) = (vec![1.0; d.y.len()], vec![0.0; d.y.len()]);
     let model = Glmm::new(Family::Binomial, Link::Logit, 3);
     let a = model
-        .fit(d.x.as_ref(), &d.y, &d.cluster, None, None)
+        .fit(&view(d.x.as_ref(), &d.y, &d.cluster, None, None, None).unwrap())
         .unwrap();
     let b = model
-        .fit(d.x.as_ref(), &d.y, &d.cluster, Some(&ones), Some(&zeros))
+        .fit(
+            &view(
+                d.x.as_ref(),
+                &d.y,
+                &d.cluster,
+                None,
+                Some(&ones),
+                Some(&zeros),
+            )
+            .unwrap(),
+        )
         .unwrap();
     assert_eq!(a.beta, b.beta);
     assert_eq!(a.theta.to_bits(), b.theta.to_bits());
@@ -151,20 +173,28 @@ fn the_order_of_the_rows_does_not_matter() {
     let model = Glmm::new(Family::Poisson, Link::Log, 5);
     let a = model
         .fit(
-            d.x.as_ref(),
-            &d.y,
-            &d.cluster,
-            Some(&d.weights),
-            Some(&d.offset),
+            &view(
+                d.x.as_ref(),
+                &d.y,
+                &d.cluster,
+                None,
+                Some(&d.weights),
+                Some(&d.offset),
+            )
+            .unwrap(),
         )
         .unwrap();
     let b = model
         .fit(
-            x.as_ref(),
-            &pick(&d.y),
-            &cluster,
-            Some(&pick(&d.weights)),
-            Some(&pick(&d.offset)),
+            &view(
+                x.as_ref(),
+                &pick(&d.y),
+                &cluster,
+                None,
+                Some(&pick(&d.weights)),
+                Some(&pick(&d.offset)),
+            )
+            .unwrap(),
         )
         .unwrap();
     assert_eq!(a.groups, b.groups);
@@ -183,22 +213,28 @@ fn the_order_of_the_rows_does_not_matter() {
     let model = Lmm::new(Criterion::Ml);
     let a = model
         .fit(
-            d.x.as_ref(),
-            &d.y,
-            &d.cluster,
-            Some(&d.slope),
-            Some(&d.weights),
-            None,
+            &view(
+                d.x.as_ref(),
+                &d.y,
+                &d.cluster,
+                Some(&d.slope),
+                Some(&d.weights),
+                None,
+            )
+            .unwrap(),
         )
         .unwrap();
     let b = model
         .fit(
-            x.as_ref(),
-            &rev(&d.y),
-            &cluster,
-            Some(&rev(&d.slope)),
-            Some(&rev(&d.weights)),
-            None,
+            &view(
+                x.as_ref(),
+                &rev(&d.y),
+                &cluster,
+                Some(&rev(&d.slope)),
+                Some(&rev(&d.weights)),
+                None,
+            )
+            .unwrap(),
         )
         .unwrap();
     for (u, v) in a
@@ -219,7 +255,7 @@ fn a_model_without_cluster_variation_is_singular() {
     let cluster: Vec<u32> = (0..n).map(|i| u32::try_from(i / 4).unwrap()).collect();
     let y: Vec<f64> = (0..n).map(|i| [1.0, -1.0, 0.5, -0.5][i % 4]).collect();
     let fit = Lmm::new(Criterion::Reml)
-        .fit(x.as_ref(), &y, &cluster, None, None, None)
+        .fit(&view(x.as_ref(), &y, &cluster, None, None, None).unwrap())
         .unwrap();
     assert!(fit.singular);
     assert_eq!(fit.theta, [0.0]);
@@ -227,7 +263,7 @@ fn a_model_without_cluster_variation_is_singular() {
     assert!(fit.modes.iter().all(|&b| b == 0.0));
     let yb: Vec<f64> = (0..n).map(|i| [1.0, 0.0, 1.0, 0.0][i % 4]).collect();
     let fit = Glmm::new(Family::Binomial, Link::Logit, 1)
-        .fit(x.as_ref(), &yb, &cluster, None, None)
+        .fit(&view(x.as_ref(), &yb, &cluster, None, None, None).unwrap())
         .unwrap();
     assert!(fit.singular);
     assert_eq!(fit.theta.to_bits(), 0.0_f64.to_bits());
@@ -241,31 +277,47 @@ fn invalid_input_is_an_error() {
     let n = d.y.len();
     let lmm = Lmm::new(Criterion::Reml);
     let glmm = Glmm::new(Family::Binomial, Link::Logit, 1);
+    let data = view(d.x.as_ref(), &d.y, &d.cluster, None, None, None).unwrap();
     assert!(matches!(
-        lmm.fit(d.x.as_ref(), &d.y[1..], &d.cluster, None, None, None),
-        Err(MixedError::Length { what: "y", .. })
+        view(d.x.as_ref(), &d.y[1..], &d.cluster, None, None, None),
+        Err(Error::Input(InputError::Length { what: "y", .. }))
     ));
     let mut w = vec![1.0; n];
     w[3] = 0.0;
+    let zero = view(d.x.as_ref(), &d.y, &d.cluster, None, Some(&w), None).unwrap();
     assert!(matches!(
-        lmm.fit(d.x.as_ref(), &d.y, &d.cluster, None, Some(&w), None),
-        Err(MixedError::Weight { row: 3, .. })
+        lmm.fit(&zero),
+        Err(Error::Input(InputError::Domain {
+            what: "weights",
+            row: Some(3),
+            ..
+        }))
     ));
+    assert!(glmm.fit(&zero).is_ok());
     w[3] = -1.0;
     assert!(matches!(
-        glmm.fit(d.x.as_ref(), &d.y, &d.cluster, Some(&w), None),
-        Err(MixedError::Weight { row: 3, .. })
+        view(d.x.as_ref(), &d.y, &d.cluster, None, Some(&w), None),
+        Err(Error::Input(InputError::Domain {
+            what: "weights",
+            row: Some(3),
+            ..
+        }))
     ));
     let mut y = d.y.clone();
     y[2] = f64::NAN;
     assert!(matches!(
-        lmm.fit(d.x.as_ref(), &y, &d.cluster, None, None, None),
-        Err(MixedError::NotFinite { what: "y", row: 2 })
+        view(d.x.as_ref(), &y, &d.cluster, None, None, None),
+        Err(Error::Input(InputError::NotFinite {
+            what: "y",
+            row: 2,
+            column: None
+        }))
     ));
     y[2] = 1.5;
+    let outside = view(d.x.as_ref(), &y, &d.cluster, None, None, None).unwrap();
     assert!(matches!(
-        glmm.fit(d.x.as_ref(), &y, &d.cluster, None, None),
-        Err(MixedError::Response { row: 2, .. })
+        glmm.fit(&outside),
+        Err(Error::Response { row: 2, .. })
     ));
     let doubled = Mat::from_fn(n, 4, |i, j| {
         if j == 3 {
@@ -275,80 +327,163 @@ fn invalid_input_is_an_error() {
         }
     });
     assert_eq!(
-        lmm.fit(doubled.as_ref(), &d.y, &d.cluster, None, None, None)
+        lmm.fit(&view(doubled.as_ref(), &d.y, &d.cluster, None, None, None).unwrap())
             .unwrap_err(),
-        MixedError::RankDeficient
+        Error::RankDeficient
     );
-    assert!(matches!(
-        Glmm::new(Family::Gaussian, Link::Identity, 1).fit(
-            d.x.as_ref(),
-            &d.y,
-            &d.cluster,
-            None,
-            None
-        ),
-        Err(MixedError::Family)
-    ));
-    assert!(matches!(
-        Glmm::new(Family::Binomial, Link::Probit, 1).fit(
-            d.x.as_ref(),
-            &d.y,
-            &d.cluster,
-            None,
-            None
-        ),
-        Err(MixedError::Family)
-    ));
+    for (family, link) in [
+        (Family::Gaussian, Link::Identity),
+        (Family::Binomial, Link::Probit),
+    ] {
+        assert!(matches!(
+            Glmm::new(family, link, 1).fit(&data),
+            Err(Error::Unsupported { .. })
+        ));
+    }
+    let sloped = view(d.x.as_ref(), &d.y, &d.cluster, Some(&d.slope), None, None).unwrap();
+    assert!(matches!(glmm.fit(&sloped), Err(Error::Unsupported { .. })));
     for nodes in [0, 101] {
-        assert_eq!(
-            Glmm::new(Family::Binomial, Link::Logit, nodes)
-                .fit(d.x.as_ref(), &d.y, &d.cluster, None, None)
-                .unwrap_err(),
-            MixedError::Nodes(nodes)
-        );
+        assert!(matches!(
+            Glmm::new(Family::Binomial, Link::Logit, nodes).fit(&data),
+            Err(Error::Input(InputError::Domain { what: "nodes", .. }))
+        ));
     }
     let small = Mat::from_fn(3, 3, |i, j| if i == j { 1.0 } else { 0.0 });
+    let small = view(
+        small.as_ref(),
+        &[1.0, 2.0, 3.0],
+        &[1, 1, 2],
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        lmm.fit(&small).unwrap_err(),
+        Error::TooFewRows {
+            rows: 3,
+            coefficients: 3
+        }
+    );
     assert!(matches!(
-        lmm.fit(
-            small.as_ref(),
-            &[1.0, 2.0, 3.0],
-            &[1, 1, 2],
-            None,
-            None,
-            None
-        ),
-        Err(MixedError::Size(_))
+        lmm.evaluate(&sloped, &[1.0]),
+        Err(Error::Input(InputError::Length {
+            what: "theta",
+            expected: 3,
+            found: 1
+        }))
     ));
-    assert_eq!(
-        lmm.evaluate(
-            d.x.as_ref(),
-            &d.y,
-            &d.cluster,
-            Some(&d.slope),
-            None,
-            None,
-            &[1.0]
-        )
-        .unwrap_err(),
-        MixedError::Parameters(3)
-    );
-    assert_eq!(
-        glmm.evaluate(
-            d.x.as_ref(),
-            &d.y,
-            &d.cluster,
-            None,
-            None,
-            f64::NAN,
-            &[0.0; 3]
-        )
-        .unwrap_err(),
-        MixedError::Parameters(4)
-    );
+    assert!(matches!(
+        glmm.evaluate(&data, f64::NAN, &[0.0; 3]),
+        Err(Error::Input(InputError::NotFinite { what: "theta", .. }))
+    ));
     let mut bad = lmm;
     bad.tolerance = 0.0;
     assert!(matches!(
-        bad.fit(d.x.as_ref(), &d.y, &d.cluster, None, None, None),
-        Err(MixedError::Control(_))
+        bad.fit(&data),
+        Err(Error::Input(InputError::Domain {
+            what: "tolerance",
+            ..
+        }))
     ));
+    bad = lmm;
+    bad.max_iterations = 0;
+    assert!(matches!(
+        bad.fit(&data),
+        Err(Error::Input(InputError::Domain {
+            what: "max_iterations",
+            ..
+        }))
+    ));
+}
+
+/// Every entry point refuses an empty, non-finite or short column with the
+/// shared input codes. The data have no order, so an unsorted column is not
+/// a fault. An empty response beside a design with rows is a length error.
+#[test]
+fn the_entry_points_refuse_bad_columns_with_the_shared_codes() {
+    let gaussian = simulate(40, "gaussian", 6);
+    let binary = simulate(40, "binomial", 6);
+    let code = |bad: BadInput| match bad {
+        BadInput::Empty => "input.length",
+        other => other.code(),
+    };
+    let spoil = |bad: BadInput, y: &[f64]| match bad {
+        BadInput::Unsorted => None,
+        _ => Some(bad.column(y)),
+    };
+    let lmm = Lmm::default();
+    let glmm = Glmm::new(Family::Binomial, Link::Logit, 3);
+    for (label, column) in [("y", 0), ("slope", 1), ("weights", 2), ("offset", 3)] {
+        let d = &gaussian;
+        let call = |bad: BadInput, evaluate: bool| {
+            let mut columns = [
+                d.y.clone(),
+                d.slope.clone(),
+                d.weights.clone(),
+                d.offset.clone(),
+            ];
+            columns[column] = spoil(bad, &columns[column])?;
+            let [y, slope, weights, offset] = &columns;
+            let data = view(
+                d.x.as_ref(),
+                y,
+                &d.cluster,
+                Some(slope),
+                Some(weights),
+                Some(offset),
+            );
+            Some(data.and_then(|data| {
+                if evaluate {
+                    lmm.evaluate(&data, &[0.5, 0.1, 0.4])
+                } else {
+                    lmm.fit(&data)
+                }
+            }))
+        };
+        assert_rejects_bad_input_with_codes(&format!("Lmm::fit {label}"), code, |bad| {
+            call(bad, false)
+        });
+        assert_rejects_bad_input_with_codes(&format!("Lmm::evaluate {label}"), code, |bad| {
+            call(bad, true)
+        });
+    }
+    for (label, column) in [("y", 0), ("weights", 1), ("offset", 2)] {
+        let d = &binary;
+        let call = |bad: BadInput, evaluate: bool| {
+            let mut columns = [d.y.clone(), d.weights.clone(), d.offset.clone()];
+            columns[column] = spoil(bad, &columns[column])?;
+            let [y, weights, offset] = &columns;
+            let data = view(
+                d.x.as_ref(),
+                y,
+                &d.cluster,
+                None,
+                Some(weights),
+                Some(offset),
+            );
+            Some(data.and_then(|data| {
+                if evaluate {
+                    glmm.evaluate(&data, 0.5, &[0.1, 0.2, 0.3])
+                } else {
+                    glmm.fit(&data)
+                }
+            }))
+        };
+        assert_rejects_bad_input_with_codes(&format!("Glmm::fit {label}"), code, |bad| {
+            call(bad, false)
+        });
+        assert_rejects_bad_input_with_codes(&format!("Glmm::evaluate {label}"), code, |bad| {
+            call(bad, true)
+        });
+    }
+    // A design without rows is empty.
+    let none = Mat::<f64>::zeros(0, 3);
+    assert_eq!(
+        view(none.as_ref(), &[], &[], None, None, None)
+            .map(|_| ())
+            .unwrap_err()
+            .code(),
+        "input.empty"
+    );
 }

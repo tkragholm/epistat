@@ -1,27 +1,28 @@
+//! The one error of the crate.
+//!
+//! Invalid input that the shared checks describe, such as a column of the
+//! wrong length or a number of data sets of 0, is [`Error::Input`] with the
+//! shared [`InputError`]. The input errors that name a column of the data,
+//! such as a method that does not apply to its type, have variants of their
+//! own. The rest are failures of a regression or a draw on accepted input.
+//! [`Classify`] gives a binding the kind and a stable code.
+
+use epistat_core::{Classify, ErrorKind, InputError};
 use epistat_glm::Error as GlmError;
 use epistat_inference::Error as InferenceError;
 
 /// Why an imputation could not be made.
+#[non_exhaustive]
 #[derive(Debug, thiserror::Error)]
-pub enum ImputeError {
-    /// The number of data sets or of iterations is zero.
-    #[error("{what} must be at least 1")]
-    Count {
-        /// `m` or `max_iterations`.
-        what: &'static str,
-    },
-    /// A column, mask, method list or predictor list has the wrong length.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The name of the input.
-        what: &'static str,
-        /// The length it needed.
-        expected: usize,
-        /// The length it had.
-        found: usize,
-    },
-    /// An observed value of a continuous column is not finite, a binary value
-    /// is not 0 or 1, or a code lies outside the levels of its column.
+pub enum Error {
+    /// The input cannot be used: a column, mask, method list or predictor
+    /// list of the wrong length, no rows or columns, a number of data sets or
+    /// iterations of 0, an observed continuous value or a survival time that
+    /// is not finite, a status other than 0 and 1.
+    #[error(transparent)]
+    Input(#[from] InputError),
+    /// An observed binary value is not 0 or 1, or a code lies outside the
+    /// levels of its column.
     #[error("column {column}, row {row}: the value is not valid for the column's type")]
     Value {
         /// The column.
@@ -46,13 +47,30 @@ pub enum ImputeError {
         /// The level.
         level: usize,
     },
-    /// An incomplete column has no method, or a complete column has one.
-    #[error("column {column}: {reason}")]
-    Method {
+    /// A column without missing cells has a method.
+    #[error("column {column} has no missing cells but has a method")]
+    MethodOnComplete {
         /// The column.
         column: usize,
-        /// What is wrong.
-        reason: &'static str,
+    },
+    /// An incomplete column has no method.
+    #[error("column {column} has missing cells but no method")]
+    NoMethod {
+        /// The column.
+        column: usize,
+    },
+    /// Predictive mean matching is asked for with no donor.
+    #[error("column {column}: predictive mean matching needs at least one donor")]
+    NoDonors {
+        /// The column.
+        column: usize,
+    },
+    /// The method does not apply to the column's type, such as a logistic
+    /// regression of a continuous column.
+    #[error("column {column}: the method does not apply to the column's type")]
+    WrongType {
+        /// The column.
+        column: usize,
     },
     /// A column has no observed value.
     #[error("column {column} has no observed value")]
@@ -82,6 +100,13 @@ pub enum ImputeError {
         /// The parameters of its model, with the intercept.
         parameters: usize,
     },
+    /// A passive function returned a column of the wrong length or a value
+    /// that is not finite at a missing cell.
+    #[error("column {column}: the passive function returned an invalid column")]
+    Passive {
+        /// The column.
+        column: usize,
+    },
     /// The covariance of the coefficients has no Cholesky factor.
     #[error("column {column}: the covariance of the coefficients is not positive definite")]
     Covariance {
@@ -94,28 +119,12 @@ pub enum ImputeError {
         /// The column.
         column: usize,
     },
-    /// A passive function returned a column of the wrong length or a value
-    /// that is not finite.
-    #[error("column {column}: the passive function returned an invalid column")]
-    Passive {
-        /// The column.
-        column: usize,
-    },
     /// A predicted value or a draw was not finite.
     #[error("column {column}: a predicted value is not finite")]
     NotFinite {
         /// The column.
         column: usize,
     },
-    /// A column of this type cannot be imputed by this method.
-    #[error("column {column}: the method does not apply to the column's type")]
-    Unsupported {
-        /// The column.
-        column: usize,
-    },
-    /// The survival times or event indicators are not valid.
-    #[error("{0}")]
-    Survival(&'static str),
     /// An analysis function passed to the pooling returned an error.
     #[error("the analysis of data set {set} failed: {source}")]
     Analysis {
@@ -139,5 +148,131 @@ pub enum ImputeError {
     Pooling(#[from] InferenceError),
 }
 
+impl Classify for Error {
+    fn kind(&self) -> ErrorKind {
+        match self {
+            Self::Input(error) => error.kind(),
+            Self::Glm(error) | Self::Multinom(error) => error.kind(),
+            Self::Draw(error) => error.kind(),
+            Self::Pooling(error) => error.kind(),
+            Self::Value { .. }
+            | Self::Levels { .. }
+            | Self::EmptyLevel { .. }
+            | Self::MethodOnComplete { .. }
+            | Self::NoMethod { .. }
+            | Self::NoDonors { .. }
+            | Self::WrongType { .. }
+            | Self::NothingObserved { .. }
+            | Self::Predictor { .. }
+            | Self::VisitOrder
+            | Self::TooFewObserved { .. }
+            | Self::Passive { .. } => ErrorKind::Input,
+            Self::Covariance { .. }
+            | Self::NotConverged { .. }
+            | Self::NotFinite { .. }
+            | Self::Analysis { .. } => ErrorKind::Numerical,
+        }
+    }
+
+    fn code(&self) -> &'static str {
+        match self {
+            Self::Input(error) => error.code(),
+            Self::Glm(error) | Self::Multinom(error) => error.code(),
+            Self::Draw(error) => error.code(),
+            Self::Pooling(error) => error.code(),
+            Self::Value { .. } => "impute.value",
+            Self::Levels { .. } => "impute.levels",
+            Self::EmptyLevel { .. } => "impute.empty_level",
+            Self::MethodOnComplete { .. } => "impute.method_on_complete",
+            Self::NoMethod { .. } => "impute.no_method",
+            Self::NoDonors { .. } => "impute.no_donors",
+            Self::WrongType { .. } => "impute.wrong_type",
+            Self::NothingObserved { .. } => "impute.nothing_observed",
+            Self::Predictor { .. } => "impute.predictor",
+            Self::VisitOrder => "impute.visit_order",
+            Self::TooFewObserved { .. } => "impute.too_few_observed",
+            Self::Passive { .. } => "impute.passive",
+            Self::Covariance { .. } => "impute.covariance",
+            Self::NotConverged { .. } => "impute.not_converged",
+            Self::NotFinite { .. } => "impute.not_finite",
+            Self::Analysis { .. } => "impute.analysis",
+        }
+    }
+}
+
 /// The result of an imputation step.
-pub type Result<T> = std::result::Result<T, ImputeError>;
+pub type Result<T> = std::result::Result<T, Error>;
+
+/// A length check, as [`epistat_core::check::same_length`].
+pub(crate) fn length(what: &'static str, expected: usize, found: usize) -> Result<()> {
+    Ok(epistat_core::check::same_length(what, expected, found)?)
+}
+
+/// A count that must be at least 1.
+pub(crate) fn at_least_one(what: &'static str, value: usize) -> Result<()> {
+    if value >= 1 {
+        Ok(())
+    } else {
+        Err(Error::Input(InputError::Domain {
+            what,
+            value: 0.0,
+            domain: "at least 1",
+            row: None,
+        }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codes_are_distinct_and_kinds_follow_the_variant() {
+        let column = 1;
+        let own = [
+            Error::Value { column, row: 2 },
+            Error::Levels { column, levels: 1 },
+            Error::EmptyLevel { column, level: 0 },
+            Error::MethodOnComplete { column },
+            Error::NoMethod { column },
+            Error::NoDonors { column },
+            Error::WrongType { column },
+            Error::NothingObserved { column },
+            Error::Predictor {
+                column,
+                predictor: 1,
+            },
+            Error::VisitOrder,
+            Error::TooFewObserved {
+                column,
+                observed: 2,
+                parameters: 3,
+            },
+            Error::Passive { column },
+            Error::Covariance { column },
+            Error::NotConverged { column },
+            Error::NotFinite { column },
+            Error::Analysis {
+                set: 0,
+                source: "failed".into(),
+            },
+        ];
+        epistat_testkit::assert_codes_unique("impute", &own);
+        for error in &own[..12] {
+            assert_eq!(error.kind(), ErrorKind::Input, "{error:?}");
+        }
+        for error in &own[12..] {
+            assert_eq!(error.kind(), ErrorKind::Numerical, "{error:?}");
+        }
+        assert_eq!(
+            Error::from(InputError::Empty { what: "columns" }).code(),
+            "input.empty"
+        );
+        assert_eq!(Error::Multinom(GlmError::Singular).code(), "glm.singular");
+        assert_eq!(
+            at_least_one("m", 0).map_err(|e| e.code()),
+            Err("input.domain")
+        );
+        assert_eq!(length("z", 2, 3).map_err(|e| e.code()), Err("input.length"));
+    }
+}

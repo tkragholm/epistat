@@ -11,6 +11,10 @@ authors.workspace = true
 repository.workspace = true
 readme = "README.md"
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [features]
 # Lets `rand` and `rand_distr` draw from a `Stream` through rand_core's traits.
 rand = ["dep:rand_core"]

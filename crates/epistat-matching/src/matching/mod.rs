@@ -1,7 +1,6 @@
 mod cardinality;
 mod cem;
 mod codes;
-mod constraints;
 mod distance;
 mod engine;
 pub(crate) use engine::{StandardCommonSupport, standard_common_support, trimmed_ids};
@@ -30,11 +29,6 @@ pub use cardinality::{
 };
 pub use cem::{
     CemBinning, CemKind, CemRule, CemStrata, CemVariable, cem_k2k_pairs, cem_strata, cem_subclasses,
-};
-pub(crate) use constraints::UsedControlsVec;
-pub use constraints::{
-    CaliperConstraint, Chained, Constraint, ConstraintContext, ConstraintGroup,
-    ExactMatchConstraint,
 };
 pub use distance::{
     DateDistance, DistanceChannel, DistanceConfig, DistanceMetric, IdMapEuclideanDistance,
@@ -90,11 +84,6 @@ pub use weights::{
     pair_weights_from_pairs,
 };
 
-pub use constraints::unique_value;
-pub(crate) use constraints::{
-    FieldValueSource, RefusesFromDate, ReplacementConstraint, ResidenceSpellSource, StatusRule,
-    StatusRuleKind, build_strata_values, caliper_allows,
-};
 pub use engine::{build_outcome, refused_outcome, to_f64};
 pub(crate) use index::CandidateIndex;
 

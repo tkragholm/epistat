@@ -167,8 +167,8 @@ fn nhanes2_pmm_and_logreg_match_mice() {
         &ImputeOptions {
             m: 500,
             max_iterations: 5,
-            seed: 20_261_123,
         },
+        20_261_123,
     )
     .unwrap();
     compare_stats(
@@ -215,8 +215,8 @@ fn nhanes2_norm_matches_mice() {
         &ImputeOptions {
             m: 500,
             max_iterations: 5,
-            seed: 20_261_124,
         },
+        20_261_124,
     )
     .unwrap();
     compare_stats(
@@ -294,11 +294,10 @@ fn sim_analysis(imputed: &Imputed, data: &Incomplete) -> Vec<PooledStats> {
     (0..2).map(|t| pooled_stats(&est[t], &var[t])).collect()
 }
 
-fn options(seed: u64) -> ImputeOptions {
+fn options() -> ImputeOptions {
     ImputeOptions {
         m: 200,
         max_iterations: 5,
-        seed,
     }
 }
 
@@ -316,7 +315,7 @@ fn sim_full(seed: u64) -> (Incomplete, Imputed) {
             None,
         ],
     );
-    let imputed = impute(&data, &spec, &options(seed)).unwrap();
+    let imputed = impute(&data, &spec, &options(), seed).unwrap();
     (data, imputed)
 }
 
@@ -361,8 +360,8 @@ fn proper_polyreg_keeps_the_mean_and_widens_the_spread() {
             &ImputeOptions {
                 m: 600,
                 max_iterations: 3,
-                seed,
             },
+            seed,
         )
         .unwrap()
     };
@@ -404,7 +403,7 @@ fn simulated_norm_and_pmm_of_a_single_column_match_mice() {
         ("pmm", Method::pmm(), &r.pmm, 20_261_128),
     ] {
         let spec = spec_of(&data, vec![None, None, Some(method), None, None, None]);
-        let imputed = impute(&data, &spec, &options(seed)).unwrap();
+        let imputed = impute(&data, &spec, &options(), seed).unwrap();
         compare_stats(
             &format!("sim {label} inc"),
             &numeric_stats(&imputed, 2),

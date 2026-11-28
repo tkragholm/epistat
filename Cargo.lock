@@ -607,7 +607,6 @@ dependencies = [
  "rand 0.10.4",
  "rand_distr",
  "rayon",
- "rstest",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
