@@ -9,8 +9,13 @@
 //! on how pairs are selected.
 //!
 //! The pairs are given to `balance_report` as a `MatchOutcome`
-//! whose realised estimand is the one R used. The report derives the unit
-//! weights from it, and the weights are checked against R's. Fits with pairs
+//! whose realised estimand is the one R used, with the focal group as the
+//! cases, as the pair matchers form them: under the ATC the cases are the
+//! controls and each pair is written control first. The report derives the
+//! unit weights from it, and the weights are checked against R's. Its
+//! statistics are the cases' against the controls', so under the ATC they are
+//! read back as treated against control before they are compared: the means
+//! swap, the differences change sign and the variance ratios invert. Fits with pairs
 //! are nearest-neighbour with replacement for the ATT and ATC, 1:2 without
 //! replacement (so that some treated units have one match), and 1:1 without
 //! replacement (equal group sizes). For the ATE R used subclassification, whose
@@ -177,14 +182,62 @@ fn estimand(name: &str) -> Estimand {
     }
 }
 
+/// An outcome of `pairs`, each written treated first, with the focal group
+/// as the cases: the treated for the ATT and the ATE, the controls for the
+/// ATC.
 fn outcome(pairs: &[(String, String)], estimand: Estimand) -> MatchOutcome {
     MatchOutcome::from_pairs(
         pairs
             .iter()
-            .map(|(treated, control)| MatchedPair::new(treated.clone(), control.clone()))
+            .map(|(treated, control)| {
+                if estimand == Estimand::Atc {
+                    MatchedPair::new(control.clone(), treated.clone())
+                } else {
+                    MatchedPair::new(treated.clone(), control.clone())
+                }
+            })
             .collect(),
         estimand,
     )
+}
+
+/// The report of a fit on R's pairs, with the focal group as the cases, read
+/// back as treated against control, as `summary.matchit()` prints it.
+fn treated_report(sample: &Groups, fit: &Fit, options: &BalanceReportOptions) -> BalanceReport {
+    let estimand = estimand(&fit.estimand);
+    let matched = outcome(&fit.pairs, estimand);
+    if estimand != Estimand::Atc {
+        return balance_report(&sample.cases, &sample.controls, &matched, options)
+            .expect("a matched estimand");
+    }
+    let mut swapped = options.clone();
+    swapped.supplemental_covariates = SupplementalBalanceCovariates {
+        cases: options.supplemental_covariates.controls.clone(),
+        controls: options.supplemental_covariates.cases.clone(),
+    };
+    let mut report = balance_report(&sample.controls, &sample.cases, &matched, &swapped)
+        .expect("a matched estimand");
+    let negate = |value: &mut Option<f64>| *value = value.map(|v| -v);
+    let invert = |value: &mut Option<f64>| *value = value.map(f64::recip);
+    for row in &mut report.numeric {
+        std::mem::swap(&mut row.mean_case_pre, &mut row.mean_control_pre);
+        std::mem::swap(&mut row.mean_case_post, &mut row.mean_control_post);
+        negate(&mut row.smd_pre);
+        negate(&mut row.smd_post);
+        invert(&mut row.var_ratio_pre);
+        invert(&mut row.var_ratio_post);
+    }
+    for level in report
+        .categorical
+        .iter_mut()
+        .flat_map(|factor| &mut factor.levels)
+    {
+        std::mem::swap(&mut level.p_case_pre, &mut level.p_control_pre);
+        std::mem::swap(&mut level.p_case_post, &mut level.p_control_post);
+        negate(&mut level.smd_pre);
+        negate(&mut level.smd_post);
+    }
+    report
 }
 
 #[track_caller]
@@ -394,14 +447,7 @@ fn balance_on_matchit_pairs_agrees_with_summary_matchit() {
     for (set_name, set, on, _) in sets(&reference) {
         let sample = groups(&set.data, on, &[]);
         for fit in set.fits.iter().filter(|fit| !fit.pairs.is_empty()) {
-            let outcome = outcome(&fit.pairs, estimand(&fit.estimand));
-            let report = balance_report(
-                &sample.cases,
-                &sample.controls,
-                &outcome,
-                &epistat_matching::BalanceReportOptions::default(),
-            )
-            .expect("a matched estimand");
+            let report = treated_report(&sample, fit, &BalanceReportOptions::default());
             let label = format!("{set_name} {}", fit.name);
             compare_fit(
                 &label,
@@ -524,8 +570,13 @@ fn unit_weights_and_sample_sizes_agree_with_matchit() {
                     }
                     let positive = fit.weights.iter().filter(|w| **w > 0.0).count();
                     assert_eq!(groups[0].len() + groups[1].len(), positive, "{label}");
+                    // The cases are the focal group, the controls under the ATC.
                     let [cases, controls] = groups;
-                    (cases, controls)
+                    if matched.diagnostics.realized_estimand == Estimand::Atc {
+                        (controls, cases)
+                    } else {
+                        (cases, controls)
+                    }
                 };
             let n_treated = treat.iter().filter(|t| **t).count();
             let n_control = treat.len() - n_treated;
@@ -671,13 +722,7 @@ fn supplemental_covariates_agree_with_addlvariables() {
                 supplemental_covariates: sample.supplemental.clone(),
                 ..BalanceReportOptions::default()
             };
-            let report = balance_report(
-                &sample.cases,
-                &sample.controls,
-                &outcome(&fit.pairs, estimand(&fit.estimand)),
-                &options,
-            )
-            .expect("a matched estimand");
+            let report = treated_report(&sample, fit, &options);
             let name = addl[0];
             let row = report.numeric.iter().find(|row| row.name == name).unwrap();
             compare_numeric(

@@ -17,7 +17,9 @@ use std::collections::{HashMap, HashSet};
 /// exact method, full matching, or none at all ([`BalanceWeights::unmatched`]).
 #[derive(Debug, Clone)]
 pub struct BalanceWeights {
-    /// The estimand that chooses the standardiser of the differences.
+    /// The estimand that chooses the standardiser of the differences: the
+    /// cases' standard deviation for the ATT, the controls' for the ATC and
+    /// the root mean of the two variances for the ATE and the ATM.
     pub estimand: Estimand,
     /// Matching weight of each unit, by group and identifier.
     pub matching: UnitWeightSet,
@@ -67,6 +69,12 @@ impl BalanceWeights {
     /// The matching weights of a pair-based outcome for its realised estimand,
     /// with its pairs.
     ///
+    /// The cases of a pair are its focal group, as the pair matchers form
+    /// them, under the ATT and the ATC alike. The cases then weigh 1 and their
+    /// standard deviation standardises the differences, which is the reading
+    /// `estimand` gives the ATT, so an ATC outcome's weights carry
+    /// [`Estimand::Att`].
+    ///
     /// # Errors
     ///
     /// [`Error::UnsupportedEstimand`] when the realised estimand is not one a
@@ -74,7 +82,11 @@ impl BalanceWeights {
     pub fn from_outcome(outcome: &MatchOutcome) -> Result<Self, Error> {
         let estimand = outcome.diagnostics.realized_estimand;
         let method = crate::MatchWeightMethod::for_estimand(estimand)?;
-        let mut weights = Self::new(estimand, outcome.match_weights(method));
+        let standardiser = match estimand {
+            Estimand::Atc => Estimand::Att,
+            other => other,
+        };
+        let mut weights = Self::new(standardiser, outcome.match_weights(method));
         weights.pairs.clone_from(&outcome.pairs);
         Ok(weights)
     }

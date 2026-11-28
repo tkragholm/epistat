@@ -58,7 +58,12 @@ use std::sync::Arc;
 
 /// Compute pre- and post-match covariate balance summaries.
 ///
-/// The cases are the treated group and the controls the comparison group.
+/// The cases and the controls are the two slices the pairs were matched
+/// from, the cases the focal group: the treated units for the ATT and the
+/// untreated for the ATC. Each difference is the cases' minus the controls',
+/// so under the ATC it is `summary.matchit()`'s with the sign changed and a
+/// variance ratio is the reciprocal of `summary.matchit()`'s.
+///
 /// "Pre" statistics use every record passed in with weight one. "Post"
 /// statistics weight each record by the unit weights the outcome gives for its
 /// realised estimand (see [`MatchOutcome::match_weights`] with [`MatchWeightMethod::for_estimand`](crate::MatchWeightMethod::for_estimand)),
@@ -68,8 +73,10 @@ use std::sync::Arc;
 /// Standardised differences follow the documentation of MatchIt's
 /// `summary.matchit()`. The difference in weighted means is divided by a
 /// standard deviation taken from the records before matching, the same one
-/// before and after: the cases' for the ATT, the controls' for the ATC and the
-/// square root of the mean of the two variances for the ATE and the ATM. A
+/// before and after: the focal group's, which is the cases', for the ATT and
+/// the ATC, and the square root of the mean of the two variances for the ATE
+/// and the ATM. [`balance_summary`] on weights given from outside reads the
+/// cases as the treated group and takes the controls' for the ATC. A
 /// continuous variable has the sample variance, a variable whose values are all
 /// zero or one has `p (1 - p)` and no variance ratio. After matching the
 /// variance is the reliability-weight estimator of `cov.wt()`. The eCDF mean and

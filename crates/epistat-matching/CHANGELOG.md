@@ -63,6 +63,7 @@ All of these are removed in the next release that breaks the API.
 ### Fixed
 
 - A subclass or optimal run with `reestimate` keeps the first-fit scores of the trimmed units, as `matchit()` reports them.
+- Weights and balance of pair matching under the ATC. The pair matchers take the focal group as their cases, the untreated units under the ATC, and form `matchit()`'s matched sets. `MatchWeightMethod::for_estimand(Estimand::Atc)` gave the treated units weight 1 and `balance_report` standardised by the treated units' standard deviation, both reading the cases as the treated units. Now `for_estimand` gives `CaseUnitControlFractional` for the ATT and the ATC, and `BalanceWeights::from_outcome` standardises by the cases' standard deviation, so the weights and the standardised differences are `matchit(estimand = "ATC")`'s. The differences are the cases' minus the controls', which under the ATC is `summary.matchit()`'s with the sign changed. On `lalonde` with 1:2 nearest matching with replacement the old weights were off by up to 79 raw and 22 normalised, and the standardised differences by up to 0.20 before and 0.43 after matching. A pair outcome built by hand with `MatchOutcome::from_pairs` under the ATC takes the untreated unit as the case of each pair. `ControlUnitCaseFractional` remains for pairs written the other way round. `balance_summary` on weights given from outside keeps reading the cases as the treated units.
 
 ### Results
 

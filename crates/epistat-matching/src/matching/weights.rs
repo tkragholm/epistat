@@ -2,11 +2,12 @@
 //!
 //! # Weights
 //!
-//! For the ATT every matched case weighs 1 and a control weighs the sum,
-//! over the pairs it is in, of `1 / m` with `m` the number of controls of the
-//! pair's case. For the ATC the roles are reversed. A control used by two
-//! cases that each have two controls weighs `1/2 + 1/2 = 1`. For the ATE
-//! and the ATM every pair adds 1 to both its units. These are the raw weights
+//! The cases of a pair are its focal group, as the pair matchers take them:
+//! the treated units for the ATT and the untreated for the ATC. Every matched
+//! case weighs 1 and a control weighs the sum, over the pairs it is in, of
+//! `1 / m` with `m` the number of controls of the pair's case. A control used
+//! by two cases that each have two controls weighs `1/2 + 1/2 = 1`. For the
+//! ATE and the ATM every pair adds 1 to both its units. These are the raw weights
 //! of `matchit(normalize = FALSE)`; [`UnitWeightSet::normalized`] divides each
 //! group's positive weights by their mean, as `matchit()` does by default.
 //! Sums run in the order of the unit ids, so they do not depend on the hash
@@ -52,16 +53,16 @@ pub enum MatchWeightMethod {
     /// Every matched case has weight 1, and a control has `1 / m` from each
     /// case with `m` controls it was drawn for.
     ///
-    /// This is `matchit()`'s weighting for the estimand whose focal group is
-    /// the cases, with or without replacement.
+    /// This is `matchit()`'s weighting, with or without replacement, for pairs
+    /// whose cases are the focal group: the treated units under the ATT and
+    /// the untreated under the ATC, as the pair matchers form them.
     CaseUnitControlFractional,
     /// Every matched control has weight 1, and a case has `1 / m` from each
     /// control drawn `m` times.
     ///
-    /// This is `matchit()`'s weighting for the estimand whose focal group is
-    /// the controls, applied to pairs that were formed from the cases'
-    /// side. `matchit()` itself would form the pairs from the controls'
-    /// side.
+    /// This is `matchit()`'s weighting for pairs whose controls are the focal
+    /// group, which the pair matchers do not form: pairs written with the
+    /// treated unit as the case under the ATC.
     ControlUnitCaseFractional,
 }
 
@@ -87,17 +88,20 @@ impl MatchWeightMethod {
     )]
     pub const CandidateUnitAnchorFractional: Self = Self::ControlUnitCaseFractional;
 
-    /// The weighting method of an estimand: fractional control weights for
-    /// the ATT, fractional case weights for the ATC, pair counts for the ATE
-    /// and the ATM.
+    /// The weighting method of an estimand for pairs whose cases are the
+    /// focal group, as the pair matchers form them: fractional control weights
+    /// for the ATT and the ATC, pair counts for the ATE and the ATM.
+    ///
+    /// Under the ATC the cases are the untreated units, so the untreated weigh
+    /// 1 and a treated unit `1 / m` from each untreated unit with `m` matches,
+    /// as `matchit(estimand = "ATC")` weighs them.
     ///
     /// # Errors
     ///
     /// [`Error::UnsupportedEstimand`] for any other estimand.
     pub fn for_estimand(estimand: Estimand) -> Result<Self, Error> {
         match matched_estimand(estimand, "the matching weights")? {
-            Estimand::Att => Ok(Self::CaseUnitControlFractional),
-            Estimand::Atc => Ok(Self::ControlUnitCaseFractional),
+            Estimand::Att | Estimand::Atc => Ok(Self::CaseUnitControlFractional),
             _ => Ok(Self::PairCount),
         }
     }
@@ -727,16 +731,29 @@ mod tests {
         assert!(UnitWeightSet::default().normalized().case.is_empty());
     }
 
+    /// Under the ATC the cases are the focal group, so they weigh 1 and a
+    /// control drawn for two cases with two controls each weighs 1/2 + 1/2.
     #[test]
     fn realized_estimand_method_resolves_expected_scheme() {
-        let outcome = outcome_with_pairs(vec![MatchedPair::new("a1", "c1")], Estimand::Atc);
+        let outcome = outcome_with_pairs(
+            vec![
+                MatchedPair::new("a1", "c1"),
+                MatchedPair::new("a1", "c2"),
+                MatchedPair::new("a2", "c2"),
+                MatchedPair::new("a2", "c3"),
+            ],
+            Estimand::Atc,
+        );
         let weights = outcome.match_weights(
             MatchWeightMethod::for_estimand(outcome.diagnostics.realized_estimand)
                 .expect("a matched estimand"),
         );
 
-        assert_eq!(weights.control.get("c1").copied(), Some(1.0));
         assert_eq!(weights.case.get("a1").copied(), Some(1.0));
+        assert_eq!(weights.case.get("a2").copied(), Some(1.0));
+        assert_eq!(weights.control.get("c1").copied(), Some(0.5));
+        assert_eq!(weights.control.get("c2").copied(), Some(1.0));
+        assert_eq!(weights.control.get("c3").copied(), Some(0.5));
     }
 
     #[test]
