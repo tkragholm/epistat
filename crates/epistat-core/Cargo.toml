@@ -26,6 +26,7 @@ serde = { version = "1.0.200", features = ["derive"], optional = true }
 [dev-dependencies]
 epistat-testkit = { path = "../epistat-testkit" }
 serde_json = { version = "1.0.120", features = ["float_roundtrip"] }
+trybuild = "1.0.112"
 
 [lints]
 workspace = true

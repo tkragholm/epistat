@@ -11,6 +11,7 @@
 //! | [`Level`] | a confidence level, kept as the confidence or alpha the caller gave |
 //! | [`Interval`], [`Coverage`], [`Estimate`], [`Scale`], [`Contrast`] | how an estimator reports a number |
 //! | [`Coefficients`], [`Term`], [`Glance`], [`Tidy`] | a fit's coefficient table and summary, and the trait fits implement |
+//! | [`Col`] | a column with null rows, as Arrow holds it: values and a validity bitmap |
 //! | [`Covariance`] | a covariance matrix that knows its dimension |
 //! | [`Matrix`] | a rectangular matrix of results, row-major |
 //! | [`Test`], [`Reference`] | a test statistic, its degrees of freedom and p-value |
@@ -33,17 +34,76 @@
 //! Types whose fields must stay consistent with each other ([`Covariance`],
 //! [`EventStudy`], [`Codes`], [`Panel`]) keep them private and are checked
 //! once, when built.
+//!
+//! # Options
+//!
+//! Options are plain structs with public fields and a `Default`, written as
+//! a literal that ends in `..Default::default()`. Each options struct in
+//! epistat also has a hidden field of the hidden type `Extensible`:
+//!
+//! ```
+//! use epistat_core::Extensible;
+//!
+//! #[derive(Clone, Debug, PartialEq)]
+//! pub struct FitOptions {
+//!     /// The most iterations before the fit gives up.
+//!     pub max_iterations: usize,
+//!     /// The change in deviance taken as convergence.
+//!     pub tolerance: f64,
+//!     #[doc(hidden)]
+//!     pub _extensible: Extensible,
+//! }
+//!
+//! impl Default for FitOptions {
+//!     fn default() -> Self {
+//!         Self {
+//!             max_iterations: 25,
+//!             tolerance: 1e-8,
+//!             _extensible: Extensible::NEW,
+//!         }
+//!     }
+//! }
+//!
+//! let options = FitOptions { max_iterations: 50, ..Default::default() };
+//! assert_eq!(options.tolerance, 1e-8);
+//! ```
+//!
+//! A literal that names only the documented fields does not compile, so no
+//! caller depends on the struct having exactly those fields. A new option is
+//! then a minor release, and cargo-semver-checks, which ignores hidden
+//! fields, agrees:
+//!
+//! ```compile_fail,E0063
+//! # use epistat_core::Extensible;
+//! # #[derive(Default)]
+//! # pub struct FitOptions {
+//! #     pub max_iterations: usize,
+//! #     pub tolerance: f64,
+//! #     #[doc(hidden)]
+//! #     pub _extensible: Extensible,
+//! # }
+//! let options = FitOptions { max_iterations: 50, tolerance: 1e-8 };
+//! ```
+//!
+//! A crate adopting it adds the field to every options struct, the structs
+//! whose names end in `Options`, `Spec`, `Settings`, `Config` or `Control`.
+//! A derived `Default` fills it. A `Default` or a `const` written out by hand
+//! sets it to `Extensible::NEW`, which only code inside epistat names. Where
+//! the struct is serialised, the field is marked `#[cfg_attr(feature =
+//! "serde", serde(skip))]`.
 
 pub mod bootstrap;
 pub mod check;
 pub mod codes;
 pub mod coefficients;
+pub mod col;
 pub mod covariance;
 pub mod day;
 pub mod error;
 pub mod estimand;
 pub mod estimate;
 pub mod event_study;
+mod extensible;
 mod format;
 pub mod hypothesis;
 pub mod level;
@@ -56,12 +116,15 @@ pub use bootstrap::{Bootstrap, Seed};
 pub use check::InputError;
 pub use codes::Codes;
 pub use coefficients::{Coefficients, EffectScale, Glance, Term, Tidy, TidyRow, VarianceKind};
+pub use col::Col;
 pub use covariance::Covariance;
 pub use day::Day;
 pub use error::{Classify, ErrorKind};
 pub use estimand::Estimand;
 pub use estimate::{Contrast, Coverage, Estimate, Interval, Scale};
 pub use event_study::EventStudy;
+#[doc(hidden)]
+pub use extensible::Extensible;
 pub use hypothesis::{Reference, Test};
 pub use level::Level;
 pub use matrix::Matrix;

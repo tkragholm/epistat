@@ -420,6 +420,10 @@ fn titman_putter(stays: &Rows<'_>, grid: &[f64], qualifying: usize, seeds: &[u64
     // and every qualifying state: the trace at two landmarks is two readings of
     // one sample, and drawing independently per landmark would break the
     // correlation the summary averages over.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "integer counts added slot by slot are the same in any order"
+    )]
     let exceeded: Vec<usize> = seeds
         .par_iter()
         .map(|&seed| {
