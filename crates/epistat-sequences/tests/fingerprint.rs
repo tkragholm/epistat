@@ -5,9 +5,8 @@
 //!
 //! The digest is the same on any thread count, which is checked everywhere.
 //! The costs go through `ln`, whose last bit depends on the maths library, so
-//! the recorded value is compared only on aarch64 macOS. `RECORDED` is `None`
-//! until it has been recorded there: run
-//! `GOLDEN_PRINT=1 cargo test -p epistat-sequences --test fingerprint -- --nocapture`
+//! the recorded value is compared only on aarch64 macOS. To record it again,
+//! run `GOLDEN_PRINT=1 cargo test -p epistat-sequences --test fingerprint -- --nocapture`
 //! on that target and paste the printed constant.
 
 use epistat_core::Bootstrap;
@@ -19,8 +18,8 @@ use epistat_sequences::{
 };
 use epistat_testkit::{Fingerprint, SplitMix64, on_threads};
 
-/// The digest recorded on aarch64 macOS, `None` until it is recorded there.
-const RECORDED: Option<u64> = None;
+/// The digest recorded on aarch64 macOS.
+const RECORDED: Option<u64> = Some(0xc361_bd8a_73f8_b1fb);
 
 const COUNT: usize = 36;
 const LENGTH: usize = 10;
