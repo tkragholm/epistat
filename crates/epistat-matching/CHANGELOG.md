@@ -20,6 +20,8 @@ This release gives the crate one `Error`, a smaller public surface, case and con
 - 72 result and reason types are `#[non_exhaustive]`, among them `MatchDiagnostics`, the outcome, balance, subclass, weight, genetic, cardinality, propensity and trial types. Build a `MatchOutcome` from pairs made elsewhere with `MatchOutcome::from_pairs(pairs, estimand)`.
 - The unused `reporting` module and feature, `KsTest` and the two-sample Kolmogorov-Smirnov test (it is in `epistat-epi`), and the projected balance rows are removed.
 - The minimum supported Rust version is 1.89. The `nightly` feature is removed.
+- Risk-set matching has no age limit unless one is set. `RoleTransitionOptions::transition_age_limit_years` is an `Option<AgeLimitYears>` and `None` by default, where it was 6 years, which made every person who became a case at 6 or later no case at all, without a count or an error. `MatchSpec::age_limit_years` left at `None` now means no limit too. `RiskSetPolicy::is_case_eligible` takes the limit as an `Option<u8>`. A study that needs a limit sets it with `with_age_limit`.
+- `MatchJob::with_gender_match` refuses a job in which no case or no control has a value under the strata key `"sex"`, with `Error::MissingStratum`. Such a job refused every control before, so no case matched and nothing said why.
 - The constraint rules are in one `constraints` module. `ExactMatchConstraint` is no longer a unit struct: write `ExactMatchConstraint::REQUIRED_STRATA` for the rule on the criteria's required strata, and `ExactMatchConstraint::on_key(key)` for one key. `MatchJob::with_gender_match` adds `ExactMatchConstraint::on_key("sex")`, so its type parameter names that type instead of `GenderMatch`.
 
 ### Added

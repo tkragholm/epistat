@@ -66,7 +66,7 @@ fn property_role_transition_respects_age_threshold() {
         ..MatchingCriteria::default()
     };
     let options = RoleTransitionOptions {
-        transition_age_limit_years: AgeLimitYears::new(6).expect("positive age limit"),
+        transition_age_limit_years: AgeLimitYears::new(6),
         ratio_fallback: vec![MatchRatio::new(1).expect("non-zero ratio")],
     };
 

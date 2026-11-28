@@ -846,7 +846,7 @@ pub struct MatchSpec {
     /// Strata key of which each control value may be used once.
     pub unique_by_key: Option<String>,
     /// Risk-set matching: the age in whole years below which a transition
-    /// makes a case. The default is 6.
+    /// makes a case. The default is `None`, no age limit.
     pub age_limit_years: Option<u8>,
     /// Risk-set matching: controls must be alive on the case's index date.
     pub require_alive: bool,

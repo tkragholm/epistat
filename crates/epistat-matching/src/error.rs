@@ -96,6 +96,18 @@ pub enum Error {
         /// The columns the batch has.
         present: Vec<String>,
     },
+    /// No case, or no control, has a value under a strata key a constraint
+    /// requires, so every pair would be refused on it.
+    #[error(
+        "no {group} has a value under the strata key `{key}`; store the stratum under that key \
+         or name the key the records have"
+    )]
+    MissingStratum {
+        /// The strata key.
+        key: &'static str,
+        /// `"case"` or `"control"`.
+        group: &'static str,
+    },
     /// A column has another type than the one asked for.
     #[error(
         "column {column} has type {found}, expected {expected}; cast it before building the records"
@@ -849,6 +861,7 @@ impl Classify for Error {
             Self::DuplicateColumn { .. } => "matching.duplicate_column",
             Self::TooManyValues { .. } => "matching.too_many_values",
             Self::MissingColumn { .. } => "matching.missing_column",
+            Self::MissingStratum { .. } => "matching.missing_stratum",
             Self::WrongType { .. } => "matching.wrong_type",
             Self::NullValue { .. } => "matching.null_value",
             Self::DateOutOfRange { .. } => "matching.date_out_of_range",
@@ -995,6 +1008,10 @@ mod tests {
             Error::MissingColumn {
                 column: String::new(),
                 present: Vec::new(),
+            },
+            Error::MissingStratum {
+                key: "x",
+                group: "case",
             },
             Error::WrongType {
                 column: String::new(),
@@ -1184,6 +1201,7 @@ mod tests {
                 | Error::DuplicateColumn { .. }
                 | Error::TooManyValues { .. }
                 | Error::MissingColumn { .. }
+                | Error::MissingStratum { .. }
                 | Error::WrongType { .. }
                 | Error::NullValue { .. }
                 | Error::DateOutOfRange { .. }
