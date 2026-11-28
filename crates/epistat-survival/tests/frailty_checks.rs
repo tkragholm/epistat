@@ -3,13 +3,14 @@
 //! model, the end states of the searches, and the profile score with the
 //! estimate, interval and standard error it gives for Breslow ties.
 
+use epistat_core::{Classify, ErrorKind};
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::cox::{
     self, Collapse, CoxOptions, CoxResidualKind, ResidualOptions, Ties, residuals,
 };
 use epistat_survival::frailty::{FrailtyMethod, FrailtyOptions, Theta, ThetaStatus, fit};
-use epistat_survival::{SurvBuf, SurvData};
+use epistat_survival::{Error, SurvBuf, SurvData};
 
 struct Sim {
     time: Vec<f64>,
@@ -470,4 +471,60 @@ fn singleton_clusters_and_no_interval() {
     assert!(with.theta_interval.is_some());
     assert_eq!(with.theta.to_bits(), without.theta.to_bits());
     assert_eq!(with.coefficients, without.coefficients);
+}
+
+/// A fit at a trial theta that fails inside Brent's search surfaces as
+/// `Error::Frailty`, with that theta and the failure of the inner fit as its
+/// source, and with the code of the source.
+///
+/// A covariate on a scale of 1000 that nearly orders the events makes the
+/// penalised information lose positive definiteness, and an iteration limit
+/// of 2 leaves the inner fits far from their solutions, so the fit at a point
+/// Brent chooses inside the bracket fails. The bracketing evaluates powers of
+/// 4, so a theta that is not one is Brent's.
+#[test]
+fn a_failed_fit_inside_the_brent_search_is_a_frailty_error() {
+    let clusters = 12;
+    let (mut time, mut status, mut cluster, mut xs) = (vec![], vec![], vec![], vec![]);
+    for c in 0..clusters {
+        for k in 0..3 {
+            let t = f64::from(1 + c * 3 + k) * if c % 2 == 0 { 1.0 } else { 0.37 };
+            time.push(t);
+            status.push(i32::from((c + k) % 3 != 0));
+            cluster.push(c);
+            xs.push(1000.0 * -t.ln() + f64::from(c % 4));
+        }
+    }
+    let x = Mat::from_fn(xs.len(), 1, |i, _| xs[i]);
+    let data = SurvBuf::builder(time, status)
+        .cluster(cluster)
+        .build()
+        .unwrap();
+    let opts = FrailtyOptions {
+        ties: Ties::Efron,
+        theta: Theta::Profile,
+        max_iterations: 2,
+        ..FrailtyOptions::default()
+    };
+    let error = fit(&data.as_data(), x.as_ref(), &opts).unwrap_err();
+    assert_eq!(error.code(), "survival.not_positive_definite");
+    assert_eq!(error.kind(), ErrorKind::Numerical);
+    let Error::Frailty { theta, source } = &error else {
+        panic!("not a frailty error: {error:?}");
+    };
+    let powers = theta.ln() / 4.0_f64.ln();
+    assert!((powers - powers.round()).abs() > 1e-3, "theta {theta}");
+    assert!(matches!(
+        **source,
+        Error::NotPositiveDefinite {
+            matrix: "information",
+            ..
+        }
+    ));
+    assert!(
+        error.to_string().starts_with(&format!(
+            "the frailty fit at theta = {theta} failed: undefined: "
+        )),
+        "{error}"
+    );
 }
