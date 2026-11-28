@@ -352,6 +352,10 @@ impl SignedRanks {
 /// The sensitivity value: the smallest `gamma` at which `p_upper(gamma)`, the
 /// upper bound of a one-sided p-value, reaches `alpha` \[5\].
 ///
+/// `alpha` is the significance level of the one-sided test, not the level of
+/// an interval, so it is a number and not an [`epistat_core::Level`]; the same
+/// holds for the `alpha` of every sensitivity value in this module.
+///
 /// `p_upper` must not decrease in `gamma`, which holds for every bound in
 /// this module. The search doubles `gamma` from 2 until the bound reaches
 /// `alpha` and then bisects to adjacent doubles, so the value is the crossing
