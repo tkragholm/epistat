@@ -10,6 +10,8 @@ The crate grows from person-time, spans and deflation into the main tools for re
 - `MergedSpans`, `NormalizedDiagnosis` and `YearOverlap` are `#[non_exhaustive]`. Read their fields and do not build them with a struct literal.
 - `person_time::days_from_civil`, `civil_from_days` and `year_from_days`, and `age::LeapBirthday`, are now re-exports of the functions and the type in `epistat_core::day`. Calls and paths that name them keep working, and the results are the same.
 - The crate depends on `epistat-core`, `epistat-optim` and `epistat-stats`, and its minimum supported Rust version is 1.89, up from 1.85.
+- `YearOverlap.calendar_year` is an `i64`, as the day counts are, where it was an `i32` that a year beyond its range turned into `i32::MAX`. Read it as `i64` or convert with `i32::try_from`.
+- `age::birthday_on_age` takes and returns an `epistat_core::Day`, so the epoch of the date is part of its type: write `birthday_on_age(Day::from_unix_days(birth)?, age, rule)` and read `.unix_days()` for the count.
 
 ### Added
 
@@ -26,10 +28,12 @@ The crate grows from person-time, spans and deflation into the main tools for re
 - `MergedSpans::bounds`, the start and end of each merged span.
 - `Error`, with `CodeItemProblem`, `CrosswalkProblem` and `PedigreeProblem`, which implements `Classify`.
 - `CpiTable::try_new`, which refuses an index that is not finite and positive and a year given twice with `InputError::Domain` at its row, where `CpiTable::new` keeps a zero index and lets the later of two rows win; `CpiTable::years`, the first and last year of the table; and `CpiTable::denmark` with the feature `denmark`.
+- `age::age_at`, the age on a `Day` of a person born on a `Day`, beside `age_in_years` on day counts; `person_time::day_from_sas_seconds`, the `Day` and time of day of a SAS datetime; and `Day` re-exported at the crate root. SAS dates enter through `Day::from_sas_days` and `Day::from_sas_column`.
 
 ### Deprecated
 
 - `RegisterError`, an alias of `Error`, use `Error`. Deprecated items are removed in the next release that breaks the API.
+- `person_time::sas_days_to_unix`, `unix_days_to_sas`, `days_from_civil_sas`, `civil_from_days_sas` and `civil_from_sas_seconds`, the SAS date functions of 0.1 on bare `i64`, whose results a caller could pass where a Unix day is read: use `epistat_core::Day::from_sas_days`, `Day::sas_days`, `Day::from_civil` and `day_from_sas_seconds`. `sas_seconds_to_unix`, `unix_seconds_to_sas` and the two offsets stay.
 
 ### Results
 

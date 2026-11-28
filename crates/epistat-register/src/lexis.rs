@@ -56,7 +56,7 @@
 //! labels with `Epi::timeBand` on the same pieces.
 
 use crate::Error;
-use crate::age::{AgeRule, birthday_on_age};
+use crate::age::{AgeRule, birthday_days};
 use crate::error::{csr, length, row_count};
 use crate::person_time::{days_from_civil, year_from_days};
 
@@ -248,7 +248,7 @@ pub fn labels(split: &Split, cuts: &[Cuts<'_>]) -> Result<Vec<Vec<Option<i64>>>,
                     let mut reached = None;
                     for &age in ages {
                         let at =
-                            birthday_on_age(birth[row], age, rule).ok_or(Error::DayOverflow {
+                            birthday_days(birth[row], age, rule).ok_or(Error::DayOverflow {
                                 what: "birthday",
                                 row,
                             })?;
@@ -304,7 +304,7 @@ fn gather(cut: &Cuts<'_>, row: usize, s: i64, e: i64, at: &mut Vec<i64>) -> Resu
         }
         Cuts::AgeYears { birth, ages, rule } => {
             for &age in ages {
-                let day = birthday_on_age(birth[row], age, rule).ok_or(Error::DayOverflow {
+                let day = birthday_days(birth[row], age, rule).ok_or(Error::DayOverflow {
                     what: "birthday",
                     row,
                 })?;
@@ -480,7 +480,7 @@ mod tests {
         for rule in [MARCH1, FEB28, AgeRule::DaysOver365_25] {
             for birth in d(1996, 1, 1)..d(2005, 1, 1) {
                 for age in 0..=105_u32 {
-                    let day = birthday_on_age(birth, age, rule).unwrap();
+                    let day = crate::age::birthday_days(birth, age, rule).unwrap();
                     assert_eq!(age_in_years(birth, day, rule), Some(age));
                     if age > 0 {
                         assert_eq!(age_in_years(birth, day - 1, rule), Some(age - 1));
@@ -531,7 +531,7 @@ mod tests {
             // No cut strictly inside a piece.
             assert_eq!(year_from_days(a), year_from_days(b - 1));
             for age in [5, 18, 40, 65] {
-                let c = birthday_on_age(birth[r], age, MARCH1).unwrap();
+                let c = crate::age::birthday_days(birth[r], age, MARCH1).unwrap();
                 assert!(!(a < c && c < b));
             }
             assert!(!periods.iter().any(|&c| a < c && c < b));
