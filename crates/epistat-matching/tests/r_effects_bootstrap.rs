@@ -2,15 +2,18 @@
 //!
 //! The bootstrap draws pair numbers from `epistat_rng`, which R cannot
 //! reproduce, so R is given the draws. The ignored test
-//! `write_bootstrap_draws` writes the pair numbers that
-//! `effects::cluster_resamples` gives for 185 pairs, 200 replicates and a fixed
-//! seed to `tests/data/effects_boot_draws.json`. `tests/data/effects_boot.R`
-//! reads them, resamples the matched rows of `tests/data/effects.json` (the
-//! 1:1 match without replacement and the 2:1 match with replacement, whose
-//! pairs are the clusters) in the same order, refits the outcome model on each
-//! replicate and writes the replicate statistics, with the intervals of
-//! `boot.ci()`. The test first checks that the committed draws are what the
-//! Rust code draws now, so the reference cannot go stale, and then compares:
+//! `write_bootstrap_draws` writes, for 185 pairs, 200 replicates and a fixed
+//! seed, the pair numbers of each replicate in the order the stream of
+//! `epistat_rng::resample_counts` draws them to
+//! `tests/data/effects_boot_draws.json`. `tests/data/effects_boot.R` reads
+//! them, resamples the matched rows of `tests/data/effects.json` (the 1:1
+//! match without replacement and the 2:1 match with replacement, whose pairs
+//! are the clusters) in that order, refits the outcome model on each replicate
+//! and writes the replicate statistics, with the intervals of `boot.ci()`. The
+//! test first checks that the committed draws, counted per pair, are the
+//! counts the Rust bootstrap draws now, so the reference cannot go stale. The
+//! Rust replicate holds the same rows grouped by pair, so its fit differs from
+//! R's only in the order of its sums. Then it compares:
 //!
 //! - every replicate of the difference, and of the ratio and odds ratio for the
 //!   logistic model, to R's, relative 1e-6 for the logistic model for the
@@ -34,10 +37,10 @@ mod r_reference;
 use epistat_core::Bootstrap;
 use epistat_matching::UnitRole;
 use epistat_matching::effects::{
-    BootstrapSpec, BootstrapStatistic, EffectSpec, MatchedSample, OutcomeModel, UnitData,
-    bootstrap, cluster_resamples,
+    BootstrapSpec, BootstrapStatistic, EffectSpec, MatchedSample, OutcomeModel, UnitData, bootstrap,
 };
 use epistat_matching::output::{LongMatches, MatchData};
+use epistat_rng::{Stream, replicate_seed, resample_counts};
 use epistat_testkit::{Tolerance, assert_close_to, load_json};
 use r_reference::{Versions, assert_r_version};
 use serde::{Deserialize, Serialize};
@@ -66,7 +69,12 @@ fn write_bootstrap_draws() {
         replicates: REPLICATES,
         seed: SEED,
         pairs: PAIRS,
-        resamples: cluster_resamples(PAIRS, Bootstrap::new(REPLICATES, SEED)),
+        resamples: (0..REPLICATES)
+            .map(|r| {
+                let mut stream = Stream::seeded(replicate_seed(SEED, r as u64));
+                (0..PAIRS).map(|_| stream.below(PAIRS)).collect()
+            })
+            .collect(),
     };
     let text = serde_json::to_string(&draws).unwrap();
     std::fs::write(data_path("effects_boot_draws.json"), text).unwrap();
@@ -231,11 +239,18 @@ fn compare(label: &str, ours: &BootstrapStatistic, r: &Stat, rel: f64) {
 #[test]
 fn bootstrap_agrees_with_boot() {
     let draws: Draws = load_json(data_path("effects_boot_draws.json"));
-    assert_eq!(
-        draws.resamples,
-        cluster_resamples(draws.pairs, Bootstrap::new(draws.replicates, draws.seed)),
-        "the committed draws are not what the code draws; run write_bootstrap_draws and the R script"
-    );
+    for (r, draw) in draws.resamples.iter().enumerate() {
+        let mut counts = vec![0_u32; draws.pairs];
+        for &pair in draw {
+            counts[pair] += 1;
+        }
+        assert_eq!(
+            counts,
+            resample_counts(draws.pairs, replicate_seed(draws.seed, r as u64)),
+            "replicate {r}: the committed draws are not what the code draws; \
+             run write_bootstrap_draws and the R script"
+        );
+    }
     assert_eq!(
         (draws.replicates, draws.seed, draws.pairs),
         (REPLICATES, SEED, PAIRS)
