@@ -14,16 +14,20 @@
 //! ```
 //!
 //! which avoids the cancellation of `x ln m - m - ln x!` for large `x`.
-//! `bd0` is summed as a series when `x` is within a tenth of `np`. The tails
-//! are regularised gamma and beta functions: `P(X <= x) = Q(x + 1, m)` for
-//! the Poisson distribution and `I_{1 - p}(n - x, x + 1)` for the binomial.
+//! `stirlerr` is the Stirling correction `ln Γ*(x)` and `bd0(x, m)` is
+//! `x (λ - 1 - ln λ)` at `λ = m / x`, both from `dist/stirling.rs`, which
+//! the incomplete gamma function shares. The tails are regularised gamma and
+//! beta functions: `P(X <= x) = Q(x + 1, m)` for the Poisson distribution and
+//! `I_{1 - p}(n - x, x + 1)` for the binomial.
 //!
 //! # Accuracy
 //!
-//! `stirlerr` below 15 is computed from `ln_gamma` and above 15 from its
-//! series to the term in `n^-9`, whose first omitted term is below `2e-16`.
-//! The point probabilities then agree with R's to about `1e-14` relative, the
-//! tails to the accuracy of the incomplete gamma and beta functions.
+//! `stirlerr` from 10 on is the Stirling series to the term in `x^-15`,
+//! whose first omitted term is below `2e-18`, and below 10 the difference
+//! `ln Γ(x) - (x - 1/2) ln x + x - ln(2π)/2`, with an absolute error of about
+//! `1e-14` at most. `bd0` is formed without cancellation near `x = m`. The
+//! point probabilities are then accurate to about `1e-14` relative, the tails
+//! to the accuracy of the incomplete gamma and beta functions.
 //!
 //! # References
 //!
@@ -32,19 +36,9 @@
 
 use super::beta::regularised as regularised_beta;
 use super::gamma::{lower_regularised, upper_regularised};
+use super::stirling::{bd0, ln_gamma_star as stirlerr};
 
-const LN_SQRT_2PI: f64 = 0.918_938_533_204_672_8;
 const TWO_PI: f64 = std::f64::consts::TAU;
-
-/// Loader's `stirlerr(n) = ln n! - ln(sqrt(2 pi n) (n / e)^n)`.
-fn stirlerr(n: f64) -> f64 {
-    unimplemented!("stirlerr({n}), LN_SQRT_2PI = {LN_SQRT_2PI}")
-}
-
-/// Loader's deviance term `bd0(x, np) = x ln(x / np) + np - x`.
-fn bd0(x: f64, np: f64) -> f64 {
-    unimplemented!("bd0({x}, {np})")
-}
 
 /// The count `x` stands for, R's rule for a point probability: `x` rounded
 /// when it is within `1e-7 max(1, |x|)` of a non-negative integer, `None`
