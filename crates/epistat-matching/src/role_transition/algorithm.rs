@@ -37,12 +37,14 @@
 
 use super::IdOrder;
 use super::sweep::RiskSetSweep;
-use crate::matching::{
-    CandidatePoolRequest, Constraint, ConstraintGroup, DateDistance, DistanceChannel,
-    DistanceConfig, DistanceMetric, MatchEngine, ReplacementConstraint, RoleIndexedRecord,
-    ScoreTable, SelectionStrategy, UsedControlsVec, build_outcome, build_strata_values,
-    finalize_estimand_diagnostics, intern_unique, ratio::RatioPolicy, refused_outcome,
+use crate::constraints::{
+    Constraint, ConstraintGroup, ReplacementConstraint, UsedControlsVec, build_strata_values,
     unique_value,
+};
+use crate::matching::{
+    CandidatePoolRequest, DateDistance, DistanceChannel, DistanceConfig, DistanceMetric,
+    MatchEngine, RoleIndexedRecord, ScoreTable, SelectionStrategy, build_outcome,
+    finalize_estimand_diagnostics, intern_unique, ratio::RatioPolicy, refused_outcome,
 };
 use crate::overlap::{Overlap, finite_bounds};
 use crate::types::{

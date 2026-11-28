@@ -14,7 +14,7 @@ mod common;
 use chrono::{Days, NaiveDate};
 use common::{Lcg, Person, Rec};
 use epistat_matching::RiskSetPolicy;
-use epistat_matching::constraints::{MissingPolicy, ResidenceSpell, caliper_on_field};
+use epistat_matching::constraints::{CaliperMissing, ResidenceSpell, caliper_on_field};
 use epistat_matching::prelude::*;
 use epistat_matching::{AtRiskSpan, DefaultRiskSetPolicy};
 use std::collections::HashMap;
@@ -97,7 +97,7 @@ fn main() {
             .with_alive_check()
             .with_resident_spells(|r: &Rec| spells.get(r.id()).map(Vec::as_slice))
             .with_constraints(vec![
-                caliper_on_field::<Rec>("parent_year", 5.0).on_missing(MissingPolicy::Refuse),
+                caliper_on_field::<Rec>("parent_year", 5.0).on_missing(CaliperMissing::Refuse),
             ])
             .with_risk_set_policy(Own { until: &until })
             .run()

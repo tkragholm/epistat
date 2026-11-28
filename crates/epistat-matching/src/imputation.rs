@@ -54,11 +54,12 @@ use rayon::prelude::*;
 
 use epistat_inference::pooling::{Pooled, dfcom_residual, rubin};
 
+use crate::constraints::ConstraintGroup;
 use crate::effects::{
     Effect, EffectEstimates, EffectSpec, MatchedSample, UnitData, estimate_effects,
 };
 use crate::matching::{
-    ConstraintGroup, CovariateRecord, DistanceConfig, MatchingRecord, PropensityMatchedOutcome,
+    CovariateRecord, DistanceConfig, MatchingRecord, PropensityMatchedOutcome,
     PropensityScoreConfig, ScoreTable, SelectionStrategy, StandardMatchRequest,
     estimate_propensity_and_match, match_standard, prepare_propensity_distance_config,
 };

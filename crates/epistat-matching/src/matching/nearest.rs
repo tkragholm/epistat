@@ -83,10 +83,6 @@
 //! each case computes the distance to every available control in range,
 //! `a * c` distances for `a` cases without a caliper.
 
-use super::constraints::{
-    Constraint, ConstraintContext, ConstraintGroup, NoSelfMatchConstraint, UniqueKeyConstraint,
-    UsedControlsVec, unique_value,
-};
 use super::distance::{
     ConfiguredMetric, DistanceConfig, DistanceMetric, IdMapEuclideanDistance,
     IdMapMahalanobisDistance,
@@ -100,6 +96,10 @@ use super::records::MatchingRecord;
 use super::selection::{Assignment, SelectionStrategy};
 use crate::Error;
 use crate::constraints::sample_sd;
+use crate::constraints::{
+    Constraint, ConstraintContext, ConstraintGroup, NoSelfMatchConstraint, UniqueKeyConstraint,
+    UsedControlsVec, unique_value,
+};
 use crate::kdtree::{Euclidean, KdTree, worth_a_tree};
 use crate::types::{
     ConstraintReason, ControlIdx, Estimand, ExclusionReason, InvalidCriteriaReason,

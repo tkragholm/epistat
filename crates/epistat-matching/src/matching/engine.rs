@@ -34,16 +34,16 @@
 //! cases and, when the realised estimand differs from the requested one,
 //! why.
 
-use super::constraints::{
-    CaliperConstraint, Constraint, ConstraintContext, ConstraintGroup, ExactMatchConstraint,
-    NoSelfMatchConstraint, ReplacementConstraint, UniqueKeyConstraint, UsedControlsVec,
-    build_strata_values, unique_value,
-};
 use super::distance::{DateDistance, DistanceChannel, DistanceConfig, DistanceMetric, ScoreTable};
 use super::index::{CandidateIndex, StrataValues};
 use super::ratio::RatioPolicy;
 use super::records::MatchingRecord;
 use super::selection::SelectionStrategy;
+use crate::constraints::{
+    CaliperConstraint, Constraint, ConstraintContext, ConstraintGroup, ExactMatchConstraint,
+    NoSelfMatchConstraint, ReplacementConstraint, UniqueKeyConstraint, UsedControlsVec,
+    build_strata_values, unique_value,
+};
 use crate::overlap::{Overlap, finite_bounds};
 use crate::role_transition::IdOrder;
 use crate::types::{
@@ -500,7 +500,7 @@ impl<'a, R: MatchingRecord + Sync, S: SelectionStrategy<R> + Clone + Send + Sync
             SelfMatch::ById => &no_self_match_constraint,
             SelfMatch::At(_) | SelfMatch::Nobody => &self_match_at,
         };
-        let strata_constraint = ExactMatchConstraint;
+        let strata_constraint = ExactMatchConstraint::REQUIRED_STRATA;
         let unique_constraint = UniqueKeyConstraint;
         let all_builtin: [&dyn Constraint<R>; 4] = [
             &replacement_constraint,

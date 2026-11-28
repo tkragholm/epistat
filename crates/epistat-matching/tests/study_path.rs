@@ -25,7 +25,7 @@ use epistat_matching::{
 use std::collections::{HashMap, HashSet};
 
 use chrono::{Days, NaiveDate};
-use epistat_matching::constraints::{MissingPolicy, ResidenceSpell, caliper_on_field};
+use epistat_matching::constraints::{CaliperMissing, ResidenceSpell, caliper_on_field};
 use epistat_matching::delegate_matching_record;
 use epistat_matching::prelude::*;
 use epistat_matching::{PairWeightTable, UnitRole, UnitWeightTable};
@@ -53,7 +53,7 @@ struct MatchConfig {
     birth_window_days: i32,
     age_limit_years: u8,
     calipers: Vec<(String, f64)>,
-    caliper_missing: MissingPolicy,
+    caliper_missing: CaliperMissing,
 }
 
 struct MatchedPairRow {
@@ -438,7 +438,7 @@ fn cases() -> Vec<(&'static str, u64)> {
             ("mother_birth_day".to_string(), 1_826.0),
             ("father_birth_day".to_string(), 1_826.0),
         ],
-        caliper_missing: MissingPolicy::MatchMissing,
+        caliper_missing: CaliperMissing::MatchMissing,
     };
     let study_two = MatchConfig {
         seed: 42,
@@ -447,7 +447,7 @@ fn cases() -> Vec<(&'static str, u64)> {
         birth_window_days: 30,
         age_limit_years: 6,
         calipers: Vec::new(),
-        caliper_missing: MissingPolicy::Refuse,
+        caliper_missing: CaliperMissing::Refuse,
     };
     let mut out = Vec::new();
     let one = run_matching(&rows, Some(&spells), &study_one);

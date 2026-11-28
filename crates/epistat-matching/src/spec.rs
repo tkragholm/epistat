@@ -33,12 +33,14 @@ pub use wiring::{CardinalityMatch, CardinalitySpec, FitFuncSpec, GeneticSpec, Lo
 
 use crate::Error;
 use crate::TrialMatching;
-use crate::constraints::{AntiExact, GenderMatch, MustBeAlive, MustBeResident, caliper_on_field};
+use crate::constraints::{
+    AntiExact, Chained, ExactMatchConstraint, MustBeAlive, MustBeResident, caliper_on_field,
+};
 use crate::matching::{
-    Assignment, CbpsConfig, CbpsMethod, CemBinning, CemRule, CemVariable, Chained,
-    CovariateEncodingConfig, CovariateRecord, DeterministicSelection, DistanceConfig,
-    ElasticNetCvConfig, ElasticNetLogisticConfig, EuclideanPreparationConfig, EuclideanScale,
-    FineBalance, FullMatchConfig, GeneticOutcome, LambdaRule, LogisticRegressionConfig,
+    Assignment, CbpsConfig, CbpsMethod, CemBinning, CemRule, CemVariable, CovariateEncodingConfig,
+    CovariateRecord, DeterministicSelection, DistanceConfig, ElasticNetCvConfig,
+    ElasticNetLogisticConfig, EuclideanPreparationConfig, EuclideanScale, FineBalance,
+    FullMatchConfig, GeneticOutcome, LambdaRule, LogisticRegressionConfig,
     MahalanobisCovarianceStrategy, MahalanobisPreparationConfig, MahalanobisTransform, MatchJob,
     MatchOrder, MatchingRecord, MissingValuePolicy, NearestBirthDateSelection, NearestSelection,
     OptimalRequest, PairDistanceMatrix, PropensityEstimator, PropensityLink, PropensityScoreConfig,
@@ -2016,8 +2018,8 @@ where
     S: SelectionStrategy<R> + Clone + Send + Sync,
 {
     let spec = plan.spec;
-    let sex: Vec<GenderMatch> = if spec.match_sex {
-        vec![GenderMatch::on_key(spec.sex_key.clone())]
+    let sex: Vec<ExactMatchConstraint> = if spec.match_sex {
+        vec![sex_match(&spec.sex_key)]
     } else {
         Vec::new()
     };
@@ -2256,8 +2258,8 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
                 false,
             )?;
             let calipers = field_calipers(spec, anchors, candidates, None)?;
-            let sex: Vec<GenderMatch> = if spec.match_sex {
-                vec![GenderMatch::on_key(spec.sex_key.clone())]
+            let sex: Vec<ExactMatchConstraint> = if spec.match_sex {
+                vec![sex_match(&spec.sex_key)]
             } else {
                 Vec::new()
             };
@@ -2728,8 +2730,8 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         }
     };
 
-    let sex: Vec<GenderMatch> = if spec.match_sex {
-        vec![GenderMatch::on_key(spec.sex_key.clone())]
+    let sex: Vec<ExactMatchConstraint> = if spec.match_sex {
+        vec![sex_match(&spec.sex_key)]
     } else {
         Vec::new()
     };
@@ -2804,4 +2806,9 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         outcome: Box::new(outcome?),
         propensity: None,
     })
+}
+
+/// Equal sex on `key`, counted under the reason of `MatchJob::with_gender_match`.
+fn sex_match(key: &str) -> ExactMatchConstraint {
+    ExactMatchConstraint::on_key(key).with_reason("gender_mismatch")
 }
