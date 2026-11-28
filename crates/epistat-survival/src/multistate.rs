@@ -1381,6 +1381,7 @@ pub(crate) fn variance_dfbeta(
 #[cfg(test)]
 mod tests {
     use super::{Plan, Rows, accumulate, bootstrap_rows, occupation};
+    use epistat_testkit::Tolerance;
 
     // Person A moves from state 0 to 1 at 2 and stays until 5. Person B is
     // censored at 3, a state outside the space. Person C moves at 4 and stays
@@ -1404,9 +1405,7 @@ mod tests {
         }
     }
 
-    fn close(a: f64, b: f64) -> bool {
-        (a - b).abs() < 1e-14
-    }
+    const CLOSE: Tolerance = Tolerance::exact().abs(1e-14);
 
     /// Worked by hand. At 2 three are at risk in state 0 and one moves, so the
     /// state 0 probability is 2/3. At 4 one is at risk in each state and the
@@ -1420,7 +1419,7 @@ mod tests {
             .iter()
             .zip([2.0 / 3.0, 1.0 / 3.0, 0.0, 1.0])
         {
-            assert!(close(*got, want), "{:?}", out.probabilities);
+            assert!(CLOSE.accepts(*got, want), "{:?}", out.probabilities);
         }
         assert_eq!(out.at_risk, vec![3.0, 2.0]);
     }
@@ -1486,7 +1485,7 @@ mod tests {
         let times_in_state = run(&[6.0]);
         assert_eq!(times_in_state.len(), 3 * 2);
         for pair in times_in_state.chunks(2) {
-            assert!(close(pair[0] + pair[1], 6.0), "{pair:?}");
+            assert!(CLOSE.accepts(pair[0] + pair[1], 6.0), "{pair:?}");
         }
     }
 

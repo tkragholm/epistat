@@ -96,6 +96,7 @@
 use epistat_core::InputError;
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{Mat, MatRef};
+use epistat_stats::weighted::ProbabilityBounds;
 
 use super::summary::WeightSummary;
 use crate::check::refuse_non_finite_matrix;
@@ -290,11 +291,11 @@ pub enum TreatmentHistory {
 /// What [`fit`] does besides the data and the designs.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct PooledOptions {
-    /// The truncation of the weights, `trunc` of `ipwtm`: `(lower, upper)`,
-    /// two probabilities with `0 <= lower < upper <= 1`, at whose type 7
-    /// quantiles the weights are truncated; `ipwtm(trunc = t)` is
-    /// `(t, 1 - t)`. The default, `None`, does not truncate.
-    pub truncation: Option<(f64, f64)>,
+    /// The truncation of the weights, `trunc` of `ipwtm`: two probabilities
+    /// with `0 <= lower < upper <= 1`, at whose type 7 quantiles the weights
+    /// are truncated; `ipwtm(trunc = t)` is `ProbabilityBounds::new(t, 1 - t)`.
+    /// The default, `None`, does not truncate.
+    pub truncation: Option<ProbabilityBounds>,
 }
 
 /// Fit the pooled logistic model of `event` on `design` and weight the rows of
@@ -326,7 +327,7 @@ pub fn fit(
     numerator: Option<MatRef<'_, f64>>,
     options: &PooledOptions,
 ) -> Result<PooledIpcw> {
-    let trunc = options.truncation;
+    let trunc = options.truncation.map(|b| (b.lower(), b.upper()));
     let surv = data.followup()?;
     let n = data.n_rows();
     if let Some((lo, hi)) = trunc

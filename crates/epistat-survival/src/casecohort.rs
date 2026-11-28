@@ -660,6 +660,7 @@ fn check_inputs(
     let rows = data.n_rows();
     if opts.ties == Ties::Exact {
         return Err(Error::unsupported(
+            "ties",
             "ties: the exact method is not supported",
         ));
     }
@@ -673,6 +674,7 @@ fn check_inputs(
         sorted.sort_unstable();
         if sorted.windows(2).any(|w| w[0] == w[1]) {
             return Err(Error::unsupported(
+                "id",
                 "id: more than one row per id is not supported",
             ));
         }

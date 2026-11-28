@@ -13,6 +13,7 @@
 //! weight, a product of at most ten factors, by `10 eta = 2e-9` relative,
 //! checked to `1e-8`.
 
+use epistat_core::Panel;
 use epistat_linalg::Mat;
 use epistat_survival::weighting::clone::{
     Adherence, CloneInput, DeviationModel, Strategy, Trigger, clone_censor, deviation_weights,
@@ -22,7 +23,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct Input {
-    id: Vec<u64>,
+    id: Vec<u32>,
     period: Vec<i64>,
     treatment: Vec<u8>,
     outcome: Vec<u8>,
@@ -88,8 +89,7 @@ fn the_clones_and_their_weights_agree_with_r() {
     let covariates: [&[f64]; 2] = [&d.f, &d.l];
     let c = clone_censor(
         &CloneInput {
-            id: &d.id,
-            period: &d.period,
+            panel: Panel::new(&d.id, &d.period).unwrap(),
             treatment: &treatment,
             outcome: &outcome,
             covariates: &covariates,
@@ -137,8 +137,7 @@ fn strategies_that_cannot_be_followed_are_errors() {
     let flags = [false, false, false];
     let x = [0.0, 1.0, f64::NAN];
     let input = CloneInput {
-        id: &id,
-        period: &period,
+        panel: Panel::new(&id, &period).unwrap(),
         treatment: &flags,
         outcome: &flags,
         covariates: &[],
@@ -189,8 +188,7 @@ fn the_general_strategies_contain_the_simple_ones() {
     let treatment: Vec<bool> = d.treatment.iter().map(|&v| v == 1).collect();
     let outcome: Vec<bool> = d.outcome.iter().map(|&v| v == 1).collect();
     let input = CloneInput {
-        id: &d.id,
-        period: &d.period,
+        panel: Panel::new(&d.id, &d.period).unwrap(),
         treatment: &treatment,
         outcome: &outcome,
         covariates: &[],

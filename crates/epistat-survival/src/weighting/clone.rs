@@ -105,7 +105,7 @@
 //!    effectiveness of dynamic treatment regimes: an application of the
 //!    parametric g-formula. Stat Biosci 2011;3(1):119-43.
 
-use epistat_core::{InputError, check};
+use epistat_core::{InputError, Panel, check};
 use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
 use epistat_linalg::{MatRef, ROW_BLOCK};
@@ -214,10 +214,9 @@ pub enum Strategy {
 /// order, and start at period 0.
 #[derive(Debug, Clone, Copy)]
 pub struct CloneInput<'a> {
-    /// The person of each row.
-    pub id: &'a [u64],
-    /// The period of each row, 0, 1, 2, ... within a person.
-    pub period: &'a [i64],
+    /// The person (the unit) and the period of each row, sorted by person and
+    /// then period; the periods of a person are 0, 1, 2, ...
+    pub panel: Panel<'a>,
     /// Whether the person is treated at the start of the period.
     pub treatment: &'a [bool],
     /// Whether the outcome happens in the period.
@@ -238,11 +237,11 @@ pub struct Cloned {
     /// The strategy of each clone row, an index into the strategies.
     pub arm: Vec<usize>,
     /// The person of each clone row, numbered from 0 in the order of the input,
-    /// which is increasing id order.
+    /// which is increasing unit order.
     pub person: Vec<u32>,
-    /// The id of each person, in increasing order: `ids[person[k]]` is the id
-    /// of clone row `k`.
-    pub ids: Vec<u64>,
+    /// The unit code of each person, in increasing order: `ids[person[k]]` is
+    /// the unit of clone row `k`.
+    pub ids: Vec<u32>,
     /// Whether the row is the first deviation of its clone.
     pub deviation: Vec<bool>,
     /// Whether the row is in the model of the weights of its strategy.
@@ -310,22 +309,22 @@ impl Cloned {
 ///
 /// # Errors
 ///
-/// An input error for columns of different lengths, no strategy, rows that
-/// are not ordered by person with the periods 0, 1, 2, ... in a person, and a
+/// An input error for columns of another length than the panel, no strategy,
+/// a person whose periods are not 0, 1, 2, ..., and a
 /// grace period or `until` beyond the longest follow-up, which no person can
 /// reach.
 pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<Cloned> {
-    let n = input.id.len();
+    let n = input.panel.len();
+    let (unit, period) = (input.panel.unit(), input.panel.period());
     check_lengths(&[
-        ("id", n),
-        ("period", input.period.len()),
+        ("panel", n),
         ("treatment", input.treatment.len()),
         ("outcome", input.outcome.len()),
     ])?;
     check::non_empty("strategies", strategies.len())?;
     if u32::try_from(n).is_err() {
         return Err(Error::from(epistat_core::InputError::TooLarge {
-            what: "id",
+            what: "panel",
             limit: u64::from(u32::MAX),
             found: n as u64,
         }));
@@ -334,22 +333,17 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
     let mut starts = Vec::new();
     let mut ids = Vec::new();
     for i in 0..n {
-        if i == 0 || input.id[i] != input.id[i - 1] {
-            if input.period[i] != 0 {
+        if i == 0 || unit[i] != unit[i - 1] {
+            if period[i] != 0 {
                 return Err(Error::order(format!(
                     "period: person {} does not start at period 0 in row {i}",
-                    input.id[i]
-                )));
-            }
-            if i > 0 && input.id[i] < input.id[i - 1] {
-                return Err(Error::order(format!(
-                    "id: the rows of a person must be next to each other and ordered, row {i}"
+                    unit[i]
                 )));
             }
             starts.push(i);
-            ids.push(input.id[i]);
+            ids.push(unit[i]);
             n_persons += 1;
-        } else if input.period[i] != input.period[i - 1] + 1 {
+        } else if period[i] != period[i - 1] + 1 {
             return Err(Error::order(format!(
                 "period: row {i} does not follow the row before it"
             )));
@@ -496,7 +490,7 @@ fn for_each_clone_row(
             let mut started: Option<i64> = None;
             let mut triggered: Option<i64> = None;
             for r in w[0]..w[1] {
-                let j = input.period[r];
+                let j = input.panel.period()[r];
                 let a = input.treatment[r];
                 let (deviates, risk) = match *strategy {
                     Strategy::InitiateWithin { grace, adherence } => {

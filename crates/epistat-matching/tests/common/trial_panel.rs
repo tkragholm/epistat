@@ -5,9 +5,7 @@
 
 use chrono::NaiveDate;
 use epistat_core::Panel;
-use epistat_matching::{
-    MatchingRecord, TrialColumns, TrialOptions, TrialPanel, expand_trial_columns,
-};
+use epistat_matching::{MatchingRecord, TrialOptions, TrialPanel, expand_trial_columns};
 
 /// One period of one person.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,8 +30,6 @@ pub struct PanelPerson<R> {
 pub struct PanelRows<R> {
     pub records: Vec<R>,
     pub unit: Vec<u32>,
-    /// The unit as the person number the survival weights take.
-    pub person: Vec<u64>,
     pub period: Vec<i64>,
     pub date: Vec<NaiveDate>,
     pub eligible: Vec<bool>,
@@ -49,7 +45,6 @@ impl<R: MatchingRecord> PanelRows<R> {
         let mut rows = Self {
             records: Vec::with_capacity(people.len()),
             unit: Vec::new(),
-            person: Vec::new(),
             period: Vec::new(),
             date: Vec::new(),
             eligible: Vec::new(),
@@ -60,7 +55,6 @@ impl<R: MatchingRecord> PanelRows<R> {
             rows.records.push(person.record.clone());
             for p in &person.periods {
                 rows.unit.push(unit);
-                rows.person.push(u64::from(unit));
                 rows.period.push(p.period);
                 rows.date.push(p.date);
                 rows.eligible.push(p.eligible);
@@ -129,9 +123,4 @@ pub fn expand_trials<R: MatchingRecord + Clone>(
             outcome: columns.outcome[i],
         })
         .collect())
-}
-
-/// The person of every row of the trials as the survival weights number them.
-pub fn persons(t: &TrialColumns) -> Vec<u64> {
-    t.unit.iter().map(|&u| u64::from(u)).collect()
 }

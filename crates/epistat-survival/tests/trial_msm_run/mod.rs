@@ -7,6 +7,7 @@
     reason = "periods and times are small integers"
 )]
 
+use epistat_core::Panel;
 use epistat_linalg::Mat;
 use epistat_survival::weighting::trials::WeightRows;
 use epistat_survival::weighting::trials::{
@@ -18,7 +19,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct Rows {
-    pub id: Vec<u64>,
+    pub id: Vec<u32>,
     pub period: Vec<i64>,
     pub treatment: Vec<f64>,
     pub am_1: Vec<f64>,
@@ -40,7 +41,7 @@ pub struct Rows {
 
 #[derive(Deserialize)]
 pub struct Trials {
-    pub id: Vec<u64>,
+    pub id: Vec<u32>,
     pub trial_period: Vec<i64>,
     pub followup_time: Vec<i64>,
     pub outcome: Vec<f64>,
@@ -98,8 +99,7 @@ pub fn run(a: &Analysis) -> Outputs {
     let treatment: Vec<bool> = w.treatment.iter().map(|&v| v > 0.5).collect();
     let previous: Vec<bool> = w.am_1.iter().map(|&v| v > 0.5).collect();
     let data = PersonPeriod {
-        id: &w.id,
-        period: &w.period,
+        panel: Panel::new(&w.id, &w.period).unwrap(),
         treatment: &treatment,
         previous: &previous,
     };
@@ -134,7 +134,7 @@ pub fn run(a: &Analysis) -> Outputs {
         &data,
         &w.wt,
         &TrialRows {
-            id: &t.id,
+            unit: &t.id,
             trial_period: &t.trial_period,
             follow_up: &t.followup_time,
         },
@@ -158,7 +158,7 @@ pub fn run(a: &Analysis) -> Outputs {
         design: design.as_ref(),
         outcome: &outcome,
         weight: &t.weight,
-        person: &t.id,
+        unit: &t.id,
     })
     .unwrap();
     let base: Vec<usize> = (0..m)

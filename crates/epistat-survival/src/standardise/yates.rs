@@ -430,9 +430,12 @@ fn one_level(
                 }
                 let (m, d) = link.apply(eta);
                 if !m.is_finite() || !d.is_finite() {
-                    return Err(Error::undefined(format!(
-                        "level {l}: the inverse link is not finite at the linear predictor {eta}"
-                    )));
+                    return Err(Error::undefined(
+                        "inverse link",
+                        format!(
+                            "level {l}: the inverse link is not finite at the linear predictor {eta}"
+                        ),
+                    ));
                 }
                 let w = level.weights.map_or(1.0, |w| w[i]);
                 acc[0] += w * m;

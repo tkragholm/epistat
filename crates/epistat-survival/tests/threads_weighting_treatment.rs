@@ -6,6 +6,7 @@ mod treatment_sim;
 
 use epistat_core::Estimand;
 use epistat_linalg::Mat;
+use epistat_stats::weighted::ProbabilityBounds;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::cox as wcox;
@@ -84,7 +85,10 @@ fn treatment_weights_are_the_same_on_every_pool() {
                 },
                 s.design.as_ref(),
                 stabilise.then(|| numerator.as_ref()),
-                &PooledOptions { truncation: trunc },
+                &PooledOptions {
+                    truncation: trunc
+                        .map(|(l, u): (f64, f64)| ProbabilityBounds::new(l, u).unwrap()),
+                },
             )
             .unwrap();
             let mut out = w.weight.clone();

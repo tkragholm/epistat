@@ -276,15 +276,19 @@ pub fn fit(
     let link = opts.link;
     let glm_link = link;
     if admits(link, 0.5).is_none() {
-        return Err(Error::unsupported(format!(
-            "link: {link:?}; the regression takes identity, log, logit and cloglog"
-        )));
+        return Err(Error::unsupported(
+            "link",
+            format!("link: {link:?}; the regression takes identity, log, logit and cloglog"),
+        ));
     }
     if !matches!(opts.covariance, SandwichType::Hc0 | SandwichType::Hc3) {
-        return Err(Error::unsupported(format!(
-            "covariance: {:?}; the regression has Hc0 and Hc3",
-            opts.covariance
-        )));
+        return Err(Error::unsupported(
+            "covariance",
+            format!(
+                "covariance: {:?}; the regression has Hc0 and Hc3",
+                opts.covariance
+            ),
+        ));
     }
     let total_weight: f64 = w.iter().sum();
     if total_weight <= 0.0 {

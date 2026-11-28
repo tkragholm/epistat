@@ -494,6 +494,7 @@ pub fn zph(
         });
         if failed {
             return Err(Error::undefined(
+                "risk score",
                 "the risk score or the denominator of a partial-likelihood term is not finite and positive at the coefficients",
             ));
         }

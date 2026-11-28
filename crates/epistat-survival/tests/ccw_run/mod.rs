@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 #![expect(clippy::cast_precision_loss, reason = "periods are small integers")]
 
+use epistat_core::Panel;
 use epistat_linalg::Mat;
 use epistat_survival::weighting::clone::{
     Adherence, CloneInput, Cloned, DeviationModel, Strategy, clone_censor, deviation_weights,
@@ -16,7 +17,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct Input {
-    pub id: Vec<u64>,
+    pub id: Vec<u32>,
     pub period: Vec<i64>,
     pub treatment: Vec<f64>,
     pub outcome: Vec<f64>,
@@ -79,8 +80,7 @@ pub fn strategies(grace: u32) -> [Strategy; 2] {
 pub fn cloned(r: &Reference, d: &Data) -> Cloned {
     clone_censor(
         &CloneInput {
-            id: &r.input.id,
-            period: &r.input.period,
+            panel: Panel::new(&r.input.id, &r.input.period).unwrap(),
             treatment: &d.treatment,
             outcome: &d.outcome,
             covariates: &[],
@@ -127,12 +127,12 @@ pub fn analyse(r: &Reference, c: &Cloned, case: Option<&[f64]>) -> Outputs {
         .iter()
         .map(|&i| w.weight[i] * case.map_or(1.0, |k| k[i]))
         .collect();
-    let person: Vec<u64> = keep.iter().map(|&i| u64::from(c.person[i])).collect();
+    let person: Vec<u32> = keep.iter().map(|&i| c.person[i]).collect();
     let msm = fit_msm(MsmInput {
         design: design.as_ref(),
         outcome: &outcome,
         weight: &weight,
-        person: &person,
+        unit: &person,
     })
     .unwrap();
     let risk_of = |arm: f64| {
