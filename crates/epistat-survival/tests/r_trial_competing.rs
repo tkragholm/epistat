@@ -20,7 +20,7 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::weighting::trials::{
-    MsmInput, cumulative_incidence_competing, fit_msm, fit_msm_competing,
+    MsmInput, Population, cumulative_incidence_competing, fit_msm, fit_msm_competing,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -120,7 +120,7 @@ fn the_two_models_and_the_risks_agree_with_r() {
     );
     // The competing model is fit_msm on every row with the competing event as
     // the outcome.
-    let alone = fit_msm(&MsmInput {
+    let alone = fit_msm(MsmInput {
         outcome: &competing,
         ..input
     })
@@ -129,10 +129,17 @@ fn the_two_models_and_the_risks_agree_with_r() {
 
     let base: Vec<usize> = (0..n).filter(|&i| d.t[i] == 0.0).collect();
     for (arm, want) in [(0.0, &r.arm0), (1.0, &r.arm1)] {
-        let got = cumulative_incidence_competing(&fit, base.len(), 6, &|k, time, out| {
-            let t = f64::from(u32::try_from(time).expect("small"));
-            out.copy_from_slice(&[1.0, arm, t, t * t, d.x[base[k]]]);
-        })
+        let got = cumulative_incidence_competing(
+            &fit,
+            &Population::Rows {
+                rows: base.len(),
+                times: 6,
+                design: &|k, time, out| {
+                    let t = f64::from(u32::try_from(time).expect("small"));
+                    out.copy_from_slice(&[1.0, arm, t, t * t, d.x[base[k]]]);
+                },
+            },
+        )
         .expect("risks");
         assert!(worst(&got.risk, &want.risk, 1.0) < 1e-10, "arm {arm}");
         assert!(worst(&got.competing_risk, &want.competing_risk, 1.0) < 1e-10);

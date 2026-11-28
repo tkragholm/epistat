@@ -25,10 +25,10 @@
 //! * `ccw` (data `ccw`, `N` persons with ten periods): the clones, the weights of
 //!   the artificial censoring and the weighted outcome model.
 //! * `trial_msm_rows`, `ccw_rows`: the same with the outcome model fitted by
-//!   `fit_msm_trials` and `fit_msm_clones`, which form the rows of the trials
-//!   or clones block by block instead of holding them, and for `ccw_rows` the
-//!   deviation weights by `deviation_weights_rows` from designs formed row by
-//!   row. The data are read into
+//!   `fit_msm` on `MsmRows::Trials` and `MsmRows::Clones`, which form the rows
+//!   of the trials or clones block by block instead of holding them, and for
+//!   `ccw_rows` the deviation weights by `deviation_weights` from designs
+//!   formed row by row. The data are read into
 //!   columns of their final size and the table is dropped before the timing,
 //!   so that the peak memory is that of the method. The numbers are those of
 //!   `trial_msm` and `ccw` bit for bit.
@@ -43,12 +43,12 @@ use epistat_survival::aipw::{AipwCensoring, AipwSurvOptions, AipwSurvSpec, Estim
 use epistat_survival::cox::Ties;
 use epistat_survival::standardise::Counterfactual;
 use epistat_survival::weighting::clone::{
-    Adherence, CloneInput, DeviationDesign, DeviationModel, DeviationRows, Strategy, clone_censor,
-    deviation_weights, deviation_weights_rows, fit_msm_clones,
+    Adherence, CloneDesign, CloneInput, DeviationDesign, DeviationModel, Strategy, clone_censor,
+    deviation_weights,
 };
 use epistat_survival::weighting::trials::WeightRows;
 use epistat_survival::weighting::trials::{
-    MsmInput, PersonPeriod, TrialRows, TrialSpans, WeightModel, fit_msm, fit_msm_trials,
+    MsmInput, PersonPeriod, TrialDesign, TrialRows, TrialSpans, WeightModel, fit_msm,
     switch_weights, trial_weights,
 };
 
@@ -233,7 +233,7 @@ fn main() {
                     },
                 )
                 .expect("trial weights");
-                fit_msm(&MsmInput {
+                fit_msm(MsmInput {
                     design: design.as_ref(),
                     outcome: &y,
                     weight: &tw,
@@ -283,8 +283,8 @@ fn main() {
                 });
                 let num = Mat::from_fn(m, 2, |i, j| [1.0, period[c.source[i]] as f64][j]);
                 let model = DeviationModel {
-                    denominator: den.as_ref(),
-                    numerator: Some(num.as_ref()),
+                    denominator: den.as_ref().into(),
+                    numerator: Some(num.as_ref().into()),
                 };
                 let w = deviation_weights(&c, &[model, model], None).expect("weights");
                 let keep: Vec<usize> = (0..m).filter(|&i| !c.deviation[i]).collect();
@@ -297,7 +297,7 @@ fn main() {
                 let y: Vec<bool> = keep.iter().map(|&i| c.outcome[i]).collect();
                 let wt: Vec<f64> = keep.iter().map(|&i| w.weight[i]).collect();
                 let person: Vec<u64> = keep.iter().map(|&i| u64::from(c.person[i])).collect();
-                fit_msm(&MsmInput {
+                fit_msm(MsmInput {
                     design: design.as_ref(),
                     outcome: &y,
                     weight: &wt,
@@ -355,20 +355,20 @@ fn main() {
             let (times, msm) = common::timed(common::reps(), || {
                 let w =
                     switch_weights(&data, &model, &WeightRows::default()).expect("switch weights");
-                fit_msm_trials(
-                    &data,
-                    &w.weight,
-                    &TrialSpans {
+                fit_msm(TrialDesign {
+                    data,
+                    row_weight: &w.weight,
+                    trials: TrialSpans {
                         start: &start,
                         end: &end,
                     },
-                    &outcome,
-                    5,
-                    &|s, r, out| {
+                    outcome: &outcome,
+                    columns: 5,
+                    design: &|s, r, out| {
                         let f = (period[r] - period[s]) as f64;
                         out.copy_from_slice(&[1.0, f64::from(u8::from(a[s])), f, f * f, x1[s]]);
                     },
-                )
+                })
                 .expect("msm")
             });
             lines.push("rows", m as f64);
@@ -421,21 +421,26 @@ fn main() {
                 let num = |i: usize, out: &mut [f64]| {
                     out.copy_from_slice(&[1.0, period[c.source[i]] as f64]);
                 };
-                let model = DeviationRows {
-                    denominator: DeviationDesign {
+                let model = DeviationModel {
+                    denominator: DeviationDesign::Rows {
                         columns: 5,
                         fill: &den,
                     },
-                    numerator: Some(DeviationDesign {
+                    numerator: Some(DeviationDesign::Rows {
                         columns: 2,
                         fill: &num,
                     }),
                 };
-                let w = deviation_weights_rows(&c, &[model, model], None).expect("weights");
-                fit_msm_clones(&c, &w.weight, 5, &|i, out| {
-                    let p = period[c.source[i]] as f64;
-                    let arm = c.arm[i] as f64;
-                    out.copy_from_slice(&[1.0, arm, p, p * p, arm * p]);
+                let w = deviation_weights(&c, &[model, model], None).expect("weights");
+                fit_msm(CloneDesign {
+                    cloned: &c,
+                    weight: &w.weight,
+                    columns: 5,
+                    design: &|i, out| {
+                        let p = period[c.source[i]] as f64;
+                        let arm = c.arm[i] as f64;
+                        out.copy_from_slice(&[1.0, arm, p, p * p, arm * p]);
+                    },
                 })
                 .expect("msm")
             });

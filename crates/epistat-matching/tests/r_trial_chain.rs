@@ -1,7 +1,7 @@
 //! The whole chain of a sequential trial emulation against TrialEmulation 0.0.5
 //! `initiators`: `expand_trial_columns` of this crate, then
 //! `protocol_rows`, `switch_weights`, `censoring_weights`,
-//! `trial_weights`, `fit_msm` and `cumulative_incidence_rows` of
+//! `trial_weights`, `fit_msm` and `cumulative_incidence` of
 //! `epistat_survival::weighting::trials`, on the person-period data of
 //! `data/trial_chain.R`, by intention to treat, per protocol with switch
 //! weights, and per protocol with switch and censoring weights.
@@ -31,8 +31,8 @@ use chrono::{Days, NaiveDate};
 use epistat_linalg::Mat;
 use epistat_matching::{BaseRecord, TrialColumns, TrialOptions, expand_trial_columns};
 use epistat_survival::weighting::trials::{
-    Msm, MsmInput, PersonPeriod, ProtocolPanel, TrialRows, TrialWeightFit, WeightModel, WeightRows,
-    censoring_weights, cumulative_incidence_rows, fit_msm, protocol_rows, switch_weights,
+    Msm, MsmInput, PersonPeriod, Population, ProtocolPanel, TrialRows, TrialWeightFit, WeightModel,
+    WeightRows, censoring_weights, cumulative_incidence, fit_msm, protocol_rows, switch_weights,
     trial_weights,
 };
 use epistat_testkit::load_json;
@@ -243,10 +243,17 @@ fn weights(
 
 fn risk(msm: &Msm, p: &PanelJson, t: &TrialColumns, assigned: bool) -> Vec<f64> {
     let starts: Vec<usize> = (0..t.len()).filter(|&r| t.follow_up_time[r] == 0).collect();
-    cumulative_incidence_rows(msm, starts.len(), 6, &|i, time, out| {
-        let f = i64::try_from(time).expect("small");
-        design_row(t, p, assigned, f, starts[i], out);
-    })
+    cumulative_incidence(
+        msm,
+        &Population::Rows {
+            rows: starts.len(),
+            times: 6,
+            design: &|i, time, out| {
+                let f = i64::try_from(time).expect("small");
+                design_row(t, p, assigned, f, starts[i], out);
+            },
+        },
+    )
     .expect("risk")
     .risk
 }
@@ -275,7 +282,7 @@ fn the_chain_agrees_with_trial_emulation() {
             design_row(&t, p, t.assigned[r], t.follow_up_time[r], r, &mut out);
             out[j]
         });
-        let msm = fit_msm(&MsmInput {
+        let msm = fit_msm(MsmInput {
             design: design.as_ref(),
             outcome: &t.outcome,
             weight: &weight,

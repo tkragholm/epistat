@@ -81,7 +81,7 @@ use epistat_inference::Clusters;
 use epistat_inference::sandwich::SmallSample;
 use epistat_linalg::{Attempt, Mat, inverse};
 
-use super::{Msm, MsmInput, check_design, dense, fit_msm, quadratic_form};
+use super::{Msm, MsmInput, Population, check_design, dense, fit_msm, quadratic_form};
 use crate::check::check_lengths;
 use crate::covariance;
 use crate::error::{Error, Result};
@@ -132,13 +132,13 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
     let outcome: Vec<bool> = rows.iter().map(|&r| input.outcome[r]).collect();
     let weight: Vec<f64> = rows.iter().map(|&r| input.weight[r]).collect();
     let person: Vec<u64> = rows.iter().map(|&r| input.person[r]).collect();
-    let event = fit_msm(&MsmInput {
+    let event = fit_msm(MsmInput {
         design: design.as_ref(),
         outcome: &outcome,
         weight: &weight,
         person: &person,
     })?;
-    let competing_fit = fit_msm(&MsmInput {
+    let competing_fit = fit_msm(MsmInput {
         design: input.design,
         outcome: competing,
         weight: input.weight,
@@ -242,9 +242,9 @@ pub struct CompetingIncidence {
 }
 
 /// The cumulative incidence under one treatment from the two models of
-/// [`fit_msm_competing`] for a population of `rows` rows, with the design that
-/// `design(row, time, out)` writes into `out` for row `row` at follow-up time
-/// `time`, from 0 to `times - 1`. Both models read the same design.
+/// [`fit_msm_competing`] for a population, given as for
+/// [`cumulative_incidence`](super::cumulative_incidence). Both models read the
+/// same design.
 ///
 /// The sums over rows are taken in the order of the rows, so the result does
 /// not depend on the number of threads.
@@ -252,13 +252,12 @@ pub struct CompetingIncidence {
 /// # Errors
 ///
 /// An input error for no time, no row, models of different numbers of
-/// coefficients, a covariance that is not `2p` by `2p` or has an undefined
+/// coefficients, designs with another number of columns than the models or of
+/// different numbers of rows, a covariance that is not `2p` by `2p` or has an undefined
 /// entry, and a design value that is not finite.
 pub fn cumulative_incidence_competing(
     fit: &MsmCompeting,
-    rows: usize,
-    times: usize,
-    design: &(dyn Fn(usize, usize, &mut [f64]) + Sync),
+    population: &Population<'_>,
 ) -> Result<CompetingIncidence> {
     let p = fit.event.coefficients.len();
     if fit.competing.coefficients.len() != p || fit.covariance.dim() != 2 * p {
@@ -266,6 +265,7 @@ pub fn cumulative_incidence_competing(
             "the two models need the same number of coefficients, and the covariance 2p by 2p",
         ));
     }
+    let (rows, times, design) = population.rows(p)?;
     if times == 0 {
         return Err(Error::no_information("designs: no times"));
     }

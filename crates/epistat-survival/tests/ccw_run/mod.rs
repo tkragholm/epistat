@@ -8,7 +8,9 @@ use epistat_linalg::Mat;
 use epistat_survival::weighting::clone::{
     Adherence, CloneInput, Cloned, DeviationModel, Strategy, clone_censor, deviation_weights,
 };
-use epistat_survival::weighting::trials::{Msm, MsmInput, cumulative_incidence, fit_msm};
+use epistat_survival::weighting::trials::{
+    Msm, MsmInput, Population, cumulative_incidence, fit_msm,
+};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -107,8 +109,8 @@ pub fn analyse(r: &Reference, c: &Cloned, case: Option<&[f64]>) -> Outputs {
     });
     let num = Mat::from_fn(m, 2, |i, j| [1.0, r.input.period[c.source[i]] as f64][j]);
     let model = DeviationModel {
-        denominator: den.as_ref(),
-        numerator: Some(num.as_ref()),
+        denominator: den.as_ref().into(),
+        numerator: Some(num.as_ref().into()),
     };
     let w = deviation_weights(c, &[model, model], case).unwrap();
     let keep: Vec<usize> = (0..m).filter(|&i| !c.deviation[i]).collect();
@@ -124,7 +126,7 @@ pub fn analyse(r: &Reference, c: &Cloned, case: Option<&[f64]>) -> Outputs {
         .map(|&i| w.weight[i] * case.map_or(1.0, |k| k[i]))
         .collect();
     let person: Vec<u64> = keep.iter().map(|&i| u64::from(c.person[i])).collect();
-    let msm = fit_msm(&MsmInput {
+    let msm = fit_msm(MsmInput {
         design: design.as_ref(),
         outcome: &outcome,
         weight: &weight,
@@ -141,7 +143,9 @@ pub fn analyse(r: &Reference, c: &Cloned, case: Option<&[f64]>) -> Outputs {
             })
             .collect();
         let refs: Vec<_> = designs.iter().map(Mat::as_ref).collect();
-        cumulative_incidence(&msm, &refs).unwrap().risk
+        cumulative_incidence(&msm, &Population::Designs(&refs))
+            .unwrap()
+            .risk
     };
     Outputs {
         weight: w.weight,

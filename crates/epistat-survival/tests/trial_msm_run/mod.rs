@@ -10,8 +10,8 @@
 use epistat_linalg::Mat;
 use epistat_survival::weighting::trials::WeightRows;
 use epistat_survival::weighting::trials::{
-    CumulativeIncidence, MsmInput, PersonPeriod, TrialRows, TrialWeightFit, WeightModel,
-    censoring_weights, cumulative_incidence, fit_msm, switch_weights, trial_weights,
+    CumulativeIncidence, MsmInput, PersonPeriod, Population, TrialRows, TrialWeightFit,
+    WeightModel, censoring_weights, cumulative_incidence, fit_msm, switch_weights, trial_weights,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -154,7 +154,7 @@ pub fn run(a: &Analysis) -> Outputs {
         ][j]
     });
     let outcome: Vec<bool> = t.outcome.iter().map(|&v| v > 0.5).collect();
-    let msm = fit_msm(&MsmInput {
+    let msm = fit_msm(MsmInput {
         design: design.as_ref(),
         outcome: &outcome,
         weight: &t.weight,
@@ -181,7 +181,7 @@ pub fn run(a: &Analysis) -> Outputs {
         .iter()
         .map(|d| {
             let refs: Vec<_> = d.iter().map(Mat::as_ref).collect();
-            cumulative_incidence(&msm, &refs).unwrap()
+            cumulative_incidence(&msm, &Population::Designs(&refs)).unwrap()
         })
         .collect();
     Outputs {

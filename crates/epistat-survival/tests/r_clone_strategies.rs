@@ -112,7 +112,7 @@ fn the_clones_and_their_weights_agree_with_r() {
         [1.0, d.l[s], d.f[s], d.period[s] as f64][j]
     });
     let model = DeviationModel {
-        denominator: den.as_ref(),
+        denominator: den.as_ref().into(),
         numerator: None,
     };
     let fit = deviation_weights(&c, &[model; 5], None).expect("weights");

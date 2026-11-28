@@ -21,7 +21,7 @@
 mod trial_msm_run;
 
 use epistat_linalg::Mat;
-use epistat_survival::weighting::trials::cumulative_incidence;
+use epistat_survival::weighting::trials::{Population, cumulative_incidence};
 
 fn worst(a: &[f64], b: &[f64]) -> f64 {
     assert_eq!(a.len(), b.len());
@@ -77,7 +77,9 @@ fn the_standard_error_of_the_incidence_is_the_delta_method() {
         let mut msm = o.msm.clone();
         msm.coefficients = coef.to_vec();
         let refs: Vec<_> = o.designs[1].iter().map(Mat::as_ref).collect();
-        cumulative_incidence(&msm, &refs).unwrap().risk
+        cumulative_incidence(&msm, &Population::Designs(&refs))
+            .unwrap()
+            .risk
     };
     let k = o.risk[1].len();
     let mut grad = vec![vec![0.0; p]; k];

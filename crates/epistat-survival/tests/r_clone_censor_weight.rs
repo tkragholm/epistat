@@ -154,8 +154,8 @@ fn a_numerator_equal_to_the_denominator_gives_weights_of_one() {
         [1.0, r.input.l[s], r.input.period[s] as f64][j]
     });
     let model = DeviationModel {
-        denominator: den.as_ref(),
-        numerator: Some(den.as_ref()),
+        denominator: den.as_ref().into(),
+        numerator: Some(den.as_ref().into()),
     };
     let w = deviation_weights(&c, &[model, model], None).unwrap();
     assert!(w.weight.iter().all(|&v| (v - 1.0).abs() < 1e-12));
