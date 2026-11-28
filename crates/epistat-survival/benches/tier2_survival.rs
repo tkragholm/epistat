@@ -277,11 +277,11 @@ fn main() {
                 .expect("clones");
                 let m = c.len();
                 let den = Mat::from_fn(m, 5, |i, j| {
-                    let s = c.source[i];
+                    let s = c.row[i] as usize;
                     let p = period[s] as f64;
                     [1.0, l[s], l0[s], p, p * p][j]
                 });
-                let num = Mat::from_fn(m, 2, |i, j| [1.0, period[c.source[i]] as f64][j]);
+                let num = Mat::from_fn(m, 2, |i, j| [1.0, period[c.row[i] as usize] as f64][j]);
                 let model = DeviationModel {
                     denominator: den.as_ref().into(),
                     numerator: Some(num.as_ref().into()),
@@ -290,7 +290,7 @@ fn main() {
                 let keep: Vec<usize> = (0..m).filter(|&i| !c.deviation[i]).collect();
                 let design = Mat::from_fn(keep.len(), 5, |k, j| {
                     let i = keep[k];
-                    let p = period[c.source[i]] as f64;
+                    let p = period[c.row[i] as usize] as f64;
                     let arm = c.arm[i] as f64;
                     [1.0, arm, p, p * p, arm * p][j]
                 });
@@ -414,12 +414,12 @@ fn main() {
                 )
                 .expect("clones");
                 let den = |i: usize, out: &mut [f64]| {
-                    let s = c.source[i];
+                    let s = c.row[i] as usize;
                     let p = period[s] as f64;
                     out.copy_from_slice(&[1.0, l[s], l0[s], p, p * p]);
                 };
                 let num = |i: usize, out: &mut [f64]| {
-                    out.copy_from_slice(&[1.0, period[c.source[i]] as f64]);
+                    out.copy_from_slice(&[1.0, period[c.row[i] as usize] as f64]);
                 };
                 let model = DeviationModel {
                     denominator: DeviationDesign::Rows {
@@ -437,7 +437,7 @@ fn main() {
                     weight: &w.weight,
                     columns: 5,
                     design: &|i, out| {
-                        let p = period[c.source[i]] as f64;
+                        let p = period[c.row[i] as usize] as f64;
                         let arm = c.arm[i] as f64;
                         out.copy_from_slice(&[1.0, arm, p, p * p, arm * p]);
                     },

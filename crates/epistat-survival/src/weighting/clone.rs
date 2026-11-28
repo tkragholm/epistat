@@ -234,7 +234,7 @@ pub struct CloneInput<'a> {
 pub struct Cloned {
     /// The row of the input each clone row is made from, for building the
     /// designs of the models.
-    pub source: Vec<usize>,
+    pub row: Vec<u32>,
     /// The strategy of each clone row, an index into the strategies.
     pub arm: Vec<usize>,
     /// The person of each clone row, numbered from 0 in the order of the input,
@@ -264,30 +264,19 @@ impl Cloned {
     ///
     /// An input error when `column` has no value at some input row.
     pub fn gather<T: Copy>(&self, column: &[T]) -> Result<Vec<T>> {
-        match self.source.iter().find(|&&r| r >= column.len()) {
-            Some(_) => {
-                let needed = self.source.iter().max().map_or(0, |&r| r + 1);
-                Err(epistat_core::InputError::Length {
-                    what: "column",
-                    expected: needed,
-                    found: column.len(),
-                }
-                .into())
-            }
-            None => Ok(self.source.iter().map(|&r| column[r]).collect()),
-        }
+        crate::expanded::gather(&self.row, column, "column")
     }
 
     /// The number of clone rows.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.source.len()
+        self.row.len()
     }
 
     /// Whether there are no clone rows.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.source.is_empty()
+        self.row.is_empty()
     }
 
     /// The case weight of each clone row in a resample of the persons: the
@@ -334,6 +323,13 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
         ("outcome", input.outcome.len()),
     ])?;
     check::non_empty("strategies", strategies.len())?;
+    if u32::try_from(n).is_err() {
+        return Err(Error::from(epistat_core::InputError::TooLarge {
+            what: "id",
+            limit: u64::from(u32::MAX),
+            found: n as u64,
+        }));
+    }
     let mut n_persons = 0usize;
     let mut starts = Vec::new();
     let mut ids = Vec::new();
@@ -418,7 +414,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
         without += 1;
     });
     let mut out = Cloned {
-        source: Vec::with_capacity(rows),
+        row: Vec::with_capacity(rows),
         arm: Vec::with_capacity(rows),
         person: Vec::with_capacity(rows),
         ids,
@@ -433,7 +429,8 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
         strategies,
         &starts,
         &mut |c| {
-            out.source.push(c.row);
+            #[expect(clippy::cast_possible_truncation, reason = "checked against u32::MAX")]
+            out.row.push(c.row as u32);
             out.arm.push(c.arm);
             out.person.push(c.person);
             out.deviation.push(c.deviation);
@@ -778,10 +775,10 @@ pub fn deviation_weights(
     })
 }
 
-/// Refuse clones whose columns differ in length from `source`.
+/// Refuse clones whose columns differ in length from `row`.
 fn check_columns(cloned: &Cloned) -> Result<()> {
     check_lengths(&[
-        ("source", cloned.source.len()),
+        ("row", cloned.row.len()),
         ("arm", cloned.arm.len()),
         ("person", cloned.person.len()),
         ("deviation", cloned.deviation.len()),
@@ -961,7 +958,7 @@ pub(super) fn fit_clones(spec: &CloneDesign<'_>) -> Result<super::trials::Msm> {
     let n = cloned.len();
     check::same_length("weight", n, weight.len())?;
     check_lengths(&[
-        ("source", n),
+        ("row", n),
         ("arm", cloned.arm.len()),
         ("person", cloned.person.len()),
         ("deviation", cloned.deviation.len()),
