@@ -278,9 +278,9 @@ impl CondensedMatrix {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when the weights do not match the offsets, an
-    /// offset is outside the triangle, or `k` is zero or more than the
-    /// sequences.
+    /// [`Error::Input`] when the weights do not match the offsets, a weight
+    /// is negative or not finite, or an offset is outside the triangle;
+    /// [`Error::Types`] when `k` is zero or more than the sequences.
     pub fn kmedoids(
         &self,
         offsets: &[u32],
@@ -290,7 +290,7 @@ impl CondensedMatrix {
         max_iterations: usize,
     ) -> Result<Attempt, Error> {
         let count = offsets.len();
-        check_weights(count, weights.len())?;
+        check_weights(count, weights)?;
         self.check_offsets(offsets)?;
         check_types(count, k)?;
         let distance = Offsets {
@@ -318,7 +318,8 @@ impl CondensedMatrix {
     /// # Errors
     ///
     /// [`Error::Input`] when the weights or labels do not cover the
-    /// triangle's sequences, or a label is not below `k`.
+    /// triangle's sequences, a weight is negative or not finite, or a label is
+    /// not below `k`.
     pub fn cluster_distance_sums(
         &self,
         weights: &[f64],
@@ -326,7 +327,7 @@ impl CondensedMatrix {
         k: usize,
     ) -> Result<Vec<f64>, Error> {
         let n = self.size;
-        check_partition(n, weights.len(), labels, k)?;
+        check_partition(n, weights, labels, k)?;
         if k == 0 {
             return Ok(Vec::new());
         }
@@ -346,7 +347,8 @@ impl CondensedMatrix {
     /// # Errors
     ///
     /// [`Error::Input`] when the weights or labels do not match the
-    /// offsets, or an offset is outside the triangle.
+    /// offsets, a weight is negative or not finite, or an offset is outside
+    /// the triangle.
     pub fn silhouette(
         &self,
         offsets: &[u32],
@@ -354,7 +356,7 @@ impl CondensedMatrix {
         labels: &[u32],
     ) -> Result<Option<f64>, Error> {
         let count = offsets.len();
-        check_lengths(count, weights.len(), labels.len())?;
+        check_lengths(count, weights, labels.len())?;
         self.check_offsets(offsets)?;
         Ok(self.silhouette_by_offset(offsets, weights, labels))
     }

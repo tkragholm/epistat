@@ -45,8 +45,8 @@
 //! parallel. Optimal-matching replicates run one at a time, because each holds
 //! a quadratic triangle and its construction and the fit over it are already
 //! parallel. Replicate `r` draws and seeds its fit with
-//! [`replicate_seed`]`(seed, r)`, so the result does not depend on the thread
-//! count.
+//! [`replicate_seed`]`(seed, r)` of its root seed, so the result does not
+//! depend on the thread count.
 //!
 //! # Summation order
 //!
@@ -91,6 +91,7 @@ use std::collections::{HashMap, HashSet};
 
 use rayon::prelude::*;
 
+use epistat_core::{Bootstrap, InputError};
 use epistat_rng::replicate_seed;
 use epistat_stats::sum::compensated;
 
@@ -99,7 +100,6 @@ use crate::nulls::{self, NullModel};
 use crate::optimal_matching::{self, CondensedMatrix};
 use crate::positionwise::{self, Panel};
 use crate::{Attempt, Error, Restarts};
-use epistat_core::InputError;
 
 /// The distances a typology can be fitted with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,15 +118,15 @@ impl Distance {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for any other name.
+    /// [`Error::UnknownDistance`] for any other name.
     pub fn named(name: &str) -> Result<Self, Error> {
         match name {
             "hamming" => Ok(Self::Hamming),
             "dhd" => Ok(Self::DynamicHamming),
             "om" => Ok(Self::OptimalMatching),
-            other => Err(Error::invalid(format!(
-                "unknown distance {other:?}; choose from \"dhd\", \"hamming\" and \"om\""
-            ))),
+            other => Err(Error::UnknownDistance {
+                name: other.to_owned(),
+            }),
         }
     }
 }
@@ -141,9 +141,9 @@ pub struct FitSettings {
     /// The number of restarts of a fit, at least one. The functions of this
     /// module fit once per null replicate or per refit, and each fit draws
     /// its restart seeds with [`Restarts::from_seed`]`(seed, restarts)` from
-    /// its own seed: [`replicate_seed`]`(seed, r)` for null replicate `r` of
-    /// [`null_silhouettes`], which is also the seed of that replicate's null
-    /// draw, and `seed` itself for every refit of [`refit_agreements`] and for
+    /// its own seed: [`replicate_seed`]`(bootstrap.seed, r)` for null
+    /// replicate `r` of [`null_silhouettes`], which is also the seed of that
+    /// replicate's null draw, and `seed` itself for every refit of [`refit_agreements`] and for
     /// [`fit_typology`]. A caller that needs other restart seeds calls
     /// [`positionwise::kmedoids`] or [`CondensedMatrix::kmedoids`] with
     /// [`Restarts::from_seeds`].
@@ -165,6 +165,7 @@ pub struct Typology {
 }
 
 /// Agreement between two partitions of the same weighted sequences.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Agreement {
     /// Weighted adjusted Rand index, or [`None`] when it is undefined: no
@@ -400,9 +401,11 @@ impl Tally {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when there is not one weight per sequence of the panel.
+/// [`Error::Input`] when there is not one weight per sequence of the panel or
+/// a weight is negative or not finite.
 pub fn transition_costs(panel: &Panel<'_>, weights: &[f64]) -> Result<Vec<f64>, Error> {
     length("weights", panel.count, weights.len())?;
+    check_weight_values("weights", weights)?;
     let (length, alphabet) = (panel.length, panel.alphabet);
     let steps = length.saturating_sub(1);
 
@@ -452,13 +455,14 @@ pub fn transition_costs(panel: &Panel<'_>, weights: &[f64]) -> Result<Vec<f64>, 
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when there is not one weight per sequence or a symbol is
-/// not below `alphabet`.
+/// [`Error::Input`] when there is not one weight per sequence, a weight is
+/// negative or not finite, or a symbol is not below `alphabet`.
 pub fn substitution_costs<'a>(
     sequences: impl Iterator<Item = &'a [u8]>,
     weights: &[f64],
     alphabet: usize,
 ) -> Result<Vec<f64>, Error> {
+    check_weight_values("weights", weights)?;
     let mut tally = Tally::new(1, alphabet);
     let mut sequences = sequences;
     let mut seen = 0_usize;
@@ -650,8 +654,8 @@ fn fit(
 /// # Errors
 ///
 /// [`Error::Input`] when the weights do not match the panel or a weight is
-/// negative or NaN, and [`Error::Invalid`] when `settings.restarts` is zero
-/// or `settings.k` is zero or more than the sequences.
+/// negative or NaN, [`Error::NoRestarts`] when `settings.restarts` is zero,
+/// and [`Error::Types`] when `settings.k` is zero or more than the sequences.
 pub fn fit_typology(
     panel: &Panel<'_>,
     weights: &[f64],
@@ -667,7 +671,7 @@ pub fn fit_typology(
 /// That a fit has at least one restart, before any replicate is drawn.
 fn check_restarts(settings: FitSettings) -> Result<(), Error> {
     if settings.restarts == 0 {
-        return Err(Error::invalid("a fit needs at least one restart"));
+        return Err(Error::NoRestarts);
     }
     Ok(())
 }
@@ -686,10 +690,11 @@ fn each_replicate<T: Send>(
     }
 }
 
-/// The silhouettes of k-medoids fits to `replicates` null datasets.
+/// The silhouettes of k-medoids fits to `bootstrap.replicates` null datasets.
 ///
 /// Replicate `r` draws null sequences from `panel` and `weights` under `model`
-/// (see [`nulls::null_sequences`]) with seed [`replicate_seed`]`(seed, r)`, collapses them to
+/// (see [`nulls::null_sequences`]) with seed
+/// [`replicate_seed`]`(bootstrap.seed, r)`, collapses them to
 /// distinct sequences with summed weights, derives the distance's costs from
 /// them, and fits `settings.k` types with the same seed. Returns one entry per
 /// replicate, in order: its silhouette, or `None` when the null had fewer than
@@ -698,25 +703,26 @@ fn each_replicate<T: Send>(
 /// # Errors
 ///
 /// [`Error::Input`] when the weights do not match the panel, a weight is
-/// negative or NaN, there is no positive weight, or `k` is zero.
+/// negative or NaN, or there is no positive weight; [`Error::Types`] when `k`
+/// is zero and [`Error::NoRestarts`] when `settings.restarts` is.
 pub fn null_silhouettes(
     panel: &Panel<'_>,
     weights: &[f64],
     model: NullModel,
     settings: FitSettings,
-    seed: u64,
-    replicates: usize,
+    bootstrap: Bootstrap,
 ) -> Result<Vec<Option<f64>>, Error> {
     length("weights", panel.count, weights.len())?;
     check_weight_values("weights", weights)?;
     if settings.k == 0 {
-        return Err(Error::invalid(
-            "asked for 0 types; a typology has at least one",
-        ));
+        return Err(Error::Types {
+            k: 0,
+            sequences: panel.count,
+        });
     }
     check_restarts(settings)?;
-    each_replicate(replicates, settings.distance, |replicate| {
-        let seed = replicate_seed(seed, replicate as u64);
+    each_replicate(bootstrap.replicates, settings.distance, |replicate| {
+        let seed = replicate_seed(bootstrap.seed, replicate as u64);
         let drawn = nulls::null_sequences(panel, weights, model, seed)?;
         let (encoded, merged, alphabet) = collapse(&drawn, panel.length, weights, panel.alphabet);
         if merged.len() < settings.k {
@@ -746,9 +752,11 @@ pub type AgreementPair = Option<(Option<f64>, Option<f64>)>;
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when the weights, the reference or the replicate
-/// weights do not match the panel, a weight or replicate weight is negative or NaN, or
-/// `k` is zero or more than the sequences.
+/// [`Error::Input`] when the panel is empty, the weights or the reference do
+/// not match the panel, or a weight or replicate weight is negative or not
+/// finite; [`Error::Ragged`] when the replicate weights do not divide into
+/// replicates of one weight per sequence; [`Error::Types`] when `k` is zero or
+/// more than the sequences and [`Error::NoRestarts`] without a restart.
 pub fn refit_agreements(
     panel: &Panel<'_>,
     weights: &[f64],
@@ -760,19 +768,23 @@ pub fn refit_agreements(
     let count = panel.count;
     length("weights", count, weights.len())?;
     length("reference", count, reference.len())?;
-    if count == 0 || !replicate_weights.len().is_multiple_of(count) {
-        return Err(Error::invalid(format!(
-            "{} replicate weights do not divide into replicates of {count} \
-             sequences",
-            replicate_weights.len()
-        )));
+    check_weight_values("weights", weights)?;
+    if count == 0 {
+        return Err(InputError::Empty { what: "panel" }.into());
+    }
+    if !replicate_weights.len().is_multiple_of(count) {
+        return Err(Error::Ragged {
+            what: "replicate_weights",
+            found: replicate_weights.len(),
+            width: count,
+        });
     }
     check_weight_values("replicate_weights", replicate_weights)?;
     if settings.k == 0 || settings.k > count {
-        return Err(Error::invalid(format!(
-            "asked for {} types from {count} distinct sequences",
-            settings.k
-        )));
+        return Err(Error::Types {
+            k: settings.k,
+            sequences: count,
+        });
     }
     check_restarts(settings)?;
     let replicates = replicate_weights.len() / count;
@@ -809,6 +821,7 @@ mod tests {
         transition_costs,
     };
     use crate::{nulls, positionwise};
+    use epistat_core::Bootstrap;
     use epistat_rng::replicate_seed;
 
     #[test]
@@ -903,8 +916,7 @@ mod tests {
                 &weights,
                 NullModel::FirstOrderMarkov,
                 settings(distance, 2),
-                7,
-                3,
+                Bootstrap::new(3, 7),
             )
             .unwrap();
             assert_eq!(silhouettes.len(), 3);
@@ -913,8 +925,7 @@ mod tests {
                 &weights,
                 NullModel::FirstOrderMarkov,
                 settings(distance, 2),
-                7,
-                3,
+                Bootstrap::new(3, 7),
             )
             .unwrap();
             let bits = |values: &[Option<f64>]| -> Vec<Option<u64>> {
@@ -928,8 +939,7 @@ mod tests {
                 &weights,
                 NullModel::StateIndependence,
                 settings(Distance::Hamming, 0),
-                1,
-                1
+                Bootstrap::new(1, 1),
             )
             .is_err()
         );
@@ -941,8 +951,7 @@ mod tests {
                 &negative,
                 NullModel::StateIndependence,
                 settings(Distance::Hamming, 2),
-                1,
-                1
+                Bootstrap::new(1, 1),
             )
             .is_err()
         );
@@ -1017,7 +1026,7 @@ mod tests {
             restarts: 3,
             max_iterations: 10,
         };
-        let got = null_silhouettes(&panel, &weights, model, given, 7, 4).unwrap();
+        let got = null_silhouettes(&panel, &weights, model, given, Bootstrap::new(4, 7)).unwrap();
         let by_hand: Vec<Option<f64>> = (0..4u64)
             .map(|r| {
                 let seed = replicate_seed(7, r);

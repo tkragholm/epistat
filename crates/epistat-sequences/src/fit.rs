@@ -9,7 +9,7 @@
 use epistat_rng::Stream;
 use rayon::prelude::*;
 
-use crate::error::{below, length};
+use crate::error::{below, length, weights as weight_values};
 use crate::{Attempt, Error, Restarts, best_attempt};
 
 /// What a fit needs to know about a distance. Positions are the caller's
@@ -27,24 +27,28 @@ pub(crate) trait FitDistance: Sync {
     fn medoids_from(&self, weights: &[f64], labels: &[u32], k: usize) -> Vec<Option<u32>>;
 }
 
-/// That there is one weight per sequence, and `count` the number of sequences.
-pub(crate) fn check_weights(count: usize, weights: usize) -> Result<(), Error> {
-    length("weights", count, weights)
+/// That there is one weight per sequence, `count` the number of sequences,
+/// and that every weight is finite and not negative.
+pub(crate) fn check_weights(count: usize, weights: &[f64]) -> Result<(), Error> {
+    length("weights", count, weights.len())?;
+    weight_values("weights", weights)
 }
 
 /// That `k` types can be drawn from `count` sequences.
 pub(crate) fn check_types(count: usize, k: usize) -> Result<(), Error> {
     if k == 0 || k > count {
-        return Err(Error::invalid(format!(
-            "asked for {k} types from {count} distinct sequences"
-        )));
+        return Err(Error::Types {
+            k,
+            sequences: count,
+        });
     }
     Ok(())
 }
 
-/// That `weights` and `labels` both have one entry per sequence.
-pub(crate) fn check_lengths(count: usize, weights: usize, labels: usize) -> Result<(), Error> {
-    length("weights", count, weights)?;
+/// That `weights` and `labels` both have one entry per sequence, and that
+/// every weight is finite and not negative.
+pub(crate) fn check_lengths(count: usize, weights: &[f64], labels: usize) -> Result<(), Error> {
+    check_weights(count, weights)?;
     length("labels", count, labels)
 }
 
@@ -52,7 +56,7 @@ pub(crate) fn check_lengths(count: usize, weights: usize, labels: usize) -> Resu
 /// one weight and one label per sequence, and every label below `k`.
 pub(crate) fn check_partition(
     count: usize,
-    weights: usize,
+    weights: &[f64],
     labels: &[u32],
     k: usize,
 ) -> Result<(), Error> {
@@ -79,7 +83,7 @@ pub(crate) fn fit<D: FitDistance>(
         let mut stream = Stream::seeded(restarts.seeds()[attempt]);
         one_fit(distance, count, weights, k, max_iterations, &mut stream)
     });
-    best_attempt(attempts).ok_or_else(|| Error::invalid("a fit needs at least one restart"))
+    best_attempt(attempts).ok_or(Error::NoRestarts)
 }
 
 /// k-means++ seeding: `k` starting medoids, drawn proportional to `d^2 * w`.

@@ -5,7 +5,7 @@
 //! or a negative weight is [`Error::Input`] with the shared [`InputError`], as
 //! in every other epistat crate. Input that is well formed but breaks a
 //! function's own contract, such as a number of types the sequences cannot
-//! fill, is [`Error::Invalid`]. [`Classify`] gives a binding the kind and a
+//! fill, has a variant of its own. [`Classify`] gives a binding the kind and a
 //! stable code.
 
 use epistat_core::{Classify, ErrorKind, InputError, check};
@@ -15,32 +15,77 @@ use epistat_core::{Classify, ErrorKind, InputError, check};
 #[non_exhaustive]
 pub enum Error {
     /// Input the function cannot take: slices of different lengths, a symbol
-    /// outside the alphabet, a cost table that is not dense, a negative weight
-    /// or a cluster label outside the clusters declared.
+    /// outside the alphabet, a cost table that is not dense, a negative weight,
+    /// a cluster label outside the clusters declared, a panel without length
+    /// or alphabet, or more sequences than 32-bit positions can number.
     #[error(transparent)]
     Input(#[from] InputError),
-    /// Input that is well formed but breaks the function's contract: no
-    /// restart, no type, more types than sequences, an unknown distance.
-    #[error("{0}")]
-    Invalid(String),
-}
-
-impl Error {
-    pub(crate) fn invalid(message: impl Into<String>) -> Self {
-        Self::Invalid(message.into())
-    }
+    /// `found` values do not divide into rows of `width`: encoded symbols into
+    /// sequences of a common length, or replicate weights into replicates of
+    /// one weight per sequence.
+    #[error("{what}: {found} values do not divide into rows of {width}")]
+    Ragged {
+        /// The argument.
+        what: &'static str,
+        /// The number of values given.
+        found: usize,
+        /// The length of a row.
+        width: usize,
+    },
+    /// A fit asked for no restart.
+    #[error("a fit needs at least one restart")]
+    NoRestarts,
+    /// A fit asked for `k` types from `sequences` distinct sequences: none, or
+    /// more types than sequences.
+    #[error("asked for {k} types from {sequences} distinct sequences")]
+    Types {
+        /// The types asked for.
+        k: usize,
+        /// The distinct sequences there are.
+        sequences: usize,
+    },
+    /// No sequence has a positive weight, so there is nothing to draw from.
+    #[error("no sequence has a positive weight; there is nothing to draw from")]
+    NoPositiveWeight,
+    /// A distance name other than `"dhd"`, `"hamming"` and `"om"`.
+    #[error("unknown distance {name:?}; choose from \"dhd\", \"hamming\" and \"om\"")]
+    UnknownDistance {
+        /// The name given.
+        name: String,
+    },
 }
 
 impl Classify for Error {
     fn kind(&self) -> ErrorKind {
-        ErrorKind::Input
+        match self {
+            Self::Input(error) => error.kind(),
+            Self::Ragged { .. }
+            | Self::NoRestarts
+            | Self::Types { .. }
+            | Self::NoPositiveWeight
+            | Self::UnknownDistance { .. } => ErrorKind::Input,
+        }
     }
 
     fn code(&self) -> &'static str {
         match self {
             Self::Input(error) => error.code(),
-            Self::Invalid(_) => "sequences.invalid",
+            Self::Ragged { .. } => "sequences.ragged",
+            Self::NoRestarts => "sequences.no_restarts",
+            Self::Types { .. } => "sequences.types",
+            Self::NoPositiveWeight => "sequences.no_positive_weight",
+            Self::UnknownDistance { .. } => "sequences.unknown_distance",
         }
+    }
+}
+
+/// The error of a count `what` of 0 where at least 1 is needed.
+pub(crate) const fn positive(what: &'static str) -> InputError {
+    InputError::Domain {
+        what,
+        value: 0.0,
+        domain: "at least 1",
+        row: None,
     }
 }
 
@@ -120,7 +165,22 @@ mod tests {
 
     #[test]
     fn codes_are_unique_and_prefixed() {
-        epistat_testkit::assert_codes_unique("sequences", &[Error::Invalid(String::new())]);
+        epistat_testkit::assert_codes_unique(
+            "sequences",
+            &[
+                Error::Ragged {
+                    what: "x",
+                    found: 3,
+                    width: 2,
+                },
+                Error::NoRestarts,
+                Error::Types { k: 0, sequences: 1 },
+                Error::NoPositiveWeight,
+                Error::UnknownDistance {
+                    name: String::new(),
+                },
+            ],
+        );
         assert_eq!(
             Error::from(InputError::Empty { what: "x" }).code(),
             "input.empty"

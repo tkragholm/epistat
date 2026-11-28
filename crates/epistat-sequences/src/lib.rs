@@ -133,6 +133,7 @@ pub use validation::{
 ///
 /// Both fits return the best of several of these, and the selection between
 /// restarts is the same comparison whichever distance produced them.
+#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Attempt {
     /// The medoids, as positions in the order the caller gave the sequences,

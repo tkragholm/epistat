@@ -33,7 +33,7 @@ impl Restarts {
     /// [`Error::Input`] when `seeds` is empty.
     pub fn from_seeds(seeds: Vec<u64>) -> Result<Self, Error> {
         if seeds.is_empty() {
-            return Err(Error::invalid("a fit needs at least one restart"));
+            return Err(Error::NoRestarts);
         }
         Ok(Self(seeds))
     }
