@@ -16,6 +16,7 @@
 //! test prints the largest deviation in units of its bound.
 
 use epistat_core::Level;
+use epistat_epi::PersonTime2;
 use epistat_epi::rates::rate_ratio_exact;
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -63,9 +64,17 @@ fn agrees_with_poisson_test() {
     for c in &r.cases {
         let label = format!("{} {} {} {} {}", c.e1, c.e0, c.t1, c.t0, c.level);
         let level = Level::confidence(c.level).unwrap();
-        let got = rate_ratio_exact(c.e1, c.t1, c.e0, c.t0, level)
-            .unwrap()
-            .unwrap();
+        let got = rate_ratio_exact(
+            &PersonTime2 {
+                exposed_events: c.e1,
+                exposed_time: c.t1,
+                unexposed_events: c.e0,
+                unexposed_time: c.t0,
+            },
+            level,
+        )
+        .unwrap()
+        .unwrap();
         let limit_bound = if c.e1.max(c.e0) > 1000.0 { 1e-6 } else { 1e-9 };
         if c.lower == 0.0 {
             assert_eq!(got.lower(), Some(0.0), "{label}");
@@ -90,8 +99,54 @@ fn agrees_with_poisson_test() {
 #[test]
 fn undefined_and_invalid_input() {
     let level = Level::default();
-    assert_eq!(rate_ratio_exact(0.0, 1.0, 0.0, 1.0, level).unwrap(), None);
-    assert_eq!(rate_ratio_exact(1.0, 0.0, 2.0, 1.0, level).unwrap(), None);
-    assert!(rate_ratio_exact(1.5, 1.0, 2.0, 1.0, level).is_err());
-    assert!(rate_ratio_exact(-1.0, 1.0, 2.0, 1.0, level).is_err());
+    assert_eq!(
+        rate_ratio_exact(
+            &PersonTime2 {
+                exposed_events: 0.0,
+                exposed_time: 1.0,
+                unexposed_events: 0.0,
+                unexposed_time: 1.0
+            },
+            level
+        )
+        .unwrap(),
+        None
+    );
+    assert_eq!(
+        rate_ratio_exact(
+            &PersonTime2 {
+                exposed_events: 1.0,
+                exposed_time: 0.0,
+                unexposed_events: 2.0,
+                unexposed_time: 1.0
+            },
+            level
+        )
+        .unwrap(),
+        None
+    );
+    assert!(
+        rate_ratio_exact(
+            &PersonTime2 {
+                exposed_events: 1.5,
+                exposed_time: 1.0,
+                unexposed_events: 2.0,
+                unexposed_time: 1.0
+            },
+            level
+        )
+        .is_err()
+    );
+    assert!(
+        rate_ratio_exact(
+            &PersonTime2 {
+                exposed_events: -1.0,
+                exposed_time: 1.0,
+                unexposed_events: 2.0,
+                unexposed_time: 1.0
+            },
+            level
+        )
+        .is_err()
+    );
 }

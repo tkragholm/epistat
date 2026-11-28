@@ -171,7 +171,7 @@ fn main() {
                     let data = OrdinalData::builder(x.as_ref(), &y).build().expect("data");
                     brant(&data).expect("brant")
                 });
-                lines.push("omnibus", test.omnibus.statistic);
+                lines.push("omnibus", test.omnibus.statistic.unwrap_or(f64::NAN));
                 (times, lines)
             } else {
                 let model = Ordinal::new(OrdinalLink::Logit);

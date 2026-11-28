@@ -78,7 +78,7 @@
 
 use epistat_core::{Covariance, InputError};
 use epistat_inference::Clusters;
-use epistat_inference::sandwich::SmallSample;
+use epistat_inference::sandwich::SandwichAdjustment;
 use epistat_linalg::{Attempt, Mat, inverse};
 
 use super::{Msm, MsmInput, Population, check_design, dense, fit_msm, quadratic_form};
@@ -182,7 +182,7 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
     let b_inv = invert(&b)?;
     // The person-clustered factor `G / (G - 1)` of the outcome model's `Cr1`
     // covariance, which the cross-covariance shares.
-    let factor = SmallSample::Clusters
+    let factor = SandwichAdjustment::ClusterCount
         .factor(n, p, Some(g))
         .ok_or_else(|| Error::no_information("outcome model: at least two persons are needed"))?;
     let am = product(&a_inv, &meat);

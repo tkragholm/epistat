@@ -32,16 +32,28 @@
 //!   estimator whose data have no unit column, by the rows of its input
 //!   ([`KeyedBy`]); clusters looked up by key must be keyed the same way.
 //!
+//! # Which clusters
+//!
+//! - [`Clusters::per_unit`] for person-period data: a unit column and a
+//!   cluster column, one entry per unit, looked up by unit code.
+//! - [`Clusters::per_row`] for data with one row per unit: the cluster of
+//!   each row of the estimator's input, looked up by row.
+//! - [`Clusters::from_codes`] only with an influence function built by
+//!   position from the same rows, since its entries are matched by position.
+//!
 //! Clusters are numbered in a fixed order (sorted code order for
-//! [`Clusters::from_codes`], [`Clusters::per_unit`] and [`Clusters::per_row`]) and every sum runs in
-//! a fixed order, so results do not depend on hashing or on the number of
-//! threads. Each module documents its formulas, edge cases and references.
+//! [`Clusters::from_codes`], [`Clusters::per_unit`] and [`Clusters::per_row`],
+//! first appearance for [`Clusters::from_labels_first_seen`]) and every sum
+//! runs in a fixed order, so results do not depend on hashing or on the
+//! number of threads. Each module documents its formulas, edge cases and
+//! references.
 #![warn(missing_docs)]
 
 pub mod bootstrap;
 mod clusters;
 pub mod curve;
 pub mod influence;
+mod input;
 pub mod interval;
 pub mod multiplicity;
 pub mod pooling;
@@ -50,7 +62,8 @@ pub mod simultaneous;
 pub mod wald;
 
 pub use clusters::Clusters;
-pub use influence::{ClusterRule, Influence, KeyedBy};
+pub use influence::{ClusterRule, Influence, InfluenceScale, KeyedBy, Keys};
+pub use input::CovarianceInput;
 
 use epistat_core::check;
 use epistat_core::{Classify, ErrorKind, InputError};

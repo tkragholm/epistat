@@ -148,17 +148,9 @@ pub struct Pooled {
     pub n_strata_used: usize,
 }
 
-/// A test statistic on `df` degrees of freedom with its p-value.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Test {
-    /// The statistic.
-    pub statistic: f64,
-    /// The degrees of freedom of the chi-square reference distribution.
-    pub df: usize,
-    /// The upper tail probability.
-    pub p_value: f64,
-}
+/// The chi-square tests of the module are the shared `epistat_core::Test`,
+/// with `df` the degrees of freedom of the chi-square reference.
+pub use epistat_core::Test;
 
 fn check_tables(tables: &[Counts2x2]) -> Result<(), Error> {
     check::non_empty("tables", tables.len())?;
@@ -426,11 +418,9 @@ pub fn rate_difference(strata: &[PersonTime2], level: Level) -> Result<Pooled, E
 }
 
 fn chi_square_test(statistic: f64, df: usize) -> Test {
-    Test {
-        statistic,
-        df,
-        p_value: chi_square_sf(statistic, df as f64),
-    }
+    let df = df as f64;
+    let statistic = statistic.is_finite().then_some(statistic);
+    Test::chi_square(statistic, df, statistic.map(|x| chi_square_sf(x, df)))
 }
 
 fn continuity_shift(delta: f64, continuity: bool) -> f64 {
@@ -896,8 +886,9 @@ mod tests {
     fn identical_tables_are_homogeneous() {
         let t = tab(12.0, 30.0, 8.0, 50.0);
         let bd = breslow_day(&[t, t, t], false).unwrap().unwrap();
-        assert!(bd.statistic < 1e-20, "{}", bd.statistic);
-        assert_eq!(bd.df, 2);
+        let statistic = bd.statistic.unwrap();
+        assert!(statistic < 1e-20, "{statistic}");
+        assert_eq!(bd.df, Some(2.0));
     }
 
     #[test]

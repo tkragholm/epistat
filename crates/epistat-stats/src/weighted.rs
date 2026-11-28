@@ -83,7 +83,7 @@
 //! 2. R Core Team. `cov.wt` in the R package stats, method `"unbiased"`.
 //! 3. Kish L. Survey Sampling. New York: Wiley; 1965, p. 427.
 
-use epistat_core::InputError;
+use epistat_core::{CaseWeights, InputError};
 
 use crate::Error;
 use crate::sum::blocked;
@@ -228,28 +228,62 @@ fn guarded_sum(terms: &[f64]) -> Result<f64, Error> {
 /// `None`. Terms are summed by [`fixed_point_sum`] with
 /// [`WEIGHTED_DECIMAL_PLACES`] decimals.
 ///
-/// `None` where [`try_mean`] returns an error.
+/// The weights are a bare column, checked here as [`CaseWeights`] checks
+/// them. `None` where [`try_mean`] returns an error for the same weights,
+/// and when every weight is zero.
 #[must_use]
 pub fn mean(values: &[f64], weights: Option<&[f64]>) -> Option<f64> {
-    try_mean(values, weights).ok()
+    mean_of(values, weights).ok()
 }
 
-/// [`mean`], with the reason when there is no mean.
+/// [`mean`] of weights checked as [`CaseWeights`], with the reason when
+/// there is no mean.
 ///
 /// The terms `x w` and the weights are each rounded to
 /// [`WEIGHTED_DECIMAL_PLACES`] decimals and added as integers. A sum whose
 /// rounding could reach [`ROUNDING_LIMIT`] of the magnitude of its terms, as
 /// for values or weights near `1e-12` and below, is refused rather than
-/// returned with its digits lost.
+/// returned with its digits lost. Rows with a weight of 0 leave the mean.
+///
+/// ```
+/// use epistat_core::CaseWeights;
+/// use epistat_stats::weighted::try_mean;
+///
+/// let x = [1.0, 2.0, 4.0];
+/// let w = CaseWeights::new(&[1.0, 0.0, 3.0])?;
+/// assert_eq!(try_mean(&x, Some(w))?, 3.25);
+/// assert_eq!(try_mean(&x, None)?, 7.0 / 3.0);
+/// // A negative weight is refused where the weights are built.
+/// assert!(CaseWeights::new(&[1.0, -1.0, 1.0]).is_err());
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 ///
 /// # Errors
 ///
-/// [`Error::Input`] when a value or weight is NaN or infinite, the weights
-/// differ in length from the values, a weight is negative, or no row has a
-/// positive weight (`Empty`); [`Error::FixedPointRounding`] when the rounding
-/// bound is too large; [`Error::FixedPointOverflow`] when a term or a sum is
-/// too large for the fixed-point sum.
-pub fn try_mean(values: &[f64], weights: Option<&[f64]>) -> Result<f64, Error> {
+/// [`Error::Input`] when a value is NaN or infinite, the weights differ in
+/// length from the values, or there are no values (`Empty`);
+/// [`Error::FixedPointRounding`] when the rounding bound is too large;
+/// [`Error::FixedPointOverflow`] when a term or a sum is too large for the
+/// fixed-point sum.
+pub fn try_mean(values: &[f64], weights: Option<CaseWeights<'_>>) -> Result<f64, Error> {
+    mean_of(values, weights.as_ref().map(CaseWeights::as_slice))
+}
+
+/// [`variance`] of weights checked as [`CaseWeights`], with the reason when
+/// there is no variance.
+///
+/// # Errors
+///
+/// [`Error::Input`] when a value is NaN or infinite, the weights differ in
+/// length from the values, or fewer than two rows have a positive weight
+/// (`Empty`), and [`Error::NonPositiveDivisor`] when the divisor
+/// `W - sum(w^2) / W` is not positive, as for one row that carries all the
+/// weight.
+pub fn try_variance(values: &[f64], weights: Option<CaseWeights<'_>>) -> Result<f64, Error> {
+    variance_of(values, weights.as_ref().map(CaseWeights::as_slice))
+}
+
+fn mean_of(values: &[f64], weights: Option<&[f64]>) -> Result<f64, Error> {
     let (x, w) = usable(values, weights)?;
     if x.is_empty() {
         let what = if weights.is_some() && !values.is_empty() {
@@ -279,12 +313,21 @@ pub fn try_mean(values: &[f64], weights: Option<&[f64]>) -> Result<f64, Error> {
 /// The variance with reliability weights, `sum(w (x - mean)^2) / (W - sum(w^2)
 /// / W)`, or the sample variance when `weights` is `None`.
 ///
-/// `None` for the cases in the module documentation.
+/// The weights are a bare column, checked here as [`CaseWeights`] checks
+/// them; [`try_variance`] takes `CaseWeights`. `None` for the cases in the
+/// module documentation.
 #[must_use]
 pub fn variance(values: &[f64], weights: Option<&[f64]>) -> Option<f64> {
-    let (x, w) = usable(values, weights).ok()?;
+    variance_of(values, weights).ok()
+}
+
+fn variance_of(values: &[f64], weights: Option<&[f64]>) -> Result<f64, Error> {
+    let (x, w) = usable(values, weights)?;
     if x.len() < 2 {
-        return None;
+        return Err(InputError::Empty {
+            what: "two rows with a positive weight",
+        }
+        .into());
     }
     let (total, squares, weighted_sum, weight_of) = if weights.is_some() {
         let products: Vec<f64> = x.iter().zip(&w).map(|(&x, &w)| x * w).collect();
@@ -297,11 +340,16 @@ pub fn variance(values: &[f64], weights: Option<&[f64]>) -> Option<f64> {
         (n, n, blocked(&products), ones)
     };
     if total <= 0.0 {
-        return None;
+        return Err(InputError::Empty {
+            what: "rows with a positive weight",
+        }
+        .into());
     }
     let divisor = total - squares / total;
     if divisor <= 0.0 {
-        return None;
+        return Err(Error::NonPositiveDivisor {
+            what: "the divisor of the weighted variance",
+        });
     }
     let mean = weighted_sum / total;
     let deviations: Vec<f64> = x
@@ -309,7 +357,7 @@ pub fn variance(values: &[f64], weights: Option<&[f64]>) -> Option<f64> {
         .zip(&weight_of)
         .map(|(&x, &w)| w * (x - mean).powi(2))
         .collect();
-    Some(blocked(&deviations) / divisor)
+    Ok(blocked(&deviations) / divisor)
 }
 
 /// Kish's effective sample size, `(sum w)^2 / sum w^2`, of the weights.
@@ -576,6 +624,30 @@ mod tests {
         assert_eq!(mean(&[1.0], Some(&[0.0])), None);
         assert_eq!(variance(&[1.0], None), None);
         assert_eq!(variance(&[1.0, 2.0], Some(&[1.0, 0.0])), None);
+        let one_row = CaseWeights::new(&[1.0, 0.0]).unwrap();
+        assert!(matches!(
+            try_variance(&[1.0, 2.0], Some(one_row)),
+            Err(Error::Input(InputError::Empty { .. }))
+        ));
+    }
+
+    #[test]
+    fn the_checked_forms_give_the_bits_of_the_slice_forms() {
+        let x = [3.0, 1.5, 7.25, 2.0, 9.5];
+        let w = [0.5, 2.0, 0.0, 1.25, 3.0];
+        let weights = CaseWeights::new(&w).unwrap();
+        assert_eq!(
+            try_mean(&x, Some(weights)).unwrap().to_bits(),
+            mean(&x, Some(&w)).unwrap().to_bits()
+        );
+        assert_eq!(
+            try_variance(&x, Some(weights)).unwrap().to_bits(),
+            variance(&x, Some(&w)).unwrap().to_bits()
+        );
+        assert_eq!(
+            try_variance(&x, None).unwrap().to_bits(),
+            variance(&x, None).unwrap().to_bits()
+        );
     }
 
     #[test]
@@ -584,20 +656,18 @@ mod tests {
         let w = [1.0, -5.0, 1.0];
         assert_eq!(mean(&x, Some(&w)), None);
         assert_eq!(variance(&x, Some(&w)), None);
-        assert_eq!(
-            try_mean(&x, Some(&w)),
-            Err(Error::Input(InputError::Domain {
+        assert!(matches!(
+            CaseWeights::new(&w),
+            Err(InputError::Domain {
                 what: "weights",
-                value: -5.0,
-                domain: "[0, inf)",
                 row: Some(1),
-            }))
-        );
+                ..
+            })
+        ));
+        assert_eq!(mean(&[1.0], Some(&[0.0])), None);
         assert_eq!(
-            try_mean(&[1.0], Some(&[0.0])),
-            Err(Error::Input(InputError::Empty {
-                what: "rows with a positive weight"
-            }))
+            CaseWeights::new(&[0.0]),
+            Err(InputError::AllZero { what: "weights" })
         );
         assert_eq!(
             try_mean(&[], None),
@@ -612,14 +682,14 @@ mod tests {
         let w = [1e-7; 3];
         assert_eq!(mean(&x, Some(&w)), None);
         assert!(matches!(
-            try_mean(&x, Some(&w)),
+            try_mean(&x, Some(CaseWeights::new(&w).unwrap())),
             Err(Error::FixedPointRounding { places: 15, .. })
         ));
         // Unweighted values are rounded the same way.
         assert_eq!(mean(&[1e-14, 2e-14], None), None);
         // Small weights alone round too: the denominator is refused.
         assert!(matches!(
-            try_mean(&[1.0, 2.0], Some(&[1e-6, 1e-6])),
+            try_mean(&[1.0, 2.0], Some(CaseWeights::new(&[1e-6, 1e-6]).unwrap())),
             Err(Error::FixedPointRounding { .. })
         ));
         // Terms of both signs whose sum is zero are not too small.
@@ -635,7 +705,7 @@ mod tests {
         let small = vec![1e-3; 1000];
         assert!((mean(&small, None).unwrap() - 1e-3).abs() <= 1e-18);
         assert_eq!(
-            try_mean(&[1e30], Some(&[1e10])),
+            try_mean(&[1e30], Some(CaseWeights::new(&[1e10]).unwrap())),
             Err(Error::FixedPointOverflow { places: 15 })
         );
     }

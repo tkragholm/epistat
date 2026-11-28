@@ -79,7 +79,7 @@
 //! their covariance is the variance of the gap. [`kitagawa_poisson`] takes
 //! events and person-time by stratum: the shares are those of the person-time,
 //! which is taken as fixed, and the counts are Poisson, so `v_i = d_i / y_i^2`
-//! times the square of the scale, estimated from the counts. The intervals
+//! times the square of `per`, estimated from the counts. The intervals
 //! are normal, `estimate -/+ z se` with `z` the normal quantile at the
 //! level's [`Level::upper_probability`]. Rates whose variance has another source,
 //! such as a bootstrap or a binomial risk, go to [`kitagawa_variance`]
@@ -414,10 +414,10 @@ pub struct PoissonDecomposition {
 /// and normal intervals at `level`.
 ///
 /// The shares are each population's shares of its person-time, from
-/// [`shares`], and the rates `scale d / y`, so the gap is the difference of
-/// the crude rates times `scale`. The estimates are those of [`kitagawa`] or
+/// [`shares`], and the rates `per d / y`, so the gap is the difference of
+/// the crude rates times `per`. The estimates are those of [`kitagawa`] or
 /// [`kitagawa_symmetric`], bit for bit. The person-time is taken as fixed and
-/// the counts as Poisson, so a rate has the variance `scale^2 d / y^2` and the
+/// the counts as Poisson, so a rate has the variance `per^2 d / y^2` and the
 /// variances are those of [`kitagawa_variance`]; they are exact for the
 /// linear parts and estimated from the counts, so a stratum without events
 /// adds nothing to them.
@@ -429,7 +429,7 @@ pub struct PoissonDecomposition {
 /// # Errors
 ///
 /// [`crate::Error::Input`] when the slices differ in length or are empty, a
-/// count or a person-time is negative or not finite, or `scale` is not
+/// count or a person-time is negative or not finite, or `per` is not
 /// positive and finite, and [`crate::Error::Invalid`] for a stratum with
 /// events and no person-time.
 pub fn kitagawa_poisson(
@@ -437,7 +437,7 @@ pub fn kitagawa_poisson(
     reference: crate::rates::Strata<'_>,
     split: Split,
     level: Level,
-    scale: f64,
+    per: f64,
 ) -> Result<Option<PoissonDecomposition>, Error> {
     let n = group.events.len();
     crate::error::columns(&[
@@ -446,10 +446,10 @@ pub fn kitagawa_poisson(
         ("reference events", reference.events.len()),
         ("reference person-time", reference.time.len()),
     ])?;
-    if !(scale > 0.0 && scale.is_finite()) {
+    if !(per > 0.0 && per.is_finite()) {
         return Err(InputError::Domain {
-            what: "scale",
-            value: scale,
+            what: "per",
+            value: per,
             domain: "(0, inf)",
             row: None,
         }
@@ -489,7 +489,7 @@ pub fn kitagawa_poisson(
         events
             .iter()
             .zip(time)
-            .map(|(&d, &y)| (scale * d / y, scale * scale * d / (y * y)))
+            .map(|(&d, &y)| (per * d / y, per * per * d / (y * y)))
             .unzip()
     };
     let (rate_a, var_a) = rates(group.events, group.time);

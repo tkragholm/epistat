@@ -42,24 +42,34 @@
 //! [`sandwich_with_inverse`] forms the same `V = A^-1 M A^-T` from an inverse
 //! the caller already has, by two products, for a symmetric `A`.
 //!
-//! [`SmallSample`] gives the small-sample factor `c` that scales `V`, with
-//! `N` rows, a model of rank `K` and `G` clusters:
+//! [`SandwichAdjustment`] gives the small-sample factor `c` that scales `V`,
+//! with `N` rows, a model of rank `K` and `G` clusters, and the call in R's
+//! `sandwich` package and in Stata that applies the same factor:
 //!
 //! ```text
-//! rule       no clusters      clusters
-//! None       1                1
-//! Clusters   N / (N - 1)      G / (G - 1)
-//! Hc1        N / (N - K)      G / (G - 1) (N - 1) / (N - K)
+//! adjustment     no clusters    clusters                         R                                   Stata
+//! None           1              1                                vcovHC(type = "HC0"),               -
+//!                                                                vcovCL(type = "HC0", cadjust = FALSE)
+//! ClusterCount   N / (N - 1)    G / (G - 1)                      vcovCL(type = "HC0", cadjust = TRUE) -
+//! Hc1            N / (N - K)    G / (G - 1) (N - 1) / (N - K)    vcovHC(type = "HC1"),               vce(robust), vce(cluster g)
+//!                                                                vcovCL(type = "HC1", cadjust = TRUE)
 //! ```
 //!
-//! `Hc1` is `sandwich::vcovHC(type = "HC1")` without clusters and
-//! `sandwich::vcovCL(type = "HC1", cadjust = TRUE)` with them; `Clusters` is
-//! `vcovCL(type = "HC0", cadjust = TRUE)`, every row its own cluster when
-//! there are none. The factor does not exist, and is `None`, where a
-//! denominator is not positive.
+//! Without clusters `ClusterCount` puts every row in its own cluster. The
+//! factor does not exist, and is `None`, where a denominator is not positive.
 //!
-//! [`standard_errors`] is `sqrt(max(V_ii, 0))`. A negative diagonal entry,
-//! which rounding can produce when `V` is near singular, is read as zero.
+//! The default is `None`, no factor. The variance of an influence function
+//! has its own rule, [`ClusterRule`](crate::ClusterRule), whose default
+//! `SmallSample` applies `G / (G - 1)`, the factor of `ClusterCount`: the two
+//! defaults differ, and an estimator documents which it uses.
+//!
+//! [`defined_standard_errors`] is `sqrt(V_ii)`, `None` for a negative or NaN
+//! diagonal entry, as `epistat_core::Covariance::standard_errors` reads one.
+//! [`standard_errors`] is `sqrt(max(V_ii, 0))`, which reads a negative
+//! diagonal entry, as rounding can produce when `V` is near singular, as
+//! zero. [`covariance`] returns the sandwich as an
+//! `epistat_core::Covariance`, the type the tests and intervals of the
+//! workspace take.
 //!
 //! # Determinism
 //!
@@ -89,6 +99,8 @@
 //! 4. Cameron AC, Gelbach JB, Miller DL. Bootstrap-based improvements for
 //!    inference with clustered errors. Rev Econ Stat. 2008;90(3):414-27.
 
+use epistat_core::Covariance;
+use epistat_linalg::convert::covariance_from_mat;
 use epistat_linalg::{Attempt, Factor, row_scaled_gram};
 use epistat_linalg::{Mat, MatRef};
 
@@ -148,21 +160,23 @@ pub fn meat_from(
     }
 }
 
-/// The small-sample factor of a sandwich covariance.
+/// The small-sample factor of a sandwich covariance; the module has the
+/// table of each factor against R's `sandwich` and Stata.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-pub enum SmallSample {
+pub enum SandwichAdjustment {
     /// No factor, `HC0`.
     #[default]
     None,
-    /// `G / (G - 1)` for `G` clusters.
-    Clusters,
+    /// `G / (G - 1)` for `G` clusters, `N / (N - 1)` without them:
+    /// `vcovCL(type = "HC0", cadjust = TRUE)`.
+    ClusterCount,
     /// `N / (N - K)` without clusters, `G / (G - 1) (N - 1) / (N - K)` with
-    /// them.
+    /// them: `HC1`, Stata's `vce(robust)` and `vce(cluster)`.
     Hc1,
 }
 
-impl SmallSample {
+impl SandwichAdjustment {
     /// The factor for `rows` rows, a model of rank `rank` and `clusters`
     /// clusters (`None` without clusters), or `None` where it does not exist:
     /// fewer than two clusters, or no more rows than the rank.
@@ -173,7 +187,7 @@ impl SmallSample {
     pub fn factor(self, rows: usize, rank: usize, clusters: Option<usize>) -> Option<f64> {
         match (self, clusters) {
             (Self::None, _) => Some(1.0),
-            (Self::Clusters, groups) => {
+            (Self::ClusterCount, groups) => {
                 let g = groups.unwrap_or(rows);
                 (g >= 2).then(|| g as f64 / (g - 1) as f64)
             }
@@ -246,7 +260,49 @@ pub fn sandwich_with_inverse(inverse: MatRef<'_, f64>, meat: MatRef<'_, f64>) ->
     Mat::from_fn(p, p, |a, b| full[(a, b)].midpoint(full[(b, a)]))
 }
 
+/// The sandwich [`sandwich`] forms, as an `epistat_core::Covariance`.
+///
+/// ```
+/// use epistat_inference::sandwich;
+/// use epistat_linalg::{Attempt, mat};
+///
+/// let information = mat![[1.0, 0.0], [0.0, 4.0]];
+/// let meat = mat![[4.0, 1.0], [1.0, 16.0]];
+/// let v = sandwich::covariance(information.as_ref(), meat.as_ref(), &Attempt::SYMMETRIC)?;
+/// assert_eq!(v.get(0, 1), Some(0.25));
+/// assert_eq!(v.standard_errors(), [Some(2.0), Some(1.0)]);
+/// # Ok::<(), epistat_inference::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// As [`sandwich`], and [`Error::Input`] for an entry that is not finite.
+pub fn covariance(
+    information: MatRef<'_, f64>,
+    meat: MatRef<'_, f64>,
+    attempts: &[Attempt],
+) -> Result<Covariance, Error> {
+    let v = sandwich(information, meat, attempts)?;
+    covariance_from_mat(v.as_ref()).map_err(|error| match error {
+        epistat_linalg::Error::Input(input) => Error::Input(input),
+        other => Error::Solve(other),
+    })
+}
+
+/// The square roots of the diagonal, `None` for a variance that is negative
+/// or NaN, as `epistat_core::Covariance::standard_errors` gives them.
+#[must_use]
+pub fn defined_standard_errors(covariance: MatRef<'_, f64>) -> Vec<Option<f64>> {
+    (0..covariance.nrows())
+        .map(|i| {
+            let v = covariance[(i, i)];
+            (v >= 0.0).then(|| v.sqrt())
+        })
+        .collect()
+}
+
 /// The square roots of the diagonal, with negative variances read as zero.
+/// [`defined_standard_errors`] gives `None` for them instead.
 #[must_use]
 pub fn standard_errors(covariance: MatRef<'_, f64>) -> Vec<f64> {
     (0..covariance.nrows())
@@ -273,6 +329,16 @@ mod tests {
             standard_errors(covariance.as_ref()),
             [covariance[(0, 0)].sqrt()]
         );
+        let shared =
+            super::covariance(information.as_ref(), m.as_ref(), &Attempt::SYMMETRIC).unwrap();
+        assert_eq!(shared.get(0, 0), Some(covariance[(0, 0)]));
+    }
+
+    #[test]
+    fn a_negative_variance_has_no_standard_error() {
+        let v = mat![[-4.0, 0.0, 0.0], [0.0, 9.0, 0.0], [0.0, 0.0, f64::NAN]];
+        assert_eq!(standard_errors(v.as_ref())[..2], [0.0, 3.0]);
+        assert_eq!(defined_standard_errors(v.as_ref()), [None, Some(3.0), None]);
     }
 
     #[test]
@@ -402,15 +468,26 @@ mod tests {
 
     #[test]
     fn small_sample_factors() {
-        assert_eq!(SmallSample::None.factor(10, 3, Some(1)), Some(1.0));
-        assert_eq!(SmallSample::Clusters.factor(10, 3, Some(5)), Some(1.25));
-        assert_eq!(SmallSample::Clusters.factor(5, 3, None), Some(1.25));
-        assert_eq!(SmallSample::Clusters.factor(10, 3, Some(1)), None);
-        assert_eq!(SmallSample::Hc1.factor(10, 2, None), Some(1.25));
-        assert_eq!(SmallSample::Hc1.factor(2, 2, None), None);
+        assert_eq!(SandwichAdjustment::None.factor(10, 3, Some(1)), Some(1.0));
+        assert_eq!(
+            SandwichAdjustment::ClusterCount.factor(10, 3, Some(5)),
+            Some(1.25)
+        );
+        assert_eq!(
+            SandwichAdjustment::ClusterCount.factor(5, 3, None),
+            Some(1.25)
+        );
+        assert_eq!(
+            SandwichAdjustment::ClusterCount.factor(10, 3, Some(1)),
+            None
+        );
+        assert_eq!(SandwichAdjustment::Hc1.factor(10, 2, None), Some(1.25));
+        assert_eq!(SandwichAdjustment::Hc1.factor(2, 2, None), None);
         let g = 4.0_f64 / 3.0 * 9.0 / 8.0;
         assert_eq!(
-            SmallSample::Hc1.factor(10, 2, Some(4)).map(f64::to_bits),
+            SandwichAdjustment::Hc1
+                .factor(10, 2, Some(4))
+                .map(f64::to_bits),
             Some(g.to_bits())
         );
         let v = mat![[1.0, 2.0], [2.0, 4.0]];

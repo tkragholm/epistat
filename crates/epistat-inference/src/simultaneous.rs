@@ -100,7 +100,7 @@ use epistat_stats::quantile;
 use epistat_stats::sum::lanes;
 use rayon::prelude::*;
 
-use crate::{Clusters, Error, check_length, empty};
+use crate::{Clusters, CovarianceInput, Error, check_length, empty};
 
 /// A covariance pivot below this leaves its column of the Cholesky factor zero.
 const PIVOT_FLOOR: f64 = 1e-12;
@@ -113,20 +113,25 @@ const NEGATIVE_FLOOR: f64 = 1e-10;
 /// `draws`. Replicate `r` draws from `replicate_seed(seed, r)`.
 ///
 /// For one coordinate the value approaches the pointwise `normal` critical
-/// value as the number of replicates grows.
+/// value as the number of replicates grows. The covariance is a faer matrix
+/// or an `epistat_core::Covariance` ([`CovarianceInput`]).
 ///
 /// # Errors
 ///
 /// [`InputError::Empty`](epistat_core::InputError::Empty) for a covariance
 /// with no rows or no replicates,
+/// [`InputError::NotFinite`](epistat_core::InputError::NotFinite) for an
+/// undefined entry of a `Covariance`,
 /// [`InputError::Length`](epistat_core::InputError::Length) when it is not
 /// square, and [`Error::NotFinite`] for a variance that is not positive and
 /// finite, or a correlation matrix that is not positive semidefinite.
 pub fn sup_t_from_covariance(
-    covariance: MatRef<'_, f64>,
+    covariance: impl CovarianceInput,
     level: Level,
     draws: Bootstrap,
 ) -> Result<f64, Error> {
+    let covariance = covariance.faer()?;
+    let covariance = covariance.as_ref();
     let Bootstrap {
         replicates: draws,
         seed,
@@ -726,6 +731,10 @@ mod tests {
         let mut maxima = supt_maxima(&cov, 4_001, 9);
         let expected = quantile::type7_unsorted(&mut maxima, 1.0 - 0.05).unwrap();
         assert_eq!(got.to_bits(), expected.to_bits());
+        let shared = epistat_linalg::convert::covariance_from_mat(cov.as_ref()).unwrap();
+        let from_core =
+            sup_t_from_covariance(&shared, alpha(0.05), Bootstrap::new(4_001, Seed(9))).unwrap();
+        assert_eq!(from_core.to_bits(), got.to_bits());
     }
 
     #[test]

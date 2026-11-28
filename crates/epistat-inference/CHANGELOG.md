@@ -16,19 +16,28 @@ Confidence levels, bootstrap settings and errors now use the shared types of `ep
 - `Clusters` numbers clusters as `u32`, like the codes they come from: `Clusters::of` returns `&[u32]` in place of `&[usize]`. `from_labels_first_seen`, `from_sorted_labels`, `singletons` and the deprecated `from_labels` return `Result<Clusters, Error>` and refuse more than `u32::MAX` clusters with `InputError::TooLarge` (code `input.too_large`); add `?`. `from_codes`, `per_unit`, `per_row` and `for_keys` cannot exceed the limit and are unchanged.
 - `epistat_linalg::SolveError` inside `Error::Solve` is now `epistat_linalg::Error`.
 - The minimum supported Rust version is 1.89, up from 1.85. The crate depends on `epistat-core`, and on `epistat-linalg` 0.4, `epistat-rng` 0.2 and `epistat-stats` 0.3.
+- `wald::wald` returns the shared `epistat_core::Test`, a chi-square test whose `df` is `Some(k as f64)` and whose `statistic` and `p_value` are `Option`s, in place of `Wald`. Match on the `Option` where 0.3 read a number. `Wald` is a deprecated alias of `Test`.
+- `wald::wald` refuses a covariance whose estimated reciprocal condition number is below the machine epsilon with `Error::Solve` holding `epistat_linalg::Error::IllConditioned`, the rule of R's `solve`, where it returned a statistic with no correct digits: `[[1, 1], [1, 1 + 2^-52]]` gave a statistic near `10^16` and a p-value of 0. It refuses a NaN or infinite estimate or covariance entry with `InputError::NotFinite`. A covariance R accepts gives the same bits as before.
+- `interval::trimmed_percentile` refuses a trim outside `[0, 0.5)` and one that leaves fewer than two replicates with `InputError::Domain`, where it capped the trim at 0.49 and returned the untrimmed interval when the trim left nothing. A valid trim gives the same interval.
+- `interval::Percentile::OutwardFromLast` and `OutwardFromCount` are renamed `OutwardRank` and `OutwardCount`, after where they count positions. The old names are deprecated constants of the same values, so code that names them still compiles and matches.
 
 ### Added
 
 - `Influence`, the influence function of one or more estimates, with `ClusterRule` for the small-sample rule, `variance` and `variance_with` for the clustered covariance, and `combine`, `select` and `with_values`. It is keyed either by unit codes (`Influence::new`, `from_dfbeta`) or by rows (`over_rows`, `from_dfbeta_over_rows`), and `KeyedBy` names which.
 - `Clusters::per_unit` and `Clusters::per_row`, which key clusters by unit codes or by rows, `Clusters::from_codes`, `for_keys`, `keys` and `keyed_by`. `Influence::variance` refuses clusters keyed the other way with `Error::KeyMismatch`. Clusters given by position work with either.
 - `Clusters::from_labels_first_seen`, the numbering of `from_labels` under a name that states its order.
-- `sandwich::SmallSample`, with `factor`, and `sandwich::scaled`, for the small-sample factors of a sandwich covariance, and `sandwich::meat_from`, the meat from a vector of residuals.
+- `sandwich::SandwichAdjustment` (`None`, `ClusterCount`, `Hc1`), with `factor`, and `sandwich::scaled`, for the small-sample factors of a sandwich covariance, each listed in the module against the call of R's `sandwich` package and of Stata that applies it, and `sandwich::meat_from`, the meat from a vector of residuals.
 - `curve::contrast_curve` and `curve::ContrastCurve`, the contrast of a spline term against a reference value, with pointwise or simultaneous (sup-t) bands, chosen by `curve::Band`.
 - `multiplicity::adjust` with `Adjustment`, the p-value adjustments of Bonferroni, Holm, Hochberg, Hommel, Benjamini-Hochberg and Benjamini-Yekutieli.
-- `pooling::rubin_vector` and `PooledVector`, `pooling::d1`, `d2` and `d3` with `MultiMethod`, `NegativeRiv` and `MultiTest`, `pooling::rubin_transformed` with `Transform` and `PooledOnScale`, `dfcom_residual` and `dfcom_events`, and `Pooled::p_value`.
+- `pooling::rubin_vector` and `PooledVector`, `pooling::d1`, `d2` and `d3` with `MultiMethod`, `NegativeRiv` and `MultiTest`, whose F test is an `epistat_core::Test` with the denominator degrees of freedom in `Reference::F` and in `MultiTest::df2`, `pooling::rubin_transformed` with `Transform` and `PooledOnScale`, `dfcom_residual` and `dfcom_events`, and `Pooled::p_value`.
 - `interval::percentile_sorted`, the percentile interval of replicates that are already sorted.
 - `bootstrap::unit_counts_of`, the resampling counts of one replicate.
 - `Error`, which implements `Classify`.
+- `CovarianceInput`, the covariance forms `wald` takes: a faer `MatRef` or `&Mat`, an `epistat_core::Covariance` such as `Influence::variance` returns, or an `epistat_core::Matrix`. A `Covariance` with an undefined entry is refused with `InputError::NotFinite`.
+- `interval::try_normal`, the normal interval with its standard error checked: a negative standard error is `InputError::Domain` and a NaN estimate or standard error `InputError::NotFinite`, where `interval::normal` returns reversed or undefined limits.
+- `sandwich::covariance`, the sandwich as an `epistat_core::Covariance`, and `sandwich::defined_standard_errors`, the square roots of the diagonal with `None` for a negative or NaN variance, as `Covariance::standard_errors` gives them. `sandwich::standard_errors` still reads a negative variance as zero.
+- `simultaneous::sup_t_from_covariance` takes any `CovarianceInput`, so an `epistat_core::Covariance` goes in as it is; a faer `MatRef` still does.
+- `Influence::from_values`, one constructor that takes the keys as `Keys::Units` or `Keys::Rows` and the scale of the values as a required `InfluenceScale::PerUnit` or `InfluenceScale::Dfbeta`, so values on the dfbeta scale cannot be read per unit by default, which gave a variance `n^2` times too small. `Influence::new`, `over_rows`, `from_dfbeta` and `from_dfbeta_over_rows` are each one of its four forms.
 
 ### Deprecated
 
@@ -38,6 +47,8 @@ Deprecated items are removed in the next release that breaks the API.
 - `Clusters::from_labels`, use `Clusters::from_labels_first_seen`, which gives the same numbering, or `Clusters::from_sorted_labels` for the order of `Codes::from_labels`.
 - `influence::standard_error`, use `Influence::variance_with` with `ClusterRule::NoSmallSample`.
 - `influence::clustered_variance`, `clustered_standard_error` and `clustered_covariance`, use `Influence::variance`, which centres the influence function.
+- `wald::Wald`, use `epistat_core::Test`.
+- `interval::Percentile::OutwardFromLast` and `OutwardFromCount`, use `Percentile::OutwardRank` and `Percentile::OutwardCount`.
 
 ### Results
 

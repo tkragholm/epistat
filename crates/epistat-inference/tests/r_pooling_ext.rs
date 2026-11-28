@@ -265,11 +265,11 @@ fn d1_matches_mitml() {
         let t = test_d1(&q, &u, None, None).unwrap();
         let bound = solve_bound(&case);
         if case.d1.f > 1e-6 {
-            worst.rel(name, t.statistic, case.d1.f, bound);
+            worst.rel(name, t.test.statistic.unwrap(), case.d1.f, bound);
         }
         worst.rel(name, t.riv, case.d1.riv, bound.max(1e-9));
-        worst.rel(name, t.df2, case.d1.df2, bound.max(1e-9));
-        worst.prob(name, t.p_value.unwrap(), case.d1.p, bound.max(1e-9));
+        worst.rel(name, t.df2(), case.d1.df2, bound.max(1e-9));
+        worst.prob(name, t.test.p_value.unwrap(), case.d1.p, bound.max(1e-9));
         let c = test_d1(&q, &u, None, Some(case.dfcom));
         if case.k * (case.m - 1) <= 4 {
             assert!(matches!(c, Err(Error::Imputations { .. })), "{name}");
@@ -277,10 +277,15 @@ fn d1_matches_mitml() {
         }
         let c = c.unwrap();
         if case.d1_dfcom.f > 1e-6 {
-            worst.rel(name, c.statistic, case.d1_dfcom.f, bound);
+            worst.rel(name, c.test.statistic.unwrap(), case.d1_dfcom.f, bound);
         }
-        worst.rel(name, c.df2, case.d1_dfcom.df2, bound.max(1e-9));
-        worst.prob(name, c.p_value.unwrap(), case.d1_dfcom.p, bound.max(1e-9));
+        worst.rel(name, c.df2(), case.d1_dfcom.df2, bound.max(1e-9));
+        worst.prob(
+            name,
+            c.test.p_value.unwrap(),
+            case.d1_dfcom.p,
+            bound.max(1e-9),
+        );
     }
     eprintln!("D1: worst deviation {:.3} of its bound", worst.0);
 }
@@ -299,14 +304,14 @@ fn d2_matches_mitml() {
             let stats: Vec<f64> = stats.iter().map(|d| d.max(0.0)).collect();
             let t = d2(&stats, case.k).unwrap();
             if want.f < 0.0 {
-                assert!(t.truncated && t.statistic == 0.0, "{name}");
-                assert_eq!(t.p_value, Some(1.0));
+                assert!(t.truncated && t.test.statistic.unwrap() == 0.0, "{name}");
+                assert_eq!(t.test.p_value, Some(1.0));
             } else {
-                worst.rel(name, t.statistic, want.f, 1e-9);
-                worst.prob(name, t.p_value.unwrap(), want.p, 1e-9);
+                worst.rel(name, t.test.statistic.unwrap(), want.f, 1e-9);
+                worst.prob(name, t.test.p_value.unwrap(), want.p, 1e-9);
             }
             worst.rel(name, t.riv, want.riv, 1e-9);
-            worst.rel(name, t.df2, want.df2, 1e-9);
+            worst.rel(name, t.df2(), want.df2, 1e-9);
         }
     }
     eprintln!("D2: worst deviation {:.3} of its bound", worst.0);
@@ -323,15 +328,20 @@ fn d3_matches_mice() {
         let t = d3(&w.lr_own, &w.lr_pooled, case.k, NegativeRiv::Keep).unwrap();
         worst.rel(name, t.riv, w.riv, 1e-9);
         if w.f != 0.0 {
-            worst.rel(name, t.statistic, w.f, 1e-9);
+            worst.rel(name, t.test.statistic.unwrap(), w.f, 1e-9);
         }
-        worst.rel(name, t.df2, w.df2, 1e-9);
-        worst.prob(name, t.p_value.unwrap(), w.p, 1e-9);
+        worst.rel(name, t.df2(), w.df2, 1e-9);
+        worst.prob(name, t.test.p_value.unwrap(), w.p, 1e-9);
         let truncated = d3(&w.lr_own, &w.lr_pooled, case.k, NegativeRiv::Truncate).unwrap();
         if w.riv < 0.0 {
-            assert!(truncated.truncated && truncated.riv == 0.0 && truncated.df2.is_infinite());
+            assert!(truncated.truncated && truncated.riv == 0.0 && truncated.df2().is_infinite());
             let dtilde = w.lr_pooled.iter().sum::<f64>() / case.m as f64;
-            worst.rel(name, truncated.statistic, dtilde / case.k as f64, 1e-12);
+            worst.rel(
+                name,
+                truncated.test.statistic.unwrap(),
+                dtilde / case.k as f64,
+                1e-12,
+            );
         } else {
             assert!(!truncated.truncated);
             assert_eq!(truncated, t);
@@ -462,13 +472,13 @@ fn fingerprint_of_the_tests() {
     let w = case.d3.as_ref().unwrap();
     let c = d3(&w.lr_own, &w.lr_pooled, case.k, NegativeRiv::Keep).unwrap();
     let hash = epistat_testkit::Fingerprint::new()
-        .f64(a.statistic)
-        .f64(a.df2)
-        .option_f64(a.p_value)
-        .f64(b.statistic)
-        .f64(b.df2)
-        .f64(c.statistic)
-        .f64(c.df2)
+        .f64(a.test.statistic.unwrap())
+        .f64(a.df2())
+        .option_f64(a.test.p_value)
+        .f64(b.test.statistic.unwrap())
+        .f64(b.df2())
+        .f64(c.test.statistic.unwrap())
+        .f64(c.df2())
         .finish();
     eprintln!("pooling fingerprint {hash:#018x}");
     epistat_testkit::hash_out("fingerprint_of_the_tests", hash);

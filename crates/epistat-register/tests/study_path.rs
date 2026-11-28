@@ -132,7 +132,7 @@ fn cases() -> Vec<(&'static str, u64)> {
         overlaps.clear();
         calendar_year_overlaps(start, end, floor, stream.below(2) == 0, &mut overlaps);
         for overlap in &overlaps {
-            h.int(i64::from(overlap.calendar_year));
+            h.int(overlap.calendar_year);
             h.int(overlap.overlap_days);
             h.int(overlap.calendar_days);
         }

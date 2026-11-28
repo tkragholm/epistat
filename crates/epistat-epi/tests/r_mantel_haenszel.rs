@@ -172,13 +172,13 @@ fn table_estimators_and_tests() {
         let cmh = cmh_test(&tables, false).unwrap();
         worst.check(
             &format!("{name} CMH"),
-            cmh.map(|t| t.statistic),
+            cmh.and_then(|t| t.statistic),
             case.test_uncorrected.stat,
             1e-12,
         );
         worst.check(
             &format!("{name} CMH p"),
-            cmh.map(|t| t.p_value),
+            cmh.and_then(|t| t.p_value),
             case.test_uncorrected.p,
             1e-8,
         );
@@ -195,21 +195,26 @@ fn table_estimators_and_tests() {
             }
             worst.check(
                 &format!("{name} mh stat"),
-                cmh.map(|t| t.statistic),
+                cmh.and_then(|t| t.statistic),
                 hh.stat,
                 1e-12,
             );
-            worst.check(&format!("{name} mh p"), cmh.map(|t| t.p_value), hh.p, 1e-8);
+            worst.check(
+                &format!("{name} mh p"),
+                cmh.and_then(|t| t.p_value),
+                hh.p,
+                1e-8,
+            );
             let corrected = cmh_test(&tables, true).unwrap();
             worst.check(
                 &format!("{name} cc stat"),
-                corrected.map(|t| t.statistic),
+                corrected.and_then(|t| t.statistic),
                 hh.stat_corrected,
                 1e-12,
             );
             worst.check(
                 &format!("{name} cc p"),
-                corrected.map(|t| t.p_value),
+                corrected.and_then(|t| t.p_value),
                 hh.p_corrected,
                 1e-8,
             );
@@ -223,29 +228,29 @@ fn table_estimators_and_tests() {
         }
         worst.check(
             &format!("{name} BD"),
-            bd.map(|t| t.statistic),
+            bd.and_then(|t| t.statistic),
             case.bd.stat,
             1e-9,
         );
         worst.check(
             &format!("{name} BD p"),
-            bd.map(|t| t.p_value),
+            bd.and_then(|t| t.p_value),
             case.bd.p,
             1e-7,
         );
         if let (Some(t), Some(k)) = (bd, case.bd.k_pos) {
-            assert_eq!(t.df + 1, k, "{name} df");
+            assert_eq!(t.df, Some((k - 1) as f64), "{name} df");
         }
         let ta = breslow_day(&tables, true).unwrap();
         worst.check(
             &format!("{name} TA"),
-            ta.map(|t| t.statistic),
+            ta.and_then(|t| t.statistic),
             case.ta.stat,
             1e-9,
         );
         worst.check(
             &format!("{name} TA p"),
-            ta.map(|t| t.p_value),
+            ta.and_then(|t| t.p_value),
             case.ta.p,
             1e-7,
         );
@@ -279,13 +284,13 @@ fn rate_estimators_and_tests() {
         let plain = rate_ratio_test(&strata, false).unwrap();
         worst.check(
             &format!("{name} MH"),
-            plain.map(|t| t.statistic),
+            plain.and_then(|t| t.statistic),
             case.test_uncorrected.stat,
             1e-12,
         );
         worst.check(
             &format!("{name} MH p"),
-            plain.map(|t| t.p_value),
+            plain.and_then(|t| t.p_value),
             case.test_uncorrected.p,
             1e-8,
         );
@@ -294,7 +299,7 @@ fn rate_estimators_and_tests() {
         let corrected = rate_ratio_test(&strata, true).unwrap();
         worst.check(
             &format!("{name} MH cc"),
-            corrected.map(|t| t.statistic),
+            corrected.and_then(|t| t.statistic),
             case.test_corrected.stat,
             1e-12,
         );
@@ -328,8 +333,8 @@ fn fingerprint_of_the_bcg_data() {
         .option_f64(rr.se)
         .option_f64(Some(rd.estimate))
         .option_f64(rd.se)
-        .f64(bd.statistic)
-        .f64(cmh.statistic)
+        .f64(bd.statistic.unwrap())
+        .f64(cmh.statistic.unwrap())
         .finish();
     eprintln!("mh fingerprint {hash:#018x}");
     epistat_testkit::hash_out("fingerprint_of_the_bcg_data", hash);

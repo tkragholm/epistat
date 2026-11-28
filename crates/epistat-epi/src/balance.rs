@@ -69,12 +69,46 @@ use epistat_stats::sum::lanes;
 
 pub use ks::{KsTest, kolmogorov_upper, ks_statistic, ks_statistic_sorted, ks_test};
 
-/// Standardised mean difference of a continuous variable, the difference in
-/// means over the square root of the mean of the two variances (Cohen 1988).
+/// The mean and variance of a covariate in one group, the two numbers
+/// [`smd`] takes from each.
+///
+/// The variance, not the standard deviation, is the field, and
+/// [`Moments::from_sd`] builds one from the standard deviation that tables
+/// and `cobalt` report, so the two cannot be confused.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Moments {
+    /// The mean.
+    pub mean: f64,
+    /// The variance.
+    pub variance: f64,
+}
+
+impl Moments {
+    /// The moments of a group with mean `mean` and standard deviation `sd`.
+    #[must_use]
+    pub fn from_sd(mean: f64, sd: f64) -> Self {
+        Self {
+            mean,
+            variance: sd * sd,
+        }
+    }
+}
+
+/// Standardised mean difference of a continuous variable between groups `a`
+/// and `b`, the difference in means over the square root of the mean of the
+/// two variances (Cohen 1988); `None` when that mean is not positive.
+///
+/// ```
+/// use epistat_epi::balance::{Moments, smd};
+///
+/// let treated = Moments::from_sd(52.0, 10.0);
+/// let control = Moments { mean: 50.0, variance: 100.0 };
+/// assert_eq!(smd(treated, control), Some(0.2));
+/// ```
 #[must_use]
-pub fn smd(mean_a: f64, mean_b: f64, var_a: f64, var_b: f64) -> Option<f64> {
-    let pooled = f64::midpoint(var_a, var_b);
-    (pooled > 0.0).then(|| (mean_a - mean_b) / pooled.sqrt())
+pub fn smd(a: Moments, b: Moments) -> Option<f64> {
+    let pooled = f64::midpoint(a.variance, b.variance);
+    (pooled > 0.0).then(|| (a.mean - b.mean) / pooled.sqrt())
 }
 
 /// Standardised mean difference of a binary variable from its two
@@ -85,10 +119,12 @@ pub fn smd_proportion(p_a: f64, p_b: f64) -> Option<f64> {
     (pooled > 0.0).then(|| (p_a - p_b) / pooled.sqrt())
 }
 
-/// `var_a / var_b`, for finite variances with `var_b` positive.
+/// `variance_a / variance_b`, for finite variances with `variance_b`
+/// positive.
 #[must_use]
-pub fn variance_ratio(var_a: f64, var_b: f64) -> Option<f64> {
-    (var_a.is_finite() && var_b.is_finite() && var_a >= 0.0 && var_b > 0.0).then(|| var_a / var_b)
+pub fn variance_ratio(variance_a: f64, variance_b: f64) -> Option<f64> {
+    (variance_a.is_finite() && variance_b.is_finite() && variance_a >= 0.0 && variance_b > 0.0)
+        .then(|| variance_a / variance_b)
 }
 
 /// The mean and the maximum absolute difference between the two empirical
@@ -548,7 +584,19 @@ mod tests {
 
     #[test]
     fn undefined_statistics_are_none() {
-        assert_eq!(smd(1.0, 0.0, 0.0, 0.0), None);
+        assert_eq!(
+            smd(
+                Moments {
+                    mean: 1.0,
+                    variance: 0.0
+                },
+                Moments {
+                    mean: 0.0,
+                    variance: 0.0
+                }
+            ),
+            None
+        );
         assert_eq!(smd_proportion(1.0, 1.0), None);
         assert_eq!(variance_ratio(1.0, 0.0), None);
         assert_eq!(ecdf_distance(&[], &[1.0]), None);
@@ -566,7 +614,10 @@ mod tests {
 
     #[test]
     fn known_values() {
-        assert!((smd(1.0, 0.0, 1.0, 1.0).unwrap() - 1.0).abs() < 1e-15);
+        assert!(
+            (smd(Moments::from_sd(1.0, 1.0), Moments::from_sd(0.0, 1.0)).unwrap() - 1.0).abs()
+                < 1e-15
+        );
         assert!((smd_proportion(0.5, 0.5).unwrap()).abs() < 1e-15);
         // Disjoint supports: the empirical distribution functions differ by 1
         // at the top of the lower group.

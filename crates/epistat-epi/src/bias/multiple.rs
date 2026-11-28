@@ -49,8 +49,8 @@ pub enum BiasStep {
         /// The specificities.
         sp: Pair,
     },
-    /// Selection, with the probability of each cell, `[[a, b], [c, d]]`.
-    Selection([[Dist; 2]; 2]),
+    /// Selection, with the distribution of the probability of each cell.
+    Selection(super::Cells<Dist>),
 }
 
 /// An unmeasured binary confounder adjusted for last.
@@ -70,7 +70,9 @@ impl BiasStep {
                 se.validate()?;
                 sp.validate()
             }
-            Self::Selection(s) => s.iter().flatten().try_for_each(Dist::validate),
+            Self::Selection(s) => super::selection_order(s)
+                .iter()
+                .try_for_each(Dist::validate),
         }
     }
 
@@ -82,7 +84,7 @@ impl BiasStep {
                 "specificity 0",
                 "specificity 1",
             ],
-            Self::Selection(_) => &["selection a", "selection b", "selection c", "selection d"],
+            Self::Selection(_) => &super::SELECTION_NAMES,
         };
         out.extend(own.iter().map(|n| format!("step {step}: {n}")));
     }

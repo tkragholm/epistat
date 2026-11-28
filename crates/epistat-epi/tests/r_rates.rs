@@ -19,8 +19,9 @@
 
 use epistat_core::Level;
 use epistat_epi::rates::{
-    crude_rate, direct_standardised, rate_difference, rate_ratio, rate_ratio_exact_test,
+    Strata, crude_rate, direct_standardised, rate_difference, rate_ratio, rate_ratio_exact_test,
 };
+use epistat_epi::{PersonTime, PersonTime2};
 use epistat_stats::dist::poisson::{Method, cipoisson};
 use epistat_testkit::{Tolerance, load_json};
 use serde::Deserialize;
@@ -106,9 +107,16 @@ fn crude_rates_and_byar() {
     let mut worst = 0.0;
     for c in reference().crude {
         let level = Level::confidence(c.level).unwrap();
-        let r = crude_rate(c.events, c.time, level, c.scale)
-            .unwrap()
-            .unwrap();
+        let r = crude_rate(
+            PersonTime {
+                events: c.events,
+                time: c.time,
+            },
+            level,
+            c.scale,
+        )
+        .unwrap()
+        .unwrap();
         ratio(&mut worst, r.estimate, c.rate, 1e-13);
         ratio(&mut worst, r.upper().unwrap(), c.upper, 1e-12);
         if c.lower > 0.0 {
@@ -133,9 +141,17 @@ fn standardised_rates() {
     let mut worst = 0.0;
     for s in reference().standardised {
         let level = Level::confidence(s.level).unwrap();
-        let got = direct_standardised(&s.events, &s.time, &s.weights, level)
-            .unwrap()
-            .unwrap();
+        let got = direct_standardised(
+            Strata {
+                events: &s.events,
+                time: &s.time,
+            },
+            &s.weights,
+            level,
+            1.0,
+        )
+        .unwrap()
+        .unwrap();
         let name = &s.name;
         let rate = got.rate;
         if s.rate > 0.0 {
@@ -158,16 +174,34 @@ fn ratios_and_differences() {
     for p in reference().pairs {
         for (level, rr, rd) in [(0.95, &p.rr95, &p.rd95), (0.99, &p.rr99, &p.rd99)] {
             let level = Level::confidence(level).unwrap();
-            let d = rate_difference(p.e1, p.t1, p.e0, p.t0, level)
-                .unwrap()
-                .unwrap();
+            let d = rate_difference(
+                &PersonTime2 {
+                    exposed_events: p.e1,
+                    exposed_time: p.t1,
+                    unexposed_events: p.e0,
+                    unexposed_time: p.t0,
+                },
+                level,
+                1.0,
+            )
+            .unwrap()
+            .unwrap();
             for (got, want) in [Some(d.estimate), d.lower(), d.upper(), d.p_value]
                 .into_iter()
                 .zip(rd)
             {
                 ratio(&mut worst, got.unwrap(), *want, 1e-12);
             }
-            let r = rate_ratio(p.e1, p.t1, p.e0, p.t0, level).unwrap();
+            let r = rate_ratio(
+                &PersonTime2 {
+                    exposed_events: p.e1,
+                    exposed_time: p.t1,
+                    unexposed_events: p.e0,
+                    unexposed_time: p.t0,
+                },
+                level,
+            )
+            .unwrap();
             match rr {
                 Some(rr) => {
                     let r = r.unwrap();
@@ -182,18 +216,31 @@ fn ratios_and_differences() {
             }
         }
         if p.e0 > 0.0 {
-            let r = rate_ratio(p.e1, p.t1, p.e0, p.t0, Level::default())
-                .unwrap()
-                .unwrap();
+            let r = rate_ratio(
+                &PersonTime2 {
+                    exposed_events: p.e1,
+                    exposed_time: p.t1,
+                    unexposed_events: p.e0,
+                    unexposed_time: p.t0,
+                },
+                Level::default(),
+            )
+            .unwrap()
+            .unwrap();
             assert!(
                 Tolerance::exact()
                     .rel(1e-13)
                     .accepts(r.estimate, p.estimate)
             );
         }
-        let got = rate_ratio_exact_test(p.e1, p.t1, p.e0, p.t0)
-            .unwrap()
-            .unwrap();
+        let got = rate_ratio_exact_test(&PersonTime2 {
+            exposed_events: p.e1,
+            exposed_time: p.t1,
+            unexposed_events: p.e0,
+            unexposed_time: p.t0,
+        })
+        .unwrap()
+        .unwrap();
         ratio(&mut worst, got, p.exact_p, 1e-11);
     }
     eprintln!("ratios: worst deviation {worst:.3} of its bound");
@@ -204,9 +251,14 @@ fn ratios_and_differences() {
 fn exact_test_grid() {
     let mut worst = 0.0;
     for e in reference().exact {
-        let got = rate_ratio_exact_test(e.e1, e.t1, e.e0, e.t0)
-            .unwrap()
-            .unwrap();
+        let got = rate_ratio_exact_test(&PersonTime2 {
+            exposed_events: e.e1,
+            exposed_time: e.t1,
+            unexposed_events: e.e0,
+            unexposed_time: e.t0,
+        })
+        .unwrap()
+        .unwrap();
         ratio(&mut worst, got, e.p, 1e-11);
     }
     eprintln!("exact grid: worst deviation {worst:.3} of its bound");
@@ -222,12 +274,45 @@ fn exact_test_grid() {
 fn fingerprint_of_a_fixed_table() {
     let s = &reference().standardised[0];
     let level = Level::default();
-    let g = direct_standardised(&s.events, &s.time, &s.weights, level)
-        .unwrap()
-        .unwrap();
-    let c = crude_rate(7.0, 12.5, level, 1000.0).unwrap().unwrap();
-    let r = rate_ratio(5.0, 100.0, 9.0, 120.0, level).unwrap().unwrap();
-    let p = rate_ratio_exact_test(5.0, 100.0, 9.0, 120.0).unwrap();
+    let g = direct_standardised(
+        Strata {
+            events: &s.events,
+            time: &s.time,
+        },
+        &s.weights,
+        level,
+        1.0,
+    )
+    .unwrap()
+    .unwrap();
+    let c = crude_rate(
+        PersonTime {
+            events: 7.0,
+            time: 12.5,
+        },
+        level,
+        1000.0,
+    )
+    .unwrap()
+    .unwrap();
+    let r = rate_ratio(
+        &PersonTime2 {
+            exposed_events: 5.0,
+            exposed_time: 100.0,
+            unexposed_events: 9.0,
+            unexposed_time: 120.0,
+        },
+        level,
+    )
+    .unwrap()
+    .unwrap();
+    let p = rate_ratio_exact_test(&PersonTime2 {
+        exposed_events: 5.0,
+        exposed_time: 100.0,
+        unexposed_events: 9.0,
+        unexposed_time: 120.0,
+    })
+    .unwrap();
     let hash = epistat_testkit::Fingerprint::new()
         .option_f64(Some(g.rate.estimate))
         .option_f64(Some(g.variance))

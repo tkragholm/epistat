@@ -85,10 +85,13 @@ pub(super) fn pretest(fit: &AttGt) -> Result<PretrendWald, Error> {
         return Err(Error::Singular);
     }
     let test = wald(&atts, matrix.as_ref()).map_err(|_| Error::NotFinite)?;
+    let (Some(statistic), Some(p_value)) = (test.statistic, test.p_value) else {
+        return Err(Error::NotFinite);
+    };
     Ok(PretrendWald {
-        statistic: test.statistic,
-        df: test.df,
-        p_value: test.p_value,
+        statistic,
+        df: k,
+        p_value,
         cells: used
             .iter()
             .map(|&i| (estimated[i].0.group, estimated[i].0.time))

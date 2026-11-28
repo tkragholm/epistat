@@ -84,7 +84,7 @@ use std::fmt;
 
 use crate::exact::poisson_two_sided;
 use crate::limits::interval;
-use epistat_core::{Estimate, Level, Scale, check};
+use epistat_core::{Estimate, Level, Scale, Test, check};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use epistat_stats::dist::normal;
 use epistat_stats::dist::poisson::{self, Method};
@@ -121,18 +121,6 @@ pub enum SirInterval {
     Wald,
     /// The profile likelihood limits.
     Profile,
-}
-
-/// A likelihood ratio statistic with its p-value.
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Homogeneity {
-    /// The statistic.
-    pub statistic: f64,
-    /// The degrees of freedom.
-    pub df: usize,
-    /// The upper tail probability of the chi-square distribution.
-    pub p_value: f64,
 }
 
 fn check_count(observed: f64, expected: f64, row: Option<usize>) -> Result<(), Error> {
@@ -266,12 +254,12 @@ fn check_strata(observed: &[f64], expected: &[f64]) -> Result<(), Error> {
     Ok(())
 }
 
-fn chi_square(statistic: f64, df: usize) -> Homogeneity {
-    Homogeneity {
-        statistic,
-        df,
-        p_value: chi_square_sf(statistic, df as f64),
-    }
+/// A likelihood ratio statistic on `df` degrees of freedom with its
+/// chi-square p-value, `None` for both when the statistic is not finite.
+fn chi_square(statistic: f64, df: usize) -> Test {
+    let df = df as f64;
+    let statistic = statistic.is_finite().then_some(statistic);
+    Test::chi_square(statistic, df, statistic.map(|x| chi_square_sf(x, df)))
 }
 
 /// The likelihood ratio test that the SIRs of the strata are equal, on one
@@ -281,7 +269,7 @@ fn chi_square(statistic: f64, df: usize) -> Homogeneity {
 ///
 /// [`crate::Error`] for slices of different length, a negative or non-finite
 /// count, or a stratum with no expected events.
-pub fn sir_homogeneity(observed: &[f64], expected: &[f64]) -> Result<Option<Homogeneity>, Error> {
+pub fn sir_homogeneity(observed: &[f64], expected: &[f64]) -> Result<Option<Test>, Error> {
     check_strata(observed, expected)?;
     if observed.len() < 2 {
         return Ok(None);
@@ -309,11 +297,7 @@ pub fn sir_homogeneity(observed: &[f64], expected: &[f64]) -> Result<Option<Homo
     clippy::float_cmp,
     reason = "equal scores give a model without a slope"
 )]
-pub fn sir_trend(
-    observed: &[f64],
-    expected: &[f64],
-    score: &[f64],
-) -> Result<Option<Homogeneity>, Error> {
+pub fn sir_trend(observed: &[f64], expected: &[f64], score: &[f64]) -> Result<Option<Test>, Error> {
     check_strata(observed, expected)?;
     check::same_length("score", observed.len(), score.len())?;
     check::finite("score", score)?;
@@ -483,12 +467,12 @@ mod tests {
         let h = sir_homogeneity(&[10.0, 20.0, 30.0], &[5.0, 10.0, 15.0])
             .unwrap()
             .unwrap();
-        assert!(h.statistic.abs() < 1e-12);
-        assert_eq!(h.df, 2);
+        assert!(h.statistic.unwrap().abs() < 1e-12);
+        assert_eq!(h.df, Some(2.0));
         let t = sir_trend(&[10.0, 20.0, 30.0], &[5.0, 10.0, 15.0], &[1.0, 2.0, 3.0])
             .unwrap()
             .unwrap();
-        assert!(t.statistic.abs() < 1e-12);
+        assert!(t.statistic.unwrap().abs() < 1e-12);
     }
 
     #[test]
@@ -496,6 +480,6 @@ mod tests {
         let o = [5.0, 9.0, 20.0, 41.0];
         let e = [10.0, 10.0, 10.0, 10.0];
         let t = sir_trend(&o, &e, &[0.0, 1.0, 2.0, 3.0]).unwrap().unwrap();
-        assert!(t.statistic > 20.0 && t.p_value < 1e-4);
+        assert!(t.statistic.unwrap() > 20.0 && t.p_value.unwrap() < 1e-4);
     }
 }

@@ -2,34 +2,38 @@
 //! outcome misclassification, selection and an unmeasured binary confounder,
 //! and their probabilistic versions.
 //!
-//! The table is a [`Counts2x2`], written `a, b, c, d` here with `a` exposed cases, `b`
-//! unexposed cases, `c` exposed non-cases and `d` unexposed non-cases. The
-//! risk ratio is `(a / (a + c)) / (b / (b + d))`, the odds ratio `a d / (b c)`
-//! and the risk difference `a / (a + c) - b / (b + d)`. Bias parameters are
-//! assumed values, and nothing here estimates them.
+//! The table is a [`Counts2x2`], written `a, b, c, d` here as in
+//! [`crate::tables`]: `a` exposed cases, `b` exposed non-cases, `c`
+//! unexposed cases and `d` unexposed non-cases. The risk ratio is
+//! `(a / (a + b)) / (c / (c + d))`, the odds ratio `a d / (b c)` and the
+//! risk difference `a / (a + b) - c / (c + d)`. Bias parameters are assumed
+//! values, and nothing here estimates them. Each analysis takes them in a
+//! type whose fields name their stratum ([`ExposureMisclass`],
+//! [`OutcomeMisclass`], [`Selection`] and the others of the `roles` types).
 //!
 //! # Algorithm
 //!
-//! Exposure misclassification, with sensitivity `Se_k` and specificity `Sp_k`
-//! of the exposure classification among cases (`k = 0`) and non-cases
-//! (`k = 1`). The true numbers of exposed cases and non-cases are
+//! Exposure misclassification, with sensitivity `Se` and specificity `Sp` of
+//! the exposure classification among the cases and among the non-cases. The
+//! true numbers of exposed and unexposed cases and non-cases are
 //!
 //! ```text
-//! A = ( a - (1 - Sp_0) (a + b) ) / ( Se_0 - (1 - Sp_0) ),      B = (a + b) - A
-//! C = ( c - (1 - Sp_1) (c + d) ) / ( Se_1 - (1 - Sp_1) ),      D = (c + d) - C
+//! A = ( a - (1 - Sp_cases) (a + c) ) / ( Se_cases - (1 - Sp_cases) ),              C = (a + c) - A
+//! B = ( b - (1 - Sp_noncases) (b + d) ) / ( Se_noncases - (1 - Sp_noncases) ),     D = (b + d) - B
 //! ```
 //!
-//! and with predictive values `PPV_k` and `NPV_k` in place of `Se` and `Sp`,
-//! `A = a PPV_0 + b (1 - NPV_0)` and `C = c PPV_1 + d (1 - NPV_1)`. With the
-//! positive predictive value and the sensitivity, the truly exposed are the
-//! recorded exposed times `PPV_k / Se_k`. Outcome
-//! misclassification is the same with the roles of exposure and outcome
-//! exchanged, `Se_k` and `Sp_k` for exposed (`k = 0`) and unexposed (`k = 1`)
-//! persons and `A = ( a - (1 - Sp_0) (a + c) ) / ( Se_0 - (1 - Sp_0) )` for the
-//! true cases among the exposed, `A = a PPV_0 + c (1 - NPV_0)` from
-//! predictive values and `A = a PPV_0 / Se_0` from the positive predictive
-//! value and the sensitivity. `Se + Sp - 1` must be positive, or the
-//! classification is no better than chance.
+//! and with predictive values `PPV` and `NPV` in place of `Se` and `Sp`,
+//! `A = a PPV_cases + c (1 - NPV_cases)` and
+//! `B = b PPV_noncases + d (1 - NPV_noncases)`. With the positive predictive
+//! value and the sensitivity, the truly exposed are the recorded exposed
+//! times `PPV / Se`. Outcome misclassification is the same with the roles of
+//! exposure and outcome exchanged, `Se` and `Sp` among the exposed and the
+//! unexposed, and `A = ( a - (1 - Sp_exposed) (a + b) ) / ( Se_exposed -
+//! (1 - Sp_exposed) )` for the true cases among the exposed,
+//! `A = a PPV_exposed + b (1 - NPV_exposed)` from predictive values and
+//! `A = a PPV_exposed / Se_exposed` from the positive predictive value and
+//! the sensitivity. `Se + Sp - 1` must be positive, or the classification is
+//! no better than chance, and [`SeSp::new`] refuses a pair that is not.
 //!
 //! Selection with the probability `s` of being in the table by cell: the
 //! corrected cells are `a / s_a`, `b / s_b`, `c / s_c` and `d / s_d`, and the
@@ -52,7 +56,7 @@
 //! interval. With `random_error`, the sampling error of the table is
 //! added as well. For misclassification this follows Fox, Lash and Greenland
 //! \[2\]: the true exposure prevalences among cases and non-cases are drawn
-//! from `Beta(A, B)` and `Beta(C, D)`, the predictive values follow from them,
+//! from `Beta(A, C)` and `Beta(B, D)`, the predictive values follow from them,
 //! the observed cells are reclassified by binomial draws, and the corrected
 //! log measure is shifted by a standard normal draw times its standard error.
 //! For selection and confounding the shift is a standard normal draw times the
@@ -110,12 +114,17 @@ use epistat_rng::{Stream, replicate_seed};
 mod multiple;
 mod rates;
 mod record;
+mod roles;
 
 pub use multiple::{BiasStep, ConfoundingStep, probabilistic_multiple};
 pub use rates::{
     CorrectedRates, correct_exposure_rates, correct_outcome_rates_ppv, probabilistic_misclass_rates,
 };
 pub use record::record_level_misclass;
+pub use roles::{
+    ByExposure, ByOutcome, ByRateCell, Cells, ExposureMisclass, OutcomeMisclass, PpvSe, Predictive,
+    RateMisclass, SeSp,
+};
 
 use epistat_core::{Bootstrap, Estimate, Level};
 use epistat_stats::dist::beta;
@@ -220,36 +229,6 @@ impl Corrected {
     }
 }
 
-/// Sensitivity and specificity of a classification in two strata. For
-/// exposure misclassification the strata are cases (index 0) and non-cases
-/// (1). For outcome misclassification they are exposed (0) and unexposed (1)
-/// persons. Equal entries give a non-differential misclassification.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Misclass {
-    /// Sensitivity in each stratum.
-    pub se: [f64; 2],
-    /// Specificity in each stratum.
-    pub sp: [f64; 2],
-}
-
-impl Misclass {
-    fn check(&self) -> Result<(), Error> {
-        for k in 0..2 {
-            if !(0.0..=1.0).contains(&self.se[k]) || !(0.0..=1.0).contains(&self.sp[k]) {
-                return Err(
-                    BiasError::Parameter("sensitivity and specificity must be in [0, 1]").into(),
-                );
-            }
-            if self.se[k] - (1.0 - self.sp[k]) <= 0.0 {
-                return Err(
-                    BiasError::Parameter("sensitivity plus specificity must exceed 1").into(),
-                );
-            }
-        }
-        Ok(())
-    }
-}
-
 /// The corrected cells for exposure misclassification.
 fn exposure_cells(t: &Counts2x2, se: [f64; 2], sp: [f64; 2]) -> Counts2x2 {
     let big_a = (t.exposed_cases - (1.0 - sp[0]) * (t.exposed_cases + t.unexposed_cases))
@@ -279,48 +258,42 @@ fn outcome_cells(t: &Counts2x2, se: [f64; 2], sp: [f64; 2]) -> Counts2x2 {
 }
 
 /// Corrects a table for misclassification of the exposure, with the
-/// sensitivity and specificity among cases (stratum 0) and non-cases
-/// (stratum 1).
+/// sensitivity and specificity among cases and among non-cases.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] when the table or a parameter is invalid.
-pub fn correct_exposure(t: &Counts2x2, m: &Misclass) -> Result<Corrected, Error> {
+/// [`crate::Error`] when the table is invalid.
+pub fn correct_exposure(t: &Counts2x2, m: &ExposureMisclass) -> Result<Corrected, Error> {
     t.check()?;
-    m.check()?;
-    Ok(Corrected::from_cells(exposure_cells(t, m.se, m.sp)))
+    let (se, sp) = roles::arrays(m.cases, m.noncases);
+    Ok(Corrected::from_cells(exposure_cells(t, se, sp)))
 }
 
 /// Corrects a table for misclassification of the outcome, with the
-/// sensitivity and specificity among the exposed (stratum 0) and the
-/// unexposed (stratum 1).
+/// sensitivity and specificity among the exposed and among the unexposed.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] when the table or a parameter is invalid.
-pub fn correct_outcome(t: &Counts2x2, m: &Misclass) -> Result<Corrected, Error> {
+/// [`crate::Error`] when the table is invalid.
+pub fn correct_outcome(t: &Counts2x2, m: &OutcomeMisclass) -> Result<Corrected, Error> {
     t.check()?;
-    m.check()?;
-    Ok(Corrected::from_cells(outcome_cells(t, m.se, m.sp)))
+    let (se, sp) = roles::arrays(m.exposed, m.unexposed);
+    Ok(Corrected::from_cells(outcome_cells(t, se, sp)))
 }
 
-/// Corrects a table for misclassification of the exposure from predictive
-/// values: `ppv` and `npv` of the classification among cases (index 0) and
-/// non-cases (index 1).
+/// Corrects a table for misclassification of the exposure from the
+/// predictive values of the classification among cases and among non-cases.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] when the table is invalid or a predictive value is outside
-/// `[0, 1]`.
+/// [`crate::Error`] when the table is invalid.
 pub fn correct_exposure_predictive(
     t: &Counts2x2,
-    ppv: [f64; 2],
-    npv: [f64; 2],
+    p: &ByOutcome<Predictive>,
 ) -> Result<Corrected, Error> {
     t.check()?;
-    if ppv.iter().chain(&npv).any(|x| !(0.0..=1.0).contains(x)) {
-        return Err(BiasError::Parameter("predictive values must be in [0, 1]").into());
-    }
+    let ppv = [p.cases.ppv(), p.noncases.ppv()];
+    let npv = [p.cases.npv(), p.noncases.npv()];
     let big_a = t.exposed_cases * ppv[0] + t.unexposed_cases * (1.0 - npv[0]);
     let big_c = t.exposed_noncases * ppv[1] + t.unexposed_noncases * (1.0 - npv[1]);
     Ok(Corrected::from_cells(Counts2x2 {
@@ -331,25 +304,22 @@ pub fn correct_exposure_predictive(
     }))
 }
 
-/// Corrects a table for misclassification of the outcome from predictive
-/// values: `ppv` and `npv` of the outcome classification among the exposed
-/// (index 0) and the unexposed (index 1). The true cases among the exposed
-/// are `a PPV_0 + c (1 - NPV_0)`, and among the unexposed `b PPV_1 + d (1 -
-/// NPV_1)`.
+/// Corrects a table for misclassification of the outcome from the
+/// predictive values of the outcome classification among the exposed and
+/// among the unexposed. The true cases among the exposed are
+/// `a PPV + b (1 - NPV)` with the exposed values, and among the unexposed
+/// `c PPV + d (1 - NPV)` with the unexposed ones.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] when the table is invalid or a predictive value is outside
-/// `[0, 1]`.
+/// [`crate::Error`] when the table is invalid.
 pub fn correct_outcome_predictive(
     t: &Counts2x2,
-    ppv: [f64; 2],
-    npv: [f64; 2],
+    p: &ByExposure<Predictive>,
 ) -> Result<Corrected, Error> {
     t.check()?;
-    if ppv.iter().chain(&npv).any(|x| !(0.0..=1.0).contains(x)) {
-        return Err(BiasError::Parameter("predictive values must be in [0, 1]").into());
-    }
+    let ppv = [p.exposed.ppv(), p.unexposed.ppv()];
+    let npv = [p.exposed.npv(), p.unexposed.npv()];
     let big_a = t.exposed_cases * ppv[0] + t.exposed_noncases * (1.0 - npv[0]);
     let big_b = t.unexposed_cases * ppv[1] + t.unexposed_noncases * (1.0 - npv[1]);
     Ok(Corrected::from_cells(Counts2x2 {
@@ -360,20 +330,10 @@ pub fn correct_outcome_predictive(
     }))
 }
 
-fn check_ppv_sensitivity(ppv: [f64; 2], se: [f64; 2]) -> Result<(), Error> {
-    if ppv.iter().any(|x| !(0.0..=1.0).contains(x)) {
-        return Err(BiasError::Parameter("predictive values must be in [0, 1]").into());
-    }
-    if se.iter().any(|x| !(*x > 0.0 && *x <= 1.0)) {
-        return Err(BiasError::Parameter("sensitivities must be in (0, 1]").into());
-    }
-    Ok(())
-}
-
 /// Corrects a table for misclassification of the outcome from the positive
 /// predictive value and the sensitivity of the outcome classification among
-/// the exposed (index 0) and the unexposed (index 1), as when a validation
-/// study reports the share of recorded cases that are real.
+/// the exposed and among the unexposed, as when a validation study reports
+/// the share of recorded cases that are real.
 ///
 /// The recorded cases of a group that are real are `PPV` times the recorded,
 /// and they are the share `Se` of all real cases, so the true cases are the
@@ -383,11 +343,11 @@ fn check_ppv_sensitivity(ppv: [f64; 2], se: [f64; 2]) -> Result<(), Error> {
 ///
 /// # Errors
 ///
-/// [`crate::Error`] when the table is invalid, a predictive value is outside
-/// `[0, 1]` or a sensitivity outside `(0, 1]`.
-pub fn correct_outcome_ppv(t: &Counts2x2, ppv: [f64; 2], se: [f64; 2]) -> Result<Corrected, Error> {
+/// [`crate::Error`] when the table is invalid.
+pub fn correct_outcome_ppv(t: &Counts2x2, p: &ByExposure<PpvSe>) -> Result<Corrected, Error> {
     t.check()?;
-    check_ppv_sensitivity(ppv, se)?;
+    let ppv = [p.exposed.ppv(), p.unexposed.ppv()];
+    let se = [p.exposed.sensitivity(), p.unexposed.sensitivity()];
     let big_a = t.exposed_cases * ppv[0] / se[0];
     let big_b = t.unexposed_cases * ppv[1] / se[1];
     Ok(Corrected::from_cells(Counts2x2 {
@@ -400,19 +360,16 @@ pub fn correct_outcome_ppv(t: &Counts2x2, ppv: [f64; 2], se: [f64; 2]) -> Result
 
 /// Corrects a table for misclassification of the exposure from the positive
 /// predictive value and the sensitivity of the exposure classification among
-/// cases (index 0) and non-cases (index 1): the truly exposed are the
-/// recorded exposed times `PPV / Se`, as in [`correct_outcome_ppv`].
+/// cases and among non-cases: the truly exposed are the recorded exposed
+/// times `PPV / Se`, as in [`correct_outcome_ppv`].
 ///
 /// # Errors
 ///
 /// As [`correct_outcome_ppv`].
-pub fn correct_exposure_ppv(
-    t: &Counts2x2,
-    ppv: [f64; 2],
-    se: [f64; 2],
-) -> Result<Corrected, Error> {
+pub fn correct_exposure_ppv(t: &Counts2x2, p: &ByOutcome<PpvSe>) -> Result<Corrected, Error> {
     t.check()?;
-    check_ppv_sensitivity(ppv, se)?;
+    let ppv = [p.cases.ppv(), p.noncases.ppv()];
+    let se = [p.cases.sensitivity(), p.noncases.sensitivity()];
     let big_a = t.exposed_cases * ppv[0] / se[0];
     let big_c = t.exposed_noncases * ppv[1] / se[1];
     Ok(Corrected::from_cells(Counts2x2 {
@@ -423,26 +380,38 @@ pub fn correct_exposure_ppv(
     }))
 }
 
-/// Selection probabilities by cell of the table: `[[a, b], [c, d]]`, the
-/// probability that a person of that cell is in the table.
-pub type Selection = [[f64; 2]; 2];
+/// Selection probabilities by cell of the table, the probability that a
+/// person of that cell is in the table.
+pub type Selection = Cells<f64>;
+
+/// The four values of `cells` in the order of the parameters of a draw:
+/// exposed cases, unexposed cases, exposed non-cases, unexposed non-cases.
+const fn selection_order<T: Copy>(cells: &Cells<T>) -> [T; 4] {
+    [
+        cells.exposed_cases,
+        cells.unexposed_cases,
+        cells.exposed_noncases,
+        cells.unexposed_noncases,
+    ]
+}
 
 fn check_selection(s: &Selection) -> Result<(), Error> {
-    if s.iter().flatten().any(|x| !(*x > 0.0 && *x <= 1.0)) {
+    if selection_order(s).iter().any(|x| !(*x > 0.0 && *x <= 1.0)) {
         return Err(BiasError::Parameter("selection probabilities must be in (0, 1]").into());
     }
     Ok(())
 }
 
-/// The factor `(s_b s_c) / (s_a s_d)` that the observed odds ratio is
-/// multiplied by to correct for selection.
+/// The factor `(s_c s_b) / (s_a s_d)` that the observed odds ratio is
+/// multiplied by to correct for selection, with `s_a` to `s_d` the selection
+/// probabilities of the cells `a` to `d` of the module.
 ///
 /// # Errors
 ///
 /// [`crate::Error`] when a probability is not in `(0, 1]`.
 pub fn selection_bias_factor(s: &Selection) -> Result<f64, Error> {
     check_selection(s)?;
-    Ok((s[0][1] * s[1][0]) / (s[0][0] * s[1][1]))
+    Ok((s.unexposed_cases * s.exposed_noncases) / (s.exposed_cases * s.unexposed_noncases))
 }
 
 /// Corrects a table for selection: each cell is divided by its selection
@@ -459,10 +428,10 @@ pub fn correct_selection(t: &Counts2x2, s: &Selection) -> Result<Corrected, Erro
 
 fn selection_cells(t: &Counts2x2, s: &Selection) -> Counts2x2 {
     Counts2x2 {
-        exposed_cases: t.exposed_cases / s[0][0],
-        unexposed_cases: t.unexposed_cases / s[0][1],
-        exposed_noncases: t.exposed_noncases / s[1][0],
-        unexposed_noncases: t.unexposed_noncases / s[1][1],
+        exposed_cases: t.exposed_cases / s.exposed_cases,
+        unexposed_cases: t.unexposed_cases / s.unexposed_cases,
+        exposed_noncases: t.exposed_noncases / s.exposed_noncases,
+        unexposed_noncases: t.unexposed_noncases / s.unexposed_noncases,
     }
 }
 
@@ -1205,10 +1174,13 @@ fn standard_errors(t: &Counts2x2) -> [f64; 3] {
 /// A probabilistic correction for misclassification of the exposure or the
 /// outcome.
 ///
-/// `se` and `sp` are the parameter pairs of [`Misclass`]. See the module
+/// `se` and `sp` are the distributions of the sensitivity and specificity in
+/// the two strata, the first stratum of each [`Pair`] being the cases for
+/// [`Kind::Exposure`] and the exposed for [`Kind::Outcome`], as the fields of
+/// [`ExposureMisclass`] and [`OutcomeMisclass`] are. See the module
 /// documentation for the draws and the random error. The parameters of each
 /// draw are named `sensitivity 0`, `sensitivity 1`, `specificity 0` and
-/// `specificity 1`, for the strata of [`Misclass`].
+/// `specificity 1`, stratum 0 the first.
 ///
 /// # Errors
 ///
@@ -1362,30 +1334,28 @@ fn misclass_draw(
 }
 
 /// A probabilistic correction for selection: `s` holds the distribution of the
-/// selection probability of each cell, `[[a, b], [c, d]]`, drawn
-/// independently. The parameters of each draw are named `selection a` to
-/// `selection d`.
+/// selection probability of each cell, drawn independently. The parameters
+/// of each draw are named `selection exposed cases`, `selection unexposed
+/// cases`, `selection exposed non-cases` and `selection unexposed non-cases`,
+/// in that order.
 ///
 /// # Errors
 ///
 /// As [`probabilistic_misclass`], without the restriction on counts.
 pub fn probabilistic_selection(
     t: &Counts2x2,
-    s: &[[Dist; 2]; 2],
+    s: &Cells<Dist>,
     opts: &ProbOptions,
 ) -> Result<ProbResult, Error> {
     t.check()?;
-    s.iter().flatten().try_for_each(Dist::validate)?;
+    selection_order(s).iter().try_for_each(Dist::validate)?;
     check_options(opts)?;
     let observed = (t.risk_ratio(), t.odds_ratio());
     let (Some(_), Some(_)) = observed else {
         return Err(BiasError::Table("the observed measures are undefined").into());
     };
     let se_log = standard_errors(t);
-    let mut out = Collector::new(
-        names(&["selection a", "selection b", "selection c", "selection d"]),
-        opts,
-    );
+    let mut out = Collector::new(names(&SELECTION_NAMES), opts);
     for r in 0..opts.bootstrap.replicates {
         let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed.value(), r as u64));
         let mut parameters = [f64::NAN; 4];
@@ -1405,22 +1375,34 @@ pub fn probabilistic_selection(
 /// Draws the four selection probabilities into `parameters`, `None` when one
 /// cannot be drawn or is outside `(0, 1]`.
 fn draw_selection(
-    s: &[[Dist; 2]; 2],
+    s: &Cells<Dist>,
     stream: &mut Stream,
     parameters: &mut [f64],
 ) -> Option<Selection> {
-    let mut p = [[0.0; 2]; 2];
-    for i in 0..2 {
-        for j in 0..2 {
-            p[i][j] = s[i][j].draw(stream)?;
-            parameters[2 * i + j] = p[i][j];
-        }
+    let mut p = [0.0; 4];
+    for (k, dist) in selection_order(s).iter().enumerate() {
+        p[k] = dist.draw(stream)?;
+        parameters[k] = p[k];
     }
-    if p.iter().flatten().any(|x| !(*x > 0.0 && *x <= 1.0)) {
+    if p.iter().any(|x| !(*x > 0.0 && *x <= 1.0)) {
         return None;
     }
-    Some(p)
+    Some(Cells {
+        exposed_cases: p[0],
+        unexposed_cases: p[1],
+        exposed_noncases: p[2],
+        unexposed_noncases: p[3],
+    })
 }
+
+/// The names of the selection parameters of a draw, in the order of
+/// `selection_order`.
+pub(crate) const SELECTION_NAMES: [&str; 4] = [
+    "selection exposed cases",
+    "selection unexposed cases",
+    "selection exposed non-cases",
+    "selection unexposed non-cases",
+];
 
 /// The result of a probabilistic adjustment for one measure.
 ///
@@ -1559,6 +1541,7 @@ fn draw_confounding(
 
 #[cfg(test)]
 mod tests {
+    use super::roles::Pairs;
     use super::*;
     use epistat_core::Seed;
     use epistat_testkit::Tolerance;
@@ -1575,7 +1558,7 @@ mod tests {
 
     /// Observed exposure counts when each exposed person is classified with
     /// sensitivity `se` and each unexposed with specificity `sp`.
-    fn observed_exposure(t: &Counts2x2, m: &Misclass) -> Counts2x2 {
+    fn observed_exposure(t: &Counts2x2, m: &Pairs) -> Counts2x2 {
         let seen = |exposed: f64, unexposed: f64, k: usize| {
             (
                 m.se[k] * exposed + (1.0 - m.sp[k]) * unexposed,
@@ -1594,11 +1577,11 @@ mod tests {
 
     #[test]
     fn exposure_correction_inverts_the_misclassification() {
-        let m = Misclass {
+        let m = Pairs {
             se: [0.9, 0.8],
             sp: [0.95, 0.97],
         };
-        let corrected = correct_exposure(&observed_exposure(&TRUE, &m), &m).unwrap();
+        let corrected = correct_exposure(&observed_exposure(&TRUE, &m), &m.exposure()).unwrap();
         let cells = corrected.cells.unwrap();
         for (got, want) in [
             cells.exposed_cases,
@@ -1622,7 +1605,7 @@ mod tests {
     fn outcome_correction_inverts_the_misclassification() {
         // Exchange the roles: strata are exposed and unexposed, and the
         // classification is of the outcome.
-        let m = Misclass {
+        let m = Pairs {
             se: [0.85, 0.75],
             sp: [0.99, 0.96],
         };
@@ -1639,7 +1622,10 @@ mod tests {
             exposed_noncases: seen.unexposed_cases,
             unexposed_noncases: seen.unexposed_noncases,
         };
-        let cells = correct_outcome(&observed, &m).unwrap().cells.unwrap();
+        let cells = correct_outcome(&observed, &m.outcome())
+            .unwrap()
+            .cells
+            .unwrap();
         for (got, want) in [
             cells.exposed_cases,
             cells.unexposed_cases,
@@ -1659,14 +1645,20 @@ mod tests {
 
     #[test]
     fn perfect_classification_is_the_identity() {
-        let m = Misclass {
+        let m = Pairs {
             se: [1.0; 2],
             sp: [1.0; 2],
         };
-        assert_eq!(correct_exposure(&TRUE, &m).unwrap().cells, Some(TRUE));
-        assert_eq!(correct_outcome(&TRUE, &m).unwrap().cells, Some(TRUE));
         assert_eq!(
-            correct_selection(&TRUE, &[[1.0; 2]; 2]).unwrap().cells,
+            correct_exposure(&TRUE, &m.exposure()).unwrap().cells,
+            Some(TRUE)
+        );
+        assert_eq!(
+            correct_outcome(&TRUE, &m.outcome()).unwrap().cells,
+            Some(TRUE)
+        );
+        assert_eq!(
+            correct_selection(&TRUE, &Cells::every(1.0)).unwrap().cells,
             Some(TRUE)
         );
     }
@@ -1682,34 +1674,16 @@ mod tests {
             exposed_noncases: 100.0,
             unexposed_noncases: 900.0,
         };
-        let m = Misclass {
+        let m = Pairs {
             se: [0.9, 0.9],
             sp: [0.95, 0.95],
         };
-        let corrected = correct_exposure(&t, &m).unwrap();
+        let corrected = correct_exposure(&t, &m.exposure()).unwrap();
         assert_eq!(corrected.cells, None);
         assert_eq!(corrected.odds_ratio, None);
-        assert!(
-            correct_exposure(
-                &t,
-                &Misclass {
-                    se: [0.5, 0.5],
-                    sp: [0.5, 0.5]
-                }
-            )
-            .is_err(),
-            "no better than chance"
-        );
-        assert!(
-            correct_exposure(
-                &t,
-                &Misclass {
-                    se: [1.1, 0.5],
-                    sp: [0.9, 0.9]
-                }
-            )
-            .is_err()
-        );
+        assert!(SeSp::new(0.5, 0.5).is_err(), "no better than chance");
+        assert!(SeSp::new(1.1, 0.9).is_err());
+        assert!(SeSp::new(f64::NAN, 0.9).is_err());
     }
 
     /// The correction of a risk difference for exposure missed with known
@@ -1726,7 +1700,7 @@ mod tests {
         };
         // Exposure is classified for everyone with the same sensitivity and no
         // false positives; the strata are cases and non-cases.
-        let m = Misclass {
+        let m = Pairs {
             se: [se; 2],
             sp: [1.0; 2],
         };
@@ -1746,7 +1720,7 @@ mod tests {
                 + observed.exposed_noncases
                 + observed.unexposed_noncases);
         let rd_observed = observed.risk_difference().unwrap();
-        let corrected = correct_exposure(&observed, &m).unwrap();
+        let corrected = correct_exposure(&observed, &m.exposure()).unwrap();
         let factor = (1.0 - p) / (1.0 - p / se);
         assert!(CLOSE.accepts(corrected.risk_difference.unwrap(), rd_observed * factor));
         assert!(CLOSE.accepts(corrected.risk_difference.unwrap(), r1 - r0));
@@ -1754,15 +1728,42 @@ mod tests {
 
     #[test]
     fn selection_multiplies_the_odds_ratio() {
-        let s = [[0.9, 0.7], [0.8, 0.95]];
+        let s = Cells {
+            exposed_cases: 0.9,
+            unexposed_cases: 0.7,
+            exposed_noncases: 0.8,
+            unexposed_noncases: 0.95,
+        };
         let corrected = correct_selection(&TRUE, &s).unwrap();
         let factor = selection_bias_factor(&s).unwrap();
         assert!(CLOSE.accepts(
             corrected.odds_ratio.unwrap(),
             TRUE.odds_ratio().unwrap() * factor
         ));
-        assert!(correct_selection(&TRUE, &[[0.0, 1.0], [1.0, 1.0]]).is_err());
-        assert!(correct_selection(&TRUE, &[[1.5, 1.0], [1.0, 1.0]]).is_err());
+        assert!(
+            correct_selection(
+                &TRUE,
+                &Cells {
+                    exposed_cases: 0.0,
+                    unexposed_cases: 1.0,
+                    exposed_noncases: 1.0,
+                    unexposed_noncases: 1.0
+                }
+            )
+            .is_err()
+        );
+        assert!(
+            correct_selection(
+                &TRUE,
+                &Cells {
+                    exposed_cases: 1.5,
+                    unexposed_cases: 1.0,
+                    exposed_noncases: 1.0,
+                    unexposed_noncases: 1.0
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1907,12 +1908,12 @@ mod tests {
 
     #[test]
     fn constant_parameters_give_the_simple_correction_in_every_draw() {
-        let m = Misclass {
+        let m = Pairs {
             se: [0.9, 0.85],
             sp: [0.95, 0.9],
         };
         let t = observed_exposure(&TRUE, &m);
-        let simple = correct_exposure(&t, &m).unwrap();
+        let simple = correct_exposure(&t, &m.exposure()).unwrap();
         let r = probabilistic_misclass(
             &t,
             Kind::Exposure,
@@ -2020,7 +2021,7 @@ mod tests {
     fn outcome_predictive_values_invert_the_misclassification() {
         // Classify the true outcome with sensitivity and specificity, and
         // take the predictive values of the classification from the truth.
-        let m = Misclass {
+        let m = Pairs {
             se: [0.8, 0.7],
             sp: [0.99, 0.97],
         };
@@ -2039,10 +2040,16 @@ mod tests {
             exposed_noncases: c,
             unexposed_noncases: d,
         };
-        let back = correct_outcome_predictive(&observed, [ppv0, ppv1], [npv0, npv1])
-            .unwrap()
-            .cells
-            .unwrap();
+        let back = correct_outcome_predictive(
+            &observed,
+            &ByExposure {
+                exposed: Predictive::new(ppv0, npv0).unwrap(),
+                unexposed: Predictive::new(ppv1, npv1).unwrap(),
+            },
+        )
+        .unwrap()
+        .cells
+        .unwrap();
         for (got, want) in [
             back.exposed_cases,
             back.unexposed_cases,
@@ -2060,25 +2067,43 @@ mod tests {
         }
         // The positive predictive value and the sensitivity give the true
         // cases as well, and agree with the correction by Se and Sp.
-        let by_ppv = correct_outcome_ppv(&observed, [ppv0, ppv1], m.se)
-            .unwrap()
-            .cells
-            .unwrap();
+        let by_ppv = correct_outcome_ppv(
+            &observed,
+            &ByExposure {
+                exposed: PpvSe::new(ppv0, m.se[0]).unwrap(),
+                unexposed: PpvSe::new(ppv1, m.se[1]).unwrap(),
+            },
+        )
+        .unwrap()
+        .cells
+        .unwrap();
         assert!(
             CLOSE.accepts(by_ppv.exposed_cases, TRUE.exposed_cases)
                 && CLOSE.accepts(by_ppv.unexposed_cases, TRUE.unexposed_cases)
         );
-        let by_se_sp = correct_outcome(&observed, &m).unwrap().cells.unwrap();
+        let by_se_sp = correct_outcome(&observed, &m.outcome())
+            .unwrap()
+            .cells
+            .unwrap();
         assert!(CLOSE.accepts(by_ppv.exposed_cases, by_se_sp.exposed_cases));
         // With the same PPV and Se in both groups the risk ratio is kept.
-        let same = correct_outcome_ppv(&TRUE, [0.9, 0.9], [0.8, 0.8]).unwrap();
+        let same = correct_outcome_ppv(
+            &TRUE,
+            &ByExposure {
+                exposed: PpvSe::new(0.9, 0.8).unwrap(),
+                unexposed: PpvSe::new(0.9, 0.8).unwrap(),
+            },
+        )
+        .unwrap();
         assert!(CLOSE.accepts(same.risk_ratio.unwrap(), TRUE.risk_ratio().unwrap()));
-        assert!(correct_outcome_ppv(&TRUE, [0.9, 0.9], [0.0, 0.8]).is_err());
+        assert!(PpvSe::new(0.9, 0.0).is_err());
+        assert!(PpvSe::new(1.1, 0.8).is_err());
+        assert!(Predictive::new(0.9, f64::NAN).is_err());
     }
 
     #[test]
     fn exposure_ppv_and_sensitivity_give_the_true_exposed() {
-        let m = Misclass {
+        let m = Pairs {
             se: [0.9, 0.8],
             sp: [0.95, 0.97],
         };
@@ -2087,10 +2112,16 @@ mod tests {
             m.se[0] * TRUE.exposed_cases / observed.exposed_cases,
             m.se[1] * TRUE.exposed_noncases / observed.exposed_noncases,
         ];
-        let cells = correct_exposure_ppv(&observed, ppv, m.se)
-            .unwrap()
-            .cells
-            .unwrap();
+        let cells = correct_exposure_ppv(
+            &observed,
+            &ByOutcome {
+                cases: PpvSe::new(ppv[0], m.se[0]).unwrap(),
+                noncases: PpvSe::new(ppv[1], m.se[1]).unwrap(),
+            },
+        )
+        .unwrap()
+        .cells
+        .unwrap();
         assert!(
             CLOSE.accepts(cells.exposed_cases, TRUE.exposed_cases)
                 && CLOSE.accepts(cells.exposed_noncases, TRUE.exposed_noncases)
@@ -2127,10 +2158,11 @@ mod tests {
                 .collect();
             let simple = correct_outcome(
                 &t,
-                &Misclass {
+                &Pairs {
                     se: [p[0], p[1]],
                     sp: [p[2], p[3]],
-                },
+                }
+                .outcome(),
             )
             .unwrap();
             if let Some(m) = r.draws.systematic[k] {
@@ -2193,16 +2225,12 @@ mod tests {
         assert_eq!(multiple.adjusted, single.risk_ratio);
         assert_eq!(multiple.draws.names[0], "step 1: sensitivity 0");
 
-        let s = [
-            [
-                Dist::Uniform { lo: 0.7, hi: 0.9 },
-                Dist::Uniform { lo: 0.85, hi: 0.95 },
-            ],
-            [
-                Dist::Uniform { lo: 0.93, hi: 0.97 },
-                Dist::Uniform { lo: 0.93, hi: 0.97 },
-            ],
-        ];
+        let s = Cells {
+            exposed_cases: Dist::Uniform { lo: 0.7, hi: 0.9 },
+            unexposed_cases: Dist::Uniform { lo: 0.85, hi: 0.95 },
+            exposed_noncases: Dist::Uniform { lo: 0.93, hi: 0.97 },
+            unexposed_noncases: Dist::Uniform { lo: 0.93, hi: 0.97 },
+        };
         let random = options(400, true);
         let single = probabilistic_selection(&t, &s, &random).unwrap();
         let multiple = probabilistic_multiple(
@@ -2270,7 +2298,7 @@ mod tests {
                 se: Pair::Same(Dist::Uniform { lo: 0.7, hi: 0.9 }),
                 sp: Pair::Same(Dist::Uniform { lo: 0.995, hi: 1.0 }),
             },
-            BiasStep::Selection([[Dist::Uniform { lo: 0.8, hi: 0.95 }; 2]; 2]),
+            BiasStep::Selection(Cells::every(Dist::Uniform { lo: 0.8, hi: 0.95 })),
         ];
         let confounder = ConfoundingStep {
             prevalence: Pair::Same(Dist::Uniform { lo: 0.2, hi: 0.3 }),
@@ -2295,15 +2323,23 @@ mod tests {
                 .iter()
                 .map(|p| p.unwrap())
                 .collect();
-            let m = Misclass {
+            let m = Pairs {
                 se: [p[0], p[1]],
                 sp: [p[2], p[3]],
             };
-            let first = correct_outcome(&t, &m).unwrap().cells.unwrap();
-            let second = correct_selection(&first, &[[p[4], p[5]], [p[6], p[7]]])
-                .unwrap()
-                .cells
-                .unwrap();
+            let first = correct_outcome(&t, &m.outcome()).unwrap().cells.unwrap();
+            let second = correct_selection(
+                &first,
+                &Cells {
+                    exposed_cases: p[4],
+                    unexposed_cases: p[5],
+                    exposed_noncases: p[6],
+                    unexposed_noncases: p[7],
+                },
+            )
+            .unwrap()
+            .cells
+            .unwrap();
             let third = adjust_confounding(
                 &second,
                 ConfoundingMeasure::RiskRatio,

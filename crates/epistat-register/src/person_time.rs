@@ -30,9 +30,22 @@
 //! 1960-01-01 00:00:00. The Unix epoch is 3 653 days, or 315 619 200 seconds,
 //! later (10 years with 3 leap days, 1960, 1964 and 1968, times 86 400).
 //! [`SAS_EPOCH_OFFSET_DAYS`] and [`SAS_EPOCH_OFFSET_SECONDS`] are those
-//! offsets. [`days_from_civil_sas`], [`civil_from_days_sas`],
-//! [`civil_from_sas_seconds`] and the unit conversions add or subtract them
-//! around the functions above, in integer arithmetic.
+//! offsets. A SAS date read as a Unix day is ten years off and nothing in the
+//! number shows it, so SAS dates enter through `epistat_core::Day`, which
+//! names the epoch: [`Day::from_sas_days`] for one date,
+//! [`Day::from_sas_column`] for a column, and [`day_from_sas_seconds`] for a
+//! datetime. The `i64` forms of release 0.1 are deprecated.
+//!
+//! ```
+//! use epistat_core::Day;
+//! use epistat_register::person_time::day_from_sas_seconds;
+//!
+//! let day = Day::from_sas_days(23_435).expect("a day");
+//! assert_eq!(day.to_string(), "2024-02-29");
+//! assert_eq!(day.unix_days(), 19_782);
+//! let (when, seconds) = day_from_sas_seconds(23_435 * 86_400 + 3_600).expect("a day");
+//! assert_eq!((when, seconds), (day, 3_600));
+//! ```
 //!
 //! # Edge cases
 //!
@@ -40,8 +53,9 @@
 //! - An `end` earlier than `start` in the same year gives that year with an
 //!   overlap of zero, which is kept only when `keep_empty` is set.
 //! - A floor after the end clips every overlap to zero.
-//! - A year that does not fit an `i32` is reported as `i32::MAX`.
 //!
+
+use epistat_core::Day;
 
 pub use epistat_core::day::year_of as year_from_days;
 pub use epistat_core::day::{add_months, add_years};
@@ -55,12 +69,17 @@ pub const SAS_EPOCH_OFFSET_DAYS: i64 = 3_653;
 pub const SAS_EPOCH_OFFSET_SECONDS: i64 = SAS_EPOCH_OFFSET_DAYS * 86_400;
 
 /// A SAS date, in days from 1960-01-01, as days from 1970-01-01.
+#[deprecated(
+    since = "0.2.0",
+    note = "use epistat_core::Day::from_sas_days(d).map(Day::unix_days), or Day::from_sas_column"
+)]
 #[must_use]
 pub const fn sas_days_to_unix(sas_days: i64) -> i64 {
     sas_days - SAS_EPOCH_OFFSET_DAYS
 }
 
 /// A day count from 1970-01-01 as a SAS date, in days from 1960-01-01.
+#[deprecated(since = "0.2.0", note = "use epistat_core::Day::sas_days")]
 #[must_use]
 pub const fn unix_days_to_sas(unix_days: i64) -> i64 {
     unix_days + SAS_EPOCH_OFFSET_DAYS
@@ -81,19 +100,43 @@ pub const fn unix_seconds_to_sas(unix_seconds: i64) -> i64 {
 
 /// Days from 1960-01-01, the value SAS stores for a date, to the proleptic
 /// Gregorian date `(y, m, d)`.
+#[deprecated(
+    since = "0.2.0",
+    note = "use epistat_core::Day::from_civil(y, m, d).map(Day::sas_days), which refuses a date that does not exist"
+)]
 #[must_use]
 pub fn days_from_civil_sas(y: i64, m: i64, d: i64) -> i64 {
-    unix_days_to_sas(days_from_civil(y, m, d))
+    days_from_civil(y, m, d) + SAS_EPOCH_OFFSET_DAYS
 }
 
 /// The proleptic Gregorian `(year, month, day)` of a SAS date.
+#[deprecated(
+    since = "0.2.0",
+    note = "use epistat_core::Day::from_sas_days(d).map(Day::to_civil)"
+)]
 #[must_use]
 pub fn civil_from_days_sas(sas_days: i64) -> (i64, i64, i64) {
-    civil_from_days(sas_days_to_unix(sas_days))
+    civil_from_days(sas_days - SAS_EPOCH_OFFSET_DAYS)
+}
+
+/// The day of a SAS datetime, in seconds from 1960-01-01 00:00:00, and the
+/// seconds since midnight of that day, from 0 to 86 399, also before 1960.
+/// `None` for a day beyond [`Day::MIN`] to [`Day::MAX`].
+#[must_use]
+pub fn day_from_sas_seconds(sas_seconds: i64) -> Option<(Day, i64)> {
+    let unix = sas_seconds_to_unix(sas_seconds);
+    Some((
+        Day::from_unix_days(unix.div_euclid(86_400))?,
+        unix.rem_euclid(86_400),
+    ))
 }
 
 /// The `((year, month, day), seconds_since_midnight)` of a SAS datetime. The
 /// seconds are from 0 to 86 399, also before 1960.
+#[deprecated(
+    since = "0.2.0",
+    note = "use day_from_sas_seconds, which returns the day as an epistat_core::Day"
+)]
 #[must_use]
 pub fn civil_from_sas_seconds(sas_seconds: i64) -> ((i64, i64, i64), i64) {
     let unix = sas_seconds_to_unix(sas_seconds);
@@ -108,7 +151,7 @@ pub fn civil_from_sas_seconds(sas_seconds: i64) -> ((i64, i64, i64), i64) {
 #[non_exhaustive]
 pub struct YearOverlap {
     /// The calendar year.
-    pub calendar_year: i32,
+    pub calendar_year: i64,
     /// Days of the interval in this year on or after the floor, both ends
     /// included, and zero rather than negative.
     pub overlap_days: i64,
@@ -139,8 +182,7 @@ pub fn calendar_year_overlaps(
         let overlap_days = (end.min(calendar_end) - lower.max(calendar_start) + 1).max(0);
         if overlap_days > 0 || keep_empty {
             out.push(YearOverlap {
-                // A year that does not fit an `i32` is reported as `i32::MAX`.
-                calendar_year: i32::try_from(year).unwrap_or(i32::MAX),
+                calendar_year: year,
                 overlap_days,
                 calendar_days: calendar_end - calendar_start + 1,
             });
@@ -303,13 +345,16 @@ mod tests {
     #[test]
     fn the_sas_epoch_is_3653_days_and_the_tools_agree() {
         assert_eq!(SAS_EPOCH_OFFSET_DAYS, 3_653);
+        assert_eq!(SAS_EPOCH_OFFSET_DAYS, epistat_core::day::SAS_OFFSET_DAYS);
         assert_eq!(SAS_EPOCH_OFFSET_SECONDS, 315_619_200);
-        assert_eq!(days_from_civil_sas(1960, 1, 1), 0);
-        assert_eq!(days_from_civil_sas(1970, 1, 1), 3_653);
-        assert_eq!(civil_from_days_sas(-1), (1959, 12, 31));
+        let sas_of = |y, m, d| Day::from_civil(y, m, d).unwrap().sas_days();
+        assert_eq!(sas_of(1960, 1, 1), 0);
+        assert_eq!(sas_of(1970, 1, 1), 3_653);
+        assert_eq!(Day::from_sas_days(-1).unwrap().to_civil(), (1959, 12, 31));
         for sas in -40_000..60_000 {
-            let (y, m, d) = civil_from_days_sas(sas);
-            assert_eq!(days_from_civil_sas(y, m, d), sas);
+            let day = Day::from_sas_days(sas).unwrap();
+            let (y, m, d) = day.to_civil();
+            assert_eq!(sas_of(y, m, d), sas);
             let tool = tool_days_since_sas_epoch(
                 i32::try_from(y).unwrap(),
                 u32::try_from(m).unwrap(),
@@ -317,21 +362,42 @@ mod tests {
             );
             assert_eq!(tool.to_bits(), (sas as f64).to_bits());
             assert_eq!(
-                tool_iso_date(sas_days_to_unix(sas)),
+                tool_iso_date(day.unix_days()),
                 format!("{y:04}-{m:02}-{d:02}")
             );
+            assert_eq!(day.to_string(), format!("{y:04}-{m:02}-{d:02}"));
         }
     }
 
     #[test]
-    fn sas_seconds_split_into_a_date_and_a_time_of_day() {
-        assert_eq!(civil_from_sas_seconds(0), ((1960, 1, 1), 0));
+    fn sas_seconds_split_into_a_day_and_a_time_of_day() {
+        let day = |y, m, d| Day::from_civil(y, m, d).unwrap();
+        assert_eq!(day_from_sas_seconds(0), Some((day(1960, 1, 1), 0)));
         assert_eq!(
-            civil_from_sas_seconds(SAS_EPOCH_OFFSET_SECONDS + 86_399),
-            ((1970, 1, 1), 86_399)
+            day_from_sas_seconds(SAS_EPOCH_OFFSET_SECONDS + 86_399),
+            Some((day(1970, 1, 1), 86_399))
         );
-        assert_eq!(civil_from_sas_seconds(-1), ((1959, 12, 31), 86_399));
+        assert_eq!(day_from_sas_seconds(-1), Some((day(1959, 12, 31), 86_399)));
+        assert_eq!(day_from_sas_seconds(i64::MAX), None);
         assert_eq!(sas_seconds_to_unix(unix_seconds_to_sas(-5)), -5);
-        assert_eq!(unix_days_to_sas(sas_days_to_unix(77)), 77);
+    }
+
+    #[test]
+    #[expect(
+        deprecated,
+        reason = "the 0.1 forms keep their results for one release"
+    )]
+    fn the_deprecated_sas_forms_agree_with_day() {
+        for sas in [-40_000, -1, 0, 3_653, 23_435, 60_000] {
+            let day = Day::from_sas_days(sas).unwrap();
+            assert_eq!(civil_from_days_sas(sas), day.to_civil());
+            let (y, m, d) = day.to_civil();
+            assert_eq!(days_from_civil_sas(y, m, d), sas);
+            assert_eq!(sas_days_to_unix(sas), day.unix_days());
+            assert_eq!(unix_days_to_sas(day.unix_days()), sas);
+            let seconds = sas * 86_400 + 7;
+            let (when, time) = day_from_sas_seconds(seconds).unwrap();
+            assert_eq!(civil_from_sas_seconds(seconds), (when.to_civil(), time));
+        }
     }
 }

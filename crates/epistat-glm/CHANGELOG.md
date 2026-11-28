@@ -15,6 +15,7 @@ Models take their data as one checked value instead of five loose arguments, err
 - `Family` has three new variants, `NegativeBinomial`, `QuasiPoisson` and `QuasiBinomial`.
 - `Fit` has a new field `residual_df`.
 - The crate depends on `epistat-core` and `epistat-inference`, and its minimum supported Rust version is 1.89, up from 1.85.
+- `ordinal::BrantTest` holds its tests as `epistat_core::Test`, which `epistat_inference::wald::wald` now returns: `omnibus.statistic` and `p_value` are `Option`s and `df` is an `Option<f64>`.
 
 ### Added
 

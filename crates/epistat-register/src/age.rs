@@ -1,6 +1,21 @@
 //! Age in whole years at a date, under a named rule.
 //!
-//! Dates are counts of days since 1970-01-01, as in [`crate::person_time`].
+//! A date is an `epistat_core::Day`, which carries its epoch, so a SAS date
+//! read as a Unix one cannot age a person by ten years. [`age_in_years`] is
+//! the same rule on days since 1970-01-01, for callers that hold columns of
+//! them.
+//!
+//! ```
+//! use epistat_core::Day;
+//! use epistat_register::{AgeRule, LeapBirthday, age_at, birthday_on_age};
+//!
+//! let birth = Day::from_civil(2000, 2, 29).unwrap();
+//! let at = Day::from_civil(2019, 2, 28).unwrap();
+//! assert_eq!(age_at(birth, at, AgeRule::CivilYears(LeapBirthday::March1)), Some(18));
+//! assert_eq!(age_at(birth, at, AgeRule::CivilYears(LeapBirthday::February28)), Some(19));
+//! let eighteen = birthday_on_age(birth, 18, AgeRule::CivilYears(LeapBirthday::March1));
+//! assert_eq!(eighteen, Day::from_civil(2018, 3, 1));
+//! ```
 //!
 //! # Rules
 //!
@@ -41,6 +56,7 @@
 //! - A reference date before the birth date gives [`None`].
 //! - On the birth date the age is 0 under both rules.
 
+use epistat_core::Day;
 use epistat_core::day::{is_leap_year, to_civil as civil_from_days};
 
 pub use epistat_core::day::LeapBirthday;
@@ -54,8 +70,16 @@ pub enum AgeRule {
     DaysOver365_25,
 }
 
+/// Age in whole years on `at` for a person born on `birth`.
+///
+/// Returns [`None`] when `at` is before `birth`.
+#[must_use]
+pub fn age_at(birth: Day, at: Day, rule: AgeRule) -> Option<u32> {
+    age_in_years(birth.unix_days(), at.unix_days(), rule)
+}
+
 /// Age in whole years on `at_day` for a person born on `birth_day`, both as
-/// days since 1970-01-01.
+/// days since 1970-01-01: [`age_at`] on day counts.
 ///
 /// Returns [`None`] when `at_day` is before `birth_day`.
 #[must_use]
@@ -71,15 +95,21 @@ pub fn age_in_years(birth_day: i64, at_day: i64, rule: AgeRule) -> Option<u32> {
     u32::try_from(years).ok()
 }
 
-/// The day on which a person born on `birth_day` reaches `age` whole years: the
-/// first day on which [`age_in_years`] gives `age`.
+/// The day on which a person born on `birth` reaches `age` whole years: the
+/// first day on which [`age_at`] gives `age`.
 ///
 /// Under [`AgeRule::CivilYears`] this is the birthday, with the convention of
 /// the rule for a 29 February birth. Under [`AgeRule::DaysOver365_25`] it is
-/// `birth_day + ceil(1461 age / 4)`. Returns [`None`] when the day does not
-/// fit in an `i64`.
+/// `birth + ceil(1461 age / 4)` days. Returns [`None`] when the day is beyond
+/// `Day::MAX`.
 #[must_use]
-pub fn birthday_on_age(birth_day: i64, age: u32, rule: AgeRule) -> Option<i64> {
+pub fn birthday_on_age(birth: Day, age: u32, rule: AgeRule) -> Option<Day> {
+    birthday_days(birth.unix_days(), age, rule).and_then(Day::from_unix_days)
+}
+
+/// [`birthday_on_age`] on days since 1970-01-01, `None` when the day does not
+/// fit in an `i64`.
+pub(crate) fn birthday_days(birth_day: i64, age: u32, rule: AgeRule) -> Option<i64> {
     match rule {
         AgeRule::CivilYears(leap) => {
             // Years beyond this are not days an i64 can hold, and the civil
@@ -132,6 +162,23 @@ mod tests {
             days_from_civil(at.0, at.1, at.2),
             rule,
         )
+    }
+
+    #[test]
+    fn days_carry_the_rule_and_refuse_a_birthday_beyond_the_last_day() {
+        let rule = AgeRule::CivilYears(LeapBirthday::March1);
+        let birth = Day::from_civil(1990, 6, 15).unwrap();
+        let at = Day::from_civil(2026, 6, 14).unwrap();
+        assert_eq!(
+            age_at(birth, at, rule),
+            age_in_years(birth.unix_days(), at.unix_days(), rule)
+        );
+        assert_eq!(
+            birthday_on_age(birth, 36, rule),
+            Day::from_civil(2026, 6, 15)
+        );
+        assert_eq!(birthday_on_age(Day::MAX, 1, rule), None);
+        assert_eq!(birthday_on_age(Day::MAX, 1, AgeRule::DaysOver365_25), None);
     }
 
     #[test]

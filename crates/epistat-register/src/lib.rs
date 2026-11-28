@@ -44,12 +44,17 @@
 //! - [`pre2dup`] estimates drug use periods from each person's own pattern of
 //!   purchases, by the PRE2DUP method.
 //! - [`cpi`] deflates nominal values to the prices of a reference year with an
-//!   annual price index the caller supplies. The Statistics Denmark index is
-//!   available behind the cargo feature `denmark`.
+//!   annual price index the caller supplies, checked by
+//!   [`CpiTable::try_new`]. The Statistics Denmark index is available behind
+//!   the cargo feature `denmark` as `CpiTable::denmark`.
 //!
 //! # Conventions
 //!
-//! Dates are counts of days since 1970-01-01 as `i64`. Row numbers and
+//! Date columns are counts of days since 1970-01-01 as `i64`, the type
+//! registers deliver and Arrow's `Date32` widens to; a single date is an
+//! `epistat_core::Day` ([`Day`]), which names its epoch. SAS dates, days since
+//! 1960-01-01, enter through `Day::from_sas_days` or `Day::from_sas_column`,
+//! never as bare `i64`. Row numbers and
 //! component numbers are `u32`, and a function that takes more rows than that
 //! refuses them. Every function returns results that depend only on its
 //! inputs, never on a thread count or hash order.
@@ -65,9 +70,9 @@
 //! |---|---|
 //! | [`Error`], [`RegisterError`], [`CodeItemProblem`], [`CrosswalkProblem`], [`PedigreeProblem`] | `error` (private module, named at the root only) |
 //! | [`CpiTable`], `DENMARK_ANNUAL_CPI` | [`cpi`] |
-//! | [`AgeRule`], [`LeapBirthday`], [`age_in_years`], [`birthday_on_age`] | [`age`] |
+//! | [`AgeRule`], [`LeapBirthday`], [`age_at`], [`age_in_years`], [`birthday_on_age`] | [`age`] |
 //! | [`Icd10Chapter`], [`NormalizedDiagnosis`], [`UnknownChapter`], [`icd10_chapter_label`], [`normalize_diagnosis_code`] | [`icd10`] |
-//! | [`SAS_EPOCH_OFFSET_DAYS`], [`SAS_EPOCH_OFFSET_SECONDS`], [`YearOverlap`], [`add_months`], [`add_years`], [`calendar_year_overlaps`], [`civil_from_days`], [`civil_from_days_sas`], [`civil_from_sas_seconds`], [`days_from_civil`], [`days_from_civil_sas`], [`sas_days_to_unix`], [`sas_seconds_to_unix`], [`unix_days_to_sas`], [`unix_seconds_to_sas`], [`year_from_days`] | [`person_time`] |
+//! | [`SAS_EPOCH_OFFSET_DAYS`], [`SAS_EPOCH_OFFSET_SECONDS`], [`YearOverlap`], [`add_months`], [`add_years`], [`calendar_year_overlaps`], [`civil_from_days`], [`day_from_sas_seconds`], [`days_from_civil`], [`sas_seconds_to_unix`], [`unix_seconds_to_sas`], [`year_from_days`] | [`person_time`] |
 //! | [`connected_components`] | [`relations`] |
 //! | [`MergedSpans`], [`merge_sorted_spans`] | [`spans`] |
 //!
@@ -93,7 +98,7 @@ pub mod residence;
 pub mod spans;
 pub mod wtd;
 
-pub use age::{AgeRule, LeapBirthday, age_in_years, birthday_on_age};
+pub use age::{AgeRule, LeapBirthday, age_at, age_in_years, birthday_on_age};
 pub use cpi::CpiTable;
 #[cfg(feature = "denmark")]
 pub use cpi::DENMARK_ANNUAL_CPI;
@@ -103,15 +108,23 @@ pub use error::{CodeItemProblem, CrosswalkProblem, Error, PedigreeProblem};
 #[deprecated(since = "0.2.0", note = "use `epistat_register::Error`")]
 pub type RegisterError = Error;
 
+pub use epistat_core::Day;
 pub use icd10::{
     Icd10Chapter, NormalizedDiagnosis, UnknownChapter, icd10_chapter_label,
     normalize_diagnosis_code,
 };
 pub use person_time::{
     SAS_EPOCH_OFFSET_DAYS, SAS_EPOCH_OFFSET_SECONDS, YearOverlap, add_months, add_years,
-    calendar_year_overlaps, civil_from_days, civil_from_days_sas, civil_from_sas_seconds,
-    days_from_civil, days_from_civil_sas, sas_days_to_unix, sas_seconds_to_unix, unix_days_to_sas,
-    unix_seconds_to_sas, year_from_days,
+    calendar_year_overlaps, civil_from_days, day_from_sas_seconds, days_from_civil,
+    sas_seconds_to_unix, unix_seconds_to_sas, year_from_days,
+};
+#[expect(
+    deprecated,
+    reason = "the 0.1 paths of the SAS date functions stay for one release"
+)]
+pub use person_time::{
+    civil_from_days_sas, civil_from_sas_seconds, days_from_civil_sas, sas_days_to_unix,
+    unix_days_to_sas,
 };
 pub use relations::connected_components;
 pub use spans::{MergedSpans, merge_sorted_spans};

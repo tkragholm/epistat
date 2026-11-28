@@ -215,6 +215,14 @@ impl From<EValueError> for Error {
             EValueError::TrueNotBelowEstimate => {
                 invalid("true value", "must be below the estimate")
             }
+            EValueError::RatioOnIdentityScale => invalid(
+                "estimate",
+                "a ratio must be on Scale::Log; a number on the identity scale may be a log ratio, \
+                 so exponentiate it first (Coefficients::exp)",
+            ),
+            EValueError::DifferenceOnLogScale => {
+                invalid("estimate", "a mean difference must be on Scale::Identity")
+            }
         }
     }
 }

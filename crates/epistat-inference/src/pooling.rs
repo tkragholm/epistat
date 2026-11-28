@@ -135,7 +135,7 @@
 //!    interest in prognostic modelling studies after multiple imputation:
 //!    current practice and guidelines. BMC Med Res Methodol. 2009;9:57.
 
-use epistat_core::{Covariance, InputError, Interval, Level, check};
+use epistat_core::{Covariance, InputError, Interval, Level, Reference, Test, check};
 use epistat_linalg::{Attempt, Mat, MatRef, Method, solve};
 use epistat_stats::dist::f::sf as f_sf;
 use epistat_stats::dist::t::quantile as t_quantile;
@@ -569,19 +569,28 @@ pub enum NegativeRiv {
 pub struct MultiTest {
     /// The method.
     pub method: MultiMethod,
-    /// The statistic.
-    pub statistic: f64,
-    /// The numerator degrees of freedom, the number of parameters.
-    pub df1: f64,
-    /// The denominator degrees of freedom, infinite when the data sets agree.
-    pub df2: f64,
-    /// The upper tail probability, `None` when the F distribution function does
-    /// not converge.
-    pub p_value: Option<f64>,
+    /// The F test: its statistic, `None` when it is not finite; `df`, the
+    /// numerator degrees of freedom, the number of parameters; the
+    /// denominator degrees of freedom in [`Reference::F`], infinite when the
+    /// data sets agree; and the upper tail probability, `None` when the F
+    /// distribution function does not converge.
+    pub test: Test,
     /// The relative increase in variance that went into `df2`.
     pub riv: f64,
     /// Whether a negative statistic or relative increase was set to 0.
     pub truncated: bool,
+}
+
+impl MultiTest {
+    /// The denominator degrees of freedom of the F test, infinite when the
+    /// data sets agree.
+    #[must_use]
+    pub const fn df2(&self) -> f64 {
+        match self.test.distribution {
+            Reference::F { df2 } => df2,
+            _ => f64::INFINITY,
+        }
+    }
 }
 
 fn multi_test(
@@ -593,19 +602,14 @@ fn multi_test(
     truncated: bool,
 ) -> MultiTest {
     let df1 = k as f64;
+    let finite = statistic.is_finite().then_some(statistic);
+    let p_value = finite.and_then(|statistic| {
+        let p = f_sf(statistic, df1, df2);
+        p.is_finite().then_some(p)
+    });
     MultiTest {
         method,
-        statistic,
-        df1,
-        df2,
-        p_value: if statistic.is_finite() {
-            {
-                let p = f_sf(statistic, df1, df2);
-                p.is_finite().then_some(p)
-            }
-        } else {
-            None
-        },
+        test: Test::new(finite, Some(df1), p_value, Reference::F { df2 }),
         riv,
         truncated,
     }

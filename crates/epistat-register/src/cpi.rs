@@ -26,11 +26,26 @@
 //! - A year with no index is an error, never a silent factor of one. A series
 //!   with several uncovered years reports all of them at once, sorted and
 //!   without duplicates, and a missing reference year is reported separately.
-//! - When the table holds a year twice, the later row wins.
-//! - A zero index in the table gives an infinite or NaN factor and is not
-//!   checked.
+//! - [`CpiTable::try_new`] refuses a year given twice and an index that is
+//!   not finite and positive, which would give an infinite or NaN factor.
+//!   [`CpiTable::new`] checks neither: the later of two rows for a year wins.
+//!
+//! ```
+//! use epistat_register::CpiTable;
+//!
+//! let cpi = CpiTable::try_new([(2015, 100.0), (2016, 100.3), (2017, 101.4)])?;
+//! assert_eq!(cpi.years(), Some(2015..=2017));
+//! let deflated = cpi.deflate(1_000.0, 2017, 2015)?;
+//! assert!((deflated - 1_000.0 * 100.0 / 101.4).abs() < 1e-9);
+//! assert!(CpiTable::try_new([(2015, 100.0), (2015, 101.0)]).is_err());
+//! assert!(CpiTable::try_new([(2015, 0.0)]).is_err());
+//! # Ok::<(), epistat_register::Error>(())
+//! ```
 
 use std::collections::BTreeMap;
+use std::ops::RangeInclusive;
+
+use epistat_core::InputError;
 
 use crate::Error;
 
@@ -41,13 +56,66 @@ pub struct CpiTable {
 }
 
 impl CpiTable {
-    /// Build a table from `(year, index)` rows. Later rows win on duplicate years.
+    /// A table from `(year, index)` rows, each year once and each index
+    /// finite and positive.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] with [`InputError::Domain`] at the row of an index
+    /// that is NaN, infinite, zero or negative, or of a year given in an
+    /// earlier row.
+    pub fn try_new(rows: impl IntoIterator<Item = (i32, f64)>) -> Result<Self, Error> {
+        let mut index_by_year = BTreeMap::new();
+        for (row, (year, index)) in rows.into_iter().enumerate() {
+            if !(index.is_finite() && index > 0.0) {
+                return Err(InputError::Domain {
+                    what: "price index",
+                    value: index,
+                    domain: "(0, inf)",
+                    row: Some(row),
+                }
+                .into());
+            }
+            if index_by_year.insert(year, index).is_some() {
+                return Err(InputError::Domain {
+                    what: "year",
+                    value: f64::from(year),
+                    domain: "the years not given in an earlier row",
+                    row: Some(row),
+                }
+                .into());
+            }
+        }
+        Ok(Self { index_by_year })
+    }
+
+    /// Build a table from `(year, index)` rows without checking them. Later
+    /// rows win on duplicate years, and a zero or NaN index is kept;
+    /// [`CpiTable::try_new`] refuses both.
     pub fn new(rows: impl IntoIterator<Item = (i32, f64)>) -> Self {
         let mut index_by_year = BTreeMap::new();
         for (year, index) in rows {
             index_by_year.insert(year, index);
         }
         Self { index_by_year }
+    }
+
+    /// The first and the last year with an index, `None` for an empty table.
+    /// Years between them without an index are listed by
+    /// [`CpiTable::missing_years`].
+    #[must_use]
+    pub fn years(&self) -> Option<RangeInclusive<i32>> {
+        let first = *self.index_by_year.keys().next()?;
+        let last = *self.index_by_year.keys().next_back()?;
+        Some(first..=last)
+    }
+
+    /// The Statistics Denmark annual consumer price index,
+    /// [`DENMARK_ANNUAL_CPI`], as a table.
+    #[cfg(feature = "denmark")]
+    #[must_use]
+    pub fn denmark() -> Self {
+        Self::new(DENMARK_ANNUAL_CPI.iter().copied())
     }
 
     /// The `(year, index)` rows in ascending year order.
@@ -134,7 +202,7 @@ impl CpiTable {
 /// Statistics Denmark annual consumer price index, 1900 to 2025, as
 /// `(year, index)` on a 2015=100 base.
 ///
-/// Build a [`CpiTable`] with `CpiTable::new(DENMARK_ANNUAL_CPI.iter().copied())`.
+/// [`CpiTable::denmark`] builds a [`CpiTable`] from it.
 ///
 /// The series is spliced from two tables of Statistics Denmark at 1994. From
 /// 1994 the values are the four-decimal 2015=100 index. Before it they are
@@ -286,6 +354,46 @@ mod tests {
             (2020, 103.4333),
             (2023, 117.2083),
         ])
+    }
+
+    #[test]
+    fn a_checked_table_refuses_bad_indices_and_repeated_years() {
+        let checked = CpiTable::try_new(table().rows()).unwrap();
+        assert_eq!(
+            checked.rows().collect::<Vec<_>>(),
+            table().rows().collect::<Vec<_>>()
+        );
+        assert_eq!(checked.years(), Some(2010..=2023));
+        assert_eq!(CpiTable::default().years(), None);
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(matches!(
+                CpiTable::try_new([(2010, 90.0), (2011, bad)]),
+                Err(Error::Input(InputError::Domain {
+                    what: "price index",
+                    row: Some(1),
+                    ..
+                }))
+            ));
+        }
+        assert!(matches!(
+            CpiTable::try_new([(2010, 90.0), (2011, 91.0), (2010, 92.0)]),
+            Err(Error::Input(InputError::Domain {
+                what: "year",
+                row: Some(2),
+                ..
+            }))
+        ));
+    }
+
+    #[cfg(feature = "denmark")]
+    #[test]
+    fn the_danish_table_passes_the_checks() {
+        let checked = CpiTable::try_new(DENMARK_ANNUAL_CPI.iter().copied()).unwrap();
+        assert_eq!(
+            CpiTable::denmark().rows().collect::<Vec<_>>(),
+            checked.rows().collect::<Vec<_>>()
+        );
+        assert_eq!(CpiTable::denmark().years(), Some(1900..=2025));
     }
 
     #[test]

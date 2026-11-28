@@ -9,7 +9,7 @@ use epistat_core::{Bootstrap, Level, Seed};
 use epistat_inference::Clusters;
 use epistat_inference::bootstrap;
 use epistat_inference::curve::{Band, contrast_curve};
-use epistat_inference::influence::{ClusterRule, Influence};
+use epistat_inference::influence::{ClusterRule, Influence, InfluenceScale, Keys};
 use epistat_inference::interval::{self, Percentile};
 use epistat_inference::multiplicity::{Adjustment, adjust};
 use epistat_inference::pooling::{
@@ -84,6 +84,17 @@ fn influence_and_bootstraps_refuse_bad_columns() {
                 units.clone(),
                 1,
                 ClusterRule::SmallSample,
+            )
+        })
+    });
+    assert_rejects_bad_input_with_codes("Influence::from_values", several, |bad| {
+        columns(bad).then(|| {
+            Influence::from_values(
+                bad.column(&VALUES),
+                Keys::Rows(units.clone()),
+                1,
+                InfluenceScale::Dfbeta,
+                ClusterRule::NoSmallSample,
             )
         })
     });

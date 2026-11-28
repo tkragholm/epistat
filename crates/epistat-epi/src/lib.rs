@@ -56,4 +56,4 @@ pub mod standardisation;
 pub mod tables;
 
 pub use error::Error;
-pub use tables::{Counts2x2, PersonTime2};
+pub use tables::{Counts2x2, PersonTime, PersonTime2};
