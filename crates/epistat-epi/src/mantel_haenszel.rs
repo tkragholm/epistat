@@ -104,9 +104,10 @@
 //!    1985;72:91-95.
 
 use crate::Error;
+use crate::error::{columns, count};
 use std::fmt;
 
-use epistat_core::{Estimate, Level, Scale};
+use epistat_core::{Estimate, InputError, Level, Scale, check};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use epistat_stats::sum::compensated;
 use epistat_stats::wald;
@@ -116,24 +117,17 @@ use crate::tables::{Counts2x2, PersonTime2};
 /// Why a Mantel-Haenszel estimate was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MhError {
-    /// There are no strata.
-    Empty,
-    /// A count or person-time is negative, NaN or infinite, or events have no
-    /// person-time.
+    /// Events have no person-time.
     Cell,
     /// A stratum has no persons or no person-time.
     EmptyStratum,
-    /// The slices given to a table builder differ in length.
-    Length,
 }
 
 impl fmt::Display for MhError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Empty => "there are no strata",
-            Self::Cell => "counts and person-time must be finite and not negative, and events need person-time",
+            Self::Cell => "events need person-time",
             Self::EmptyStratum => "a stratum has no persons or no person-time",
-            Self::Length => "the inputs differ in length",
         })
     }
 }
@@ -166,25 +160,16 @@ pub struct Test {
     pub p_value: f64,
 }
 
-fn finite_count(x: f64) -> bool {
-    x.is_finite() && x >= 0.0
-}
-
 fn check_tables(tables: &[Counts2x2]) -> Result<(), Error> {
-    if tables.is_empty() {
-        return Err(MhError::Empty.into());
-    }
-    for t in tables {
-        if ![
-            t.exposed_cases,
-            t.exposed_noncases,
-            t.unexposed_cases,
-            t.unexposed_noncases,
-        ]
-        .into_iter()
-        .all(finite_count)
-        {
-            return Err(MhError::Cell.into());
+    check::non_empty("tables", tables.len())?;
+    for (row, t) in tables.iter().enumerate() {
+        for (what, value) in [
+            ("exposed_cases", t.exposed_cases),
+            ("exposed_noncases", t.exposed_noncases),
+            ("unexposed_cases", t.unexposed_cases),
+            ("unexposed_noncases", t.unexposed_noncases),
+        ] {
+            count(what, value, Some(row))?;
         }
         if t.exposed_cases + t.exposed_noncases + t.unexposed_cases + t.unexposed_noncases == 0.0 {
             return Err(MhError::EmptyStratum.into());
@@ -194,20 +179,15 @@ fn check_tables(tables: &[Counts2x2]) -> Result<(), Error> {
 }
 
 fn check_strata(strata: &[PersonTime2]) -> Result<(), Error> {
-    if strata.is_empty() {
-        return Err(MhError::Empty.into());
-    }
-    for s in strata {
-        if ![
-            s.exposed_events,
-            s.exposed_time,
-            s.unexposed_events,
-            s.unexposed_time,
-        ]
-        .into_iter()
-        .all(finite_count)
-        {
-            return Err(MhError::Cell.into());
+    check::non_empty("strata", strata.len())?;
+    for (row, s) in strata.iter().enumerate() {
+        for (what, value) in [
+            ("exposed_events", s.exposed_events),
+            ("exposed_time", s.exposed_time),
+            ("unexposed_events", s.unexposed_events),
+            ("unexposed_time", s.unexposed_time),
+        ] {
+            count(what, value, Some(row))?;
         }
         if (s.exposed_time == 0.0 && s.exposed_events > 0.0)
             || (s.unexposed_time == 0.0 && s.unexposed_events > 0.0)
@@ -819,11 +799,13 @@ pub fn tables_from_records(
     exposed: &[bool],
     case: &[bool],
 ) -> Result<Vec<Counts2x2>, Error> {
-    if stratum.len() != exposed.len() || stratum.len() != case.len() {
-        return Err(MhError::Length.into());
-    }
+    columns(&[
+        ("stratum", stratum.len()),
+        ("exposed", exposed.len()),
+        ("case", case.len()),
+    ])?;
     let Some(&top) = stratum.iter().max() else {
-        return Err(MhError::Empty.into());
+        return Err(InputError::Empty { what: "stratum" }.into());
     };
     let mut tables = vec![
         Counts2x2 {
@@ -889,7 +871,7 @@ mod tests {
     fn refuses_bad_input() {
         assert_eq!(
             odds_ratio(&[], Level::default()),
-            Err(MhError::Empty.into())
+            Err(InputError::Empty { what: "tables" }.into())
         );
         assert_eq!(
             odds_ratio(&[tab(0.0, 0.0, 0.0, 0.0)], Level::default()),
@@ -897,7 +879,13 @@ mod tests {
         );
         assert_eq!(
             odds_ratio(&[tab(-1.0, 1.0, 1.0, 1.0)], Level::default()),
-            Err(MhError::Cell.into())
+            Err(InputError::Domain {
+                what: "exposed_cases",
+                value: -1.0,
+                domain: "[0, inf)",
+                row: Some(0)
+            }
+            .into())
         );
     }
 

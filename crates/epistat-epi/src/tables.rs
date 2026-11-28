@@ -38,6 +38,19 @@ pub struct Counts2x2 {
 }
 
 impl Counts2x2 {
+    /// That every cell is a count, finite and not negative.
+    pub(crate) fn check_cells(&self) -> Result<(), crate::Error> {
+        for (what, value) in [
+            ("exposed_cases", self.exposed_cases),
+            ("exposed_noncases", self.exposed_noncases),
+            ("unexposed_cases", self.unexposed_cases),
+            ("unexposed_noncases", self.unexposed_noncases),
+        ] {
+            crate::error::count(what, value, None)?;
+        }
+        Ok(())
+    }
+
     /// The risk ratio, or `None` when a risk is undefined or the unexposed
     /// risk is zero.
     #[must_use]

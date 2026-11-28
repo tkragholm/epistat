@@ -164,10 +164,10 @@ pub fn probabilistic_multiple(
         );
     }
     let width = names.len();
-    let mut draws = Draws::new(names, opts.draws, opts.random_error);
+    let mut draws = Draws::new(names, opts.bootstrap.replicates, opts.random_error);
     let mut parameters = vec![f64::NAN; width];
-    for r in 0..opts.draws {
-        let mut stream = Stream::seeded(replicate_seed(opts.seed, r as u64));
+    for r in 0..opts.bootstrap.replicates {
+        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed, r as u64));
         parameters.fill(f64::NAN);
         let value = (|| {
             let mut cells = *t;
@@ -206,7 +206,7 @@ pub fn probabilistic_multiple(
             };
             value.is_finite().then_some(value)
         })();
-        draws.parameters.extend_from_slice(&parameters);
+        draws.push_parameters(&parameters);
         draws.systematic.push(value);
         if opts.random_error {
             draws

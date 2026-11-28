@@ -201,11 +201,11 @@ pub fn probabilistic_misclass_rates(
             "specificity 0",
             "specificity 1",
         ]),
-        opts.draws,
+        opts.bootstrap.replicates,
         opts.random_error,
     );
-    for r in 0..opts.draws {
-        let mut stream = Stream::seeded(replicate_seed(opts.seed, r as u64));
+    for r in 0..opts.bootstrap.replicates {
+        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed, r as u64));
         let mut parameters = [f64::NAN; 4];
         let corrected = (|| {
             let s_e = se.draw(&mut stream)?;
@@ -223,7 +223,7 @@ pub fn probabilistic_misclass_rates(
             }
             cells.rate_ratio()
         })();
-        draws.parameters.extend_from_slice(&parameters);
+        draws.push_parameters(&parameters);
         draws.systematic.push(corrected);
         if opts.random_error {
             draws.total.push(corrected.map(|irr| {
@@ -239,7 +239,7 @@ pub fn probabilistic_misclass_rates(
 mod tests {
     use super::*;
     use crate::bias::Dist;
-    use epistat_core::Level;
+    use epistat_core::{Bootstrap, Level};
 
     const TRUE: PersonTime2 = PersonTime2 {
         exposed_events: 120.0,
@@ -305,8 +305,7 @@ mod tests {
             &Pair::Independent([Dist::Constant(0.9), Dist::Constant(0.85)]),
             &Pair::Independent([Dist::Constant(0.99), Dist::Constant(0.98)]),
             &ProbOptions {
-                draws: 20,
-                seed: 1,
+                bootstrap: Bootstrap::new(20, 1),
                 random_error: false,
                 level: Level::alpha(0.05).unwrap(),
             },
@@ -316,6 +315,9 @@ mod tests {
             r.adjusted.unwrap().estimate.to_bits(),
             simple.rate_ratio.unwrap().to_bits()
         );
-        assert_eq!(r.draws.parameters_of(3), &[0.9, 0.85, 0.99, 0.98]);
+        assert_eq!(
+            r.draws.parameters_of(3),
+            &[Some(0.9), Some(0.85), Some(0.99), Some(0.98)]
+        );
     }
 }

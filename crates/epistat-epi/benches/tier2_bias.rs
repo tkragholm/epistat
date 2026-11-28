@@ -13,7 +13,7 @@
 mod common;
 
 use common::Lines;
-use epistat_core::{Estimate, Level};
+use epistat_core::{Bootstrap, Estimate, Level};
 use epistat_epi::Counts2x2;
 use epistat_epi::bias::{Dist, Kind, Pair, ProbOptions, probabilistic_misclass};
 
@@ -34,8 +34,7 @@ fn main() {
     let (method, n) = (common::method(), common::size());
     let mut lines = Lines::default();
     let opts = ProbOptions {
-        draws: n,
-        seed: 20_261_223,
+        bootstrap: Bootstrap::new(n, 20_261_223),
         random_error: true,
         level: Level::alpha(0.05).expect("a level"),
     };

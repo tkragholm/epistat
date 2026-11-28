@@ -440,10 +440,12 @@ pub fn kitagawa_poisson(
     scale: f64,
 ) -> Result<Option<PoissonDecomposition>, Error> {
     let n = group.events.len();
-    check::non_empty("events", n)?;
-    check::same_length("person-time", n, group.time.len())?;
-    check::same_length("reference events", n, reference.events.len())?;
-    check::same_length("reference person-time", n, reference.time.len())?;
+    crate::error::columns(&[
+        ("events", n),
+        ("person-time", group.time.len()),
+        ("reference events", reference.events.len()),
+        ("reference person-time", reference.time.len()),
+    ])?;
     if !(scale > 0.0 && scale.is_finite()) {
         return Err(InputError::Domain {
             what: "scale",

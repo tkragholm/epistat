@@ -120,11 +120,12 @@
 //!    1999;28:2141-2160.
 
 use crate::Error;
+use crate::error::{columns, count, counts, finite_number};
 use std::fmt;
 
 use crate::exact::binomial_two_sided;
 use crate::limits::interval;
-use epistat_core::{Estimate, Interval, Level, Scale};
+use epistat_core::{Estimate, Interval, Level, Scale, check};
 use epistat_stats::dist::normal;
 use epistat_stats::dist::poisson::{self, Method};
 use epistat_stats::dist::{beta, chi_square, f};
@@ -138,32 +139,20 @@ use epistat_stats::sum::compensated;
 /// Why a rate was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RateError {
-    /// The slices differ in length.
-    Length,
-    /// An event count is negative, NaN or infinite.
+    /// The exact interval of an event count could not be formed.
     Events,
-    /// A person-time is negative, NaN or infinite.
-    Time,
-    /// A weight is negative, NaN or infinite, or the weights sum to 0.
+    /// The weights sum to 0.
     Weights,
-    /// The scale is not positive and finite.
-    Scale,
     /// A count given to the exact test is not an integer.
     NotInteger,
-    /// There are no strata.
-    Empty,
 }
 
 impl fmt::Display for RateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Length => "the inputs differ in length",
-            Self::Events => "an event count must be finite and not negative",
-            Self::Time => "a person-time must be finite and not negative",
-            Self::Weights => "weights must be finite, not negative and sum to more than 0",
-            Self::Scale => "the scale must be positive and finite",
+            Self::Events => "the exact interval of the event count is undefined",
+            Self::Weights => "the weights sum to 0",
             Self::NotInteger => "the exact test needs integer counts",
-            Self::Empty => "there are no strata",
         })
     }
 }
@@ -183,20 +172,18 @@ pub struct Standardised {
     pub variance: f64,
 }
 
-fn check_count(x: f64) -> Result<(), Error> {
-    if x.is_finite() && x >= 0.0 {
-        Ok(())
-    } else {
-        Err(RateError::Events.into())
-    }
+fn check_count(what: &'static str, x: f64) -> Result<(), Error> {
+    count(what, x, None)
 }
 
-fn check_time(x: f64) -> Result<(), Error> {
-    if x.is_finite() && x >= 0.0 {
-        Ok(())
-    } else {
-        Err(RateError::Time.into())
-    }
+fn check_time(what: &'static str, x: f64) -> Result<(), Error> {
+    count(what, x, None)
+}
+
+/// A scale that is finite and positive.
+fn check_scale(scale: f64) -> Result<(), Error> {
+    finite_number("scale", scale)?;
+    Ok(check::positive("scale", scale)?)
 }
 
 /// The rate `events / time * scale` with the exact Poisson interval at
@@ -213,11 +200,9 @@ pub fn crude_rate(
     level: Level,
     scale: f64,
 ) -> Result<Option<Estimate>, Error> {
-    check_count(events)?;
-    check_time(time)?;
-    if !(scale > 0.0 && scale.is_finite()) {
-        return Err(RateError::Scale.into());
-    }
+    check_count("events", events)?;
+    check_time("time", time)?;
+    check_scale(scale)?;
     if time == 0.0 {
         return Ok(None);
     }
@@ -250,17 +235,14 @@ struct Parts {
 /// Checks a group and the weights and forms its sums, `None` when a stratum
 /// with a positive weight has no person-time.
 fn standardise(events: &[f64], time: &[f64], weights: &[f64]) -> Result<Option<Parts>, Error> {
-    if events.len() != time.len() || events.len() != weights.len() {
-        return Err(RateError::Length.into());
-    }
-    if events.is_empty() {
-        return Err(RateError::Empty.into());
-    }
-    events.iter().try_for_each(|&x| check_count(x))?;
-    time.iter().try_for_each(|&x| check_time(x))?;
-    if weights.iter().any(|w| !w.is_finite() || *w < 0.0) {
-        return Err(RateError::Weights.into());
-    }
+    columns(&[
+        ("events", events.len()),
+        ("time", time.len()),
+        ("weights", weights.len()),
+    ])?;
+    counts("events", events)?;
+    counts("time", time)?;
+    check::weights("weights", weights)?;
     let total = compensated(weights.iter().copied());
     if !(total > 0.0 && total.is_finite()) {
         return Err(RateError::Weights.into());
@@ -483,10 +465,10 @@ pub fn standardised_difference(
 }
 
 fn check_pair(e1: f64, t1: f64, e0: f64, t0: f64) -> Result<(), Error> {
-    check_count(e1)?;
-    check_count(e0)?;
-    check_time(t1)?;
-    check_time(t0)?;
+    check_count("e1", e1)?;
+    check_count("e0", e0)?;
+    check_time("t1", t1)?;
+    check_time("t0", t0)?;
     Ok(())
 }
 
@@ -666,7 +648,12 @@ mod tests {
     fn refuses_bad_input() {
         assert_eq!(
             direct_standardised(&[1.0], &[1.0, 2.0], &[1.0], Level::default()),
-            Err(RateError::Length.into())
+            Err(epistat_core::InputError::Length {
+                what: "time",
+                expected: 1,
+                found: 2
+            }
+            .into())
         );
         assert_eq!(
             direct_standardised(&[1.0], &[1.0], &[0.0], Level::default()),
@@ -674,7 +661,13 @@ mod tests {
         );
         assert_eq!(
             crude_rate(-1.0, 1.0, Level::default(), 1.0),
-            Err(RateError::Events.into())
+            Err(epistat_core::InputError::Domain {
+                what: "events",
+                value: -1.0,
+                domain: "[0, inf)",
+                row: None
+            }
+            .into())
         );
         assert_eq!(
             rate_ratio_exact_test(1.5, 1.0, 2.0, 1.0),

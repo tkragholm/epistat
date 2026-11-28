@@ -39,6 +39,7 @@
 //! 1. Rosenbaum PR. Observational Studies, 2nd ed. Springer; 2002. Chapter 4.
 
 use crate::Error;
+use epistat_core::check;
 use epistat_stats::dist::normal;
 use epistat_stats::sum::lanes;
 
@@ -80,9 +81,7 @@ impl std::error::Error for SignedRankError {}
 /// [`crate::Error`] when a value is NaN or infinite.
 #[expect(clippy::float_cmp, reason = "tied values are equal")]
 pub fn average_ranks(values: &[f64]) -> Result<Vec<f64>, Error> {
-    if values.iter().any(|v| !v.is_finite()) {
-        return Err(SignedRankError::NotFinite.into());
-    }
+    check::finite("values", values)?;
     let mut order: Vec<usize> = (0..values.len()).collect();
     order.sort_by(|&a, &b| values[a].total_cmp(&values[b]));
     let mut ranks = vec![0.0; values.len()];
