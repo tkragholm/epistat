@@ -280,7 +280,9 @@ struct ScoredUnit {
 ///
 /// Returns [`Error::NoSubclasses`] when `config.subclasses`
 /// is 0, and [`Error::UnsupportedEstimand`] for an estimand other than the
-/// ATT, the ATC, the ATE and the ATM, which takes the weights of the ATE.
+/// ATT, the ATC and the ATE. The ATM is refused, as in
+/// [`abadie_imbens`](crate::abadie_imbens): subclasses of the score have no
+/// weights that target the matched population.
 pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + Sync>(
     anchors: &[R],
     candidates: &[R],
@@ -322,6 +324,12 @@ pub fn subclassify_with_set_aside_scores<R: MatchingRecord, H: BuildHasher + Syn
     set_aside_candidates: &[f64],
 ) -> Result<SubclassificationOutcome, Error> {
     crate::types::matched_estimand(estimand, "subclassification")?;
+    if estimand == Estimand::Atm {
+        return Err(Error::UnsupportedEstimand {
+            estimand,
+            method: "subclassification",
+        });
+    }
     if config.subclasses == 0 {
         return Err(Error::NoSubclasses);
     }
@@ -433,7 +441,7 @@ fn resolve_reference_group(
     reference_group.unwrap_or(match estimand {
         Estimand::Att => SubclassReferenceGroup::Cases,
         Estimand::Atc => SubclassReferenceGroup::Controls,
-        // The ATE and the ATM; the entry points refuse any other estimand.
+        // The ATE; the entry points refuse any other estimand.
         _ => SubclassReferenceGroup::Pooled,
     })
 }
@@ -965,6 +973,45 @@ mod tests {
             values.extend(&out.quantile_cuts);
             values
         });
+    }
+
+    #[test]
+    fn the_atm_is_refused_as_abadie_imbens_refuses_it() {
+        let anchors = vec![record("a1"), record("a2")];
+        let candidates = vec![record("c1"), record("c2")];
+        let scores = HashMap::from([
+            (String::from("a1"), 0.10),
+            (String::from("a2"), 0.30),
+            (String::from("c1"), 0.20),
+            (String::from("c2"), 0.40),
+        ]);
+        let config = SubclassificationConfig {
+            subclasses: 2,
+            ..SubclassificationConfig::default()
+        };
+        assert!(matches!(
+            subclassify_by_propensity_score_map(
+                &anchors,
+                &candidates,
+                &scores,
+                Estimand::Atm,
+                &config,
+            ),
+            Err(Error::UnsupportedEstimand {
+                estimand: Estimand::Atm,
+                method: "subclassification",
+            })
+        ));
+        assert!(
+            subclassify_by_propensity_score_map(
+                &anchors,
+                &candidates,
+                &scores,
+                Estimand::Ate,
+                &config,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
