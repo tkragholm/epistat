@@ -10,6 +10,9 @@ First release. The crate holds the types the other epistat crates share, so that
 - `Level::P90`, `Level::P95` and `Level::P99`, and `Level::percent(k)` for `k` percent, so a usual level needs no `unwrap`. `same_coverage` compares two levels whichever form each was given in. A level prints as `95%`.
 - `InputError::Percentage`: `Level::confidence(95.0)` is refused with a message that says 95% is 0.95. The documentation of each `InputError` variant names its code.
 - `Interval`, `Estimate`, `Scale` and `Contrast`, the way an estimator reports a number. Undefined values are `None`, never NaN.
+- `Coverage` on `Interval`: pointwise, as `Interval::new` builds it, or simultaneous with the family's critical value, as `Interval::simultaneous` builds it for a uniform band. An estimate with a simultaneous interval carries no p-value.
+- `Estimate::null`, the value the p-value tests (0, or 1 for a ratio on the log scale), and `Estimate::se_log`, the standard error of the log, which is `None` on the identity scale.
+- `Display` for `Interval` and `Estimate`: `0.510 (95% CI 0.428 to 0.608), p = 4.9e-14`.
 - `Covariance`, a covariance matrix that knows its dimension, with `variances`, `standard_errors` and `quadratic`.
 - `EventStudy`, event-study coefficients with their covariance and reference period.
 - `Bootstrap`, a number of replicates and a root seed. There is no default seed.

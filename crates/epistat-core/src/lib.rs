@@ -9,7 +9,7 @@
 //! | item | what it is |
 //! |---|---|
 //! | [`Level`] | a confidence level, kept as the confidence or alpha the caller gave |
-//! | [`Interval`], [`Estimate`], [`Scale`], [`Contrast`] | how an estimator reports a number |
+//! | [`Interval`], [`Coverage`], [`Estimate`], [`Scale`], [`Contrast`] | how an estimator reports a number |
 //! | [`Covariance`] | a covariance matrix that knows its dimension |
 //! | [`EventStudy`] | event-study coefficients, their covariance and the reference period |
 //! | [`Bootstrap`] | the replicates and root seed of a randomised call |
@@ -49,7 +49,7 @@ pub use covariance::Covariance;
 pub use day::Day;
 pub use error::{Classify, ErrorKind};
 pub use estimand::Estimand;
-pub use estimate::{Contrast, Estimate, Interval, Scale};
+pub use estimate::{Contrast, Coverage, Estimate, Interval, Scale};
 pub use event_study::EventStudy;
 pub use level::Level;
 pub use panel::Panel;
