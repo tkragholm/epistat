@@ -1,0 +1,87 @@
+# Changelog
+
+## [0.3.0] - unreleased
+
+The distribution functions move into a `dist` module, the epidemiological methods move to the new crate `epistat-epi`, and the crate has one error type. Every path of 0.2 still compiles and is deprecated.
+
+### Breaking changes
+
+- `cluster::KMeansError` is replaced by `epistat_stats::Error`, a non-exhaustive enum with the variants `Input` (wrapping `epistat_core::InputError`) and `EmptyCluster`. `kmeans` returns `Result<KMeans, Error>`. The old variants `Empty`, `Shape`, `NotFinite`, `Centres` and `NoIterations` are now `Error::Input`. Match on `Error` or read `code()` through `epistat_core::Classify`.
+- `likelihood::InformationCriteria` is `#[non_exhaustive]`. Read its fields and do not build it with a struct literal.
+- The minimum supported Rust version is 1.89, up from 1.85.
+- The crate depends on `epistat-core` and `epistat-rng`.
+
+### Added
+
+- `dist`, one module per distribution: `normal`, `t`, `chi_square`, `f`, `beta`, `gamma`, `poisson` and `binomial`, with density or mass, cumulative and upper tail probabilities and quantiles, `gamma::digamma` and `gamma::trigamma`, `beta::regularised` and `poisson::cipoisson`, which takes a `Level` and returns an `epistat_core::Interval`. These functions return NaN for a parameter outside the domain, as R does.
+- `compat`, the older approximations kept for callers that need their numbers: `cdf_as26`, `erf_as26`, `quantile_acklam` and `rounded_rank`.
+- `sum::lanes`, sums, sums of squares, centred squares and dot products over eight fixed lanes, so the result does not depend on the machine.
+- `moments`, `mean`, `variance` and `mean_sd` over those lanes, with `Divisor`.
+- `logistic`, `expit`, `logit`, `log1p_exp` and `log_expit`.
+- `wald`, an estimate with its Wald interval and p-value for a given `Level` and `Scale`.
+- `weighted::effective_sample_size`, `weighted::WeightLimits` (clip weights at quantiles or values, with the preset `P99`) and `weighted::ProbabilityBounds`.
+- `Error`, which implements `Classify`.
+
+### Changed
+
+- `mcmc::autocorrelation`, `effective_sample_size` and `split_rhat`, `quantile::weighted_type1`, and the weighted balance statistics sum over eight fixed lanes. See Results.
+
+### Deprecated
+
+Deprecated items are removed in the next release that breaks the API.
+
+- `normal::pdf`, `cdf`, `quantile`, `truncated_quantile`, `two_sided_z` and `folded_quantile`, use the functions of the same name in `dist::normal`. The new `truncated_quantile` and `folded_quantile` return NaN where the old ones returned `None`, and `two_sided_z` takes a `Level`.
+- `normal::cdf_as26`, `erf_as26` and `quantile_acklam`, use `compat`.
+- `gamma::ln_gamma`, `lower_regularised`, `upper_regularised`, `chi_square_cdf` and `chi_square_sf`, use `dist::gamma::ln_gamma`, `dist::gamma::cdf(x, a)`, `dist::gamma::sf(x, a)`, `dist::chi_square::cdf` and `dist::chi_square::sf`.
+- `student::t_ln_density`, `t_cdf_sf`, `t_quantile` and `regularised_beta`, use `dist::t::ln_pdf`, `dist::t::cdf` and `dist::t::sf`, `dist::t::quantile` (NaN instead of `None`) and `dist::beta::regularised`.
+- `poisson::cipoisson`, `Method`, `Interval`, `PoissonError` and `gamma_quantile`, use `dist::poisson::cipoisson` with a `Level`, `dist::poisson::Method`, `epistat_core::Interval`, `epistat_stats::Error` and `dist::gamma::quantile`.
+- `quantile::rounded_rank`, use `compat::rounded_rank`.
+- `cluster::KMeansError`, use `epistat_stats::Error`.
+- Everything in `balance`, `decomposition`, `evalue`, `rosenbaum`, `signed_rank` and `standardisation` has moved to the same module name in `epistat-epi`. The deprecation note on each item gives its new path.
+
+### Fixed
+
+- The incomplete beta function, and with it the t, F and binomial tails, lost accuracy for large shapes. At a shape of 1000 the largest error against a 50-digit reference falls from about 2,000 units in the last place to about 20. For a and b of 1e7 it falls from about 1.6e-8 relative to below 2e-12. The t tail at 1e5 degrees of freedom was off by about 5e-10 relative to R.
+
+### Results
+
+- `dist::beta::regularised`, `cdf` and `quantile`, `dist::t`, `dist::f` and `dist::binomial` tails and quantiles (and the deprecated `student::regularised_beta`, `t_cdf_sf` and `t_quantile`): in the last bits, typically 1e-15 to 5e-15 relative, at most 1.4e-14 on a derived quantile, because the incomplete beta function is evaluated by a new continued fraction and prefactor. For a shape of 1000 or more the change is larger, as described under Fixed.
+- `mcmc::autocorrelation`, `mcmc::effective_sample_size` and `mcmc::split_rhat`: in the last bits, because the sums run over eight fixed lanes. Chains shorter than 8 draws are unchanged.
+- `quantile::weighted_type1`: the total weight is summed over eight lanes, so it can differ in the last bit. The selected observation changes only if the target falls within that rounding of a cumulative weight.
+- Balance statistics that sum weights or gaps (`balance::eqq_distance`, `ecdf_distance`, `eqq_distance_weighted`, `cramers_v_weighted`) and `signed_rank::normal_upper_tail`: in the last bits, for the same reason.
+
+## [0.2.5] - 2026-11-22
+
+- Added Poisson confidence intervals, the gamma quantile and `normal::two_sided_z`.
+- Added the t distribution and the incomplete beta function, E-values, the signed rank distribution with Rosenbaum bounds, k-means from given starts, and covariate balance on unit weights with a weighted eQQ distance.
+- Added a streaming compensated sum.
+- Fixed a Cramer's V that depended on the scale of the weights, an overflow in an exact tail, and k-means with zero passes.
+
+## [0.2.4] - 2026-11-20
+
+- Kitagawa decompositions by part, and the occupation integral made public.
+
+## [0.2.3] - 2026-11-19
+
+- Added weighted moments, standardisation, decompositions and SAS dates.
+
+## [0.2.2] - 2026-11-19
+
+- Added a weighted quantile.
+
+## [0.2.1] - 2026-11-19
+
+- A constant MCMC chain is now recognised by comparing its draws.
+
+## [0.2.0] - 2026-11-19
+
+- Undefined results are `None` instead of NaN, and invalid weights are refused.
+- The truncated normal quantile returns `None` for a NaN bound.
+
+## [0.1.1] - 2026-11-19
+
+- Added the gamma and chi-square functions and the Wald test.
+
+## [0.1.0] - 2026-11-19
+
+- First release: sample quantiles, the normal distribution, sums, truncated and folded normal quantiles, log-sum-exp, softmax and information criteria, covariate balance and MCMC diagnostics.
