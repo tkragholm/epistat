@@ -16,7 +16,7 @@
 //! | [`Estimand`] | the population an average treatment effect is averaged over |
 //! | [`Codes`] | labels as dense `u32` codes in sorted order, and back |
 //! | [`Panel`] | the validated unit-and-period key of person-period data |
-//! | [`day`] | civil dates as `i64` days since 1970-01-01 |
+//! | [`day`], [`Day`] | civil dates as `i64` days since 1970-01-01, and one such date |
 //! | [`check`], [`InputError`] | the input checks every estimator shares |
 //! | [`ErrorKind`], [`Classify`] | what kind of failure an error is, and its stable code |
 //!
@@ -45,6 +45,7 @@ pub use bootstrap::Bootstrap;
 pub use check::InputError;
 pub use codes::Codes;
 pub use covariance::Covariance;
+pub use day::Day;
 pub use error::{Classify, ErrorKind};
 pub use estimand::Estimand;
 pub use estimate::{Contrast, Estimate, Interval, Scale};

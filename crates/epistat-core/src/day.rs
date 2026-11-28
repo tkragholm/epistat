@@ -3,7 +3,15 @@
 //!
 //! A date column is `i64` days throughout the workspace, the type registers
 //! deliver and Arrow's `Date32` widens to. This module converts day counts to
-//! and from year, month and day, and adds whole years and months.
+//! and from year, month and day, and adds whole years and months. [`Day`] is
+//! one such date as a value of its own: it is built only from a valid
+//! calendar date or a day count with its epoch named, and prints as an ISO
+//! date.
+//!
+//! SAS counts days from 1960-01-01, [`SAS_OFFSET_DAYS`] days before the
+//! Unix epoch of 1970-01-01. A SAS day passed where a Unix day is read is ten
+//! years off and nothing in the number shows it, so [`Day::from_sas_days`]
+//! and [`Day::from_unix_days`] name the epoch at the call.
 //!
 //! # Algorithm
 //!
@@ -34,8 +42,17 @@
 //! 1. Hinnant H. chrono-Compatible Low-Level Date Algorithms.
 //!    howardhinnant.github.io/date_algorithms.html
 
+/// The days from 1960-01-01, the day 0 of SAS dates, to 1970-01-01, the day 0
+/// of Unix days: a SAS day `s` is the Unix day `s - SAS_OFFSET_DAYS`.
+pub const SAS_OFFSET_DAYS: i64 = 3_653;
+
 /// Days from 1970-01-01 to the proleptic Gregorian date `(y, m, d)`, with the
 /// month from 1 to 12 and the day from 1.
+///
+/// The date is not checked. A month or a day outside its range gives the day
+/// count the formula gives, not an error: `from_civil(2020, 13, 45)` is a
+/// day in 2021. [`checked_from_civil`] and [`Day::from_civil`] refuse such a
+/// date.
 #[must_use]
 pub const fn from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
@@ -44,6 +61,20 @@ pub const fn from_civil(y: i64, m: i64, d: i64) -> i64 {
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146_097 + doe - 719_468
+}
+
+/// Days from 1970-01-01 to the proleptic Gregorian date `(y, m, d)`, or
+/// `None` when it is not a date: a month outside 1 to 12, a day outside the
+/// days of its month, or a year outside the range of [`Day`].
+#[must_use]
+pub const fn checked_from_civil(y: i64, m: i64, d: i64) -> Option<i64> {
+    if y < Day::MIN_YEAR || y > Day::MAX_YEAR || m < 1 || m > 12 {
+        return None;
+    }
+    if d < 1 || d > days_in_month(y, m) {
+        return None;
+    }
+    Some(from_civil(y, m, d))
 }
 
 /// The proleptic Gregorian date `(year, month, day)` of a day count from
@@ -132,9 +163,218 @@ pub const fn add_months(day: i64, months: i64) -> i64 {
     from_civil(ty, tm, if d < last { d } else { last })
 }
 
+/// A civil date: one day of the proleptic Gregorian calendar, held as the
+/// days since 1970-01-01.
+///
+/// A `Day` is made from a date that exists ([`Day::from_civil`]) or from a day
+/// count whose epoch the call names ([`Day::from_unix_days`],
+/// [`Day::from_sas_days`]), and reads back in either. Its years run from
+/// [`Day::MIN_YEAR`] to [`Day::MAX_YEAR`], those of an `i32`, so every
+/// conversion is exact. It orders as the dates do and prints as an ISO 8601
+/// date, `yyyy-mm-dd`, with a sign and at least four digits for a year
+/// outside 0 to 9999.
+///
+/// ```
+/// use epistat_core::day::Day;
+///
+/// let day = Day::from_civil(2024, 2, 29).expect("a leap day");
+/// assert_eq!(day.unix_days(), 19_782);
+/// assert_eq!(day.sas_days(), 23_435);
+/// assert_eq!(Day::from_sas_days(23_435), Some(day));
+/// assert_eq!(day.to_string(), "2024-02-29");
+/// assert_eq!(Day::from_civil(2023, 2, 29), None);
+/// assert_eq!(Day::from_civil(2020, 13, 45), None);
+/// ```
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(try_from = "i64", into = "i64"))]
+pub struct Day(i64);
+
+impl Day {
+    /// The first year a `Day` can hold.
+    pub const MIN_YEAR: i64 = i32::MIN as i64;
+    /// The last year a `Day` can hold.
+    pub const MAX_YEAR: i64 = i32::MAX as i64;
+    /// The first day, 1 January of [`Day::MIN_YEAR`].
+    pub const MIN: Self = Self(from_civil(Self::MIN_YEAR, 1, 1));
+    /// The last day, 31 December of [`Day::MAX_YEAR`].
+    pub const MAX: Self = Self(from_civil(Self::MAX_YEAR, 12, 31));
+
+    /// The date `(year, month, day)`, or `None` when it does not exist: a
+    /// month outside 1 to 12, a day outside its month, or a year outside
+    /// [`Day::MIN_YEAR`] to [`Day::MAX_YEAR`].
+    #[must_use]
+    pub const fn from_civil(year: i64, month: i64, day: i64) -> Option<Self> {
+        match checked_from_civil(year, month, day) {
+            Some(days) => Some(Self(days)),
+            None => None,
+        }
+    }
+
+    /// The day `days` after 1970-01-01, or `None` outside [`Day::MIN`] to
+    /// [`Day::MAX`].
+    #[must_use]
+    pub const fn from_unix_days(days: i64) -> Option<Self> {
+        if days < Self::MIN.0 || days > Self::MAX.0 {
+            None
+        } else {
+            Some(Self(days))
+        }
+    }
+
+    /// The day `days` after 1960-01-01, the epoch of SAS dates, or `None`
+    /// outside [`Day::MIN`] to [`Day::MAX`].
+    #[must_use]
+    pub const fn from_sas_days(days: i64) -> Option<Self> {
+        match days.checked_sub(SAS_OFFSET_DAYS) {
+            Some(unix) => Self::from_unix_days(unix),
+            None => None,
+        }
+    }
+
+    /// The days since 1970-01-01, negative before it.
+    #[must_use]
+    pub const fn unix_days(self) -> i64 {
+        self.0
+    }
+
+    /// The days since 1960-01-01, as SAS counts them.
+    #[must_use]
+    pub const fn sas_days(self) -> i64 {
+        self.0 + SAS_OFFSET_DAYS
+    }
+
+    /// The date as `(year, month, day)`.
+    #[must_use]
+    pub const fn to_civil(self) -> (i64, i64, i64) {
+        to_civil(self.0)
+    }
+
+    /// The calendar year.
+    #[must_use]
+    pub const fn year(self) -> i64 {
+        year_of(self.0)
+    }
+
+    /// The day `days` later, or earlier for a negative `days`, or `None`
+    /// outside [`Day::MIN`] to [`Day::MAX`].
+    #[must_use]
+    pub const fn checked_add_days(self, days: i64) -> Option<Self> {
+        match self.0.checked_add(days) {
+            Some(sum) => Self::from_unix_days(sum),
+            None => None,
+        }
+    }
+}
+
+impl core::fmt::Display for Day {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let (y, m, d) = self.to_civil();
+        if (0..=9999).contains(&y) {
+            write!(f, "{y:04}-{m:02}-{d:02}")
+        } else {
+            write!(f, "{y:+05}-{m:02}-{d:02}")
+        }
+    }
+}
+
+impl core::fmt::Debug for Day {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "Day({self})")
+    }
+}
+
+impl TryFrom<i64> for Day {
+    type Error = crate::InputError;
+
+    /// The day of a Unix day count.
+    fn try_from(days: i64) -> Result<Self, Self::Error> {
+        Self::from_unix_days(days).ok_or(crate::InputError::Domain {
+            what: "day",
+            value: days as f64,
+            domain: "the Unix days of the years of an i32",
+            row: None,
+        })
+    }
+}
+
+impl From<Day> for i64 {
+    /// The Unix day count.
+    fn from(day: Day) -> Self {
+        day.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_day_is_made_only_from_a_date_that_exists() {
+        assert_eq!(checked_from_civil(2020, 13, 45), None);
+        assert_eq!(from_civil(2020, 13, 45), from_civil(2021, 2, 14));
+        assert_eq!(Day::from_civil(2023, 2, 29), None);
+        assert_eq!(Day::from_civil(2023, 4, 31), None);
+        assert_eq!(Day::from_civil(2023, 0, 1), None);
+        assert_eq!(Day::from_civil(2023, 1, 0), None);
+        assert_eq!(Day::from_civil(Day::MAX_YEAR + 1, 1, 1), None);
+        assert_eq!(
+            Day::from_civil(2024, 2, 29).map(Day::unix_days),
+            Some(19_782)
+        );
+        assert_eq!(Day::from_civil(1960, 1, 1).map(Day::sas_days), Some(0));
+        assert_eq!(Day::from_civil(1970, 1, 1).map(Day::unix_days), Some(0));
+    }
+
+    #[test]
+    fn the_epochs_differ_by_ten_years() {
+        let day = Day::from_civil(1970, 1, 1).expect("a date");
+        assert_eq!(day.sas_days(), SAS_OFFSET_DAYS);
+        assert_eq!(Day::from_sas_days(SAS_OFFSET_DAYS), Some(day));
+        assert_eq!(Day::from_sas_days(0), Day::from_civil(1960, 1, 1));
+        assert_eq!(Day::from_sas_days(i64::MIN), None);
+        assert_eq!(Day::from_unix_days(i64::MAX), None);
+        assert_eq!(Day::from_unix_days(Day::MAX.unix_days()), Some(Day::MAX));
+        assert_eq!(Day::MAX.checked_add_days(1), None);
+        assert_eq!(Day::MIN.checked_add_days(-1), None);
+        assert_eq!(
+            day.checked_add_days(-1).map(Day::to_civil),
+            Some((1969, 12, 31))
+        );
+        assert_eq!(Day::MIN.to_civil(), (Day::MIN_YEAR, 1, 1));
+        assert_eq!(Day::MAX.to_civil(), (Day::MAX_YEAR, 12, 31));
+    }
+
+    #[test]
+    fn a_day_prints_as_an_iso_date() {
+        let print = |y, m, d| Day::from_civil(y, m, d).expect("a date").to_string();
+        assert_eq!(print(2024, 2, 29), "2024-02-29");
+        assert_eq!(print(5, 3, 1), "0005-03-01");
+        assert_eq!(print(-1, 12, 31), "-0001-12-31");
+        assert_eq!(print(12_345, 1, 1), "+12345-01-01");
+        assert_eq!(
+            format!("{:?}", Day::from_civil(2000, 1, 1).expect("a date")),
+            "Day(2000-01-01)"
+        );
+        assert!(Day::from_civil(1999, 12, 31) < Day::from_civil(2000, 1, 1));
+    }
+
+    #[test]
+    fn a_day_converts_to_and_from_its_unix_count() {
+        let day = Day::try_from(19_782_i64).expect("in range");
+        assert_eq!(i64::from(day), 19_782);
+        assert_eq!(day.year(), 2024);
+        assert!(Day::try_from(i64::MIN).is_err());
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    fn serde_writes_the_unix_count_and_refuses_one_out_of_range() {
+        let day = Day::from_civil(2024, 2, 29).expect("a date");
+        assert_eq!(serde_json::to_string(&day).unwrap(), "19782");
+        assert_eq!(serde_json::from_str::<Day>("19782").unwrap(), day);
+        assert!(serde_json::from_str::<Day>("9223372036854775807").is_err());
+    }
 
     #[test]
     fn known_dates() {
