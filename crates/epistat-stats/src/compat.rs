@@ -127,7 +127,8 @@ pub fn quantile_acklam(p: f64) -> f64 {
 
 /// The order statistic nearest to position `p (n - 1)`, rounding halves away
 /// from zero. Not one of the Hyndman and Fan types. `None` for an empty
-/// sample, a sample with NaN, or `p` outside `[0, 1]`.
+/// sample, a sample with NaN or one that is not sorted ascending, or `p`
+/// outside `[0, 1]`.
 #[must_use]
 #[expect(
     clippy::cast_possible_truncation,
@@ -136,15 +137,11 @@ pub fn quantile_acklam(p: f64) -> f64 {
 )]
 pub fn rounded_rank(sorted: &[f64], p: f64) -> Option<f64> {
     let n = sorted.len();
-    if n == 0 || !(0.0..=1.0).contains(&p) || has_nan(sorted) {
+    if n == 0 || !(0.0..=1.0).contains(&p) || !crate::quantile::sorted_without_nan(sorted) {
         return None;
     }
     let index = (p * (n - 1) as f64).round() as usize;
     Some(sorted[index.min(n - 1)])
-}
-
-fn has_nan(sample: &[f64]) -> bool {
-    sample.iter().any(|v| v.is_nan())
 }
 
 #[cfg(test)]

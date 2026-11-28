@@ -21,6 +21,7 @@ The distribution functions move into a `dist` module, the epidemiological method
 - `wald`, an estimate with its Wald interval and p-value for a given `Level` and `Scale`.
 - `weighted::effective_sample_size`, `weighted::WeightLimits` (clip weights at quantiles or values, with the preset `P99`) and `weighted::ProbabilityBounds`.
 - `Error`, which implements `Classify`.
+- `weighted::try_mean`, the weighted mean with the reason when there is none, and `weighted::ROUNDING_LIMIT`. `Error` has the variants `FixedPointRounding` and `FixedPointOverflow` for it.
 
 ### Changed
 
@@ -41,6 +42,9 @@ Deprecated items are removed in the next release that breaks the API.
 
 ### Fixed
 
+- `weighted::mean` returned 0 or a value with few correct digits when its terms `x w` or its weights were near `1e-15`, since each is rounded to 15 decimals: `mean(&[1e-9, 2e-9, 3e-9], Some(&[1e-7; 3]))` was `Some(0.0)`. It now returns `None` when the rounding bound of a sum, half a unit in the 15th decimal per term, exceeds `1e-12` of the sum of the magnitudes of its terms. Values that pass the check are the same bits as before.
+- `weighted::mean` and `weighted::variance` dropped a row with a negative weight as if its weight were 0. They now return `None`, and `try_mean` returns `Error::Input` with `InputError::Domain`, as every other weight check of the workspace does. A weight of 0 still drops its row.
+- `quantile::type7`, `type7_ratio`, `type1`, `weighted_type1` and `compat::rounded_rank` read order statistics from the sample as given, so an unsorted sample gave a wrong number: `type7(&[5.0, 1.0, 2.0, 9.0, 3.0], 0.25)` was 1. They now return `None` for a sample with a value below the one before it, checked in the same pass as the check for NaN. `quantile::type7_unsorted` takes a sample in any order.
 - The regularised incomplete gamma functions `dist::gamma::cdf` and `sf`, and with them the chi-square and Poisson tails, the F tail at large degrees of freedom, the gamma and chi-square quantiles and the exact Poisson limits, are written again from Gil, Segura and Temme (2012): the uniform asymptotic expansion near `x = a` from a shape of 12, the series for `P`, a series for `Q` at small shapes and the continued fraction for `Q`, with the prefactor `x^a e^-x / Γ(a + 1)` formed as a product below a shape of 10 and about `x = a` above. Against mpmath at 60 digits the relative error of the smaller tail is below 6e-15 for shapes below 12 and 2e-13 for shapes to 1e7, where it was up to 2e-14, 1e-11 at 1e4 and 1.7e-8 at 1e7. `P(1e15, 1e15)` is 0.5000000042 where it was 0.0485, `P(1e300, 1e300)` is 0.5 where it was NaN, `Q(1e-300, 1e-300)` is 6.9e-298 where it was -2.35e-14, and a subnormal shape gives `Q = a E1(x)` where it gave NaN. An infinite shape gives `P = 0` and `Q = 1` at finite `x`, as R does.
 - The Poisson and binomial point probabilities take their Stirling correction and deviance term from the same helper, with the Stirling series from 10 on.
 - The incomplete beta function, and with it the t, F and binomial tails, lost accuracy for large shapes. At a shape of 1000 the largest error against a 50-digit reference falls from about 2,000 units in the last place to about 20. For a and b of 1e7 it falls from about 1.6e-8 relative to below 2e-12. The t tail at 1e5 degrees of freedom was off by about 5e-10 relative to R.

@@ -75,13 +75,16 @@
 //! All functions return `None` for an empty sample, for a sample that contains
 //! NaN, and for `p` outside `[0, 1]`, including NaN. A quantile of a sample with
 //! a missing value does not exist, and a sort would place the NaN at one end and
-//! return a number. [`weighted_type1`] also returns `None` for a negative or
+//! return a number. The functions that take a sorted sample also return `None`
+//! when a value is below the one before it, since an order statistic read from
+//! an unsorted sample is a wrong number; sort the sample first, with
+//! `sort_by(f64::total_cmp)`, or use [`type7_unsorted`]. [`weighted_type1`] also returns `None` for a negative or
 //! non-finite weight, a total weight of zero or one that overflows, and for
 //! values and weights of different lengths. Weights of zero are allowed.
 //! [`type7_ratio`] also returns `None` for a zero denominator, a
 //! numerator above the denominator, or an overflow in `numerator * (n - 1)`. The
-//! sorted forms assume the sample is sorted. The check for NaN reads the whole
-//! sample, which is linear in its length.
+//! check for NaN and order reads the whole sample once, which is linear in its
+//! length.
 //!
 //! # References
 //!
@@ -89,10 +92,11 @@
 //!    Statistician 1996;50:361-365.
 
 /// R's type 7, the default of R and of most software: linear interpolation
-/// between the order statistics at `1 + (n - 1) p`.
+/// between the order statistics at `1 + (n - 1) p`. `None` for a sample that
+/// is not sorted ascending; [`type7_unsorted`] takes one in any order.
 #[must_use]
 pub fn type7(sorted: &[f64], p: f64) -> Option<f64> {
-    if has_nan(sorted) {
+    if !sorted_without_nan(sorted) {
         return None;
     }
     let (lo, hi, h) = type7_position(sorted.len(), p)?;
@@ -116,11 +120,11 @@ pub fn type7_unsorted(values: &mut [f64], p: f64) -> Option<f64> {
 }
 
 /// [`type7`] at the probability `numerator / denominator`, which avoids
-/// rounding the probability.
+/// rounding the probability. `None` for a sample that is not sorted.
 #[must_use]
 pub fn type7_ratio(sorted: &[f64], numerator: usize, denominator: usize) -> Option<f64> {
     let n = sorted.len();
-    if n == 0 || denominator == 0 || numerator > denominator || has_nan(sorted) {
+    if n == 0 || denominator == 0 || numerator > denominator || !sorted_without_nan(sorted) {
         return None;
     }
     let position = numerator.checked_mul(n - 1)?;
@@ -134,7 +138,8 @@ pub fn type7_ratio(sorted: &[f64], numerator: usize, denominator: usize) -> Opti
 }
 
 /// R's type 1, the inverse of the empirical distribution function: the
-/// smallest order statistic whose rank is at least `n p`.
+/// smallest order statistic whose rank is at least `n p`. `None` for a
+/// sample that is not sorted.
 #[must_use]
 #[expect(
     clippy::cast_possible_truncation,
@@ -143,7 +148,7 @@ pub fn type7_ratio(sorted: &[f64], numerator: usize, denominator: usize) -> Opti
 )]
 pub fn type1(sorted: &[f64], p: f64) -> Option<f64> {
     let n = sorted.len();
-    if n == 0 || !(0.0..=1.0).contains(&p) || has_nan(sorted) {
+    if n == 0 || !(0.0..=1.0).contains(&p) || !sorted_without_nan(sorted) {
         return None;
     }
     // R adds four machine epsilons before taking the floor, so that n p
@@ -157,13 +162,14 @@ pub fn type1(sorted: &[f64], p: f64) -> Option<f64> {
 /// The inverse of the weighted empirical distribution function: the smallest
 /// value, among those with positive weight, whose cumulative weight reaches
 /// `p` times the total. `sorted` is ascending and `weights[i]` belongs to
-/// `sorted[i]`. With equal weights the result is [`type1`].
+/// `sorted[i]`; `None` when it is not sorted. With equal weights the result
+/// is [`type1`].
 #[must_use]
 pub fn weighted_type1(sorted: &[f64], weights: &[f64], p: f64) -> Option<f64> {
     if sorted.is_empty()
         || sorted.len() != weights.len()
         || !(0.0..=1.0).contains(&p)
-        || has_nan(sorted)
+        || !sorted_without_nan(sorted)
         || weights.iter().any(|w| !w.is_finite() || *w < 0.0)
     {
         return None;
@@ -196,6 +202,12 @@ pub fn rounded_rank(sorted: &[f64], p: f64) -> Option<f64> {
 
 fn has_nan(sample: &[f64]) -> bool {
     sample.iter().any(|v| v.is_nan())
+}
+
+/// Whether `sample` holds no NaN and no value below the one before it, in
+/// one pass.
+pub(crate) fn sorted_without_nan(sample: &[f64]) -> bool {
+    sample.first().is_none_or(|v| !v.is_nan()) && sample.windows(2).all(|pair| pair[0] <= pair[1])
 }
 
 /// Zero-based indices of the two order statistics and the weight of the
@@ -249,6 +261,22 @@ mod tests {
         assert_eq!(type1(&sample, 0.5), None);
         assert_eq!(type7_ratio(&sample, 1, 2), None);
         assert_eq!(type7_unsorted(&mut [f64::NAN, 1.0, 2.0], 0.5), None);
+        assert_eq!(type7(&[f64::NAN], 0.5), None);
+    }
+
+    #[test]
+    fn an_unsorted_sample_gives_none() {
+        let unsorted = [5.0, 1.0, 2.0, 9.0, 3.0];
+        assert_eq!(type7(&unsorted, 0.25), None);
+        assert_eq!(type1(&unsorted, 0.25), None);
+        assert_eq!(type7_ratio(&unsorted, 1, 4), None);
+        assert_eq!(weighted_type1(&unsorted, &[1.0; 5], 0.25), None);
+        assert_eq!(crate::compat::rounded_rank(&unsorted, 0.25), None);
+        let mut copy = unsorted;
+        assert_eq!(type7_unsorted(&mut copy, 0.25), Some(2.0));
+        // Ties and signed zeros are in order.
+        assert_eq!(type7(&[-0.0, 0.0, 0.0, 1.0], 0.5), Some(0.0));
+        assert_eq!(type1(&[0.0, -0.0], 1.0), Some(-0.0));
     }
 
     #[test]
