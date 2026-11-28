@@ -7,7 +7,7 @@ First release of `epistat-did`, which continues `did_methods` (last release 0.2.
 ### Added
 
 - `att_gt`: group-time average treatment effects ATT(g,t) for staggered adoption (Callaway and Sant'Anna) by outcome regression, inverse probability weighting or the doubly robust estimator, on panels and repeated cross-sections, with never-treated or not-yet-treated comparison groups, varying or universal base periods, anticipation and sampling weights, and aggregation by event time, cohort, calendar time or overall as `aggte` does. `AttGt::event_study` returns the event study that `epistat-honestdid` takes.
-- `two_period::estimate`: the two-period doubly robust estimators of `DRDID` on a `TwoPeriodData` (panel or repeated cross-section), with `Estimator::{Improved, DoublyRobust, TraditionalDoublyRobust, InverseProbabilityWeighting, OutcomeRegression}`. `Improved` is the default and reports the estimate plus or minus 1.96 standard errors as a 95 per cent interval whatever `level` is set.
+- `two_period::estimate`: the two-period doubly robust estimators of `DRDID` on a `TwoPeriodData` (panel or repeated cross-section), with `Estimator::{Improved, DoublyRobust, TraditionalDoublyRobust, InverseProbabilityWeighting, OutcomeRegression}`. `Improved` is the default. Every estimator's normal interval is at `level`.
 - `did_cc::estimate`: compositional changes in repeated cross-sections (Sant'Anna and Xu), with cross-fitting. A propensity model that fails to fit is an error unless `DidCcOptions::propensity_fallback` is set, in which case the fallbacks used are listed in `DidCc::propensity_fallbacks`.
 - `triple_did::estimate` for doubly robust triple differences, and `continuous::estimate` for the average causal response to a continuous treatment by a sieve estimator, with a polynomial or B-spline basis.
 - The efficient ATT(g,t) that combines all baseline periods (Chen, Sant'Anna and Xie), with aggregations whose standard errors use the combined influence function.
@@ -20,4 +20,4 @@ First release of `epistat-did`, which continues `did_methods` (last release 0.2.
 
 ### Results
 
-No released result changes.
+- The improved two-period estimators (`Estimator::Improved`, `drdid_imp_panel` and `drdid_imp_rc` in `did_methods`) form their interval with the normal quantile of the level asked for, as the other two-period estimators do, where `did_methods` 0.2.0 reported `att +- 1.96 se` labelled 95 per cent whatever the level. At 95 per cent each limit moves by `(1.96 - 1.959964) se`, about `3.6e-5 se`; at other levels the interval is the one asked for. Estimates and standard errors do not change.

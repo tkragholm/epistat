@@ -137,3 +137,51 @@ fn improved_panel_matches_drdid_imp_panel() {
         assert!(att < 1e-8 && se < 1e-8 && influence < 1e-6, "{}", case.name);
     }
 }
+
+/// The improved estimators' interval is the normal one at the level asked
+/// for, `att +- z se` with `z` the normal quantile, as the other two-period
+/// estimators form it, with and without clusters. The tolerance is a few
+/// rounding errors of `att + z se`: `4 eps max(|att|, z se)`.
+#[test]
+fn improved_interval_follows_the_level() {
+    let level = epistat_core::Level::confidence(0.9).unwrap();
+    let z = epistat_stats::dist::normal::quantile(level.upper_probability());
+    let check = |fit: &two_period::TwoPeriod| {
+        let estimate = &fit.estimate;
+        let interval = estimate.interval.expect("interval");
+        assert_eq!(interval.level, level);
+        let (att, se) = (estimate.estimate, estimate.se.expect("se"));
+        let tolerance = 4.0 * f64::EPSILON * att.abs().max(z * se);
+        assert!((interval.lower.unwrap() - (att - z * se)).abs() <= tolerance);
+        assert!((interval.upper.unwrap() - (att + z * se)).abs() <= tolerance);
+    };
+    let fixture = fixture();
+    let options = TwoPeriodOptions { level, ..options() };
+    let d = &fixture.rc[0].data;
+    let treated: Vec<bool> = d.d.iter().map(|&v| v > 0.5).collect();
+    let post: Vec<bool> = d.post.iter().map(|&v| v > 0.5).collect();
+    let (x, k) = column_major(&d.x);
+    let n = d.y.len();
+    let clusters: Vec<u32> = (0..n).map(|i| u32::try_from(i % 7).unwrap()).collect();
+    for clustered in [false, true] {
+        let builder = TwoPeriodData::repeated_cross_section(&treated, &post, &d.y)
+            .weights(&d.weights)
+            .covariates(MatRef::from_column_major_slice(&x, n, k));
+        let builder = if clustered {
+            builder.clusters(&clusters)
+        } else {
+            builder
+        };
+        check(&two_period::estimate(&builder.build().unwrap(), &options).unwrap());
+    }
+    let d = &fixture.panel[0].data;
+    let treated: Vec<bool> = d.d.iter().map(|&v| v > 0.5).collect();
+    let change: Vec<f64> = d.y1.iter().zip(&d.y0).map(|(a, b)| a - b).collect();
+    let (x, k) = column_major(&d.x);
+    let data = TwoPeriodData::panel(&treated, &change)
+        .weights(&d.weights)
+        .covariates(MatRef::from_column_major_slice(&x, change.len(), k))
+        .build()
+        .unwrap();
+    check(&two_period::estimate(&data, &options).unwrap());
+}

@@ -25,7 +25,7 @@ mod data;
 mod estimate;
 mod nuisance;
 
-use crate::inference::{standard_error_from_influence, validate_confidence_level};
+use crate::inference::{normal_interval, standard_error_from_influence, validate_confidence_level};
 use crate::types::{DrDidConfig, DrDidError, DrDidEstimate, DrDidRepeatedObservation};
 
 use data::prepare_repeated_data;
@@ -36,9 +36,10 @@ use nuisance::fit_improved_repeated_nuisance_models;
 /// estimator.
 ///
 /// `DrDidRepeatedObservation::covariates` holds the covariates without an
-/// intercept, which the estimator prepends. The interval is `att +- 1.96 se`
-/// whatever `config.confidence_level` is, and the bootstrap settings are not
-/// used.
+/// intercept, which the estimator prepends. The interval is the normal one,
+/// `att +- z se` with `z` the normal quantile of `config.confidence_level`,
+/// and the bootstrap settings are not used. `DRDID`'s `drdid_imp_rc` forms
+/// `att +- 1.96 se` at 95% only.
 ///
 /// # Errors
 ///
@@ -57,7 +58,7 @@ pub fn estimate_drdid_improved_repeated_cross_section(
     let estimate = estimate_improved_repeated_att(&prepared, &nuisance);
 
     let se = standard_error_from_influence(&estimate.influence_function);
-    let (ci_low, ci_high) = (estimate.att - 1.96 * se, estimate.att + 1.96 * se);
+    let (ci_low, ci_high) = normal_interval(estimate.att, se, config.confidence_level);
 
     Ok(DrDidEstimate {
         att: estimate.att,

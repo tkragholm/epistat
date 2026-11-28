@@ -49,8 +49,9 @@
 //! `sd(psi) sqrt(n - 1) / n`, and the interval is `att +- z se` at
 //! [`TwoPeriodOptions::level`]; with [`TwoPeriodOptions::bootstrap`] it is the
 //! percentile interval of Rademacher multiplier draws of `psi`, `DRDID`'s
-//! `boot = TRUE` with `boot.type = "multiplier"`. The improved estimators'
-//! interval is `att +- 1.96 se` and is labelled 95% whatever the level. With
+//! `boot = TRUE` with `boot.type = "multiplier"`. The improved estimators
+//! always give the normal interval, where `DRDID` forms `att +- 1.96 se` at
+//! 95% only. With
 //! clusters in the data the standard error is `sqrt(sum_c s_c^2)`, `s_c` the
 //! sum of the centred `psi_i` of cluster `c` divided by `n`, without the
 //! factor `G / (G - 1)`, as `did` reports it with `clustervars`, and the
@@ -195,11 +196,10 @@ pub struct TwoPeriodOptions {
     pub estimator: Estimator,
     /// The nuisance models.
     pub nuisance: NuisanceOptions,
-    /// The confidence level of the interval. Ignored by
-    /// [`Estimator::Improved`], whose interval is always the 95% one,
-    /// `att +- 1.96 se` as `DRDID`'s `drdid_imp_panel` and `drdid_imp_rc`
-    /// form it (with clusters, the normal 95% interval of the clustered
-    /// standard error), and is labelled 95% whatever level is asked for.
+    /// The confidence level of the interval, 95% by default. Every
+    /// estimator's normal interval uses the normal quantile of this level;
+    /// `DRDID`'s `drdid_imp_panel` and `drdid_imp_rc` form `att +- 1.96 se`
+    /// at 95% only.
     pub level: Level,
     /// A multiplier bootstrap for the interval, `boot = TRUE` with
     /// `boot.type = "multiplier"`: the percentile interval of Rademacher
@@ -217,10 +217,7 @@ pub struct TwoPeriod {
     pub estimator: Estimator,
     /// The ATT with its standard error, interval and normal p-value; a part
     /// that is not finite is `None`. The interval is at
-    /// [`TwoPeriodOptions::level`], except for [`Estimator::Improved`]
-    /// without clusters, whose interval is `att +- 1.96 se` at level 95%
-    /// whatever level was asked for; with clusters it is the normal 95%
-    /// interval of the clustered standard error, again whatever the level.
+    /// [`TwoPeriodOptions::level`].
     pub estimate: Estimate,
     /// Treated rows.
     pub n_treated: usize,
@@ -286,11 +283,7 @@ pub fn estimate(data: &TwoPeriodData<'_>, options: &TwoPeriodOptions) -> Result<
     } else {
         repeated(data, options.estimator, config)?
     };
-    let level = match options.estimator {
-        Estimator::Improved => Level::confidence(0.95)?,
-        _ => options.level,
-    };
-    finish(data, options.estimator, fit, level)
+    finish(data, options.estimator, fit, options.level)
 }
 
 /// The canonical 2x2 difference in means of a repeated cross-section without
