@@ -167,7 +167,7 @@ pub struct PassPolicy<'a> {
 }
 
 impl RiskSetPolicy<Rec> for PassPolicy<'_> {
-    fn is_case_eligible(&self, row: &Rec, age_limit_years: u8) -> bool {
+    fn is_case_eligible(&self, row: &Rec, age_limit_years: Option<u8>) -> bool {
         !self.unexposed_ids.contains(row.id())
             && !self.matched_case_ids.contains(row.id())
             && DefaultRiskSetPolicy.is_case_eligible(row, age_limit_years)

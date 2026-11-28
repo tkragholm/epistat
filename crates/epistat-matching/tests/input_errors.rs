@@ -12,8 +12,9 @@ use epistat_matching::effects::UnitData;
 use epistat_matching::output::{MatchDataOptions, Units, match_data_from_weights};
 use epistat_matching::sensitivity::{MatchedSet, WilcoxonDistribution, wilcoxon_bounds};
 use epistat_matching::{
-    AgeLimitYears, BaseRecord, BirthDateWindowDays, Error, MatchJob, MatchRatio, MatchWeightMethod,
-    PairDistanceMatrix, QuickMatchOptions, RoleTransitionRecord, quick_clusters,
+    AgeLimitYears, BaseRecord, BirthDateWindowDays, Col, Error, MatchJob, MatchRatio,
+    MatchWeightMethod, PairDistanceMatrix, QuickMatchOptions, RiskSetCohort, RoleTransitionRecord,
+    TreatmentData, quick_clusters,
 };
 use epistat_testkit::{
     BadInput, assert_codes_unique, assert_input_error, assert_rejects_bad_input,
@@ -234,6 +235,28 @@ fn the_sensitivity_bounds_refuse_bad_outcomes() {
 }
 
 #[test]
+fn the_views_refuse_bad_numeric_columns() {
+    let ids = ["a", "b", "c", "d"];
+    let treated = [true, false, true, false];
+    let age = [31.0, 42.0, 55.0, 60.0];
+    assert_rejects_bad_input("TreatmentData::numeric", |bad| {
+        (bad != BadInput::Unsorted).then(|| {
+            TreatmentData::builder(&ids, &treated)
+                .numeric("age", bad.column(&age))
+                .build()
+        })
+    });
+    let birth = [14_610_i64, 14_620, 14_640, 14_600];
+    assert_rejects_bad_input("RiskSetCohort::numeric", |bad| {
+        (bad != BadInput::Unsorted).then(|| {
+            RiskSetCohort::builder(&ids, Col::unix_days(&birth[..]))
+                .numeric("age", bad.column(&age))
+                .build()
+        })
+    });
+}
+
+#[test]
 fn every_variant_kind_and_code_is_stable() {
     let errors = [
         Error::DuplicateId { id: "a".into() },
@@ -249,6 +272,14 @@ fn every_variant_kind_and_code_is_stable() {
         Error::SingularCovariance,
         Error::NotConverged,
         Error::ReestimateAcross,
+        Error::UnknownColumn {
+            name: "sex".into(),
+            known: vec!["gender".into()],
+        },
+        Error::MissingStratum {
+            key: "sex",
+            group: "control",
+        },
         Error::Trial {
             period: 1,
             source: Box::new(Error::NoMatches),
@@ -268,6 +299,8 @@ fn every_variant_kind_and_code_is_stable() {
             ErrorKind::Numerical,
             ErrorKind::Numerical,
             ErrorKind::Unsupported,
+            ErrorKind::Input,
+            ErrorKind::Input,
             ErrorKind::Numerical,
         ]
     );

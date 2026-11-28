@@ -364,10 +364,9 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
             "{label}: used_controls"
         );
 
-        // Weights of the matched side by estimand.
-        let weights_anchor_side = outcome.match_weights(
-            MatchWeightMethod::for_estimand(Estimand::Att).expect("a matched estimand"),
-        );
+        // Weights with the focal group, the anchors, at 1.
+        let weights_anchor_side =
+            outcome.match_weights(MatchWeightMethod::CaseUnitControlFractional);
         let raw = expected_of(&expected.idx, &expected.raw);
         assert_weights(
             &format!("{label} raw"),
@@ -384,9 +383,8 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
             focal_value,
             &norm,
         );
-        let weights_candidate_side = outcome.match_weights(
-            MatchWeightMethod::for_estimand(Estimand::Atc).expect("a matched estimand"),
-        );
+        let weights_candidate_side =
+            outcome.match_weights(MatchWeightMethod::ControlUnitCaseFractional);
         let other = expected_of(&expected.idx, &expected.other_raw);
         assert_weights(
             &format!("{label} other"),

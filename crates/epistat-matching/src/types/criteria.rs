@@ -173,22 +173,17 @@ impl AsRef<MatchingCriteria> for ValidatedMatchingCriteria {
 }
 
 /// Generalized options for transition-based risk-set matching.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// There is no age limit unless one is set: every record with a transition
+/// date is a case.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RoleTransitionOptions {
-    /// Include records transitioning strictly before this age threshold in years.
-    pub transition_age_limit_years: AgeLimitYears,
+    /// A record is a case only if its transition comes before this age in
+    /// whole years, `None` for no limit.
+    pub transition_age_limit_years: Option<AgeLimitYears>,
     /// Optional descending fallback ratios, for example `[4, 3, 2]`.
     /// When empty, [`MatchingCriteria::match_ratio`] is used.
     pub ratio_fallback: Vec<MatchRatio>,
-}
-
-impl Default for RoleTransitionOptions {
-    fn default() -> Self {
-        Self {
-            transition_age_limit_years: AgeLimitYears(6),
-            ratio_fallback: Vec::new(),
-        }
-    }
 }
 
 #[cfg(test)]

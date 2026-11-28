@@ -49,7 +49,7 @@ use epistat_matching::prelude::*;
 use epistat_matching::{
     BalanceRecord, BalanceReport, BalanceReportOptions, BalanceSummary, BalanceWeights,
     CategoricalBalance, CovariateValue, NumericBalance, NumericBalanceTransform, SampleSizeTable,
-    balance_improvement, balance_summary,
+    UnitWeightSet, balance_improvement, balance_summary,
 };
 use epistat_testkit::{Tolerance, load_json, na_f64, na_f64_vec};
 use r_reference::{Versions, assert_r_version};
@@ -211,6 +211,37 @@ fn outcome(pairs: &[(String, String)], estimand: Estimand) -> MatchOutcome {
     )
 }
 
+/// The weights the crate derives from R's pairs, each written treated first.
+///
+/// The outcome takes the focal group as its cases, as the pair matchers form
+/// pairs, so under the ATC each pair is given control first. The derived
+/// weights are then put back in the reading of `balance_summary`, whose cases
+/// are the treated units and whose ATC standardiser is the controls'.
+fn pair_weights(fit: &Fit) -> BalanceWeights {
+    let estimand = estimand(&fit.estimand);
+    if estimand != Estimand::Atc {
+        return BalanceWeights::from_outcome(&outcome(&fit.pairs, estimand))
+            .expect("a matched estimand");
+    }
+    let reversed: Vec<(String, String)> = fit
+        .pairs
+        .iter()
+        .map(|(treated, control)| (control.clone(), treated.clone()))
+        .collect();
+    let derived =
+        BalanceWeights::from_outcome(&outcome(&reversed, estimand)).expect("a matched estimand");
+    let owned = |group: &mut dyn Iterator<Item = (&str, f64)>| {
+        group
+            .map(|(id, weight)| (id.to_string(), weight))
+            .collect::<Vec<_>>()
+    };
+    let matching = UnitWeightSet::new(
+        owned(&mut derived.matching.controls()),
+        owned(&mut derived.matching.cases()),
+    );
+    BalanceWeights::new(Estimand::Atc, matching).with_pairs(outcome(&fit.pairs, estimand).pairs)
+}
+
 const LALONDE: [&str; 6] = ["age", "educ", "race", "married", "nodegree", "re74"];
 const LALONDE_EXACT: [&str; 3] = ["married", "nodegree", "race"];
 const SIM: [&str; 6] = ["x1", "x2", "z", "b", "cnt", "f"];
@@ -238,8 +269,7 @@ enum Source {
 fn weights_for(fit: &Fit, ids: &[String], sample: &Sample, source: Source) -> BalanceWeights {
     let sampling = fit.name.contains("sampling");
     let mut weights = if source == Source::Pairs {
-        BalanceWeights::from_outcome(&outcome(&fit.pairs, estimand(&fit.estimand)))
-            .expect("a matched estimand")
+        pair_weights(fit)
     } else if fit.name == "none" || fit.name == "none_sampling" {
         BalanceWeights::unmatched(&sample.cases, &sample.controls, estimand(&fit.estimand))
     } else {

@@ -111,6 +111,9 @@ pub struct MatchJob<Mode, R, S, G = (), P = DefaultRiskSetPolicy> {
     strategy: S,
     constraints: G,
     risk_set_policy: P,
+    /// Strata keys that some case and some control must carry, or the job
+    /// refuses to run.
+    required_keys: Vec<&'static str>,
     record: PhantomData<R>,
 }
 
@@ -132,6 +135,7 @@ impl<'a, R: RoleIndexedRecord>
             strategy: RandomSelection::seeded(seed),
             constraints: (),
             risk_set_policy: DefaultRiskSetPolicy,
+            required_keys: Vec::new(),
             record: PhantomData,
         }
     }
@@ -155,6 +159,7 @@ impl<'a, R: MatchingRecord>
             strategy: RandomSelection::seeded(seed),
             constraints: (),
             risk_set_policy: DefaultRiskSetPolicy,
+            required_keys: Vec::new(),
             record: PhantomData,
         }
     }
@@ -260,6 +265,7 @@ where
             strategy,
             constraints: self.constraints,
             risk_set_policy: self.risk_set_policy,
+            required_keys: self.required_keys,
             record: PhantomData,
         }
     }
@@ -286,6 +292,7 @@ where
                 second: group,
             },
             risk_set_policy: self.risk_set_policy,
+            required_keys: self.required_keys,
             record: PhantomData,
         }
     }
@@ -334,6 +341,7 @@ where
             strategy: self.strategy,
             constraints: (self.constraints, constraint),
             risk_set_policy: self.risk_set_policy,
+            required_keys: self.required_keys,
             record: PhantomData,
         }
     }
@@ -351,12 +359,17 @@ where
     /// Add a gender match constraint.
     ///
     /// Adds [`ExactMatchConstraint::on_key`](crate::constraints::ExactMatchConstraint::on_key)
-    /// on the "sex" strata key, whose refusals are counted under
-    /// `gender_mismatch`.
+    /// on the strata key `"sex"`, whose refusals are counted under
+    /// `gender_mismatch`. `run` refuses the job with
+    /// [`Error::MissingStratum`] when no case or no control has a value
+    /// under that key, as when sex is stored under another name; use
+    /// [`with_constraint`](Self::with_constraint) with
+    /// `ExactMatchConstraint::on_key` for another key.
     #[must_use]
     pub fn with_gender_match(
-        self,
+        mut self,
     ) -> MatchJob<Mode, R, S, (G, crate::constraints::ExactMatchConstraint), P> {
+        self.required_keys.push("sex");
         self.with_constraint(
             crate::constraints::ExactMatchConstraint::on_key("sex").with_reason("gender_mismatch"),
         )
@@ -384,6 +397,7 @@ where
             strategy: Rounds(self.strategy),
             constraints: self.constraints,
             risk_set_policy: self.risk_set_policy,
+            required_keys: self.required_keys,
             record: PhantomData,
         }
     }
@@ -547,10 +561,11 @@ impl<'a, R: RoleIndexedRecord, S, G, P> MatchJob<TransitionMode<'a, R>, R, S, G,
 where
     G: ConstraintGroup<R>,
 {
-    /// Set the transition age limit in years (for role-transition matching).
+    /// Make a record a case only if its transition comes before this age in
+    /// whole years. Without it there is no age limit.
     #[must_use]
     pub const fn with_age_limit(mut self, years: AgeLimitYears) -> Self {
-        self.mode.options.transition_age_limit_years = years;
+        self.mode.options.transition_age_limit_years = Some(years);
         self
     }
 
@@ -598,6 +613,7 @@ where
             strategy: self.strategy,
             constraints: self.constraints,
             risk_set_policy,
+            required_keys: self.required_keys,
             record: PhantomData,
         }
     }
@@ -619,6 +635,9 @@ where
     {
         matched_estimand(self.criteria.estimand, "matching")?;
         self.constraints.check()?;
+        let cohort = self.mode.cohort;
+        let cases = cohort.iter().filter(|record| record.event_date().is_some());
+        require_keys(&self.required_keys, &cases, &cohort.iter())?;
         let window = birth_window(
             self.mode.birth_window_set && self.mode.distance_config.is_some(),
             &self.criteria,
@@ -685,6 +704,11 @@ where
     {
         matched_estimand(self.criteria.estimand, "matching")?;
         self.constraints.check()?;
+        require_keys(
+            &self.required_keys,
+            &self.mode.anchors.iter(),
+            &self.mode.candidates.iter(),
+        )?;
         let window = birth_window(
             self.mode.birth_window_set && self.mode.distance_config.is_some(),
             &self.criteria,
@@ -704,6 +728,28 @@ where
             },
         ))
     }
+}
+
+/// Refuses a job in which no case, or no control, has a value for one of
+/// `keys`: every pair would be refused on it.
+fn require_keys<'r, R: MatchingRecord + 'r>(
+    keys: &[&'static str],
+    cases: &(impl Iterator<Item = &'r R> + Clone),
+    controls: &(impl Iterator<Item = &'r R> + Clone),
+) -> Result<(), Error> {
+    for &key in keys {
+        let carried = |record: &R| record.stratum(key).is_some();
+        if !cases.clone().any(carried) {
+            return Err(Error::MissingStratum { key, group: "case" });
+        }
+        if !controls.clone().any(carried) {
+            return Err(Error::MissingStratum {
+                key,
+                group: "control",
+            });
+        }
+    }
+    Ok(())
 }
 
 /// The birth-date window of `criteria` as a constraint, for a job whose
@@ -745,6 +791,81 @@ mod tests {
 
         assert_eq!(result.matched_cases, 1);
         assert_eq!(result.pairs.len(), 1);
+    }
+
+    /// A cohort of adults: without an age limit every case is matched, and
+    /// an age limit set by the caller removes the cases at or above it.
+    #[test]
+    fn a_transition_job_has_no_age_limit_unless_one_is_set() {
+        use crate::types::RoleTransitionRecord;
+
+        let records = vec![
+            RoleTransitionRecord::from_record(
+                BaseRecord::new("a1", date(1980, 1, 1)),
+                Some(date(2015, 1, 1)),
+            ),
+            RoleTransitionRecord::from_record(BaseRecord::new("c1", date(1980, 1, 2)), None),
+        ];
+        let job = || {
+            MatchJob::new_transition(&records, 42)
+                .with_ratio(MatchRatio::new(1).expect("non-zero ratio"))
+        };
+        let open = job().run().expect("a valid job");
+        assert_eq!((open.matched_cases, open.pairs.len()), (1, 1));
+        let limited = job()
+            .with_age_limit(AgeLimitYears::new(6).expect("positive age limit"))
+            .run()
+            .expect("a valid job");
+        assert_eq!((limited.matched_cases, limited.pairs.len()), (0, 0));
+    }
+
+    /// Sex stored under another key is an error, not a run in which every
+    /// control is refused.
+    #[test]
+    fn a_gender_match_needs_cases_and_controls_with_the_sex_key() {
+        use crate::types::RoleTransitionRecord;
+
+        let person = |id: &str, key: &str| {
+            let mut record = BaseRecord::new(id, date(2010, 1, 1));
+            record.strata.insert(key.to_string(), "F".to_string());
+            record
+        };
+        let ratio = MatchRatio::new(1).expect("non-zero ratio");
+        let cases = vec![person("a1", "sex")];
+        let controls = vec![person("c1", "gender")];
+        assert_eq!(
+            MatchJob::new_standard(&cases, &controls, 1)
+                .with_ratio(ratio)
+                .with_gender_match()
+                .run()
+                .unwrap_err(),
+            Error::MissingStratum {
+                key: "sex",
+                group: "control"
+            }
+        );
+        let records = vec![
+            RoleTransitionRecord::from_record(person("a1", "gender"), Some(date(2012, 1, 1))),
+            RoleTransitionRecord::from_record(person("c1", "sex"), None),
+        ];
+        assert_eq!(
+            MatchJob::new_transition(&records, 1)
+                .with_ratio(ratio)
+                .with_gender_match()
+                .run()
+                .unwrap_err(),
+            Error::MissingStratum {
+                key: "sex",
+                group: "case"
+            }
+        );
+        let both = vec![person("c1", "sex")];
+        let outcome = MatchJob::new_standard(&cases, &both, 1)
+            .with_ratio(ratio)
+            .with_gender_match()
+            .run()
+            .expect("both groups carry the key");
+        assert_eq!(outcome.pairs.len(), 1);
     }
 
     #[test]

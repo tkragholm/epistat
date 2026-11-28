@@ -67,8 +67,9 @@ use std::collections::{BTreeSet, HashSet};
 pub trait RiskSetPolicy<R: RoleIndexedRecord>: Sync {
     /// Whether a record should be treated as an eligible case.
     ///
-    /// Default behavior requires an event date before the configured age limit.
-    fn is_case_eligible(&self, row: &R, age_limit_years: u8) -> bool {
+    /// Default behavior requires an event date, before the age limit when the
+    /// job has one.
+    fn is_case_eligible(&self, row: &R, age_limit_years: Option<u8>) -> bool {
         is_case_before_age_limit(row, age_limit_years)
     }
 
@@ -287,7 +288,10 @@ fn match_with_distance_channel<
         request.strategy,
         &RoleIndexingConfig {
             criteria: request.criteria,
-            age_limit_years: request.options.transition_age_limit_years.get(),
+            age_limit_years: request
+                .options
+                .transition_age_limit_years
+                .map(crate::types::AgeLimitYears::get),
             ratio_fallback: &request.options.ratio_fallback,
             extra_constraints: request.constraints,
             distance_channel,
@@ -308,7 +312,7 @@ struct RoleIndexingConfig<
     P: RiskSetPolicy<R> + ?Sized,
 > {
     criteria: &'a MatchingCriteria,
-    age_limit_years: u8,
+    age_limit_years: Option<u8>,
     ratio_fallback: &'a [MatchRatio],
     extra_constraints: &'a G,
     distance_channel: DistanceChannel<'a, R, D>,
@@ -1088,7 +1092,7 @@ fn invalid_record_by_hashing<R: RoleIndexedRecord>(cohort: &[R]) -> Option<Exclu
 /// order.
 fn eligible_case_indices<R: RoleIndexedRecord, P: RiskSetPolicy<R> + ?Sized>(
     cohort: &[R],
-    age_limit_years: u8,
+    age_limit_years: Option<u8>,
     risk_set_policy: &P,
     id_order: Option<&IdOrder>,
 ) -> Vec<usize> {
@@ -1158,9 +1162,12 @@ fn cases_by_comparing_ids<R: RoleIndexedRecord>(
         .collect_vec()
 }
 
-fn is_case_before_age_limit<R: RoleIndexedRecord>(row: &R, age_limit_years: u8) -> bool {
+fn is_case_before_age_limit<R: RoleIndexedRecord>(row: &R, age_limit_years: Option<u8>) -> bool {
     let Some(event_date) = row.event_date() else {
         return false;
+    };
+    let Some(age_limit_years) = age_limit_years else {
+        return true;
     };
     let day = |date: NaiveDate| i64::from(date.num_days_from_ce() - crate::UNIX_EPOCH_DAYS_FROM_CE);
     // An event before birth is below any age limit.
@@ -1242,10 +1249,11 @@ mod tests {
                     let row =
                         RoleTransitionRecord::from_record(BaseRecord::new("a", birth), Some(event));
                     assert_eq!(
-                        is_case_before_age_limit(&row, limit),
+                        is_case_before_age_limit(&row, Some(limit)),
                         event < limit_date,
                         "{birth} {event} {limit}"
                     );
+                    assert!(is_case_before_age_limit(&row, None));
                 }
             }
         }
@@ -1313,7 +1321,7 @@ mod tests {
         fn is_case_eligible(
             &self,
             row: &RoleTransitionRecord<ResidencyRecord>,
-            age_limit_years: u8,
+            age_limit_years: Option<u8>,
         ) -> bool {
             is_case_before_age_limit(row, age_limit_years)
                 && row.record.resident_until.is_none_or(|until| {
@@ -1341,7 +1349,7 @@ mod tests {
     fn transition_matching_is_generic_over_record_shape() {
         let criteria = MatchingCriteria::default();
         let options = RoleTransitionOptions {
-            transition_age_limit_years: age_limit(6),
+            transition_age_limit_years: Some(age_limit(6)),
             ratio_fallback: vec![ratio(1)],
         };
 
@@ -1370,7 +1378,7 @@ mod tests {
     fn transition_works_with_base_record_default_type() {
         let criteria = MatchingCriteria::default();
         let options = RoleTransitionOptions {
-            transition_age_limit_years: age_limit(6),
+            transition_age_limit_years: Some(age_limit(6)),
             ratio_fallback: vec![ratio(1)],
         };
 
@@ -1399,7 +1407,7 @@ mod tests {
     fn transition_policy_filters_non_resident_candidates() {
         let criteria = MatchingCriteria::default();
         let options = RoleTransitionOptions {
-            transition_age_limit_years: age_limit(6),
+            transition_age_limit_years: Some(age_limit(6)),
             ratio_fallback: vec![ratio(1)],
         };
         let cohort = vec![
@@ -1442,7 +1450,7 @@ mod tests {
             ..MatchingCriteria::default()
         };
         let options = RoleTransitionOptions {
-            transition_age_limit_years: age_limit(6),
+            transition_age_limit_years: Some(age_limit(6)),
             ratio_fallback: vec![ratio(1)],
         };
         let cohort = vec![
@@ -1485,7 +1493,7 @@ mod tests {
             ..MatchingCriteria::default()
         };
         let options = RoleTransitionOptions {
-            transition_age_limit_years: age_limit(6),
+            transition_age_limit_years: Some(age_limit(6)),
             ratio_fallback: vec![ratio(1)],
         };
         let cohort = vec![
@@ -1528,7 +1536,7 @@ mod tests {
             ..MatchingCriteria::default()
         };
         let options = RoleTransitionOptions {
-            transition_age_limit_years: age_limit(6),
+            transition_age_limit_years: Some(age_limit(6)),
             ratio_fallback: Vec::new(),
         };
 
@@ -1562,7 +1570,7 @@ mod tests {
             ..MatchingCriteria::default()
         };
         let options = RoleTransitionOptions {
-            transition_age_limit_years: age_limit(6),
+            transition_age_limit_years: Some(age_limit(6)),
             ratio_fallback: vec![ratio(2)],
         };
 
@@ -1595,7 +1603,7 @@ mod tests {
             ..MatchingCriteria::default()
         };
         let options = RoleTransitionOptions {
-            transition_age_limit_years: age_limit(6),
+            transition_age_limit_years: Some(age_limit(6)),
             ratio_fallback: vec![ratio(1)],
         };
         let cohort = vec![
@@ -1636,7 +1644,7 @@ mod tests {
             ..MatchingCriteria::default()
         };
         let options = RoleTransitionOptions {
-            transition_age_limit_years: age_limit(6),
+            transition_age_limit_years: Some(age_limit(6)),
             ratio_fallback: vec![ratio(1)],
         };
         let cohort = vec![
@@ -1738,7 +1746,7 @@ mod tests {
             let by_order = invalid_record(&cohort, Some(&order));
             assert_eq!(by_order, invalid_record_by_hashing(&cohort), "seed {seed}");
             reported += usize::from(by_order.is_some());
-            for limit in [1_u8, 6] {
+            for limit in [Some(1_u8), Some(6), None] {
                 assert_eq!(
                     eligible_case_indices(&cohort, limit, &DefaultRiskSetPolicy, Some(&order)),
                     cases_by_comparing_ids(

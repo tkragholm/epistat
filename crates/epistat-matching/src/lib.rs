@@ -240,6 +240,7 @@ mod sorting;
 pub mod spec;
 mod trials;
 mod types;
+mod views;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
@@ -247,6 +248,12 @@ pub mod test_utils;
 pub use test_utils::{date, record, test_outcome};
 
 pub use cohort::{Cohort, CohortBuilder, CohortRow};
+pub use epistat_core::Day;
+pub use views::{
+    Col, ColumnKind, ExactMissing, Label, LabelColumn, Residence, RiskSetCohort,
+    RiskSetCohortBuilder, SpellEnd, TreatmentData, TreatmentDataBuilder, UnixDays,
+    UnixDaysNullable,
+};
 
 pub use balance::{
     BalanceWeights, balance_diagnostics, balance_improvement, balance_report, balance_summary,
