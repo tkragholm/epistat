@@ -37,4 +37,5 @@ pub mod f;
 pub mod gamma;
 pub mod normal;
 pub mod poisson;
+pub(crate) mod stirling;
 pub mod t;

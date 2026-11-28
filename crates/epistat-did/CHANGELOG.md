@@ -21,3 +21,5 @@ First release of `epistat-did`, which continues `did_methods` (last release 0.2.
 ### Results
 
 No released result changes.
+
+- The Wald p-value of the pre-test of `att_gt` and the Hausman p-value of `did_cc` change by at most 9e-16 relative (8 units in the last place), because the chi-square tail in `epistat-stats` is computed by a new method.

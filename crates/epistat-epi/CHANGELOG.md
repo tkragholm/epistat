@@ -30,3 +30,5 @@ Compared with the same items in `epistat-stats` 0.2.5:
 ### Results
 
 No released result changes. The functions that were also in `epistat-stats` 0.2.5 use the distribution functions and sums of `epistat-stats` 0.3, and differ from the 0.2.5 values in the last bits for the reasons given in that crate's changelog.
+
+- The exact and gamma limits of `crude_rate`, `direct_standardised` and `sir`, and the exact p-values of `sir` and `poisson_two_sided`, change by up to 1e-14 relative, and up to 1.7e-13 for a p-value of 1e-73, because the incomplete gamma function and its quantile in `epistat-stats` are computed by a new method. The checked values moved towards the exact ones.
