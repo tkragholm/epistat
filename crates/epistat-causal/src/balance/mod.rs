@@ -140,6 +140,7 @@ pub struct GroupSummary {
 /// The fields are private, since the variance of the outcome estimates relies
 /// on the weights being those the method found for the treatment and sample
 /// weights it was given.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct BalanceWeights {
     estimand: Estimand,

@@ -257,6 +257,7 @@ impl Default for CbpsOptions {
 }
 
 /// The result of [`cbps`].
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct Cbps {
     /// The weights and what the outcome estimates need.

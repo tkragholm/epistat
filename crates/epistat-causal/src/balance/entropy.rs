@@ -132,6 +132,7 @@ impl Default for EntropyOptions {
 }
 
 /// The result of [`entropy_balance`].
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct EntropyBalance {
     /// The weights and what the outcome estimates need.
