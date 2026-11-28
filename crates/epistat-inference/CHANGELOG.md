@@ -18,6 +18,8 @@ Confidence levels, bootstrap settings and errors now use the shared types of `ep
 - The minimum supported Rust version is 1.89, up from 1.85. The crate depends on `epistat-core`, and on `epistat-linalg` 0.4, `epistat-rng` 0.2 and `epistat-stats` 0.3.
 - `wald::wald` returns the shared `epistat_core::Test`, a chi-square test whose `df` is `Some(k as f64)` and whose `statistic` and `p_value` are `Option`s, in place of `Wald`. Match on the `Option` where 0.3 read a number. `Wald` is a deprecated alias of `Test`.
 - `wald::wald` refuses a covariance whose estimated reciprocal condition number is below the machine epsilon with `Error::Solve` holding `epistat_linalg::Error::IllConditioned`, the rule of R's `solve`, where it returned a statistic with no correct digits: `[[1, 1], [1, 1 + 2^-52]]` gave a statistic near `10^16` and a p-value of 0. It refuses a NaN or infinite estimate or covariance entry with `InputError::NotFinite`. A covariance R accepts gives the same bits as before.
+- `interval::trimmed_percentile` refuses a trim outside `[0, 0.5)` and one that leaves fewer than two replicates with `InputError::Domain`, where it capped the trim at 0.49 and returned the untrimmed interval when the trim left nothing. A valid trim gives the same interval.
+- `interval::Percentile::OutwardFromLast` and `OutwardFromCount` are renamed `OutwardRank` and `OutwardCount`, after where they count positions. The old names are deprecated constants of the same values, so code that names them still compiles and matches.
 
 ### Added
 
@@ -32,6 +34,7 @@ Confidence levels, bootstrap settings and errors now use the shared types of `ep
 - `bootstrap::unit_counts_of`, the resampling counts of one replicate.
 - `Error`, which implements `Classify`.
 - `CovarianceInput`, the covariance forms `wald` takes: a faer `MatRef` or `&Mat`, an `epistat_core::Covariance` such as `Influence::variance` returns, or an `epistat_core::Matrix`. A `Covariance` with an undefined entry is refused with `InputError::NotFinite`.
+- `interval::try_normal`, the normal interval with its standard error checked: a negative standard error is `InputError::Domain` and a NaN estimate or standard error `InputError::NotFinite`, where `interval::normal` returns reversed or undefined limits.
 
 ### Deprecated
 
@@ -42,6 +45,7 @@ Deprecated items are removed in the next release that breaks the API.
 - `influence::standard_error`, use `Influence::variance_with` with `ClusterRule::NoSmallSample`.
 - `influence::clustered_variance`, `clustered_standard_error` and `clustered_covariance`, use `Influence::variance`, which centres the influence function.
 - `wald::Wald`, use `epistat_core::Test`.
+- `interval::Percentile::OutwardFromLast` and `OutwardFromCount`, use `Percentile::OutwardRank` and `Percentile::OutwardCount`.
 
 ### Results
 

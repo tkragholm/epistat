@@ -13,10 +13,13 @@
 //!
 //! # Normal interval
 //!
-//! [`normal()`] returns `estimate -/+ z * se`, where `z` is the standard normal
-//! quantile at the upper probability of the level, `1 - alpha / 2`. A NaN
-//! limit, as from a NaN standard error, is `None`; an infinite standard error
-//! gives infinite limits.
+//! [`try_normal`] returns `estimate -/+ z * se`, where `z` is the standard
+//! normal quantile at the upper probability of the level, `1 - alpha / 2`. It
+//! refuses a standard error that is negative or NaN, which would give reversed
+//! or undefined limits, and an estimate that is NaN; an infinite standard
+//! error gives infinite limits. [`normal()`] is the same interval without the
+//! checks: a NaN limit is `None` and a negative standard error gives the
+//! limits in reverse order.
 //!
 //! # Percentile intervals
 //!
@@ -25,27 +28,27 @@
 //! the rule. Type 7 is the rule for new work: it is R's default, it is the
 //! quantile of \[3\] that most software computes, and it does not depend on a
 //! convention about which side to round to. The other two reproduce existing
-//! software and are kept so that its intervals can be reproduced exactly:
-//! `OutwardFromLast` the percentile interval of the PHD kernels, and
-//! `OutwardFromCount` that of the semicontinuous cost models. With
-//! `last = n - 1`:
+//! software that reads the bounds as order statistics, so that its intervals
+//! can be reproduced exactly. Both round the position away from the centre;
+//! `OutwardRank` counts positions on `n - 1`, as type 7 does, and
+//! `OutwardCount` on `n`. With `last = n - 1`:
 //!
 //! ```text
-//! Type7:            quantiles at alpha/2 and 1 - alpha/2, type 7 of [3]
-//! OutwardFromLast:  x(floor(alpha/2 * last)),  x(min(ceil((1 - alpha/2) * last), last))
-//! OutwardFromCount: x(floor(alpha/2 * n)),     x(ceil((1 - alpha/2) * n) - 1)
+//! Type7:         quantiles at alpha/2 and 1 - alpha/2, type 7 of [3]
+//! OutwardRank:   x(floor(alpha/2 * last)),  x(min(ceil((1 - alpha/2) * last), last))
+//! OutwardCount:  x(floor(alpha/2 * n)),     x(ceil((1 - alpha/2) * n) - 1)
 //! ```
 //!
 //! Type 7 interpolates linearly between order statistics, so it can return a
 //! value that is not a replicate. The two outward rules always return
-//! replicates and round away from the centre. For `OutwardFromCount` the lower
-//! position is capped at `last` and the upper position is raised to at least
-//! the lower, so the bounds are in order.
+//! replicates. For `OutwardCount` the lower position is capped at `last` and
+//! the upper position is raised to at least the lower, so the bounds are in
+//! order.
 //!
 //! [`trimmed_percentile`] first drops `floor(trim * n)` replicates from each
-//! end of the sorted sample, with `trim` capped to `[0, 0.49]`, and then
-//! applies [`percentile`] to what is left. If nothing would be dropped, or the
-//! trim would leave no replicates, it returns the untrimmed interval.
+//! end of the sorted sample and then applies [`percentile`] to what is left;
+//! a trim that drops nothing gives the untrimmed interval. It refuses a trim
+//! outside `[0, 0.5)` and one that leaves fewer than two replicates.
 //!
 //! # Bias-corrected interval
 //!
@@ -78,6 +81,8 @@
 //!   [`InputError::NotFinite`] at its position, and replicates that
 //!   [`percentile_sorted`] finds out of order are [`InputError::Unsorted`].
 //! - One replicate gives that replicate as both bounds.
+//! - A trim outside `[0, 0.5)`, or one that leaves fewer than two
+//!   replicates, is [`InputError::Domain`].
 //!
 //! # References
 //!
@@ -100,25 +105,41 @@ use crate::{Error, empty};
 
 /// How a percentile interval reads its bounds from the sorted replicates.
 ///
-/// Use [`Percentile::Type7`] for new work. The other two rules reproduce the
-/// intervals of existing software.
+/// Use [`Percentile::Type7`] for new work. The two outward rules reproduce
+/// software that takes the bounds as order statistics, rounding the position
+/// away from the centre.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Percentile {
     /// R's type 7 quantiles at `alpha / 2` and `1 - alpha / 2`.
     Type7,
-    /// For reproducing the PHD kernels' `percentile_ci`. The replicates at
-    /// positions `floor(alpha / 2 * (n - 1))` and
-    /// `ceil((1 - alpha / 2) * (n - 1))`, counting from 0.
-    OutwardFromLast,
-    /// For reproducing semicontinuous_models' `bootstrap_percentile_ci`. The
-    /// replicates at positions `floor(alpha / 2 * n)` and
-    /// `ceil((1 - alpha / 2) * n) - 1`, counting from 0.
-    OutwardFromCount,
+    /// The replicates at positions `floor(alpha / 2 * (n - 1))` and
+    /// `ceil((1 - alpha / 2) * (n - 1))`, counting from 0: the ranks of type
+    /// 7, rounded outward instead of interpolated.
+    OutwardRank,
+    /// The replicates at positions `floor(alpha / 2 * n)` and
+    /// `ceil((1 - alpha / 2) * n) - 1`, counting from 0: positions counted on
+    /// the number of replicates, rounded outward.
+    OutwardCount,
+}
+
+#[expect(
+    non_upper_case_globals,
+    reason = "the names of the variants they stand for in 0.3"
+)]
+impl Percentile {
+    /// The name of [`Percentile::OutwardRank`] in epistat-inference 0.3.
+    #[deprecated(since = "0.4.0", note = "use Percentile::OutwardRank")]
+    pub const OutwardFromLast: Self = Self::OutwardRank;
+    /// The name of [`Percentile::OutwardCount`] in epistat-inference 0.3.
+    #[deprecated(since = "0.4.0", note = "use Percentile::OutwardCount")]
+    pub const OutwardFromCount: Self = Self::OutwardCount;
 }
 
 /// `estimate -/+ z se` with `z` the normal quantile at the level's upper
-/// probability, `1 - alpha / 2`. A NaN limit is `None`.
+/// probability, `1 - alpha / 2`, without checking `se`: a NaN limit is
+/// `None` and a negative `se` gives the limits in reverse order.
+/// [`try_normal`] refuses both.
 #[must_use]
 pub fn normal(estimate: f64, se: f64, level: Level) -> Interval {
     let margin = normal::quantile(level.upper_probability()) * se;
@@ -128,6 +149,46 @@ pub fn normal(estimate: f64, se: f64, level: Level) -> Interval {
         defined(estimate + margin),
         level,
     )
+}
+
+/// The normal interval `estimate -/+ z se`, as [`normal()`], for a standard
+/// error that is not negative.
+///
+/// ```
+/// use epistat_core::Level;
+/// use epistat_inference::interval::try_normal;
+///
+/// let interval = try_normal(1.0, 0.5, Level::P95)?;
+/// assert_eq!(interval.to_string(), "95% CI 0.0200 to 1.98");
+/// assert!(try_normal(1.0, -0.5, Level::P95).is_err());
+/// # Ok::<(), epistat_inference::Error>(())
+/// ```
+///
+/// # Errors
+///
+/// [`InputError::NotFinite`] for an estimate or standard error that is NaN,
+/// and [`InputError::Domain`] for a negative standard error.
+pub fn try_normal(estimate: f64, se: f64, level: Level) -> Result<Interval, Error> {
+    for (what, value) in [("estimate", estimate), ("se", se)] {
+        if value.is_nan() {
+            return Err(InputError::NotFinite {
+                what,
+                row: 0,
+                column: None,
+            }
+            .into());
+        }
+    }
+    if se < 0.0 {
+        return Err(InputError::Domain {
+            what: "se",
+            value: se,
+            domain: "[0, inf]",
+            row: None,
+        }
+        .into());
+    }
+    Ok(normal(estimate, se, level))
 }
 
 /// The percentile interval of the replicates, which it sorts.
@@ -177,12 +238,12 @@ fn sorted_bounds(sorted: &[f64], level: Level, rule: Percentile) -> Result<Inter
             quantile::type7(sorted, lower_p).ok_or_else(|| empty("replicates"))?,
             quantile::type7(sorted, upper_p).ok_or_else(|| empty("replicates"))?,
         ),
-        Percentile::OutwardFromLast => {
+        Percentile::OutwardRank => {
             let lower = (lower_p * last as f64).floor() as usize;
             let upper = (upper_p * last as f64).ceil() as usize;
             (sorted[lower], sorted[upper.min(last)])
         }
-        Percentile::OutwardFromCount => {
+        Percentile::OutwardCount => {
             let lower = ((lower_p * n).floor() as usize).min(last);
             let upper = ((upper_p * n).ceil() as usize)
                 .saturating_sub(1)
@@ -193,13 +254,13 @@ fn sorted_bounds(sorted: &[f64], level: Level, rule: Percentile) -> Result<Inter
     Ok(Interval::new(Some(lower), Some(upper), level))
 }
 
-/// [`percentile`] after dropping `floor(trim * n)` replicates from each tail,
-/// with `trim` capped at 0.49. Without trimming, or when the trim would leave
-/// nothing, it is the untrimmed interval.
+/// [`percentile`] after dropping `floor(trim * n)` replicates from each tail.
+/// A trim that drops nothing gives the untrimmed interval.
 ///
 /// # Errors
 ///
-/// As [`percentile`].
+/// As [`percentile`], and [`InputError::Domain`] for a trim outside
+/// `[0, 0.5)` or one that leaves fewer than two replicates.
 #[expect(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
@@ -213,8 +274,26 @@ pub fn trimmed_percentile(
 ) -> Result<Interval, Error> {
     check_replicates(replicates)?;
     let n = replicates.len();
-    let cut = (trim.clamp(0.0, 0.49) * n as f64).floor() as usize;
-    if cut == 0 || 2 * cut >= n {
+    if !(0.0..0.5).contains(&trim) {
+        return Err(InputError::Domain {
+            what: "trim",
+            value: trim,
+            domain: "[0, 0.5)",
+            row: None,
+        }
+        .into());
+    }
+    let cut = (trim * n as f64).floor() as usize;
+    if n - 2 * cut < 2 && cut > 0 {
+        return Err(InputError::Domain {
+            what: "trim",
+            value: trim,
+            domain: "a trim that leaves at least two replicates",
+            row: None,
+        }
+        .into());
+    }
+    if cut == 0 {
         return percentile(replicates, level, rule);
     }
     replicates.sort_by(f64::total_cmp);
@@ -285,8 +364,8 @@ mod tests {
     fn the_three_percentile_rules() {
         let at = |rule| bounds(percentile(&mut replicates(), alpha(0.1), rule).unwrap());
         assert_eq!(at(Percentile::Type7), (4.95, 94.05));
-        assert_eq!(at(Percentile::OutwardFromLast), (4.0, 95.0));
-        assert_eq!(at(Percentile::OutwardFromCount), (5.0, 94.0));
+        assert_eq!(at(Percentile::OutwardRank), (4.0, 95.0));
+        assert_eq!(at(Percentile::OutwardCount), (5.0, 94.0));
         let interval = percentile(&mut replicates(), alpha(0.1), Percentile::Type7).unwrap();
         assert_eq!(interval.level, alpha(0.1));
     }
@@ -297,8 +376,8 @@ mod tests {
         sorted.sort_by(f64::total_cmp);
         for rule in [
             Percentile::Type7,
-            Percentile::OutwardFromLast,
-            Percentile::OutwardFromCount,
+            Percentile::OutwardRank,
+            Percentile::OutwardCount,
         ] {
             assert_eq!(
                 percentile_sorted(&sorted, alpha(0.1), rule).unwrap(),
@@ -313,17 +392,78 @@ mod tests {
 
     #[test]
     fn trimming_and_bias_correction() {
-        let trimmed = trimmed_percentile(
-            &mut replicates(),
-            alpha(0.1),
-            0.1,
-            Percentile::OutwardFromLast,
-        )
-        .unwrap();
+        let trimmed =
+            trimmed_percentile(&mut replicates(), alpha(0.1), 0.1, Percentile::OutwardRank)
+                .unwrap();
         assert_eq!(bounds(trimmed), (13.0, 86.0));
         // A point estimate at the median leaves the interval centred.
         let (lower, upper) = bounds(bias_corrected(&mut replicates(), 49.5, alpha(0.1)).unwrap());
         assert!((lower + upper - 99.0).abs() <= 1.0);
+    }
+
+    #[test]
+    fn a_trim_outside_its_range_or_leaving_one_replicate_is_refused() {
+        let domain = |result: Result<Interval, Error>| {
+            matches!(
+                result,
+                Err(Error::Input(InputError::Domain { what: "trim", .. }))
+            )
+        };
+        for trim in [0.5, 0.9, -0.1, f64::NAN, f64::INFINITY] {
+            assert!(domain(trimmed_percentile(
+                &mut replicates(),
+                alpha(0.1),
+                trim,
+                Percentile::Type7
+            )));
+        }
+        assert!(domain(trimmed_percentile(
+            &mut vec![1.0, 2.0, 3.0],
+            alpha(0.1),
+            0.4,
+            Percentile::Type7
+        )));
+        // A trim that drops nothing is the untrimmed interval.
+        assert_eq!(
+            trimmed_percentile(&mut replicates(), alpha(0.1), 0.001, Percentile::Type7),
+            percentile(&mut replicates(), alpha(0.1), Percentile::Type7)
+        );
+    }
+
+    #[test]
+    fn the_checked_normal_interval_refuses_a_negative_or_nan_se() {
+        assert_eq!(
+            try_normal(1.0, 0.5, alpha(0.05)).unwrap(),
+            normal(1.0, 0.5, alpha(0.05))
+        );
+        assert!(matches!(
+            try_normal(1.0, -0.5, alpha(0.05)),
+            Err(Error::Input(InputError::Domain { what: "se", .. }))
+        ));
+        assert!(matches!(
+            try_normal(1.0, f64::NAN, alpha(0.05)),
+            Err(Error::Input(InputError::NotFinite { what: "se", .. }))
+        ));
+        assert!(matches!(
+            try_normal(f64::NAN, 1.0, alpha(0.05)),
+            Err(Error::Input(InputError::NotFinite {
+                what: "estimate",
+                ..
+            }))
+        ));
+        let wide = try_normal(1.0, f64::INFINITY, alpha(0.05)).unwrap();
+        assert_eq!(wide.upper, Some(f64::INFINITY));
+    }
+
+    #[test]
+    #[expect(deprecated, reason = "the 0.3 names still name the same rules")]
+    fn the_names_of_0_3_are_the_same_rules() {
+        assert_eq!(Percentile::OutwardFromLast, Percentile::OutwardRank);
+        assert_eq!(Percentile::OutwardFromCount, Percentile::OutwardCount);
+        assert!(matches!(
+            Percentile::OutwardRank,
+            Percentile::OutwardFromLast
+        ));
     }
 
     #[test]
@@ -337,8 +477,8 @@ mod tests {
         };
         for rule in [
             Percentile::Type7,
-            Percentile::OutwardFromLast,
-            Percentile::OutwardFromCount,
+            Percentile::OutwardRank,
+            Percentile::OutwardCount,
         ] {
             let mut sample = vec![1.0, f64::NAN, 3.0];
             assert_eq!(percentile(&mut sample, alpha(0.1), rule), nan_at(1));
