@@ -18,7 +18,7 @@
 //! that R sums in row order, with a rounding error below `n eps` for `n` = 400
 //! persons, `1e-13` relative.
 
-use epistat_core::Level;
+use epistat_core::{CaseWeights, Level};
 use epistat_epi::decomposition::{Split, kitagawa, kitagawa_poisson, kitagawa_symmetric, shares};
 use epistat_epi::rates::Strata;
 use epistat_epi::standardisation::{standardisation_weights, stratum_counts};
@@ -148,19 +148,19 @@ fn decompositions_and_their_variances() {
 fn standardisation_weights_against_matchit_and_tapply() {
     let s = reference().standardisation;
     let n_strata = 8;
-    let ones = vec![1.0; s.stratum.len()];
-    let w = standardisation_weights(&s.stratum, &s.exposed, &ones, n_strata).unwrap();
+    let w = standardisation_weights(&s.stratum, &s.exposed, None, n_strata).unwrap();
     let mut worst = 0.0_f64;
     for ((&got, &m), &e) in w.iter().zip(&s.matchit).zip(&s.exposed) {
         let want = if e { m } else { m / s.matchit_factor };
         worst = worst.max((got - want).abs() / (1e-13 * want.abs().max(1.0)));
     }
-    let counts = stratum_counts(&s.stratum, &s.exposed, &s.g, n_strata).unwrap();
+    let g = Some(CaseWeights::new(&s.g).unwrap());
+    let counts = stratum_counts(&s.stratum, &s.exposed, g, n_strata).unwrap();
     for (k, c) in counts.iter().enumerate() {
         worst = worst.max((c[0] - s.comparators[k]).abs() / (1e-13 * s.comparators[k]));
         worst = worst.max((c[1] - s.exposed_counts[k]).abs() / (1e-13 * s.exposed_counts[k]));
     }
-    let w = standardisation_weights(&s.stratum, &s.exposed, &s.g, n_strata).unwrap();
+    let w = standardisation_weights(&s.stratum, &s.exposed, g, n_strata).unwrap();
     for (&got, &want) in w.iter().zip(&s.weighted) {
         worst = worst.max((got - want).abs() / (1e-13 * want.abs().max(1e-300)));
     }

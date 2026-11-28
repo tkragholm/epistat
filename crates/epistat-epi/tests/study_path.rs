@@ -11,6 +11,7 @@
 //! appends them to that file. Print them with
 //! `STUDY_PATH_PRINT=1 cargo test --test study_path -- --nocapture`.
 
+use epistat_core::CaseWeights;
 use epistat_epi::{decomposition, standardisation};
 use epistat_testkit::{Fingerprint, SplitMix64};
 
@@ -84,6 +85,7 @@ fn cases() -> Vec<(&'static str, u64)> {
     let mut h = Hash::new();
     let ones = vec![1.0; data.cost.len()];
     for weights in [ones.as_slice(), data.weight.as_slice()] {
+        let weights = Some(CaseWeights::new(weights).expect("weights"));
         let counts =
             standardisation::stratum_counts(&data.stratum, &data.exposed, weights, N_STRATA)
                 .expect("counts");

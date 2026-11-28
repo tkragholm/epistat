@@ -33,9 +33,27 @@
 //!
 //! # Edge cases
 //!
-//! `None` when the slices differ in length, a stratum is `n_strata` or more,
-//! or a weight is NaN or infinite. A count beyond the range of `f64` is
+//! Columns of different lengths are [`InputError::Length`] and a stratum code
+//! of `n_strata` or more is [`InputError::Domain`] at its row. The weights
+//! are [`CaseWeights`], checked where they were built, and `None` stands for
+//! a weight of 1 for every person. A count beyond the range of `f64` is
 //! infinite, and a comparator of that stratum then has weight 0 or NaN.
+//!
+//! ```
+//! use epistat_core::CaseWeights;
+//! use epistat_epi::standardisation::standardisation_weights;
+//!
+//! // Stratum 0: one exposed, two comparators; stratum 1: two exposed, one comparator.
+//! let stratum = [0, 0, 0, 1, 1, 1];
+//! let exposed = [true, false, false, true, true, false];
+//! let w = standardisation_weights(&stratum, &exposed, None, 2)?;
+//! assert_eq!(w, [1.0, 0.5, 0.5, 1.0, 1.0, 2.0]);
+//! let draws = [1.0, 2.0, 0.0, 1.0, 1.0, 1.0];
+//! let w = standardisation_weights(&stratum, &exposed, Some(CaseWeights::frequency(&draws)?), 2)?;
+//! assert_eq!(w, [1.0, 1.0, 0.0, 1.0, 1.0, 2.0]);
+//! assert!(standardisation_weights(&[0, 2], &[true, false], None, 2).is_err());
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
 //!
 //! # Agreement with other software
 //!
@@ -52,67 +70,100 @@
 //! 2. Rothman KJ, Greenland S, Lash TL. Modern Epidemiology. 3rd ed.
 //!    Philadelphia: Lippincott Williams and Wilkins; 2008. Chapter 3.
 
+use std::borrow::Cow;
+
+use epistat_core::{CaseWeights, InputError, check};
 use epistat_stats::sum::exact;
 
+use crate::Error;
+
+/// The weights of each person, 1 for `None`, after the columns are checked.
+fn checked<'a>(
+    stratum: &[u32],
+    exposed: &[bool],
+    weights: Option<CaseWeights<'a>>,
+    n_strata: usize,
+) -> Result<Cow<'a, [f64]>, Error> {
+    check::same_length("exposed", stratum.len(), exposed.len())?;
+    let weights = match weights {
+        Some(weights) => {
+            weights.check_rows(stratum.len())?;
+            Cow::Borrowed(weights.as_slice())
+        }
+        None => Cow::Owned(vec![1.0; stratum.len()]),
+    };
+    if let Some(row) = stratum.iter().position(|&s| s as usize >= n_strata) {
+        return Err(InputError::Domain {
+            what: "stratum",
+            value: f64::from(stratum[row]),
+            domain: "the codes below n_strata",
+            row: Some(row),
+        }
+        .into());
+    }
+    Ok(weights)
+}
+
 /// The weighted counts of the comparators and the exposed in each stratum, as
-/// `[comparators, exposed]`.
+/// `[comparators, exposed]`, with every weight 1 for `weights = None`.
 ///
-/// `None` for the cases in the module documentation.
-#[must_use]
+/// # Errors
+///
+/// [`InputError::Length`] when `exposed` or the weights differ in length
+/// from `stratum`, and [`InputError::Domain`] at the first stratum code of
+/// `n_strata` or more.
 pub fn stratum_counts(
     stratum: &[u32],
     exposed: &[bool],
-    weights: &[f64],
+    weights: Option<CaseWeights<'_>>,
     n_strata: usize,
-) -> Option<Vec<[f64; 2]>> {
-    if stratum.len() != exposed.len() || stratum.len() != weights.len() {
-        return None;
-    }
+) -> Result<Vec<[f64; 2]>, Error> {
+    let weights = checked(stratum, exposed, weights, n_strata)?;
+    Ok(counts(stratum, exposed, &weights, n_strata))
+}
+
+fn counts(stratum: &[u32], exposed: &[bool], weights: &[f64], n_strata: usize) -> Vec<[f64; 2]> {
     let mut terms: Vec<[Vec<f64>; 2]> = vec![[Vec::new(), Vec::new()]; n_strata];
     for ((&s, &is_exposed), &g) in stratum.iter().zip(exposed).zip(weights) {
-        if !g.is_finite() {
-            return None;
-        }
-        terms.get_mut(s as usize)?[usize::from(is_exposed)].push(g);
+        terms[s as usize][usize::from(is_exposed)].push(g);
     }
-    Some(
-        terms
-            .into_iter()
-            .map(|[c, e]| [exact(c), exact(e)])
-            .collect(),
-    )
+    terms
+        .into_iter()
+        .map(|[c, e]| [exact(c), exact(e)])
+        .collect()
 }
 
 /// The weight of each person after standardisation to the exposed mix:
 /// `g` for the exposed and `g n_E(s) / n_C(s)` for a comparator, 0 where
-/// `n_C(s)` is not positive.
+/// `n_C(s)` is not positive, with `g` 1 for every person for `weights =
+/// None`.
 ///
-/// `None` for the cases in the module documentation.
-#[must_use]
+/// # Errors
+///
+/// As [`stratum_counts`].
 pub fn standardisation_weights(
     stratum: &[u32],
     exposed: &[bool],
-    weights: &[f64],
+    weights: Option<CaseWeights<'_>>,
     n_strata: usize,
-) -> Option<Vec<f64>> {
-    let counts = stratum_counts(stratum, exposed, weights, n_strata)?;
-    Some(
-        stratum
-            .iter()
-            .zip(exposed)
-            .zip(weights)
-            .map(|((&s, &is_exposed), &g)| {
-                let [comparators, exposed_count] = counts[s as usize];
-                if is_exposed {
-                    g
-                } else if comparators > 0.0 {
-                    g * exposed_count / comparators
-                } else {
-                    0.0
-                }
-            })
-            .collect(),
-    )
+) -> Result<Vec<f64>, Error> {
+    let weights = checked(stratum, exposed, weights, n_strata)?;
+    let counts = counts(stratum, exposed, &weights, n_strata);
+    Ok(stratum
+        .iter()
+        .zip(exposed)
+        .zip(weights.iter())
+        .map(|((&s, &is_exposed), &g)| {
+            let [comparators, exposed_count] = counts[s as usize];
+            if is_exposed {
+                g
+            } else if comparators > 0.0 {
+                g * exposed_count / comparators
+            } else {
+                0.0
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -129,9 +180,19 @@ mod tests {
     #[test]
     fn counts_and_weights_follow_the_formula() {
         let ones = [1.0; 11];
-        let counts = stratum_counts(&STRATUM, &EXPOSED, &ones, 3).unwrap();
+        let counts = stratum_counts(&STRATUM, &EXPOSED, None, 3).unwrap();
         assert_eq!(counts, [[4.0, 2.0], [1.0, 3.0], [0.0, 1.0]]);
-        let weights = standardisation_weights(&STRATUM, &EXPOSED, &ones, 3).unwrap();
+        let weights = standardisation_weights(&STRATUM, &EXPOSED, None, 3).unwrap();
+        assert_eq!(
+            weights,
+            standardisation_weights(
+                &STRATUM,
+                &EXPOSED,
+                Some(CaseWeights::new(&ones).unwrap()),
+                3
+            )
+            .unwrap()
+        );
         let expected: [f64; 11] = [1.0, 1.0, 0.5, 0.5, 0.5, 0.5, 1.0, 1.0, 1.0, 3.0, 1.0];
         assert_eq!(
             weights.iter().map(|w| w.to_bits()).collect::<Vec<_>>(),
@@ -154,22 +215,45 @@ mod tests {
     #[test]
     fn weights_multiply_before_the_division() {
         let g = [0.5, 0.25, 3.0, 0.125, 1.5, 2.0, 1.0, 1.0, 1.0, 0.75, 1.0];
-        let counts = stratum_counts(&STRATUM, &EXPOSED, &g, 3).unwrap();
+        let g = CaseWeights::new(&g).unwrap();
+        let counts = stratum_counts(&STRATUM, &EXPOSED, Some(g), 3).unwrap();
         assert_eq!(
             counts[0].map(f64::to_bits),
             [6.625_f64, 0.75].map(f64::to_bits)
         );
-        let weights = standardisation_weights(&STRATUM, &EXPOSED, &g, 3).unwrap();
+        let weights = standardisation_weights(&STRATUM, &EXPOSED, Some(g), 3).unwrap();
         assert_eq!(weights[2].to_bits(), (3.0 * 0.75 / 6.625_f64).to_bits());
     }
 
     #[test]
-    fn refusals_are_none() {
+    fn bad_input_is_an_error_that_names_the_row() {
         let ones = [1.0; 11];
-        assert_eq!(stratum_counts(&STRATUM, &EXPOSED, &ones[..10], 3), None);
-        assert_eq!(stratum_counts(&STRATUM, &EXPOSED, &ones, 2), None);
+        let short = CaseWeights::new(&ones[..10]).unwrap();
+        assert!(matches!(
+            stratum_counts(&STRATUM, &EXPOSED, Some(short), 3),
+            Err(Error::Input(InputError::Length {
+                what: "weights",
+                ..
+            }))
+        ));
+        assert!(matches!(
+            stratum_counts(&STRATUM, &EXPOSED[..10], None, 3),
+            Err(Error::Input(InputError::Length {
+                what: "exposed",
+                ..
+            }))
+        ));
+        assert_eq!(
+            standardisation_weights(&STRATUM, &EXPOSED, None, 2),
+            Err(Error::Input(InputError::Domain {
+                what: "stratum",
+                value: 2.0,
+                domain: "the codes below n_strata",
+                row: Some(10),
+            }))
+        );
         let mut bad = ones;
         bad[3] = f64::NAN;
-        assert_eq!(standardisation_weights(&STRATUM, &EXPOSED, &bad, 3), None);
+        assert!(CaseWeights::new(&bad).is_err());
     }
 }
