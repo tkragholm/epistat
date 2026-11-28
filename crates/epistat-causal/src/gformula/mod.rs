@@ -81,10 +81,12 @@
 //!
 //! The nonparametric bootstrap resamples persons with replacement
 //! (`epistat_rng::resample_counts` with the seed `replicate_seed(r_b, 0)`, where
-//! `r_b = replicate_seed(seed, b + 1)`), refits every model with the counts as
-//! prior weights, which equals fitting to the resampled rows, and simulates
-//! again from the resampled persons with the seed `r_b` (the point estimate uses
-//! `replicate_seed(seed, 0)`). The cut to the observed range keeps the range of
+//! `r_b = replicate_seed(bootstrap.seed, b + 1)`), refits every model with the
+//! counts as prior weights, which equals fitting to the resampled rows, and
+//! simulates again from the resampled persons with the seed `r_b`. The point
+//! estimate simulates with the seed `replicate_seed(seed, 0)` of
+//! [`GFormulaOptions::seed`], so the bootstrap may share the root seed of the
+//! simulation, and gfoRmula's single `seed` is the same number in both. The cut to the observed range keeps the range of
 //! the original data, as gfoRmula does. The standard error is the standard
 //! deviation of the replicates, and the interval is the percentile interval
 //! (type 7 quantiles, gfoRmula's default) or `estimate -/+ z se`. A replicate in
@@ -172,12 +174,12 @@ mod history;
 mod prepare;
 mod simulate;
 
-use epistat_core::{Level, Panel};
+use epistat_core::{Bootstrap, Level, Panel};
 use epistat_inference::interval::{self, Percentile};
 use epistat_rng::replicate_seed;
 use rayon::prelude::*;
 
-use crate::error::{Error, Result};
+use crate::error::Result;
 pub use history::{History, Term};
 
 /// The person-period table, one row per person and period.
@@ -449,6 +451,9 @@ pub enum IntervalMethod {
 }
 
 /// What the g-formula does besides the data and the models.
+///
+/// There is no default: the seed of the simulation is the caller's, so the
+/// options start from [`GFormulaOptions::new`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GFormulaOptions {
     /// The number of persons simulated, drawn with replacement from the
@@ -457,9 +462,11 @@ pub struct GFormulaOptions {
     pub simulated: Option<usize>,
     /// The number of periods simulated; the number observed when `None`.
     pub periods: Option<usize>,
-    /// The number of bootstrap replicates, 0 (the default) for none.
-    pub bootstrap: usize,
-    /// The seed of the simulation and the bootstrap.
+    /// The bootstrap replicates and their root seed, gfoRmula's `nsamples`
+    /// and `seed`; none by default.
+    pub bootstrap: Option<Bootstrap>,
+    /// The root seed of the simulation of the point estimate, gfoRmula's
+    /// `seed`.
     pub seed: u64,
     /// The level of the bootstrap limits, by default 95%.
     pub level: Level,
@@ -481,13 +488,16 @@ pub struct GFormulaOptions {
     pub keep_simulated: bool,
 }
 
-impl Default for GFormulaOptions {
-    fn default() -> Self {
+impl GFormulaOptions {
+    /// The options of gfoRmula's defaults with the simulation's root seed
+    /// `seed` and no bootstrap.
+    #[must_use]
+    pub fn new(seed: u64) -> Self {
         Self {
             simulated: None,
             periods: None,
-            bootstrap: 0,
-            seed: 20_261_124,
+            bootstrap: None,
+            seed,
             level: Level::default(),
             interval: IntervalMethod::Percentile,
             reference: 0,
@@ -577,16 +587,17 @@ pub struct SimulatedCourse {
     pub values: Vec<Vec<f64>>,
     /// The probability of the event in the period given the history and no
     /// competing event, for a survival outcome; the outcome model's mean at the
-    /// last period for an outcome at the end of follow-up, NaN at the others.
-    pub outcome_probability: Vec<f64>,
+    /// last period for an outcome at the end of follow-up, `None` at the
+    /// others.
+    pub outcome_probability: Vec<Option<f64>>,
     /// The probability of the competing event in the period, 0 without one and
-    /// NaN for an outcome at the end of follow-up.
-    pub competing_probability: Vec<f64>,
+    /// `None` for an outcome at the end of follow-up.
+    pub competing_probability: Vec<Option<f64>>,
     /// The person's risk by the end of the period (gfoRmula's `poprisk`), or
-    /// the mean at the last period for an outcome at the end of follow-up, NaN
-    /// at the others. The estimate of the strategy is its mean over the
+    /// the mean at the last period for an outcome at the end of follow-up,
+    /// `None` at the others. The estimate of the strategy is its mean over the
     /// persons.
-    pub value: Vec<f64>,
+    pub value: Vec<Option<f64>>,
 }
 
 impl SimulatedCourse {
@@ -644,9 +655,11 @@ pub struct GFormula {
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for data or models that cannot be used (see the module
-/// documentation), [`Error::NoConvergence`] for a model that does not
-/// converge on the data.
+/// [`Error::Input`], [`Error::Invalid`] and [`Error::Term`] for data,
+/// models or interventions that cannot be used (see the module
+/// documentation), [`Error::NoRows`] for a model the data leave no rows to
+/// fit, and [`Error::NotConverged`], [`Error::Aliased`] or [`Error::Fit`] for
+/// a model that cannot be fitted to the data.
 pub fn gformula(
     data: &PersonPeriods<'_>,
     covariates: &[Covariate],
@@ -670,10 +683,11 @@ pub fn gformula(
         options.keep_simulated,
     )?;
 
-    let replicates: Vec<Option<Vec<Vec<f64>>>> = (0..options.bootstrap)
+    let bootstrap = options.bootstrap.unwrap_or(Bootstrap::new(0, options.seed));
+    let replicates: Vec<Option<Vec<Vec<f64>>>> = (0..bootstrap.replicates)
         .into_par_iter()
         .map(|b| -> Result<Option<Vec<Vec<f64>>>> {
-            let seed = replicate_seed(options.seed, b as u64 + 1);
+            let seed = replicate_seed(bootstrap.seed, b as u64 + 1);
             let counts: Vec<f64> = epistat_rng::resample_counts(n, replicate_seed(seed, 0))
                 .into_iter()
                 .map(f64::from)
@@ -721,7 +735,7 @@ pub fn gformula(
         strategies,
         models,
         simulated: sources.len(),
-        replicates: options.bootstrap,
+        replicates: bootstrap.replicates,
         failed_replicates: failed,
         courses: point.courses.take(),
     })
@@ -756,13 +770,12 @@ fn summarise(
         let level = options.level;
         let limits = match options.interval {
             IntervalMethod::Percentile => {
-                interval::percentile(&mut values, level, Percentile::Type7)
-                    .map_err(|e| Error::input(e.to_string()))?
+                interval::percentile(&mut values, level, Percentile::Type7)?
             }
             IntervalMethod::Normal => interval::normal(estimate, se, level),
         };
-        e.lower = Some(limits.lower.unwrap_or(f64::NAN));
-        e.upper = Some(limits.upper.unwrap_or(f64::NAN));
+        e.lower = limits.lower;
+        e.upper = limits.upper;
         Ok(e)
     };
     let mut out = Vec::with_capacity(strategies);

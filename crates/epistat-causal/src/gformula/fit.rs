@@ -7,7 +7,7 @@ use epistat_linalg::Mat;
 use super::history::{History, Term};
 use super::prepare::Prepared;
 use super::{Censoring, Covariate, CovariateKind, FittedModel, Models, Outcome, Restriction};
-use crate::error::{Error, Result};
+use crate::error::{Error, Model, Result};
 use crate::shared::{fit_glm, glm_data};
 
 /// A fitted linear predictor and how it maps to a mean; for a multinomial
@@ -113,7 +113,7 @@ pub(super) fn fit_all(
                         &c.terms,
                         levels,
                         weights,
-                        &format!("the model of variable {j}"),
+                        Model::Variable(j),
                         |p, r, k| {
                             if k == 0 {
                                 return None;
@@ -132,7 +132,7 @@ pub(super) fn fit_all(
                 family,
                 link,
                 weights,
-                &format!("the model of variable {j}"),
+                Model::Variable(j),
                 |p, r, k| {
                     if k == 0 {
                         return None;
@@ -158,7 +158,7 @@ pub(super) fn fit_all(
                 Family::Binomial,
                 Link::Logit,
                 weights,
-                "the outcome model",
+                Model::Outcome,
                 |_, r, _| {
                     let d = competing.as_ref().is_some_and(|c| c.event[r]);
                     (!d && !censored(r)).then(|| (f64::from(u8::from(event[r])), w))
@@ -173,7 +173,7 @@ pub(super) fn fit_all(
                         Family::Binomial,
                         Link::Logit,
                         weights,
-                        "the competing-event model",
+                        Model::Competing,
                         |_, r, _| (!censored(r)).then(|| (f64::from(u8::from(c.event[r])), w)),
                     )
                 })
@@ -193,7 +193,7 @@ pub(super) fn fit_all(
                 family,
                 link,
                 weights,
-                "the outcome model",
+                Model::Outcome,
                 |_, r, k| (k == last && !value[r].is_nan()).then(|| (value[r], w)),
             )?;
             (fitted_outcome, None)
@@ -219,7 +219,7 @@ pub(super) fn fit_censoring(
         Family::Binomial,
         Link::Logit,
         weights,
-        "the censoring model",
+        Model::Censoring,
         |_, r, _| Some((f64::from(u8::from(censoring.censored[r])), prepared.width)),
     )
 }
@@ -233,7 +233,7 @@ fn fit_model(
     family: Family,
     link: Link,
     weights: &[f64],
-    what: &str,
+    what: Model,
     row: impl Fn(usize, usize, usize) -> Option<(f64, usize)>,
 ) -> Result<Linear> {
     let q = terms.len();
@@ -256,7 +256,7 @@ fn fit_model(
     }
     let n = y.len();
     if n == 0 {
-        return Err(Error::input(format!("{what}: no rows to fit")));
+        return Err(Error::NoRows { model: what });
     }
     let x = Mat::from_fn(n, q, |i, j| design[i * q + j]);
     let glm = Glm::new(family, link);
@@ -294,7 +294,7 @@ fn fit_multinomial(
     terms: &[Term],
     levels: usize,
     weights: &[f64],
-    what: &str,
+    what: Model,
     row: impl Fn(usize, usize, usize) -> Option<(f64, usize)>,
 ) -> Result<Linear> {
     let q = terms.len();
@@ -317,18 +317,21 @@ fn fit_multinomial(
     }
     let n = y.len();
     if n == 0 {
-        return Err(Error::input(format!("{what}: no rows to fit")));
+        return Err(Error::NoRows { model: what });
     }
     let x = Mat::from_fn(n, q, |i, j| design[i * q + j]);
     let data = MultinomData::builder(x.as_ref(), &y, levels)
         .weights(&w)
         .build()
-        .map_err(|e| Error::input(format!("{what}: {e}")))?;
+        .map_err(|e| Error::fit(what, e))?;
     let fit = Multinom::default()
         .fit(&data)
-        .map_err(|e| Error::input(format!("{what}: {e}")))?;
+        .map_err(|e| Error::fit(what, e))?;
     if !fit.converged {
-        return Err(Error::NoConvergence(format!("{what}: no convergence")));
+        return Err(Error::NotConverged {
+            model: what,
+            iterations: Some(fit.iterations),
+        });
     }
     Ok(Linear {
         beta: fit.coefficients.clone(),

@@ -181,12 +181,14 @@ use epistat_linalg::{
 };
 use epistat_optim::bfgs::Bfgs;
 
-use super::{BalanceWeights, Nuisance, check_len, compensated, resolve_weights, summarise};
+use super::{BalanceWeights, Nuisance, compensated, resolve_weights, summarise};
 use epistat_core::Estimand;
 use epistat_stats::logistic::expit;
 
-use crate::error::{Error, Result};
-use crate::shared::{check_estimand, fit_glm, glm_data};
+use epistat_core::check;
+
+use crate::error::{Error, Model, Result, empty};
+use crate::shared::{check_design, check_estimand, fit_glm, glm_data};
 
 /// Whether the balance conditions alone or with the score conditions fix the
 /// coefficients.
@@ -592,8 +594,8 @@ impl Problem {
             return Ok(None);
         }
         let hinv = inverse(half.as_ref(), &Attempt::SYMMETRIC)
-            .map_err(|err| {
-                Error::Input(format!("the Hessian of the objective is singular: {err}"))
+            .map_err(|_| Error::Singular {
+                model: Model::Balance,
             })?
             .x;
         let mut out = Mat::<f64>::zeros(m, k);
@@ -619,7 +621,7 @@ impl Problem {
         let [a, b, c] = self.vparts(e);
         let g = |w: &[f64]| {
             weighted_gram(self.x.as_ref(), &self.sw(w))
-                .map_err(|err| Error::input(format!("weights: {err}")))
+                .map_err(|err| Error::linalg(Model::Balance, err))
         };
         let (ga, gb, gc) = (g(&a)?, g(&b)?, g(&c)?);
         Ok(Mat::from_fn(2 * k, 2 * k, |r, cc| {
@@ -637,17 +639,19 @@ impl Problem {
         let v = self.v(e)?;
         inverse(v.as_ref(), &Attempt::SYMMETRIC)
             .map(|s| s.x)
-            .map_err(|err| Error::Input(format!("the moment covariance is singular: {err}")))
+            .map_err(|_| Error::Singular {
+                model: Model::Balance,
+            })
     }
 }
 
 fn check_probs(e: &[f64]) -> Result<()> {
     let lim = 1e-12;
     if let Some(i) = e.iter().position(|&p| !(p > lim && p < 1.0 - lim)) {
-        return Err(Error::Infeasible(format!(
-            "person {i} has fitted probability {}, which is numerically 0 or 1",
-            e[i]
-        )));
+        return Err(Error::Separation {
+            model: Model::Propensity,
+            row: i,
+        });
     }
     Ok(())
 }
@@ -814,15 +818,14 @@ impl Problem {
                         }
                 })
                 .collect();
-            let gram = weighted_gram(self.x.as_ref(), &h)
-                .map_err(|e| Error::input(format!("weights: {e}")))?;
+            let gram =
+                weighted_gram(self.x.as_ref(), &h).map_err(|e| Error::linalg(Model::Balance, e))?;
             let hess = Mat::from_fn(k, k, |r, c| gram[(r, c)] / self.n);
             let rhs = Mat::from_fn(k, 1, |r, _| g[r]);
             let step = solve(hess.as_ref(), rhs.as_ref(), &[Attempt::plain(Method::Cholesky)])
-                .map_err(|_| {
-                    Error::Infeasible(
-                        "the balance conditions have no solution: the curvature of the potential vanishes".into(),
-                    )
+                .map_err(|_| Error::Infeasible {
+                    model: Model::Balance,
+                    why: "the balance conditions have no solution: the curvature of the potential vanishes",
                 })?
                 .x;
             let slope: f64 = (0..k).map(|j| g[j] * step[(j, 0)]).sum();
@@ -842,22 +845,22 @@ impl Problem {
                 t *= 0.5;
             }
             if !accepted {
-                return Err(Error::NoConvergence(format!(
-                    "the balance conditions: the line search failed with the largest condition at {:e}",
-                    max_abs(&g)
-                )));
+                return Err(Error::NotConverged {
+                    model: Model::Balance,
+                    iterations: None,
+                });
             }
             if beta.iter().any(|b| b.abs() > 1e4) {
-                return Err(Error::Infeasible(
-                    "the balance conditions have no solution: the coefficients grow without bound"
-                        .into(),
-                ));
+                return Err(Error::Infeasible {
+                    model: Model::Balance,
+                    why: "the balance conditions have no solution: the coefficients grow without bound",
+                });
             }
         }
-        Err(Error::NoConvergence(format!(
-            "the balance conditions: no convergence in {} iterations",
-            opts.max_iterations
-        )))
+        Err(Error::NotConverged {
+            model: Model::Balance,
+            iterations: Some(opts.max_iterations),
+        })
     }
 
     /// `J` at `beta` for a fixed weighting matrix.
@@ -911,7 +914,9 @@ impl Problem {
                 Ok(sol) => sol.x,
                 Err(_) => {
                     solve(a.as_ref(), rhs.as_ref(), &Attempt::SYMMETRIC)
-                        .map_err(|err| Error::NoConvergence(format!("Gauss-Newton step: {err}")))?
+                        .map_err(|_| Error::Singular {
+                            model: Model::Balance,
+                        })?
                         .x
                 }
             };
@@ -947,15 +952,16 @@ impl Problem {
                 t *= 0.5;
             }
             if !accepted {
-                return Err(Error::NoConvergence(format!(
-                    "the over-identified objective: the line search failed with gradient {gmax:e}"
-                )));
+                return Err(Error::NotConverged {
+                    model: Model::Balance,
+                    iterations: None,
+                });
             }
         }
-        Err(Error::NoConvergence(format!(
-            "the over-identified objective: no convergence in {} iterations",
-            opts.max_iterations
-        )))
+        Err(Error::NotConverged {
+            model: Model::Balance,
+            iterations: Some(opts.max_iterations),
+        })
     }
 
     /// Newton steps on the gradient of the continuously updated `J` from a BFGS
@@ -1036,11 +1042,13 @@ impl Problem {
 /// # Errors
 ///
 /// [`Error::Input`] for values of different lengths, a value that is not finite,
-/// a negative sample weight, one group without persons of positive weight, a
-/// design with an aliased column, and a logistic fit that does not converge.
-/// [`Error::Infeasible`] when the balance conditions have no solution or a fitted
-/// probability is numerically 0 or 1. [`Error::NoConvergence`] when an iteration
-/// does not reach its tolerance.
+/// a negative sample weight and a tolerance that is not positive;
+/// [`Error::Invalid`] for one group without persons of positive weight;
+/// [`Error::Aliased`] or [`Error::Singular`] for a design with an aliased
+/// column; [`Error::Separation`] for a fitted probability numerically 0 or 1;
+/// [`Error::Infeasible`] when the balance conditions have no solution; and
+/// [`Error::NotConverged`] when the logistic fit or an iteration does not
+/// reach its tolerance.
 #[expect(
     clippy::too_many_lines,
     reason = "one pass from the data to the weights and the influence functions"
@@ -1048,19 +1056,11 @@ impl Problem {
 pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
     let n = input.treatment.len();
     if n == 0 {
-        return Err(Error::input("treatment: no persons"));
+        return Err(empty("treatment"));
     }
-    check_len("design", input.design.nrows(), n)?;
+    check_design("design", input.design, n)?;
     let k = input.design.ncols();
-    if k == 0 {
-        return Err(Error::input("design: no columns"));
-    }
-    if !(opts.tolerance > 0.0 && opts.tolerance.is_finite()) {
-        return Err(Error::input("tolerance: must be positive"));
-    }
-    if (0..n).any(|i| (0..k).any(|j| !input.design[(i, j)].is_finite())) {
-        return Err(Error::input("design: a value is not finite"));
-    }
+    check::positive("tolerance", opts.tolerance)?;
     check_estimand(opts.estimand)?;
     let s = resolve_weights("sample_weight", input.sample_weight, n)?;
     let flip = opts.estimand == Estimand::Atc;
@@ -1070,22 +1070,25 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
         compensated((0..n).filter(|&i| !t[i]).map(|i| s[i])),
     );
     if nt <= 0.0 || nc <= 0.0 {
-        return Err(Error::input(
-            "treatment: both groups need persons of positive weight",
+        return Err(Error::invalid(
+            "treatment",
+            "both groups need persons of positive weight",
         ));
     }
     let total = nt + nc;
     let keep = independent_columns(input.design, &s, None, 1e-8)
-        .map_err(|e| Error::input(format!("design: {e}")))?;
-    if let Some(j) = keep.iter().position(|&x| !x) {
-        return Err(Error::input(format!("design: column {j} is aliased")));
+        .map_err(|e| Error::linalg(Model::Propensity, e))?;
+    if let Some(column) = keep.iter().position(|&x| !x) {
+        return Err(Error::Aliased {
+            model: Model::Propensity,
+            column,
+        });
     }
     // Whiten: L L' = n^-1 X' S X, x~_i = L^-1 x_i.
-    let gram =
-        weighted_gram(input.design, &s).map_err(|e| Error::input(format!("weights: {e}")))?;
+    let gram = weighted_gram(input.design, &s).map_err(|e| Error::linalg(Model::Propensity, e))?;
     let scaled = Mat::from_fn(k, k, |r, c| gram[(r, c)] / total);
-    let l = cholesky_factor(scaled.as_ref(), Regularisation::default()).ok_or_else(|| {
-        Error::input("design: the weighted cross-product is not positive definite")
+    let l = cholesky_factor(scaled.as_ref(), Regularisation::default()).ok_or(Error::Singular {
+        model: Model::Propensity,
     })?;
     let mut x = Mat::<f64>::zeros(n, k);
     for i in 0..n {
@@ -1110,7 +1113,7 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
         },
     };
     let y: Vec<f64> = t.iter().map(|&a| f64::from(u8::from(a))).collect();
-    let what = "logistic fit";
+    let what = Model::Propensity;
     let (_, mut ml) = fit_glm(
         &Glm::new(Family::Binomial, Link::Logit),
         &glm_data(prob.x.as_ref(), &y, Some(&s), None, what)?,
@@ -1149,7 +1152,10 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
                         ..Bfgs::default()
                     };
                     bfgs.minimize(&s0, |b| prob.cu(b), None)
-                        .map_err(|e| Error::NoConvergence(format!("BFGS: {e}")))
+                        .map_err(|_| Error::NotConverged {
+                            model: Model::Balance,
+                            iterations: None,
+                        })
                         .and_then(|m| {
                             let (x, value, gradient, steps) =
                                 prob.polish_cu(m.x, m.value, m.gradient, opts.tolerance);
@@ -1160,11 +1166,10 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
                             {
                                 Ok((x, value, iterations))
                             } else {
-                                Err(Error::NoConvergence(format!(
-                                    "the continuously updated objective: gradient {:e} after {} iterations",
-                                    max_abs(&gradient),
-                                    iterations
-                                )))
+                                Err(Error::NotConverged {
+                                    model: Model::Balance,
+                                    iterations: Some(iterations),
+                                })
                             }
                         })
                 };
@@ -1179,7 +1184,10 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
                 }
             }
             let (which, b, j) = best.ok_or_else(|| {
-                last_err.unwrap_or_else(|| Error::NoConvergence("no start converged".into()))
+                last_err.unwrap_or(Error::NotConverged {
+                    model: Model::Balance,
+                    iterations: None,
+                })
             })?;
             let jl = if opts.two_step { j_ml } else { prob.cu(&ml).0 };
             (b, Some(j), Some(jl), Some(which))
@@ -1227,7 +1235,9 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
         Identification::Exact => {
             let gb = Mat::from_fn(k, k, |r, c| jac[(k + r, c)]);
             let inv = inverse(gb.as_ref(), &Attempt::SYMMETRIC)
-                .map_err(|err| Error::Input(format!("the balance Jacobian is singular: {err}")))?
+                .map_err(|_| Error::Singular {
+                    model: Model::Balance,
+                })?
                 .x;
             // K = -n^-1 Gb^-1 on the balance block, 0 on the score block.
             (
@@ -1266,8 +1276,8 @@ pub fn cbps(input: &CbpsInput<'_>, opts: &CbpsOptions) -> Result<Cbps> {
                 }
             }
             let ainv = inverse(a.as_ref(), &Attempt::SYMMETRIC)
-                .map_err(|err| {
-                    Error::Input(format!("the Hessian of the objective is singular: {err}"))
+                .map_err(|_| Error::Singular {
+                    model: Model::Balance,
                 })?
                 .x;
             // K = -n^-1 A^-1 G'W

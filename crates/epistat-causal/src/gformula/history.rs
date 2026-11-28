@@ -1,6 +1,6 @@
 //! A person's history and the terms of the models, evaluated on it.
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Model, Result};
 
 /// One term of a model's linear predictor, evaluated on a person's history at
 /// a period `k`.
@@ -73,43 +73,49 @@ impl Term {
     /// Checks that the term names existing variables, that its lags are at
     /// least 1, and that it reads the current period only of variables before
     /// `current` in the simulation order.
-    fn check(&self, baseline: usize, width: usize, current: usize, what: &str) -> Result<()> {
-        let bad = |message: String| Err(Error::input(format!("{what}: {message}")));
+    fn check(&self, baseline: usize, width: usize, current: usize, model: Model) -> Result<()> {
+        let bad = |variable: Option<usize>, rule: &'static str| {
+            Err(Error::Term {
+                model,
+                variable,
+                rule,
+            })
+        };
         match self {
             Self::Baseline(b) if *b >= baseline => {
-                bad(format!("baseline variable {b} does not exist"))
+                bad(Some(*b), "the baseline variable does not exist")
             }
             Self::Intercept | Self::Period | Self::PeriodIs(_) | Self::Baseline(_) => Ok(()),
             Self::Current(v) | Self::CumulativeAverage(v) => {
                 if *v >= width {
-                    bad(format!("time-varying variable {v} does not exist"))
+                    bad(Some(*v), "the time-varying variable does not exist")
                 } else if *v >= current {
-                    bad(format!(
-                        "reads time-varying variable {v} at the current period, \
-                         which is simulated after it"
-                    ))
+                    bad(
+                        Some(*v),
+                        "reads a time-varying variable at the current period, which is simulated after it",
+                    )
                 } else {
                     Ok(())
                 }
             }
             Self::Lag(v, lag) | Self::LaggedCumulativeAverage(v, lag) => {
                 if *v >= width {
-                    bad(format!("time-varying variable {v} does not exist"))
+                    bad(Some(*v), "the time-varying variable does not exist")
                 } else if *lag == 0 {
-                    bad("a lag must be at least 1".into())
+                    bad(Some(*v), "a lag must be at least 1")
                 } else {
                     Ok(())
                 }
             }
             Self::Product(a, b) => {
-                a.check(baseline, width, current, what)?;
-                b.check(baseline, width, current, what)
+                a.check(baseline, width, current, model)?;
+                b.check(baseline, width, current, model)
             }
             Self::Is(a, value) => {
                 if value.is_finite() {
-                    a.check(baseline, width, current, what)
+                    a.check(baseline, width, current, model)
                 } else {
-                    bad(format!("the value {value} of an indicator is not finite"))
+                    bad(None, "the value of an indicator is not finite")
                 }
             }
         }
@@ -132,14 +138,18 @@ pub(crate) fn check_terms(
     baseline: usize,
     width: usize,
     current: usize,
-    what: &str,
+    model: Model,
 ) -> Result<()> {
     if terms.is_empty() {
-        return Err(Error::input(format!("{what}: the model has no terms")));
+        return Err(Error::Term {
+            model,
+            variable: None,
+            rule: "the model has no terms",
+        });
     }
     terms
         .iter()
-        .try_for_each(|t| t.check(baseline, width, current, what))
+        .try_for_each(|t| t.check(baseline, width, current, model))
 }
 
 /// A read-only view of one person's history at one period, observed or

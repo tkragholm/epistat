@@ -91,7 +91,7 @@ use epistat_glm::{Family, Glm, Link};
 use epistat_inference::Influence;
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, weighted_gram};
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Model, Result, domain_at, empty};
 use crate::shared::{
     case_weights, check_arms, check_design, check_estimand, check_finite, check_len,
     check_separation, clusters, compensated, contrast, fit_glm, glm_data, influence, row_keys,
@@ -195,7 +195,7 @@ struct Core {
 fn core(input: &AipwInput<'_>, opts: &AipwOptions) -> Result<Core> {
     let n = input.treatment.len();
     if n == 0 {
-        return Err(Error::input("treatment: no persons"));
+        return Err(empty("treatment"));
     }
     check_estimand(opts.estimand)?;
     check_len("outcome", input.outcome.len(), n)?;
@@ -208,9 +208,10 @@ fn core(input: &AipwInput<'_>, opts: &AipwOptions) -> Result<Core> {
     if let Some((lo, hi)) = opts.truncation
         && !(0.0 < lo && lo < hi && hi < 1.0)
     {
-        return Err(Error::input(format!(
-            "truncation: ({lo}, {hi}) are not limits with 0 < lower < upper < 1"
-        )));
+        return Err(Error::invalid(
+            "truncation",
+            "the limits must have 0 < lower < upper < 1",
+        ));
     }
     check_finite("outcome", input.outcome)?;
     check_finite("mu1", input.mu1)?;
@@ -219,10 +220,11 @@ fn core(input: &AipwInput<'_>, opts: &AipwOptions) -> Result<Core> {
     let mut e = Vec::with_capacity(n);
     let mut clipped = Vec::with_capacity(n);
     for (i, &p) in input.propensity.iter().enumerate() {
+        if !p.is_finite() {
+            check_finite("propensity", input.propensity)?;
+        }
         if !(p > 0.0 && p < 1.0) {
-            return Err(Error::input(format!(
-                "propensity: person {i} has {p}, outside (0, 1)"
-            )));
+            return Err(domain_at("propensity", p, "(0, 1)", i));
         }
         let q = opts.truncation.map_or(p, |(lo, hi)| p.clamp(lo, hi));
         clipped.push(q.to_bits() != p.to_bits());
@@ -253,7 +255,10 @@ fn core(input: &AipwInput<'_>, opts: &AipwOptions) -> Result<Core> {
     }
     let size = compensated((0..n).map(|i| omega[i] * d[i]));
     if size <= 0.0 {
-        return Err(Error::input("the target population has weight 0"));
+        return Err(Error::invalid(
+            "weight",
+            "the target population has weight 0",
+        ));
     }
     let theta = [
         compensated((0..n).map(|i| omega[i] * u1[i])) / size,
@@ -309,10 +314,10 @@ fn finish(
 /// # Errors
 ///
 /// [`Error::Input`] for inputs of different lengths, no persons, a value that is
-/// not finite, a negative weight, a propensity outside `(0, 1)`, truncation
-/// limits that are not `0 < lower < upper < 1`, an estimand other than the
-/// ATE, ATT and ATC, a group without persons of positive weight and a target
-/// population of weight 0.
+/// not finite, a negative weight and a propensity outside `(0, 1)`;
+/// [`Error::Invalid`] for truncation limits that are not `0 < lower < upper <
+/// 1`, an estimand other than the ATE, ATT and ATC, a group without persons
+/// of positive weight and a target population of weight 0.
 pub fn aipw(input: &AipwInput<'_>, opts: &AipwOptions) -> Result<Aipw> {
     let c = core(input, opts)?;
     finish(&c, &c.influence, input.cluster, Variance::Efficient, opts)
@@ -344,8 +349,9 @@ fn canonical(family: Family) -> Result<(Link, VarianceFunction)> {
         Family::Gaussian => Ok((Link::Identity, |_| 1.0)),
         Family::Binomial => Ok((Link::Logit, |m| m * (1.0 - m))),
         Family::Poisson => Ok((Link::Log, |m| m)),
-        _ => Err(Error::input(
-            "family: the outcome model is Gaussian, binomial or Poisson with its canonical link",
+        _ => Err(Error::invalid(
+            "family",
+            "the outcome model is Gaussian, binomial or Poisson with its canonical link",
         )),
     }
 }
@@ -357,10 +363,9 @@ pub(crate) fn fitted_mean(
     x: MatRef<'_, f64>,
     y: &[f64],
     weights: &[f64],
-    what: &str,
+    model: Model,
 ) -> Result<Vec<f64>> {
-    let what = &format!("{what} model");
-    let (_, coefficients) = fit_glm(glm, &glm_data(x, y, Some(weights), None, what)?, what)?;
+    let (_, coefficients) = fit_glm(glm, &glm_data(x, y, Some(weights), None, model)?, model)?;
     Ok((0..x.nrows())
         .map(|i| {
             let eta: f64 = (0..x.ncols()).map(|j| x[(i, j)] * coefficients[j]).sum();
@@ -377,18 +382,18 @@ fn block(
     gram: &[f64],
     rhs: [&[f64]; 2],
     score: &[f64],
-    what: &str,
+    model: Model,
 ) -> Result<[Vec<f64>; 2]> {
     let (n, p) = (x.nrows(), x.ncols());
-    let g = weighted_gram(x, gram).map_err(|e| Error::input(format!("{what} model: {e}")))?;
-    let factor = Factor::new(g.as_ref(), &Attempt::SYMMETRIC)
-        .map_err(|e| Error::input(format!("{what} model: {e}")))?;
+    let g = weighted_gram(x, gram).map_err(|e| Error::linalg(model, e))?;
+    let factor =
+        Factor::new(g.as_ref(), &Attempt::SYMMETRIC).map_err(|e| Error::linalg(model, e))?;
     let b = Mat::from_fn(p, 2, |j, m| {
         compensated((0..n).map(|i| x[(i, j)] * rhs[m][i]))
     });
     let v = factor
         .solve(b.as_ref())
-        .map_err(|e| Error::input(format!("{what} model: {e}")))?;
+        .map_err(|e| Error::linalg(model, e))?;
     let out = |m: usize| -> Vec<f64> {
         (0..n)
             .map(|i| {
@@ -411,12 +416,13 @@ fn block(
 ///
 /// # Errors
 ///
-/// The errors of [`aipw`], and [`Error::Input`] for a design with another number
-/// of rows than the data or without columns, an outcome family other than the
-/// three above, a model that has an aliased column, a response outside the
-/// support of the family, and a propensity model whose fitted probabilities are
-/// numerically 0 or 1; [`Error::NoConvergence`] for a model that does not
-/// converge.
+/// The errors of [`aipw`]; [`Error::Input`] for a design with another number
+/// of rows than the data, without columns or with a value that is not finite;
+/// [`Error::Invalid`] for an outcome family other than the three above;
+/// [`Error::Aliased`] for a model that has an aliased column, [`Error::Fit`]
+/// for a response outside the support of the family, [`Error::Separation`]
+/// for a propensity model whose fitted probabilities are numerically 0 or 1
+/// and [`Error::NotConverged`] for a model that does not converge.
 pub fn aipw_glm(input: &GlmInput<'_>, family: Family, opts: &AipwOptions) -> Result<Aipw> {
     let n = input.treatment.len();
     check_estimand(opts.estimand)?;
@@ -447,12 +453,12 @@ pub fn aipw_glm(input: &GlmInput<'_>, family: Family, opts: &AipwOptions) -> Res
         z,
         &a,
         &omega,
-        "propensity",
+        Model::Propensity,
     )?;
     check_separation(&propensity)?;
     let glm = Glm::new(family, link);
-    let m1 = fitted_mean(&glm, x, input.outcome, &arm(true), "outcome (treated)")?;
-    let m0 = fitted_mean(&glm, x, input.outcome, &arm(false), "outcome (controls)")?;
+    let m1 = fitted_mean(&glm, x, input.outcome, &arm(true), Model::Outcome)?;
+    let m0 = fitted_mean(&glm, x, input.outcome, &arm(false), Model::Outcome)?;
     let data = AipwInput {
         outcome: input.outcome,
         treatment: input.treatment,
@@ -534,16 +540,16 @@ pub fn aipw_glm(input: &GlmInput<'_>, family: Family, opts: &AipwOptions) -> Res
         &gram(true, &m1),
         [&d1b, &zeros],
         &score(true, &m1),
-        "outcome (treated)",
+        Model::Outcome,
     )?;
     let b0 = block(
         x,
         &gram(false, &m0),
         [&zeros, &d0b],
         &score(false, &m0),
-        "outcome (controls)",
+        Model::Outcome,
     )?;
-    let be = block(z, &ps_gram, [&d1e, &d0e], &ps_score, "propensity")?;
+    let be = block(z, &ps_gram, [&d1e, &d0e], &ps_score, Model::Propensity)?;
     let [e1, e0] = be;
     let mut influence = c.influence.clone();
     for i in 0..n {

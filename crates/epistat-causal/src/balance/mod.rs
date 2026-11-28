@@ -83,9 +83,11 @@ use epistat_inference::Influence;
 use epistat_linalg::design::independent_columns;
 use epistat_linalg::{Attempt, Mat, MatRef, inverse, weighted_gram, weighted_xtz};
 
-use crate::error::{Error, Result};
+use epistat_core::check;
+
+use crate::error::{Error, Model, Result};
 pub(crate) use crate::shared::{case_weights as resolve_weights, check_len, compensated};
-use crate::shared::{check_finite, clusters, contrast, row_keys, rule};
+use crate::shared::{check_finite, clusters, contrast, finite_design, row_keys, rule};
 
 pub use cbps::{Cbps, CbpsInput, CbpsOptions, Identification, cbps};
 pub use entropy::{EntropyInput, EntropyOptions, balance_columns, entropy_balance};
@@ -320,27 +322,21 @@ impl BalanceWeights {
         check_len("design", design.nrows(), n)?;
         check_finite("outcome", outcome)?;
         let k = design.ncols();
-        if k == 0 {
-            return Err(Error::input("design: no columns"));
-        }
-        if (0..n).any(|i| (0..k).any(|j| !design[(i, j)].is_finite())) {
-            return Err(Error::input("design: a value is not finite"));
-        }
+        check::non_empty("design", k)?;
+        finite_design("design", design)?;
         let total: Vec<f64> = (0..n)
             .map(|i| self.sample_weight[i] * self.weights[i])
             .collect();
-        let keep = independent_columns(design, &total, None, 1e-8)
-            .map_err(|e| Error::input(format!("design: {e}")))?;
-        if let Some(j) = keep.iter().position(|&x| !x) {
-            return Err(Error::input(format!(
-                "design: column {j} is aliased among the weighted persons"
-            )));
+        let model = Model::Regression;
+        let keep =
+            independent_columns(design, &total, None, 1e-8).map_err(|e| Error::linalg(model, e))?;
+        if let Some(column) = keep.iter().position(|&x| !x) {
+            return Err(Error::Aliased { model, column });
         }
-        let h = weighted_gram(design, &total).map_err(|e| Error::input(format!("weights: {e}")))?;
-        let rhs = weighted_xtz(design, &total, outcome)
-            .map_err(|e| Error::input(format!("weights: {e}")))?;
+        let h = weighted_gram(design, &total).map_err(|e| Error::linalg(model, e))?;
+        let rhs = weighted_xtz(design, &total, outcome).map_err(|e| Error::linalg(model, e))?;
         let hinv = inverse(h.as_ref(), &Attempt::SYMMETRIC)
-            .map_err(|e| Error::input(format!("the weighted design is singular: {e}")))?
+            .map_err(|_| Error::Singular { model })?
             .x;
         let theta: Vec<f64> = (0..k)
             .map(|a| compensated((0..k).map(|b| hinv[(a, b)] * rhs[(b, 0)])))
@@ -394,7 +390,7 @@ impl BalanceWeights {
             columns.len(),
             rule(clustered),
         )
-        .map_err(|e| Error::input(format!("influence function: {e}")))
+        .map_err(Error::from)
     }
 
     /// A weighted least squares regression of `outcome` on `design`, with the
@@ -402,9 +398,9 @@ impl BalanceWeights {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for values of different lengths, a value that is not
-    /// finite and a design column that is aliased among the persons with
-    /// positive weight.
+    /// [`Error::Input`] for values of different lengths, a design without
+    /// columns and a value that is not finite; [`Error::Aliased`] for a design
+    /// column that is aliased among the persons with positive weight.
     pub fn weighted_regression(
         &self,
         outcome: &[f64],
@@ -416,9 +412,7 @@ impl BalanceWeights {
         let st = self.stage(outcome, design, variance)?;
         let columns: Vec<&[f64]> = st.influence.iter().map(Vec::as_slice).collect();
         let influence = self.influence(&columns, cluster.is_some())?;
-        let covariance = influence
-            .variance(clusters.as_ref())
-            .map_err(|e| Error::input(format!("influence function: {e}")))?;
+        let covariance = influence.variance(clusters.as_ref()).map_err(Error::from)?;
         Ok(WeightedRegression {
             coefficients: st.theta,
             covariance,

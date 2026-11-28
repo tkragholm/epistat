@@ -5,9 +5,13 @@
 
 mod gformula_sim;
 
+use epistat_causal::Bootstrap;
 use epistat_causal::gformula::{GFormulaOptions, gformula};
 use epistat_testkit::{POOLS, assert_same_on_pools};
 use gformula_sim::{complete, covariates, flatten, interventions, simulate};
+
+/// The root seed of the simulation and the bootstrap of every run here.
+const SEED: u64 = 20_261_124;
 
 #[test]
 fn the_g_formula_is_the_same_on_every_pool() {
@@ -19,8 +23,8 @@ fn the_g_formula_is_the_same_on_every_pool() {
     for simulated in [None, Some(1_300)] {
         let options = GFormulaOptions {
             simulated,
-            bootstrap: 6,
-            ..GFormulaOptions::default()
+            bootstrap: Some(Bootstrap::new(6, SEED)),
+            ..GFormulaOptions::new(SEED)
         };
         assert_same_on_pools(&POOLS, || {
             let g = gformula(&data, &covariates(), &outcome, &interventions(), &options).unwrap();
@@ -33,8 +37,8 @@ fn the_g_formula_is_the_same_on_every_pool() {
     let data = end.data(&baseline, &tv);
     let outcome = end.binary_end();
     let options = GFormulaOptions {
-        bootstrap: 4,
-        ..GFormulaOptions::default()
+        bootstrap: Some(Bootstrap::new(4, SEED)),
+        ..GFormulaOptions::new(SEED)
     };
     assert_same_on_pools(&POOLS, || {
         let g = gformula(&data, &covariates(), &outcome, &interventions(), &options).unwrap();

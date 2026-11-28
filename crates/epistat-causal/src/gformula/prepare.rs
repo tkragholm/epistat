@@ -5,7 +5,9 @@ use super::{
     Action, Covariate, CovariateKind, GFormulaOptions, Intervention, Outcome, PersonPeriods,
     Restriction,
 };
-use crate::error::{Error, Result};
+use epistat_core::{InputError, check};
+
+use crate::error::{Error, Model, Result, domain, domain_at};
 
 /// The rule of one variable under one strategy, with the periods it applies at.
 pub(super) struct ActiveRule<'a> {
@@ -80,14 +82,8 @@ fn is_binary(x: f64) -> bool {
     x == 0.0 || x == 1.0
 }
 
-fn check_length(what: &str, expected: usize, found: usize) -> Result<()> {
-    if expected == found {
-        Ok(())
-    } else {
-        Err(Error::input(format!(
-            "{what} has {found} entries where {expected} were expected"
-        )))
-    }
+fn check_length(what: &'static str, expected: usize, found: usize) -> Result<()> {
+    Ok(check::same_length(what, expected, found)?)
 }
 
 pub(super) fn prepare<'a>(
@@ -101,22 +97,21 @@ pub(super) fn prepare<'a>(
     let rows = id.len();
     let width = data.time_varying.len();
     let n_baseline = data.baseline.len();
-    for (j, column) in data.baseline.iter().enumerate() {
-        check_length(&format!("baseline variable {j}"), rows, column.len())?;
+    for column in data.baseline {
+        check_length("baseline", rows, column.len())?;
     }
-    for (j, column) in data.time_varying.iter().enumerate() {
-        check_length(&format!("time-varying variable {j}"), rows, column.len())?;
+    for column in data.time_varying {
+        check_length("time_varying", rows, column.len())?;
     }
     check_length("covariates", width, covariates.len())?;
     if options.simulated == Some(0) {
-        return Err(Error::input("at least one person must be simulated"));
+        return Err(domain("simulated", 0.0, "at least 1"));
     }
     if options.reference > interventions.len() {
-        return Err(Error::input(format!(
-            "reference {} names no strategy; there are {} interventions",
-            options.reference,
-            interventions.len()
-        )));
+        return Err(Error::invalid(
+            "reference",
+            "names no strategy: it is 0 or the number of an intervention",
+        ));
     }
 
     // Persons: the key sorts the rows by person and period, and each person's
@@ -130,19 +125,15 @@ pub(super) fn prepare<'a>(
         }
         let expected = if first { 0 } else { period[r - 1] + 1 };
         if usize::try_from(k).ok() != Some(expected) {
-            return Err(Error::input(if first {
-                format!(
-                    "row {r}: the first row of person {} is at period {k}, not 0",
-                    id[r]
-                )
-            } else {
-                format!(
-                    "row {r}: person {} goes from period {} to {k}; the periods of a person \
-                     must be consecutive",
-                    id[r],
-                    period[r - 1]
-                )
-            }));
+            return Err(Error::invalid_at(
+                "row",
+                r,
+                if first {
+                    "the first row of a person is not at period 0"
+                } else {
+                    "the periods of a person must be consecutive"
+                },
+            ));
         }
         period.push(expected);
     }
@@ -151,10 +142,12 @@ pub(super) fn prepare<'a>(
     let last_period = *period.iter().max().unwrap_or(&0);
     let periods = options.periods.unwrap_or(last_period + 1);
     if periods == 0 || periods > last_period + 1 {
-        return Err(Error::input(format!(
-            "{periods} periods asked for; the data have {}",
-            last_period + 1
-        )));
+        #[expect(clippy::cast_precision_loss, reason = "the value is reported only")]
+        return Err(domain(
+            "periods",
+            periods as f64,
+            "1 to the number of periods in the data",
+        ));
     }
 
     // Baseline variables, constant within a person.
@@ -163,18 +156,21 @@ pub(super) fn prepare<'a>(
         for (j, column) in data.baseline.iter().enumerate() {
             let value = column[start[p]];
             if !value.is_finite() {
-                return Err(Error::input(format!(
-                    "row {}: baseline variable {j} is not finite",
-                    start[p]
-                )));
+                return Err(InputError::NotFinite {
+                    what: "baseline",
+                    row: start[p],
+                    column: Some(j),
+                }
+                .into());
             }
             if let Some(r) =
                 (start[p]..start[p + 1]).find(|&r| column[r].to_bits() != value.to_bits())
             {
-                return Err(Error::input(format!(
-                    "row {r}: baseline variable {j} changes within person {}",
-                    id[r]
-                )));
+                return Err(InputError::NotConstant {
+                    what: "baseline",
+                    unit: id[r],
+                }
+                .into());
             }
             baseline.push(value);
         }
@@ -188,28 +184,34 @@ pub(super) fn prepare<'a>(
         if let CovariateKind::Categorical(levels) = covariates[j].kind
             && levels < 2
         {
-            return Err(Error::input(format!(
-                "variable {j}: a categorical covariate needs at least two classes"
-            )));
+            return Err(Error::invalid_at(
+                "variable",
+                j,
+                "a categorical covariate needs at least two classes",
+            ));
         }
         for r in 0..rows {
             let x = column[r];
             if !x.is_finite() {
-                return Err(Error::input(format!(
-                    "row {r}: time-varying variable {j} is not finite"
-                )));
+                return Err(InputError::NotFinite {
+                    what: "time_varying",
+                    row: r,
+                    column: Some(j),
+                }
+                .into());
             }
             if binary && !is_binary(x) {
-                return Err(Error::input(format!(
-                    "row {r}: binary variable {j} is {x}, not 0 or 1"
-                )));
+                return Err(domain_at("time_varying", x, "{0, 1}", r));
             }
             if let CovariateKind::Categorical(levels) = covariates[j].kind
                 && !(x >= 0.0 && x.fract() == 0.0 && x < levels as f64)
             {
-                return Err(Error::input(format!(
-                    "row {r}: categorical variable {j} is {x}, not a class in 0..{levels}"
-                )));
+                return Err(domain_at(
+                    "time_varying",
+                    x,
+                    "the classes 0, 1, ... of the variable",
+                    r,
+                ));
             }
             values[r * width + j] = x;
             let before = if period[r] == 0 {
@@ -223,18 +225,14 @@ pub(super) fn prepare<'a>(
 
     // The models' terms.
     for (j, c) in covariates.iter().enumerate() {
-        check_terms(
-            &c.terms,
-            n_baseline,
-            width,
-            j,
-            &format!("the model of variable {j}"),
-        )?;
+        check_terms(&c.terms, n_baseline, width, j, Model::Variable(j))?;
         if matches!(c.restriction, Some(Restriction::Absorbing)) && c.kind != CovariateKind::Binary
         {
-            return Err(Error::input(format!(
-                "variable {j}: only a binary covariate can be absorbing"
-            )));
+            return Err(Error::invalid_at(
+                "variable",
+                j,
+                "only a binary covariate can be absorbing",
+            ));
         }
         if let Some(Restriction::When {
             otherwise: super::Otherwise::Value(v),
@@ -242,9 +240,11 @@ pub(super) fn prepare<'a>(
         }) = &c.restriction
             && !v.is_finite()
         {
-            return Err(Error::input(format!(
-                "variable {j}: the value outside the restriction is not finite"
-            )));
+            return Err(Error::invalid_at(
+                "variable",
+                j,
+                "the value outside the restriction is not finite",
+            ));
         }
     }
     let (end_of_follow_up, observed) = match outcome {
@@ -259,56 +259,50 @@ pub(super) fn prepare<'a>(
                 check_length("the censoring", rows, c.censored.len())?;
                 match c.cutoff {
                     super::WeightCutoff::Quantile(q) if !(0.0..=1.0).contains(&q) => {
-                        return Err(Error::input(format!(
-                            "weight cutoff: the quantile {q} is not a probability in [0, 1]"
-                        )));
+                        return Err(domain("weight cutoff quantile", q, "[0, 1]"));
                     }
                     super::WeightCutoff::Value(v) if !(v.is_finite() && v > 0.0) => {
-                        return Err(Error::input(format!(
-                            "weight cutoff: the value {v} is not positive and finite"
-                        )));
+                        return Err(domain("weight cutoff value", v, "(0, inf)"));
                     }
                     _ => {}
                 }
-                check_terms(&c.terms, n_baseline, width, width, "the censoring model")?;
+                check_terms(&c.terms, n_baseline, width, width, Model::Censoring)?;
                 for p in 0..persons {
                     for r in start[p]..start[p + 1] {
                         if !c.censored[r] {
                             continue;
                         }
                         if r + 1 != start[p + 1] {
-                            return Err(Error::input(format!(
-                                "row {r}: person {} has rows after censoring",
-                                id[r]
-                            )));
+                            return Err(Error::invalid_at(
+                                "row",
+                                r,
+                                "a person has rows after censoring",
+                            ));
                         }
                         if event[r] || competing.as_ref().is_some_and(|d| d.event[r]) {
-                            return Err(Error::input(format!(
-                                "row {r}: a censored row has no observed event"
-                            )));
+                            return Err(Error::invalid_at(
+                                "row",
+                                r,
+                                "a censored row has no observed event",
+                            ));
                         }
                     }
                 }
             }
-            check_terms(terms, n_baseline, width, width, "the outcome model")?;
+            check_terms(terms, n_baseline, width, width, Model::Outcome)?;
             if let Some(c) = competing {
                 check_length("the competing event", rows, c.event.len())?;
-                check_terms(
-                    &c.terms,
-                    n_baseline,
-                    width,
-                    width,
-                    "the competing-event model",
-                )?;
+                check_terms(&c.terms, n_baseline, width, width, Model::Competing)?;
             }
             for p in 0..persons {
                 for r in start[p]..start[p + 1] - 1 {
                     let d = competing.as_ref().is_some_and(|c| c.event[r]);
                     if event[r] || d {
-                        return Err(Error::input(format!(
-                            "row {r}: person {} has rows after an event",
-                            id[r]
-                        )));
+                        return Err(Error::invalid_at(
+                            "row",
+                            r,
+                            "a person has rows after an event",
+                        ));
                     }
                 }
             }
@@ -318,9 +312,10 @@ pub(super) fn prepare<'a>(
         }
         Outcome::BinaryEnd { value, terms } | Outcome::ContinuousEnd { value, terms } => {
             check_length("the outcome", rows, value.len())?;
-            check_terms(terms, n_baseline, width, width, "the outcome model")?;
+            check_terms(terms, n_baseline, width, width, Model::Outcome)?;
             if periods != last_period + 1 {
-                return Err(Error::input(
+                return Err(Error::invalid(
+                    "periods",
                     "an outcome at the end of follow-up needs every period simulated",
                 ));
             }
@@ -335,16 +330,25 @@ pub(super) fn prepare<'a>(
                 if y.is_nan() {
                     continue;
                 }
-                if !y.is_finite() || (binary && !is_binary(y)) {
-                    return Err(Error::input(format!(
-                        "row {r}: the outcome is {y}, which the model cannot take"
-                    )));
+                if !y.is_finite() {
+                    return Err(InputError::NotFinite {
+                        what: "outcome",
+                        row: r,
+                        column: None,
+                    }
+                    .into());
+                }
+                if binary && !is_binary(y) {
+                    return Err(domain_at("outcome", y, "{0, 1}", r));
                 }
                 sum += y;
                 count += 1;
             }
             if count == 0 {
-                return Err(Error::input("no outcome is observed at the last period"));
+                return Err(Error::invalid(
+                    "outcome",
+                    "no outcome is observed at the last period",
+                ));
             }
             (true, vec![Some(sum / count as f64)])
         }
@@ -355,36 +359,26 @@ pub(super) fn prepare<'a>(
     for (i, intervention) in interventions.iter().enumerate() {
         let mut by_variable: Vec<Option<ActiveRule<'a>>> = (0..width).map(|_| None).collect();
         for rule in &intervention.rules {
-            let what = format!("intervention {}", i + 1);
+            let bad = |rule| Err(Error::invalid_at("intervention", i + 1, rule));
             if rule.variable >= width {
-                return Err(Error::input(format!(
-                    "{what}: time-varying variable {} does not exist",
-                    rule.variable
-                )));
+                return bad("names a time-varying variable that does not exist");
             }
             if by_variable[rule.variable].is_some() {
-                return Err(Error::input(format!(
-                    "{what}: two rules for variable {}",
-                    rule.variable
-                )));
+                return bad("has two rules for one variable");
             }
             match &rule.action {
                 Action::Set(v) if !v.is_finite() => {
-                    return Err(Error::input(format!("{what}: the value is not finite")));
+                    return bad("sets a value that is not finite");
                 }
                 Action::Schedule(s)
                     if s.len() < periods || s[..periods].iter().any(|v| !v.is_finite()) =>
                 {
-                    return Err(Error::input(format!(
-                        "{what}: the schedule needs a finite value for each of {periods} periods"
-                    )));
+                    return bad("the schedule needs a finite value for each period simulated");
                 }
                 Action::Threshold { lower, upper }
                     if lower.is_nan() || upper.is_nan() || lower > upper =>
                 {
-                    return Err(Error::input(format!(
-                        "{what}: the threshold needs lower <= upper"
-                    )));
+                    return bad("the threshold needs lower <= upper");
                 }
                 _ => {}
             }

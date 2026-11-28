@@ -12,10 +12,14 @@
 
 mod gformula_sim;
 
+use epistat_causal::Bootstrap;
 use epistat_causal::Level;
 use epistat_causal::gformula::{GFormulaOptions, IntervalMethod, gformula};
 use epistat_testkit::Fingerprint;
 use gformula_sim::{complete, covariates, flatten, interventions, simulate};
+
+/// The root seed of the simulation and the bootstrap of every run here.
+const SEED: u64 = 20_261_124;
 
 /// `(name, length, digest)` of each recorded output.
 const EXPECTED: &[(&str, usize, u64)] = &[
@@ -48,14 +52,14 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
     // 0.05 / 2, which moves percentile limits in the last bit.
     let recorded = GFormulaOptions {
         level: Level::alpha(0.05).unwrap(),
-        ..GFormulaOptions::default()
+        ..GFormulaOptions::new(SEED)
     };
     let mut out = Vec::new();
     for (name, options) in [
         (
             "survival, each person once, bootstrap",
             GFormulaOptions {
-                bootstrap: 8,
+                bootstrap: Some(Bootstrap::new(8, SEED)),
                 ..recorded
             },
         ),
@@ -63,7 +67,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
             "survival, 2500 simulated, normal limits",
             GFormulaOptions {
                 simulated: Some(2_500),
-                bootstrap: 5,
+                bootstrap: Some(Bootstrap::new(5, SEED)),
                 interval: IntervalMethod::Normal,
                 reference: 2,
                 ..recorded
@@ -88,7 +92,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
     let data = end.data(&baseline, &tv);
     let outcome = end.binary_end();
     let options = GFormulaOptions {
-        bootstrap: 4,
+        bootstrap: Some(Bootstrap::new(4, SEED)),
         ..recorded
     };
     let g = gformula(&data, &covariates(), &outcome, &interventions(), &options).unwrap();
