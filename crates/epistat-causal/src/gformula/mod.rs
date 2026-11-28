@@ -655,11 +655,18 @@ pub struct GFormula {
 ///
 /// # Errors
 ///
-/// [`Error::Input`], [`Error::Invalid`] and [`Error::Term`] for data,
-/// models or interventions that cannot be used (see the module
-/// documentation), [`Error::NoRows`] for a model the data leave no rows to
-/// fit, and [`Error::NotConverged`], [`Error::Aliased`] or [`Error::Fit`] for
+/// [`Input`], [`Invalid`] and [`Term`] for data, models or interventions that
+/// cannot be used (see the module documentation), [`NoRows`] for a model the
+/// data leave no rows to fit, and [`NotConverged`], [`Aliased`] or [`Fit`] for
 /// a model that cannot be fitted to the data.
+///
+/// [`Input`]: crate::Error::Input
+/// [`Invalid`]: crate::Error::Invalid
+/// [`Term`]: crate::Error::Term
+/// [`NoRows`]: crate::Error::NoRows
+/// [`NotConverged`]: crate::Error::NotConverged
+/// [`Aliased`]: crate::Error::Aliased
+/// [`Fit`]: crate::Error::Fit
 pub fn gformula(
     data: &PersonPeriods<'_>,
     covariates: &[Covariate],
