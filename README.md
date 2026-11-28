@@ -27,7 +27,9 @@ Rust crates for statistics in epidemiology and register research.
 ## Contributing
 
 The golden, fingerprint and study-path tests assert their recorded hashes only
-on aarch64 macOS. On other targets they compute the hashes and assert nothing.
+on aarch64 macOS. On other targets they compute the hashes and assert nothing:
+on x86 the last bits depend on the vector extensions faer selects at run time,
+so two runs are comparable only on the same machine.
 To check that a change keeps every hash on any target, run
 `scripts/hashes.sh before.txt` on the base commit and `scripts/hashes.sh
 after.txt` on the head, then `diff before.txt after.txt`. Each line is

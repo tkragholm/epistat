@@ -17,8 +17,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 bench-internals = []
-# faer's runtime-dispatched AVX-512 kernels, through epistat-linalg.
-nightly = ["epistat-linalg/nightly"]
 
 [dependencies]
 epistat-core = { path = "../epistat-core", version = "0.1.0" }

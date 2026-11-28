@@ -11,11 +11,6 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-[features]
-# faer's runtime-dispatched AVX-512 kernels. On x86 this needs Rust 1.89, which
-# stabilised the AVX-512 types that bytemuck then implements `Pod` for.
-nightly = ["faer/nightly"]
-
 [dependencies]
 epistat-core = { path = "../epistat-core", version = "0.1.0" }
 dyn-stack = "0.13"
