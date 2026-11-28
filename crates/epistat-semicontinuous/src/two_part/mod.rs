@@ -103,7 +103,8 @@ pub enum Regularization {
     ElasticNet {
         /// The overall penalty on the sum scale of the weights.
         lambda: f64,
-        /// The share of the penalty on the L1 norm, in `[0, 1]`.
+        /// The share of the penalty on the L1 norm, in `[0, 1]`: glmnet's
+        /// `alpha`, a parameter of the penalty, not a confidence level.
         alpha: f64,
         /// Whether the first column is left unpenalised.
         exclude_intercept: bool,
