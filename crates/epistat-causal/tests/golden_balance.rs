@@ -12,6 +12,7 @@
 
 mod balance_sim;
 
+use epistat_causal::CaseWeights;
 use epistat_causal::Estimand;
 use epistat_causal::balance::{
     CbpsInput, CbpsOptions, EntropyInput, EntropyOptions, Identification, balance_columns, cbps,
@@ -42,7 +43,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
             &EntropyInput {
                 treatment: &s.a,
                 covariates: cols.as_ref(),
-                sample_weight: Some(&s.s),
+                sample_weight: Some(CaseWeights::new(&s.s).expect("weights")),
                 base_weight: Some(&s.q),
             },
             &EntropyOptions {
@@ -69,7 +70,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
             &CbpsInput {
                 treatment: &s.a,
                 design: s.x.as_ref(),
-                sample_weight: Some(&s.s),
+                sample_weight: Some(CaseWeights::new(&s.s).expect("weights")),
             },
             &CbpsOptions {
                 estimand: target,

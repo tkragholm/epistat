@@ -13,6 +13,7 @@
 mod gformula_sim;
 
 use epistat_causal::Level;
+use epistat_causal::gformula::Reference;
 use epistat_causal::gformula::{GFormulaOptions, IntervalMethod, gformula};
 use epistat_causal::{Bootstrap, Seed};
 use epistat_testkit::Fingerprint;
@@ -52,7 +53,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
     // 0.05 / 2, which moves percentile limits in the last bit.
     let recorded = GFormulaOptions {
         level: Level::alpha(0.05).unwrap(),
-        ..GFormulaOptions::new(SEED)
+        ..GFormulaOptions::new(Seed(SEED))
     };
     let mut out = Vec::new();
     for (name, options) in [
@@ -69,7 +70,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
                 simulated: Some(2_500),
                 bootstrap: Some(Bootstrap::new(5, Seed(SEED))),
                 interval: IntervalMethod::Normal,
-                reference: 2,
+                reference: Reference::Intervention(1),
                 ..recorded
             },
         ),

@@ -229,7 +229,13 @@ impl Sim {
 }
 
 fn push(out: &mut Vec<f64>, e: &SimulatedEstimate) {
-    for x in [e.estimate, e.monte_carlo_se, e.se, e.lower, e.upper] {
+    for x in [
+        e.estimate,
+        e.monte_carlo_se,
+        e.se,
+        e.interval.and_then(|i| i.lower),
+        e.interval.and_then(|i| i.upper),
+    ] {
         out.push(x.unwrap_or(f64::NAN));
     }
 }

@@ -174,7 +174,7 @@ mod history;
 mod prepare;
 mod simulate;
 
-use epistat_core::{Bootstrap, Level, Panel, Seed};
+use epistat_core::{Bootstrap, Interval, Level, Panel, Seed};
 use epistat_inference::interval::{self, Percentile};
 use epistat_rng::replicate_seed;
 use rayon::prelude::*;
@@ -450,6 +450,29 @@ pub enum IntervalMethod {
     Normal,
 }
 
+/// The strategy that ratios and differences are taken against.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Reference {
+    /// The natural course, without intervention, gfoRmula's `ref_int = 0`.
+    #[default]
+    NaturalCourse,
+    /// The intervention at this position of the interventions given, from 0;
+    /// gfoRmula's `ref_int` is one more.
+    Intervention(usize),
+}
+
+impl Reference {
+    /// The strategy's position among the simulated strategies, the natural
+    /// course first.
+    pub(crate) const fn strategy(self) -> usize {
+        match self {
+            Self::NaturalCourse => 0,
+            Self::Intervention(i) => i + 1,
+        }
+    }
+}
+
 /// What the g-formula does besides the data and the models.
 ///
 /// There is no default: the seed of the simulation is the caller's, so the
@@ -467,14 +490,14 @@ pub struct GFormulaOptions {
     pub bootstrap: Option<Bootstrap>,
     /// The root seed of the simulation of the point estimate, gfoRmula's
     /// `seed`.
-    pub seed: u64,
+    pub seed: Seed,
     /// The level of the bootstrap limits, by default 95%.
     pub level: Level,
     /// How the bootstrap limits are formed.
     pub interval: IntervalMethod,
-    /// The strategy that ratios and differences are taken against: 0 for the
-    /// natural course (the default), `i` for intervention `i` (from 1).
-    pub reference: usize,
+    /// The strategy that ratios and differences are taken against, by
+    /// default the natural course.
+    pub reference: Reference,
     /// Whether lags before period 0 take the value at period 0 (gfoRmula's
     /// `baselags`); 0 when false, the default.
     pub baseline_lags: bool,
@@ -492,7 +515,7 @@ impl GFormulaOptions {
     /// The options of gfoRmula's defaults with the simulation's root seed
     /// `seed` and no bootstrap.
     #[must_use]
-    pub fn new(seed: u64) -> Self {
+    pub fn new(seed: Seed) -> Self {
         Self {
             simulated: None,
             periods: None,
@@ -500,7 +523,7 @@ impl GFormulaOptions {
             seed,
             level: Level::default(),
             interval: IntervalMethod::Percentile,
-            reference: 0,
+            reference: Reference::NaturalCourse,
             baseline_lags: false,
             truncate: true,
             keep_simulated: false,
@@ -518,10 +541,9 @@ pub struct SimulatedEstimate {
     pub monte_carlo_se: Option<f64>,
     /// The bootstrap standard error.
     pub se: Option<f64>,
-    /// The lower bootstrap limit.
-    pub lower: Option<f64>,
-    /// The upper bootstrap limit.
-    pub upper: Option<f64>,
+    /// The bootstrap interval at the options' level, `None` without at least
+    /// two replicates.
+    pub interval: Option<Interval>,
 }
 
 /// The results of one strategy.
@@ -678,7 +700,7 @@ pub fn gformula(
     let n = prepared.persons();
     let ones = vec![1.0; n];
     let fitted = fit::fit_all(&prepared, covariates, outcome, &ones)?;
-    let point_seed = replicate_seed(options.seed, 0);
+    let point_seed = replicate_seed(options.seed.value(), 0);
     let sources = simulate::sources(&ones, options.simulated, point_seed);
     let mut point = simulate::run(
         &prepared,
@@ -690,9 +712,7 @@ pub fn gformula(
         options.keep_simulated,
     )?;
 
-    let bootstrap = options
-        .bootstrap
-        .unwrap_or(Bootstrap::new(0, Seed(options.seed)));
+    let bootstrap = options.bootstrap.unwrap_or(Bootstrap::new(0, options.seed));
     let replicates: Vec<Option<Vec<Vec<f64>>>> = (0..bootstrap.replicates)
         .into_par_iter()
         .map(|b| -> Result<Option<Vec<Vec<f64>>>> {
@@ -783,8 +803,7 @@ fn summarise(
             }
             IntervalMethod::Normal => interval::normal(estimate, se, level),
         };
-        e.lower = limits.lower;
-        e.upper = limits.upper;
+        e.interval = Some(limits);
         Ok(e)
     };
     let mut out = Vec::with_capacity(strategies);

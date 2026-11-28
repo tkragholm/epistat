@@ -87,7 +87,7 @@ use epistat_linalg::{
 };
 
 use super::{BalanceWeights, Nuisance, compensated, resolve_weights, summarise};
-use epistat_core::Estimand;
+use epistat_core::{CaseWeights, Estimand};
 
 use epistat_core::check;
 
@@ -103,7 +103,7 @@ pub struct EntropyInput<'a> {
     /// higher moments and products with [`balance_columns`].
     pub covariates: MatRef<'a, f64>,
     /// Sample weights, 1 for each person when `None`.
-    pub sample_weight: Option<&'a [f64]>,
+    pub sample_weight: Option<CaseWeights<'a>>,
     /// The base weights `q` the weights stay close to, 1 for each person when
     /// `None`. A person with base weight 0 gets weight 0.
     pub base_weight: Option<&'a [f64]>,
@@ -337,7 +337,7 @@ pub fn entropy_balance(input: &EntropyInput<'_>, opts: &EntropyOptions) -> Resul
     check::positive("tolerance", opts.tolerance)?;
     check_estimand(opts.estimand)?;
     let s = resolve_weights("sample_weight", input.sample_weight, n)?;
-    let q = resolve_weights("base_weight", input.base_weight, n)?;
+    let q = crate::shared::weight_column("base_weight", input.base_weight, n)?;
     let t = input.treatment;
     let in_target = |i: usize| {
         s[i] > 0.0

@@ -19,9 +19,19 @@
 //! A binary outcome has `l = 0` and `u = 1`. Estimates and influences are mapped
 //! back by `u - l`.
 //!
-//! Propensity bound. With `b` the bound of [`TmleOptions::propensity_bound`],
-//! `g1 = max(g, b)` and `g0 = max(1 - g, b)`, as `tmle`'s `gbound`; its default
-//! is `b = 5 / (sqrt(n) ln n)`, here [`PropensityBound::Tmle`].
+//! Propensity bound. With the bounds `[b_l, b_u]` of
+//! [`TmleOptions::propensity_bound`], `g1 = max(g, b_l)` and
+//! `g0 = max(1 - g, 1 - b_u)`, as `tmle`'s `gbound`, with `b = b_l` for both
+//! when the bounds are symmetric about 1/2 (`b_u = 1 - b_l`). `tmle`'s
+//! default is `b = 5 / (sqrt(n) ln n)`, here [`PropensityBound::Tmle`]; the
+//! default here is no bound, so a comparison with `tmle` at its defaults
+//! sets [`PropensityBound::Tmle`].
+//!
+//! Predictions. For a binary outcome, every outcome 0 or 1, the predictions
+//! given to [`tmle`] are probabilities, and one outside `[0, 1]`, such as a log
+//! odds or a percent, is refused rather than moved into the range. Predictions
+//! of a continuous outcome outside its range are bounded with the others, as
+//! `tmle` bounds them by its `Qbounds`.
 //!
 //! The effect in the population ([`Estimand::Ate`]). Logistic fluctuation with
 //! the two clever covariates `H0 = (1 - A) / g0` and `H1 = A / g1`:
@@ -140,16 +150,20 @@
 
 pub mod survival;
 
-use epistat_core::{Contrast, Estimand, Level};
+use epistat_core::{
+    CaseWeights, Coefficients, Contrast, Covariance, Estimand, Glance, Level, Tidy, VarianceKind,
+};
 use epistat_glm::{Family, Fit, Glm, Link};
 use epistat_inference::{ClusterRule, Influence};
 use epistat_linalg::{Mat, MatRef};
+use epistat_stats::weighted::ProbabilityBounds;
 
 use crate::aipw::{AipwInput, GlmInput, fitted_mean};
 use crate::error::{Error, Model, Result, domain, domain_at, empty};
 use crate::shared::{
-    case_weights, check_arms, check_design, check_estimand, check_finite, check_len,
-    check_separation, clusters, compensated, contrast, fit_glm, glm_data, influence, row_keys,
+    case_weights, check_arms, check_design, check_estimand, check_finite, check_intercept,
+    check_len, check_probabilities, check_separation, clusters, compensated,
+    contrast_and_covariance, fit_glm, glm_data, influence, is_binary, means_table, row_keys,
 };
 
 /// The predictions of the models and the data of [`tmle`], the same as those of
@@ -172,16 +186,19 @@ pub enum OutcomeRange {
     },
 }
 
-/// The lower bound `b` of `g` and `1 - g` in the clever covariates.
+/// The bounds of `g` in the clever covariates, `tmle`'s `gbound`.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum PropensityBound {
-    /// No bound.
+    /// No bound, the default here; `tmle`'s default is [`Self::Tmle`].
     #[default]
     None,
-    /// `5 / (sqrt(n) ln n)` for `n` persons, the default of `tmle`.
+    /// `[b, 1 - b]` with `b = 5 / (sqrt(n) ln n)` for `n` persons, the default
+    /// of `tmle`.
     Tmle,
-    /// A bound `0 < b < 0.5`.
-    At(f64),
+    /// The bounds `[b_l, b_u]`: `g` is bounded below by `b_l` and `1 - g` by
+    /// `1 - b_u`. The effect on the treated or on the controls, and
+    /// [`survival`], take bounds symmetric about 1/2 only.
+    At(ProbabilityBounds),
 }
 
 /// The outcome model of [`tmle_glm`].
@@ -204,13 +221,11 @@ pub struct TmleOptions {
     pub estimand: Estimand,
     /// The level of the confidence limits, by default 95%.
     pub level: Level,
-    /// The outcome model that [`tmle_glm`] fits. The default is
-    /// [`OutcomeModel::Pooled`]; [`tmle`] does not read it.
-    pub outcome_model: OutcomeModel,
     /// The range that maps the outcome to `[0, 1]`. The default is the observed
     /// range.
     pub range: OutcomeRange,
-    /// The bound of the propensity. The default is none.
+    /// The bounds of the propensity. The default is none, where `tmle`'s is
+    /// [`PropensityBound::Tmle`].
     pub propensity_bound: PropensityBound,
     /// The bound `delta` of the scaled outcome predictions, which are kept in
     /// `[delta, 1 - delta]`, with `0 < delta < 0.5`. The default is 0.0005, as
@@ -229,7 +244,6 @@ impl Default for TmleOptions {
         Self {
             estimand: Estimand::Ate,
             level: Level::default(),
-            outcome_model: OutcomeModel::Pooled,
             range: OutcomeRange::Observed,
             propensity_bound: PropensityBound::None,
             outcome_bound: 0.0005,
@@ -237,6 +251,17 @@ impl Default for TmleOptions {
             restrict_support: true,
         }
     }
+}
+
+/// What [`tmle_glm`] does besides the data: the options of [`tmle`] and the
+/// outcome model it fits.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TmleGlmOptions {
+    /// The options of the targeting.
+    pub tmle: TmleOptions,
+    /// The outcome model. The default is [`OutcomeModel::Pooled`], `tmle`'s
+    /// main-terms model.
+    pub outcome_model: OutcomeModel,
 }
 
 /// How the outcome predictions were moved.
@@ -315,13 +340,34 @@ pub struct Tmle {
     pub score: f64,
     /// The range `(l, u)` that mapped the outcome to `[0, 1]`.
     pub range: (f64, f64),
-    /// The bound `b` of the propensity, 0 when there is none.
-    pub propensity_bound: f64,
+    /// The bounds of the propensity, `None` when there are none.
+    pub propensity_bound: Option<ProbabilityBounds>,
     /// The number of persons used whose `g` or `1 - g` was below the bound.
     pub n_trimmed: usize,
     /// The number of persons used, fewer than all for the effect on the treated
     /// or on the controls under the support rule.
     pub n_used: usize,
+    covariance: Covariance,
+}
+
+/// The table of the two means `mean1` and `mean0` on the outcome's scale,
+/// with the influence-function covariance of [`Tmle::influence`], the only
+/// one the estimator has ([`VarianceKind::Robust`]).
+impl Tidy for Tmle {
+    type Error = Error;
+
+    fn coefficients(&self, level: Level, variance: VarianceKind) -> Result<Coefficients> {
+        let theta = [self.contrast.mean1.estimate, self.contrast.mean0.estimate];
+        means_table(theta, &self.covariance, level, variance)
+    }
+
+    fn default_variance(&self) -> VarianceKind {
+        VarianceKind::Robust
+    }
+
+    fn glance(&self) -> Glance {
+        Glance::new(self.targeted1.len(), self.n_used, true)
+    }
 }
 
 /// The data after the checks, on the scale of the targeting.
@@ -334,7 +380,11 @@ struct Prepared<'a> {
     ystar: Vec<f64>,
     lower: f64,
     width: f64,
+    /// The lower bound of `g`, 0 without one.
     bound: f64,
+    /// The lower bound of `1 - g`, 0 without one.
+    bound0: f64,
+    bounds: Option<ProbabilityBounds>,
     delta: f64,
 }
 
@@ -356,7 +406,7 @@ fn flag(t: bool) -> f64 {
 fn prepare<'a>(
     outcome: &'a [f64],
     treatment: &'a [bool],
-    weight: Option<&[f64]>,
+    weight: Option<CaseWeights<'_>>,
     cluster: Option<&'a [u32]>,
     opts: &TmleOptions,
 ) -> Result<Prepared<'a>> {
@@ -407,8 +457,8 @@ fn prepare<'a>(
     };
     let width = upper - lower;
     let ystar = outcome.iter().map(|&y| (y - lower) / width).collect();
-    let bound = match opts.propensity_bound {
-        PropensityBound::None => 0.0,
+    let (bound, bound0, bounds) = match opts.propensity_bound {
+        PropensityBound::None => (0.0, 0.0, None),
         PropensityBound::Tmle => {
             let m = n as f64;
             let b = 5.0 / m.sqrt() / m.ln();
@@ -418,13 +468,34 @@ fn prepare<'a>(
                     "tmle's bound 5 / (sqrt(n) ln n) is not in (0, 0.5) for this number of persons",
                 ));
             }
-            b
+            (b, b, Some(symmetric(b)?))
         }
-        PropensityBound::At(b) => {
-            if !(b > 0.0 && b < 0.5) {
-                return Err(domain("propensity_bound", b, "(0, 0.5)"));
+        PropensityBound::At(bounds) => {
+            let (lower, upper) = (bounds.lower(), bounds.upper());
+            if !(lower > 0.0 && lower < upper && upper < 1.0) {
+                return Err(domain(
+                    "propensity_bound",
+                    if lower > 0.0 && lower < upper {
+                        upper
+                    } else {
+                        lower
+                    },
+                    "0 < lower < upper < 1",
+                ));
             }
-            b
+            // Bounds symmetric about 1/2 bound g and 1 - g by the same value.
+            let lower0 = if (1.0 - lower).to_bits() == upper.to_bits() {
+                lower
+            } else {
+                1.0 - upper
+            };
+            if opts.estimand != Estimand::Ate && lower0.to_bits() != lower.to_bits() {
+                return Err(Error::invalid(
+                    "propensity_bound",
+                    "the effect on the treated or on the controls takes bounds symmetric about 1/2",
+                ));
+            }
+            (lower, lower0, Some(bounds))
         }
     };
     Ok(Prepared {
@@ -436,8 +507,15 @@ fn prepare<'a>(
         lower,
         width,
         bound,
+        bound0,
+        bounds,
         delta: opts.outcome_bound,
     })
+}
+
+/// The bounds `[b, 1 - b]`.
+pub(crate) fn symmetric(b: f64) -> Result<ProbabilityBounds> {
+    ProbabilityBounds::new(b, 1.0 - b).map_err(|_| domain("propensity_bound", b, "(0, 0.5)"))
 }
 
 fn check_propensity(g: &[f64]) -> Result<()> {
@@ -515,7 +593,7 @@ fn population(
     let n = p.w.len();
     let a: Vec<f64> = p.treatment.iter().map(|&t| flag(t)).collect();
     let g1: Vec<f64> = g.iter().map(|&x| x.max(p.bound)).collect();
-    let g0: Vec<f64> = g.iter().map(|&x| (1.0 - x).max(p.bound)).collect();
+    let g0: Vec<f64> = g.iter().map(|&x| (1.0 - x).max(p.bound0)).collect();
     let l1: Vec<f64> = q1.iter().map(|&q| logit(q)).collect();
     let l0: Vec<f64> = q0.iter().map(|&q| logit(q)).collect();
     let offset: Vec<f64> = (0..n)
@@ -572,7 +650,7 @@ fn population(
         .collect();
     let n_trimmed = g
         .iter()
-        .filter(|&&x| x < p.bound || 1.0 - x < p.bound)
+        .filter(|&&x| x < p.bound || 1.0 - x < p.bound0)
         .count();
     finish(
         p,
@@ -925,7 +1003,8 @@ fn finish(
         ClusterRule::SmallSample,
     )?;
     let clusters = clusters(p.cluster, n)?;
-    let contrast = contrast(values, &influence, clusters.as_ref(), opts.level)?;
+    let (contrast, covariance) =
+        contrast_and_covariance(values, &influence, clusters.as_ref(), opts.level)?;
     Ok(Tmle {
         estimand: opts.estimand,
         contrast,
@@ -936,9 +1015,10 @@ fn finish(
         targeting,
         score,
         range: (p.lower, p.lower + p.width),
-        propensity_bound: p.bound,
+        propensity_bound: p.bounds,
         n_trimmed,
         n_used: rows.len(),
+        covariance,
     })
 }
 
@@ -951,11 +1031,15 @@ fn finish(
 /// the controls the support rule recalibrates the propensity by an intercept in
 /// both of its cases.
 ///
+/// For a binary outcome the predictions are probabilities, and one outside
+/// `[0, 1]` is refused.
+///
 /// # Errors
 ///
 /// [`Error::Input`] for inputs of different lengths, no persons, a value that is
-/// not finite, a negative weight, a propensity outside `(0, 1)`, an outcome
-/// outside the known range and options outside their ranges;
+/// not finite, a propensity outside `(0, 1)`, an outcome outside the known
+/// range, a prediction of a binary outcome outside `[0, 1]` and options
+/// outside their ranges;
 /// [`Error::Invalid`] for an outcome with one value, an estimand other than
 /// the ATE, ATT and ATC and a group without persons of positive weight;
 /// [`Error::Aliased`] for an aliased fluctuation coefficient (see the module
@@ -975,6 +1059,10 @@ pub fn tmle(input: &TmleInput<'_>, opts: &TmleOptions) -> Result<Tmle> {
     check_len("propensity", input.propensity.len(), n)?;
     check_finite("mu1", input.mu1)?;
     check_finite("mu0", input.mu0)?;
+    if is_binary(input.outcome) {
+        check_probabilities("mu1", input.mu1)?;
+        check_probabilities("mu0", input.mu0)?;
+    }
     check_propensity(input.propensity)?;
     let scale = |v: &[f64]| -> Vec<f64> {
         v.iter()
@@ -992,8 +1080,8 @@ pub fn tmle(input: &TmleInput<'_>, opts: &TmleOptions) -> Result<Tmle> {
 /// The outcome model is fitted to the scaled outcome `Y*`, logistic for
 /// [`Family::Binomial`] and linear for [`Family::Gaussian`], as `tmle` with
 /// `Q.SL.library = "SL.glm"` and `cvQinit = FALSE`, in the form of
-/// [`TmleOptions::outcome_model`]; [`OutcomeModel::Pooled`] is `tmle`'s
-/// main-terms model. The propensity model is a logistic regression of the
+/// [`TmleGlmOptions::outcome_model`]; [`OutcomeModel::Pooled`] is `tmle`'s
+/// main-terms model. Both designs need a constant column, the intercept. The propensity model is a logistic regression of the
 /// treatment on `propensity_design`. Both get the case weights rescaled to
 /// mean 1.
 ///
@@ -1001,12 +1089,14 @@ pub fn tmle(input: &TmleInput<'_>, opts: &TmleOptions) -> Result<Tmle> {
 ///
 /// The errors of [`tmle`]; [`Error::Input`] for a design with another number
 /// of rows than the data, without columns or with a value that is not finite;
-/// [`Error::Invalid`] for a family other than the two above;
+/// [`Error::Invalid`] for a family other than the two above and a design
+/// without a constant column;
 /// [`Error::Aliased`] for a model that has an aliased column;
 /// [`Error::Separation`] for a propensity model whose fitted probabilities are
 /// numerically 0 or 1; [`Error::NotConverged`] for a model that does not
 /// converge.
-pub fn tmle_glm(input: &GlmInput<'_>, family: Family, opts: &TmleOptions) -> Result<Tmle> {
+pub fn tmle_glm(input: &GlmInput<'_>, family: Family, options: &TmleGlmOptions) -> Result<Tmle> {
+    let opts = &options.tmle;
     let p = prepare(
         input.outcome,
         input.treatment,
@@ -1017,6 +1107,8 @@ pub fn tmle_glm(input: &GlmInput<'_>, family: Family, opts: &TmleOptions) -> Res
     let n = p.w.len();
     check_design("outcome_design", input.outcome_design, n)?;
     check_design("propensity_design", input.propensity_design, n)?;
+    check_intercept("outcome_design", input.outcome_design)?;
+    check_intercept("propensity_design", input.propensity_design)?;
     let link = match family {
         Family::Binomial => Link::Logit,
         Family::Gaussian => Link::Identity,
@@ -1039,7 +1131,7 @@ pub fn tmle_glm(input: &GlmInput<'_>, family: Family, opts: &TmleOptions) -> Res
     check_separation(&propensity)?;
     let glm = Glm::new(family, link);
     let x = input.outcome_design;
-    let (q1, q0) = match opts.outcome_model {
+    let (q1, q0) = match options.outcome_model {
         OutcomeModel::Pooled => {
             let k = x.ncols();
             let design = Mat::from_fn(n, k + 1, |i, j| if j < k { x[(i, j)] } else { a[i] });

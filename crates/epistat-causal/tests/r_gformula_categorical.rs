@@ -21,6 +21,7 @@
 //! simulated persons.
 
 use epistat_causal::Panel;
+use epistat_causal::Seed;
 use epistat_causal::gformula::{
     Covariate, CovariateKind, GFormulaOptions, Intervention, Outcome, PersonPeriods, Term, gformula,
 };
@@ -120,7 +121,7 @@ fn a_categorical_covariate_agrees_with_gformula() {
         &GFormulaOptions {
             simulated: Some(200_000),
             periods: Some(2),
-            ..GFormulaOptions::new(SEED)
+            ..GFormulaOptions::new(Seed(SEED))
         },
     )
     .expect("g-formula");
@@ -169,7 +170,7 @@ fn a_class_outside_the_levels_is_an_error() {
             &covariates,
             &outcome,
             &[],
-            &GFormulaOptions::new(SEED),
+            &GFormulaOptions::new(Seed(SEED)),
         )
         .is_err()
     );

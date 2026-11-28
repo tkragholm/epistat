@@ -106,7 +106,7 @@
 //! 3. Benkeser D, Carone M, Gilbert PB. Improved estimation of the cumulative
 //!    incidence of rare outcomes. Stat Med. 2018;37(2):280-93.
 
-use epistat_core::{Contrast, Level};
+use epistat_core::{CaseWeights, Contrast, Level, Matrix};
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::{ClusterRule, Clusters, Influence};
 use epistat_linalg::{Mat, MatRef};
@@ -143,8 +143,9 @@ pub struct SurvivalInput<'a> {
     pub censoring0: MatRef<'a, f64>,
     /// `P(A = 1 | X)` of each person.
     pub propensity: &'a [f64],
-    /// Case weights, 1 for each person when `None`.
-    pub weight: Option<&'a [f64]>,
+    /// Case weights, 1 for each person when `None`; a person of weight 0
+    /// leaves the estimate.
+    pub weight: Option<CaseWeights<'a>>,
     /// The cluster of each person, each person a cluster when `None`.
     pub cluster: Option<&'a [u32]>,
 }
@@ -200,8 +201,8 @@ pub struct SurvivalTmle {
     /// The mean of the first term of the influence function of each risk at the
     /// end, which targeting brings below `se / (sqrt(n) ln n)`.
     pub score: [f64; 2],
-    /// The bound `b`, 0 when there is none.
-    pub propensity_bound: f64,
+    /// The bound `b`, `None` when there is none.
+    pub propensity_bound: Option<f64>,
     /// The number of persons whose `g_a G(k - 1)` was below the bound for an arm
     /// and an interval up to the horizon.
     pub n_trimmed: usize,
@@ -428,7 +429,16 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
             let m = n as f64;
             5.0 / m.sqrt() / m.ln()
         }
-        PropensityBound::At(b) => b,
+        PropensityBound::At(bounds) => {
+            let (lower, upper) = (bounds.lower(), bounds.upper());
+            if (1.0 - lower).to_bits() != upper.to_bits() {
+                return Err(Error::invalid(
+                    "propensity_bound",
+                    "the survival estimator bounds g G and (1 - g) G by one value; give bounds symmetric about 1/2",
+                ));
+            }
+            lower
+        }
     };
     if !(0.0..0.5).contains(&bound) {
         return Err(domain("propensity_bound", bound, "[0, 0.5)"));
@@ -480,7 +490,7 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
         iterations: [one.iterations, zero.iterations],
         epsilon: [one.epsilon, zero.epsilon],
         score: [one.score, zero.score],
-        propensity_bound: bound,
+        propensity_bound: (bound > 0.0).then_some(bound),
         n_trimmed,
     })
 }
@@ -526,8 +536,9 @@ pub struct SurvivalGlmInput<'a> {
     /// The design of the logistic model of the treatment, one row per person,
     /// with an intercept.
     pub propensity: MatRef<'a, f64>,
-    /// Case weights, 1 for each person when `None`.
-    pub weight: Option<&'a [f64]>,
+    /// Case weights, 1 for each person when `None`; a person of weight 0
+    /// leaves the estimate.
+    pub weight: Option<CaseWeights<'a>>,
     /// The cluster of each person, each person a cluster when `None`.
     pub cluster: Option<&'a [u32]>,
 }
@@ -547,14 +558,14 @@ pub struct SurvivalTmleGlm {
     pub propensity_coefficients: Vec<f64>,
     /// The event hazard of each person (rows) and interval up to the horizon
     /// (columns) had the person been treated.
-    pub hazard1: Mat<f64>,
+    pub hazard1: Matrix,
     /// The same had the person not been treated.
-    pub hazard0: Mat<f64>,
+    pub hazard0: Matrix,
     /// The censoring hazard of each person and interval before the horizon had
     /// the person been treated, at least one column.
-    pub censoring1: Mat<f64>,
+    pub censoring1: Matrix,
     /// The same had the person not been treated.
-    pub censoring0: Mat<f64>,
+    pub censoring0: Matrix,
     /// The fitted propensity of each person.
     pub propensity: Vec<f64>,
 }
@@ -733,10 +744,15 @@ pub fn tmle_survival_glm(
         hazard_coefficients,
         censoring_coefficients,
         propensity_coefficients,
-        hazard1,
-        hazard0,
-        censoring1,
-        censoring0,
+        hazard1: result_matrix(&hazard1)?,
+        hazard0: result_matrix(&hazard0)?,
+        censoring1: result_matrix(&censoring1)?,
+        censoring0: result_matrix(&censoring0)?,
         propensity,
     })
+}
+
+/// A matrix of fitted hazards as a result, its entries finite.
+fn result_matrix(m: &Mat<f64>) -> Result<Matrix> {
+    epistat_linalg::convert::to_matrix(m.as_ref()).map_err(|e| Error::linalg(Model::Hazard, e))
 }

@@ -40,10 +40,13 @@
 //! multiplied by the square root of `rule::conversion`, the exact ratio of the
 //! two rules derived there.
 
+use epistat_causal::CaseWeights;
 use epistat_causal::Estimand;
+use epistat_causal::ProbabilityBounds;
 use epistat_causal::aipw::{AipwInput, GlmInput};
 use epistat_causal::tmle::{
-    OutcomeModel, OutcomeRange, PropensityBound, Targeting, Tmle, TmleOptions, tmle, tmle_glm,
+    OutcomeModel, OutcomeRange, PropensityBound, Targeting, Tmle, TmleGlmOptions, TmleOptions,
+    tmle, tmle_glm,
 };
 use epistat_glm::Family;
 use epistat_linalg::Mat;
@@ -129,7 +132,7 @@ fn options(s: &Scenario) -> TmleOptions {
         propensity_bound: match s.gbound {
             None => PropensityBound::Tmle,
             Some(0.0) => PropensityBound::None,
-            Some(b) => PropensityBound::At(b),
+            Some(b) => PropensityBound::At(ProbabilityBounds::new(b, 1.0 - b).unwrap()),
         },
         range: if s.range_kind == "known" {
             OutcomeRange::Known {
@@ -301,7 +304,11 @@ fn compare(s: &Scenario, got: &Tmle, t: usize, tol: &Tolerances<'_>, worst: &mut
         }
         (target, targeting) => panic!("{name}: {target:?} with {targeting:?}"),
     }
-    assert_eq!(got.propensity_bound.to_bits(), s.bound.to_bits(), "{name}");
+    assert_eq!(
+        got.propensity_bound.map_or(0.0, |b| b.lower()).to_bits(),
+        s.bound.to_bits(),
+        "{name}"
+    );
 }
 
 /// Compares with a `tmle` run: the estimates, the relative risk and the variances
@@ -409,7 +416,9 @@ fn glm_wrapper_matches_tmle_and_the_hand_written_estimator() {
             treatment: &d.treatment,
             outcome_design: d.x.as_ref(),
             propensity_design: d.x.as_ref(),
-            weight: s.weighted.then_some(s.weights.as_slice()),
+            weight: s
+                .weighted
+                .then(|| CaseWeights::new(&s.weights).expect("weights")),
             cluster: s.cluster.as_deref(),
         };
         let family = if s.outcome == "binary" {
@@ -432,10 +441,13 @@ fn glm_wrapper_matches_tmle_and_the_hand_written_estimator() {
             let got = tmle_glm(
                 &input,
                 family,
-                &TmleOptions {
-                    estimand: target,
+                &TmleGlmOptions {
+                    tmle: TmleOptions {
+                        estimand: target,
+
+                        ..options(s)
+                    },
                     outcome_model: model,
-                    ..options(s)
                 },
             )
             .unwrap();
@@ -462,7 +474,9 @@ fn core_matches_tmle_given_the_predictions() {
             mu1: &s.mu1,
             mu0: &s.mu0,
             propensity: &s.propensity,
-            weight: s.weighted.then_some(s.weights.as_slice()),
+            weight: s
+                .weighted
+                .then(|| CaseWeights::new(&s.weights).expect("weights")),
             cluster: s.cluster.as_deref(),
         };
         let tol = Tolerances {

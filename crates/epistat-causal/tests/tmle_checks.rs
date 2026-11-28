@@ -8,9 +8,11 @@
 )]
 
 use epistat_causal::Estimand;
+use epistat_causal::ProbabilityBounds;
 use epistat_causal::aipw::{AipwInput, AipwOptions, GlmInput, aipw, aipw_glm};
 use epistat_causal::tmle::{
-    OutcomeModel, OutcomeRange, PropensityBound, Targeting, TmleOptions, tmle, tmle_glm,
+    OutcomeModel, OutcomeRange, PropensityBound, Targeting, TmleGlmOptions, TmleOptions, tmle,
+    tmle_glm,
 };
 use epistat_glm::Family;
 use epistat_linalg::Mat;
@@ -77,17 +79,20 @@ fn fluctuation_solves_its_score_equations() {
     let r = tmle_glm(
         &d.input(),
         Family::Binomial,
-        &TmleOptions {
-            estimand: Estimand::Ate,
+        &TmleGlmOptions {
+            tmle: TmleOptions {
+                estimand: Estimand::Ate,
+
+                ..opts
+            },
             outcome_model: OutcomeModel::Pooled,
-            ..opts
         },
     )
     .unwrap();
     let Targeting::Fluctuation { epsilon, .. } = r.targeting else {
         panic!("targeting");
     };
-    let b = r.propensity_bound;
+    let b = r.propensity_bound.map_or(0.0, |b| b.lower());
     let g = propensity(&d);
     let (mut u, mut info, mut deviance) = ([0.0f64; 2], [0.0f64; 2], 0.0);
     for (i, &gi) in g.iter().enumerate() {
@@ -145,10 +150,13 @@ fn one_step_score_converges_with_the_step() {
                 tmle_glm(
                     &d.input(),
                     Family::Binomial,
-                    &TmleOptions {
-                        estimand: target,
+                    &TmleGlmOptions {
+                        tmle: TmleOptions {
+                            estimand: target,
+
+                            ..opts
+                        },
                         outcome_model: OutcomeModel::Pooled,
-                        ..opts
                     },
                 )
                 .unwrap()
@@ -237,10 +245,13 @@ fn targeted_estimate_approaches_the_augmented_one() {
         let t = tmle_glm(
             &d.input(),
             Family::Binomial,
-            &TmleOptions {
-                estimand: Estimand::Ate,
+            &TmleGlmOptions {
+                tmle: TmleOptions {
+                    estimand: Estimand::Ate,
+
+                    ..opts
+                },
                 outcome_model: OutcomeModel::ByArm,
-                ..opts
             },
         )
         .unwrap();
@@ -287,20 +298,26 @@ fn options_that_change_nothing_change_no_bits() {
         let r1 = tmle_glm(
             &d.input(),
             Family::Binomial,
-            &TmleOptions {
-                estimand: target,
+            &TmleGlmOptions {
+                tmle: TmleOptions {
+                    estimand: target,
+
+                    ..base
+                },
                 outcome_model: OutcomeModel::Pooled,
-                ..base
             },
         )
         .unwrap();
         let r2 = tmle_glm(
             &d.input(),
             Family::Binomial,
-            &TmleOptions {
-                estimand: target,
+            &TmleGlmOptions {
+                tmle: TmleOptions {
+                    estimand: target,
+
+                    ..known
+                },
                 outcome_model: OutcomeModel::Pooled,
-                ..known
             },
         )
         .unwrap();
@@ -317,10 +334,13 @@ fn options_that_change_nothing_change_no_bits() {
     let r = tmle_glm(
         &d.input(),
         Family::Binomial,
-        &TmleOptions {
-            estimand: Estimand::Att,
+        &TmleGlmOptions {
+            tmle: TmleOptions {
+                estimand: Estimand::Att,
+
+                ..open
+            },
             outcome_model: OutcomeModel::Pooled,
-            ..open
         },
     )
     .unwrap();
@@ -364,9 +384,9 @@ fn refusals() {
         tmle_glm(
             &d.input(),
             Family::Binomial,
-            &TmleOptions {
+            &TmleGlmOptions {
+                tmle: TmleOptions { ..opts },
                 outcome_model: OutcomeModel::Pooled,
-                ..opts
             },
         )
     };
@@ -387,7 +407,7 @@ fn refusals() {
             ..base
         },
         TmleOptions {
-            propensity_bound: PropensityBound::At(0.5),
+            propensity_bound: PropensityBound::At(ProbabilityBounds::new(0.5, 0.5).unwrap()),
             ..base
         },
         TmleOptions {
@@ -406,10 +426,13 @@ fn refusals() {
         tmle_glm(
             &d.input(),
             Family::Poisson,
-            &TmleOptions {
-                estimand: Estimand::Ate,
-                outcome_model: OutcomeModel::Pooled,
-                ..base
+            &TmleGlmOptions {
+                tmle: TmleOptions {
+                    estimand: Estimand::Ate,
+
+                    ..base
+                },
+                outcome_model: OutcomeModel::Pooled
             }
         )
         .is_err()
@@ -423,10 +446,13 @@ fn refusals() {
         tmle_glm(
             &flat,
             Family::Binomial,
-            &TmleOptions {
-                estimand: Estimand::Ate,
-                outcome_model: OutcomeModel::Pooled,
-                ..base
+            &TmleGlmOptions {
+                tmle: TmleOptions {
+                    estimand: Estimand::Ate,
+
+                    ..base
+                },
+                outcome_model: OutcomeModel::Pooled
             }
         )
         .is_err()

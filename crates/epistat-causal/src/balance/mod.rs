@@ -78,7 +78,9 @@
 pub mod cbps;
 pub mod entropy;
 
-use epistat_core::{Contrast, Covariance, Estimand, Level};
+use epistat_core::{
+    Coefficients, Contrast, Covariance, EffectScale, Estimand, Glance, Level, Tidy, VarianceKind,
+};
 use epistat_inference::Influence;
 use epistat_linalg::design::independent_columns;
 use epistat_linalg::{Attempt, Mat, MatRef, inverse, weighted_gram, weighted_xtz};
@@ -87,7 +89,9 @@ use epistat_core::check;
 
 use crate::error::{Error, Model, Result};
 pub(crate) use crate::shared::{case_weights as resolve_weights, check_len, compensated};
-use crate::shared::{check_finite, clusters, contrast, finite_design, row_keys, rule};
+use crate::shared::{
+    check_finite, clusters, contrast_and_covariance, finite_design, means_table, row_keys, rule,
+};
 
 pub use cbps::{Cbps, CbpsInput, CbpsOptions, Identification, cbps};
 pub use entropy::{EntropyInput, EntropyOptions, balance_columns, entropy_balance};
@@ -180,13 +184,52 @@ pub struct WeightedRegression {
 
 impl WeightedRegression {
     /// The standard error of coefficient `j`, `None` for a column that is not
-    /// in the design or an undefined variance.
+    /// in the design or a variance that is undefined or negative.
     #[must_use]
     pub fn se(&self, j: usize) -> Option<f64> {
         if j >= self.coefficients.len() {
             return None;
         }
-        self.covariance.get(j, j).map(|v| v.max(0.0).sqrt())
+        crate::shared::se(self.covariance.get(j, j))
+    }
+}
+
+/// The coefficient table of the regression on the outcome's scale, with the
+/// covariance of the stacked estimating equations, a sandwich
+/// ([`VarianceKind::Robust`]), the only one it has.
+impl Tidy for WeightedRegression {
+    type Error = Error;
+
+    fn coefficients(&self, level: Level, variance: VarianceKind) -> Result<Coefficients> {
+        if variance != VarianceKind::Robust {
+            return Err(Error::invalid(
+                "variance",
+                "the regression has the sandwich (robust) covariance only",
+            ));
+        }
+        let estimates: Vec<Option<f64>> = self.coefficients.iter().copied().map(Some).collect();
+        epistat_stats::coefficients(
+            Coefficients::positional_names(estimates.len()),
+            &estimates,
+            self.covariance.clone(),
+            level,
+            VarianceKind::Robust,
+            EffectScale::Identity,
+            None,
+        )
+        .map_err(|e| match e {
+            epistat_stats::Error::Input(e) => Error::Input(e),
+            _ => Error::invalid("coefficients", "the table could not be formed"),
+        })
+    }
+
+    fn default_variance(&self) -> VarianceKind {
+        VarianceKind::Robust
+    }
+
+    fn glance(&self) -> Glance {
+        let n = self.influence.n_units();
+        Glance::new(n, n, true)
     }
 }
 
@@ -207,6 +250,28 @@ pub struct MeanDifference {
     pub influence: Influence,
     /// Which variance it is.
     pub variance: WeightVariance,
+    covariance: Covariance,
+}
+
+/// The table of the two means `mean1` and `mean0` on the outcome's scale,
+/// with the influence-function covariance of [`MeanDifference::influence`],
+/// the only one it has ([`VarianceKind::Robust`]).
+impl Tidy for MeanDifference {
+    type Error = Error;
+
+    fn coefficients(&self, level: Level, variance: VarianceKind) -> Result<Coefficients> {
+        let theta = [self.contrast.mean1.estimate, self.contrast.mean0.estimate];
+        means_table(theta, &self.covariance, level, variance)
+    }
+
+    fn default_variance(&self) -> VarianceKind {
+        VarianceKind::Robust
+    }
+
+    fn glance(&self) -> Glance {
+        let n = self.influence.n_units();
+        Glance::new(n, n, true)
+    }
 }
 
 pub(crate) fn summarise(
@@ -444,7 +509,7 @@ impl BalanceWeights {
         });
         let st = self.stage(outcome, z.as_ref(), options.variance)?;
         let influence = self.influence(&[&st.influence[1], &st.influence[0]], cluster.is_some())?;
-        let contrast = contrast(
+        let (contrast, covariance) = contrast_and_covariance(
             [st.theta[1], st.theta[0]],
             &influence,
             clusters.as_ref(),
@@ -454,6 +519,7 @@ impl BalanceWeights {
             contrast,
             influence,
             variance: options.variance,
+            covariance,
         })
     }
 }

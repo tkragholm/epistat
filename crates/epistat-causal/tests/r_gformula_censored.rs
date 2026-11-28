@@ -14,6 +14,7 @@
 //! and the observed risk, built from ratios of weighted sums and products of
 //! five of them, by `20` times that, `2e-9`; it is checked to `1e-8`.
 
+use epistat_causal::Seed;
 use epistat_causal::gformula::{
     Censoring, Competing, Covariate, CovariateKind, GFormulaOptions, Outcome, PersonPeriods, Term,
     WeightCutoff, gformula,
@@ -118,7 +119,7 @@ fn the_models_and_the_weighted_observed_risk_agree_with_gformula() {
             &[],
             &GFormulaOptions {
                 simulated: Some(200),
-                ..GFormulaOptions::new(SEED)
+                ..GFormulaOptions::new(Seed(SEED))
             },
         )
         .expect("g-formula")
@@ -192,7 +193,13 @@ fn the_models_and_the_weighted_observed_risk_agree_with_gformula() {
             competing: competing.clone(),
             censoring: censoring.clone().map(|c| Censoring { cutoff, ..c }),
         };
-        let result = gformula(&data, &covariates, &cut, &[], &GFormulaOptions::new(SEED));
+        let result = gformula(
+            &data,
+            &covariates,
+            &cut,
+            &[],
+            &GFormulaOptions::new(Seed(SEED)),
+        );
         assert!(
             matches!(result, Err(Error::Input(ref e)) if e.to_string().contains("weight cutoff")),
             "{cutoff:?}"
@@ -234,7 +241,7 @@ fn a_row_after_censoring_is_an_error() {
             &covariates,
             &outcome,
             &[],
-            &GFormulaOptions::new(SEED),
+            &GFormulaOptions::new(Seed(SEED)),
         )
         .is_err()
     );

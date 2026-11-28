@@ -25,7 +25,7 @@ use common::{Lines, Rng, Table, Writer};
 use epistat_causal::Estimand;
 use epistat_causal::aipw::GlmInput;
 use epistat_causal::tmle::survival::{SurvivalInput, SurvivalOptions, tmle_survival};
-use epistat_causal::tmle::{OutcomeModel, PropensityBound, TmleOptions, tmle_glm};
+use epistat_causal::tmle::{OutcomeModel, PropensityBound, TmleGlmOptions, TmleOptions, tmle_glm};
 use epistat_glm::Family;
 use epistat_linalg::Mat;
 
@@ -120,10 +120,13 @@ fn main() {
                 tmle_glm(
                     &input,
                     family,
-                    &TmleOptions {
-                        estimand: target,
+                    &TmleGlmOptions {
+                        tmle: TmleOptions {
+                            estimand: target,
+
+                            ..opts
+                        },
                         outcome_model: OutcomeModel::Pooled,
-                        ..opts
                     },
                 )
                 .expect("tmle")

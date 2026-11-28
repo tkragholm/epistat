@@ -107,10 +107,12 @@ pub(super) fn prepare<'a>(
     if options.simulated == Some(0) {
         return Err(domain("simulated", 0.0, "at least 1"));
     }
-    if options.reference > interventions.len() {
+    if let super::Reference::Intervention(i) = options.reference
+        && i >= interventions.len()
+    {
         return Err(Error::invalid(
             "reference",
-            "names no strategy: it is 0 or the number of an intervention",
+            "names no intervention: its position is beyond the interventions given",
         ));
     }
 
@@ -425,7 +427,7 @@ pub(super) fn prepare<'a>(
         rules,
         ranges,
         observed,
-        reference: options.reference,
+        reference: options.reference.strategy(),
         baseline_lags: options.baseline_lags,
         truncate: options.truncate,
         end_of_follow_up,

@@ -42,6 +42,29 @@
 //! [`tmle`] has `tmle`'s `n - 1` divisor, `SmallSample`, with and without
 //! clusters.
 //!
+//! [`aipw::Aipw`], [`tmle::Tmle`], [`balance::MeanDifference`] and
+//! [`balance::WeightedRegression`] implement [`Tidy`](epistat_core::Tidy): a
+//! table of the two means (`mean1`, `mean0`) or of the regression's
+//! coefficients with the influence-function covariance, which is a sandwich
+//! and is reported as [`VarianceKind::Robust`](epistat_core::VarianceKind).
+//!
+//! # Inputs
+//!
+//! Case weights are [`CaseWeights`]; a person of weight 0 leaves the
+//! estimate. Predictions given for a binary outcome, every outcome 0 or 1,
+//! are probabilities, and [`aipw::aipw`] and [`tmle::tmle`] refuse one
+//! outside `[0, 1]`. The designs of the fitted nuisance models need a
+//! constant column, the intercept.
+//!
+//! | field | meaning |
+//! |---|---|
+//! | `contrast` | `mean1`, `mean0`, their difference and ratio, as [`Estimate`]s |
+//! | `influence` | the influence functions of the two means, per unit |
+//! | `coefficients`, `covariance` | a fitted model's estimates and their covariance |
+//! | `se`, `interval` | a standard error and an interval, `None` where undefined |
+//! | `n_used`, `n_trimmed` | the persons used, and those whose propensity was bounded |
+//! | `weight`, `cluster` | the case weights and the cluster codes of the input |
+//!
 //! Results do not depend on the number of threads.
 #![warn(missing_docs)]
 
@@ -52,7 +75,7 @@ pub mod gformula;
 mod shared;
 pub mod tmle;
 
-pub use epistat_core::{Bootstrap, Contrast, Estimand, Estimate, Level, Panel, Seed};
+pub use epistat_core::{Bootstrap, CaseWeights, Contrast, Estimand, Estimate, Level, Panel, Seed};
 pub use epistat_inference::{ClusterRule, Clusters, Influence, KeyedBy};
 pub use epistat_stats::weighted::ProbabilityBounds;
 pub use error::{Error, Model, Result};

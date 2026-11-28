@@ -24,7 +24,7 @@ fn the_g_formula_is_the_same_on_every_pool() {
         let options = GFormulaOptions {
             simulated,
             bootstrap: Some(Bootstrap::new(6, Seed(SEED))),
-            ..GFormulaOptions::new(SEED)
+            ..GFormulaOptions::new(Seed(SEED))
         };
         assert_same_on_pools(&POOLS, || {
             let g = gformula(&data, &covariates(), &outcome, &interventions(), &options).unwrap();
@@ -38,7 +38,7 @@ fn the_g_formula_is_the_same_on_every_pool() {
     let outcome = end.binary_end();
     let options = GFormulaOptions {
         bootstrap: Some(Bootstrap::new(4, Seed(SEED))),
-        ..GFormulaOptions::new(SEED)
+        ..GFormulaOptions::new(Seed(SEED))
     };
     assert_same_on_pools(&POOLS, || {
         let g = gformula(&data, &covariates(), &outcome, &interventions(), &options).unwrap();

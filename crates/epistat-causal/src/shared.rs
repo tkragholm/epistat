@@ -20,7 +20,10 @@
 //! `WeightIt`'s M-estimation variance, `survtmle`). Fewer than two clusters
 //! leave the standard errors `None`.
 
-use epistat_core::{Contrast, Estimand, Estimate, Interval, Level, Scale};
+use epistat_core::{
+    CaseWeights, Coefficients, Contrast, Covariance, EffectScale, Estimand, Estimate, Interval,
+    Level, Scale, VarianceKind,
+};
 use epistat_glm::{Fit, Glm, GlmData};
 use epistat_inference::{ClusterRule, Clusters, Influence};
 
@@ -42,9 +45,25 @@ pub(crate) fn check_finite(name: &'static str, values: &[f64]) -> Result<()> {
     Ok(check::finite(name, values)?)
 }
 
-/// The case weights, or 1 for each of `n` persons, checked to be finite and
-/// non-negative.
+/// The case weights, or 1 for each of `n` persons, checked to have one per
+/// person; [`CaseWeights`] checked them to be finite and non-negative.
 pub(crate) fn case_weights(
+    name: &'static str,
+    given: Option<CaseWeights<'_>>,
+    n: usize,
+) -> Result<Vec<f64>> {
+    match given {
+        None => Ok(vec![1.0; n]),
+        Some(w) => {
+            check_len(name, w.len(), n)?;
+            Ok(w.as_slice().to_vec())
+        }
+    }
+}
+
+/// The non-negative weights `given`, or 1 for each of `n` persons, checked
+/// to have one per person and be finite and non-negative.
+pub(crate) fn weight_column(
     name: &'static str,
     given: Option<&[f64]>,
     n: usize,
@@ -56,6 +75,47 @@ pub(crate) fn case_weights(
             check::weights(name, w)?;
             Ok(w.to_vec())
         }
+    }
+}
+
+/// Whether every outcome is 0 or 1, so that predictions of its mean are
+/// probabilities.
+pub(crate) fn is_binary(outcome: &[f64]) -> bool {
+    outcome.iter().all(|&y| y == 0.0 || y == 1.0)
+}
+
+/// Every prediction of a binary outcome's mean in `[0, 1]`, or
+/// [`epistat_core::InputError::Domain`] at the first that is not: a
+/// prediction outside is not a probability, such as a log odds or a percent,
+/// and is refused rather than moved into the range.
+pub(crate) fn check_probabilities(name: &'static str, values: &[f64]) -> Result<()> {
+    match values.iter().position(|&p| !(0.0..=1.0).contains(&p)) {
+        Some(row) => Err(crate::error::domain_at(
+            name,
+            values[row],
+            "[0, 1], a probability, for a binary outcome",
+            row,
+        )),
+        None => Ok(()),
+    }
+}
+
+/// The design has a constant column, the intercept a nuisance model needs.
+pub(crate) fn check_intercept(
+    name: &'static str,
+    m: epistat_linalg::MatRef<'_, f64>,
+) -> Result<()> {
+    let constant = (0..m.ncols()).any(|j| {
+        let first = m[(0, j)];
+        first != 0.0 && (1..m.nrows()).all(|i| m[(i, j)].to_bits() == first.to_bits())
+    });
+    if m.nrows() == 0 || constant {
+        Ok(())
+    } else {
+        Err(Error::invalid(
+            name,
+            "has no constant column; the model needs an intercept column in the design",
+        ))
     }
 }
 
@@ -222,9 +282,10 @@ pub(crate) fn combined_variance(
     variance_of(&combined, clusters)
 }
 
-/// The standard error from a variance, `None` where the variance is.
-fn se(variance: Option<f64>) -> Option<f64> {
-    variance.map(|v| v.max(0.0).sqrt())
+/// The standard error from a variance, `None` where the variance is
+/// undefined or negative.
+pub(crate) fn se(variance: Option<f64>) -> Option<f64> {
+    variance.filter(|&v| v >= 0.0).map(f64::sqrt)
 }
 
 /// The Wald estimate of `value` against 0 at `level`.
@@ -256,6 +317,16 @@ pub(crate) fn contrast(
     clusters: Option<&Clusters>,
     level: Level,
 ) -> Result<Contrast> {
+    Ok(contrast_and_covariance(theta, influence, clusters, level)?.0)
+}
+
+/// [`contrast`] with the covariance of the two means it was formed from.
+pub(crate) fn contrast_and_covariance(
+    theta: [f64; 2],
+    influence: &Influence,
+    clusters: Option<&Clusters>,
+    level: Level,
+) -> Result<(Contrast, Covariance)> {
     let covariance = influence.variance(clusters).map_err(Error::from)?;
     let mean1 = wald(theta[0], covariance.get(0, 0), level);
     let mean0 = wald(theta[1], covariance.get(1, 1), level);
@@ -271,5 +342,35 @@ pub(crate) fn contrast(
         let variance = combined_variance(influence, &[1.0 / theta[1], -r / theta[1]], clusters)?;
         Some(ratio_estimate(r, variance, level))
     };
-    Ok(Contrast::new(mean1, mean0, difference, ratio))
+    Ok((Contrast::new(mean1, mean0, difference, ratio), covariance))
+}
+
+/// The coefficient table of the two means `mean1` and `mean0` with their
+/// covariance, the influence-function (sandwich) covariance the estimate
+/// reports; any other variance is refused.
+pub(crate) fn means_table(
+    theta: [f64; 2],
+    covariance: &Covariance,
+    level: Level,
+    variance: VarianceKind,
+) -> Result<Coefficients> {
+    if variance != VarianceKind::Robust {
+        return Err(Error::invalid(
+            "variance",
+            "the estimate has the influence-function (robust) covariance only",
+        ));
+    }
+    epistat_stats::coefficients(
+        vec!["mean1".into(), "mean0".into()],
+        &[Some(theta[0]), Some(theta[1])],
+        covariance.clone(),
+        level,
+        VarianceKind::Robust,
+        EffectScale::Identity,
+        None,
+    )
+    .map_err(|e| match e {
+        epistat_stats::Error::Input(e) => Error::Input(e),
+        _ => Error::invalid("coefficients", "the table could not be formed"),
+    })
 }

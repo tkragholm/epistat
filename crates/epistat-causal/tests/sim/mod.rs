@@ -1,5 +1,6 @@
 //! The simulated data of the thread and golden tests.
 
+use epistat_causal::CaseWeights;
 use epistat_causal::Estimate;
 use epistat_causal::aipw::{Aipw, GlmInput};
 use epistat_linalg::Mat;
@@ -47,7 +48,7 @@ impl Simulated {
             treatment: &self.a,
             outcome_design: self.x.as_ref(),
             propensity_design: self.x.as_ref(),
-            weight: Some(&self.weight),
+            weight: Some(CaseWeights::new(&self.weight).expect("weights")),
             cluster: Some(&self.cluster),
         }
     }

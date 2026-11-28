@@ -4,6 +4,7 @@
 mod gformula_sim;
 
 use epistat_causal::gformula::Competing;
+use epistat_causal::gformula::Reference;
 use epistat_causal::gformula::{
     Action, Covariate, CovariateKind, GFormula, GFormulaOptions, History, IntervalMethod,
     Intervention, Otherwise, Outcome, PersonPeriods, Restriction, Rule, Term, gformula,
@@ -63,7 +64,7 @@ fn a_rule_that_changes_nothing_is_the_natural_course() {
             }],
         },
     ];
-    let g = run(&sim, &unchanged, &GFormulaOptions::new(SEED));
+    let g = run(&sim, &unchanged, &GFormulaOptions::new(Seed(SEED)));
     for s in 1..=2 {
         assert_eq!(bits(&values(&g, s)), bits(&values(&g, 0)));
         assert_eq!(
@@ -91,7 +92,7 @@ fn a_constant_schedule_is_a_set_value() {
                 }],
             },
         ],
-        &GFormulaOptions::new(SEED),
+        &GFormulaOptions::new(Seed(SEED)),
     );
     assert_eq!(bits(&values(&g, 1)), bits(&values(&g, 2)));
     assert!(g.strategies[1].intervened_persons > 0.0);
@@ -108,7 +109,7 @@ fn fewer_periods_give_the_first_periods_of_the_longer_run() {
             &interventions(),
             &GFormulaOptions {
                 simulated,
-                ..GFormulaOptions::new(SEED)
+                ..GFormulaOptions::new(Seed(SEED))
             },
         );
         let short = run(
@@ -117,7 +118,7 @@ fn fewer_periods_give_the_first_periods_of_the_longer_run() {
             &GFormulaOptions {
                 simulated,
                 periods: Some(2),
-                ..GFormulaOptions::new(SEED)
+                ..GFormulaOptions::new(Seed(SEED))
             },
         );
         assert_eq!(short.periods, vec![0, 1]);
@@ -131,13 +132,13 @@ fn fewer_periods_give_the_first_periods_of_the_longer_run() {
 #[test]
 fn the_seed_moves_only_simulated_values() {
     let sim = simulate(400, 4, 4);
-    let a = run(&sim, &interventions(), &GFormulaOptions::new(SEED));
+    let a = run(&sim, &interventions(), &GFormulaOptions::new(Seed(SEED)));
     let b = run(
         &sim,
         &interventions(),
         &GFormulaOptions {
-            seed: 99,
-            ..GFormulaOptions::new(SEED)
+            seed: Seed(99),
+            ..GFormulaOptions::new(Seed(SEED))
         },
     );
     assert_eq!(
@@ -145,7 +146,7 @@ fn the_seed_moves_only_simulated_values() {
         bits(&flatten(&run(
             &sim,
             &interventions(),
-            &GFormulaOptions::new(SEED)
+            &GFormulaOptions::new(Seed(SEED))
         )))
     );
     assert_ne!(values(&a, 0), values(&b, 0));
@@ -162,15 +163,15 @@ fn bootstrap_limits_follow_the_method() {
     let options = GFormulaOptions {
         bootstrap: Some(Bootstrap::new(30, Seed(SEED))),
         interval: IntervalMethod::Normal,
-        ..GFormulaOptions::new(SEED)
+        ..GFormulaOptions::new(Seed(SEED))
     };
     let g = run(&sim, &interventions(), &options);
     let z = epistat_stats::dist::normal::quantile(0.975);
     for s in &g.strategies {
         for e in s.value.iter().chain(&s.difference).chain(&s.ratio) {
             let (x, se) = (e.estimate.unwrap(), e.se.unwrap());
-            assert!((e.lower.unwrap() - (x - z * se)).abs() <= 1e-15);
-            assert!((e.upper.unwrap() - (x + z * se)).abs() <= 1e-15);
+            assert!((e.interval.and_then(|i| i.lower).unwrap() - (x - z * se)).abs() <= 1e-15);
+            assert!((e.interval.and_then(|i| i.upper).unwrap() - (x + z * se)).abs() <= 1e-15);
         }
     }
     let p = run(
@@ -184,8 +185,8 @@ fn bootstrap_limits_follow_the_method() {
     // The same replicates: the standard errors agree, the limits do not.
     assert_eq!(g.strategies[1].value[2].se, p.strategies[1].value[2].se);
     assert_ne!(
-        g.strategies[1].value[2].lower,
-        p.strategies[1].value[2].lower
+        g.strategies[1].value[2].interval.and_then(|i| i.lower),
+        p.strategies[1].value[2].interval.and_then(|i| i.lower)
     );
     // The reference's own difference is 0 in every replicate.
     assert_eq!(g.strategies[0].difference[2].se, Some(0.0));
@@ -194,7 +195,7 @@ fn bootstrap_limits_follow_the_method() {
 #[test]
 fn restrictions_fit_only_where_they_apply() {
     let sim = simulate(500, 4, 7);
-    let g = run(&sim, &interventions(), &GFormulaOptions::new(SEED));
+    let g = run(&sim, &interventions(), &GFormulaOptions::new(Seed(SEED)));
     // L is absorbing: its model is fitted to the rows after period 0 whose
     // previous L is 0.
     let absorbing_rows = (1..sim.id.len())
@@ -217,7 +218,7 @@ fn restrictions_fit_only_where_they_apply() {
         &c,
         &sim.survival(),
         &interventions(),
-        &GFormulaOptions::new(SEED),
+        &GFormulaOptions::new(Seed(SEED)),
     )
     .unwrap();
     let rows = (0..sim.id.len())
@@ -236,7 +237,7 @@ fn an_outcome_at_the_end_reports_one_period() {
         &covariates(),
         &sim.binary_end(),
         &interventions(),
-        &GFormulaOptions::new(SEED),
+        &GFormulaOptions::new(Seed(SEED)),
     )
     .unwrap();
     assert_eq!(g.periods, vec![2]);
@@ -270,7 +271,7 @@ fn unusable_input_is_refused() {
     let ok = |c: &[Covariate], o: &Outcome<'_>, i: &[Intervention], opt: &GFormulaOptions| {
         gformula(&data, c, o, i, opt)
     };
-    let default = GFormulaOptions::new(SEED);
+    let default = GFormulaOptions::new(Seed(SEED));
 
     // A model reading a later variable of the same period.
     let mut c = covariates();
@@ -336,7 +337,7 @@ fn unusable_input_is_refused() {
             &outcome,
             &[],
             &GFormulaOptions {
-                reference: 1,
+                reference: Reference::Intervention(0),
                 ..default
             },
         ),
@@ -464,7 +465,7 @@ fn the_simulated_courses_give_the_estimates() {
         &GFormulaOptions {
             simulated: Some(900),
             keep_simulated: true,
-            ..GFormulaOptions::new(SEED)
+            ..GFormulaOptions::new(Seed(SEED))
         },
     );
     let plain = run(
@@ -472,7 +473,7 @@ fn the_simulated_courses_give_the_estimates() {
         &interventions(),
         &GFormulaOptions {
             simulated: Some(900),
-            ..GFormulaOptions::new(SEED)
+            ..GFormulaOptions::new(Seed(SEED))
         },
     );
     assert!(plain.courses.is_none());

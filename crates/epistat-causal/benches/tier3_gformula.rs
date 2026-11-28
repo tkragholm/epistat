@@ -180,7 +180,7 @@ fn main() {
     };
     let options = GFormulaOptions {
         bootstrap: (method == "gf_boot").then_some(Bootstrap::new(20, Seed(GFORMULA_SEED))),
-        ..GFormulaOptions::new(GFORMULA_SEED)
+        ..GFormulaOptions::new(Seed(GFORMULA_SEED))
     };
     let covariates = covariates();
     let interventions = interventions(&method);

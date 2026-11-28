@@ -182,7 +182,7 @@ use epistat_linalg::{
 use epistat_optim::bfgs::Bfgs;
 
 use super::{BalanceWeights, Nuisance, compensated, resolve_weights, summarise};
-use epistat_core::Estimand;
+use epistat_core::{CaseWeights, Estimand};
 use epistat_stats::logistic::expit;
 
 use epistat_core::check;
@@ -219,7 +219,7 @@ pub struct CbpsInput<'a> {
     /// The design of the propensity score model, with the intercept as a column.
     pub design: MatRef<'a, f64>,
     /// Sample weights, 1 for each person when `None`.
-    pub sample_weight: Option<&'a [f64]>,
+    pub sample_weight: Option<CaseWeights<'a>>,
 }
 
 /// What [`cbps`] does besides the data.

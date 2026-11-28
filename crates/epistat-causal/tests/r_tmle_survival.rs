@@ -27,6 +27,7 @@
 
 use epistat_causal::tmle::PropensityBound;
 use epistat_causal::tmle::survival::{SurvivalInput, SurvivalOptions, tmle_survival};
+use epistat_causal::{CaseWeights, ProbabilityBounds};
 use epistat_linalg::Mat;
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -96,12 +97,14 @@ fn matches_the_hand_written_estimator() {
             censoring1: c1.as_ref(),
             censoring0: c0.as_ref(),
             propensity: &s.propensity,
-            weight: s.weighted.then_some(s.weights.as_slice()),
+            weight: s
+                .weighted
+                .then(|| CaseWeights::new(&s.weights).expect("weights")),
             cluster: s.cluster.as_deref(),
         };
         let opts = SurvivalOptions {
             propensity_bound: if s.bound > 0.0 {
-                PropensityBound::At(s.bound)
+                PropensityBound::At(ProbabilityBounds::new(s.bound, 1.0 - s.bound).unwrap())
             } else {
                 PropensityBound::None
             },

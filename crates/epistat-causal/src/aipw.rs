@@ -86,7 +86,9 @@
 //!    treatment effects with right-censored time to event outcome and competing
 //!    risks. Biom J. 2020;62(3):751-63.
 
-use epistat_core::{Contrast, Estimand, Level};
+use epistat_core::{
+    CaseWeights, Coefficients, Contrast, Covariance, Estimand, Glance, Level, Tidy, VarianceKind,
+};
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::Influence;
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, weighted_gram};
@@ -94,9 +96,9 @@ use epistat_stats::weighted::ProbabilityBounds;
 
 use crate::error::{Error, Model, Result, domain_at, empty};
 use crate::shared::{
-    case_weights, check_arms, check_design, check_estimand, check_finite, check_len,
-    check_separation, clusters, compensated, contrast, fit_glm, glm_data, influence, row_keys,
-    rule,
+    case_weights, check_arms, check_design, check_estimand, check_finite, check_intercept,
+    check_len, check_probabilities, check_separation, clusters, compensated,
+    contrast_and_covariance, fit_glm, glm_data, influence, is_binary, means_table, row_keys, rule,
 };
 
 /// Which variance an estimate carries.
@@ -146,8 +148,9 @@ pub struct AipwInput<'a> {
     pub mu0: &'a [f64],
     /// `P(A = 1 | X)` of each person.
     pub propensity: &'a [f64],
-    /// Case weights, 1 for each person when `None`.
-    pub weight: Option<&'a [f64]>,
+    /// Case weights, 1 for each person when `None`; a person of weight 0
+    /// leaves the estimate.
+    pub weight: Option<CaseWeights<'a>>,
     /// The cluster of each person, each person a cluster when `None`.
     pub cluster: Option<&'a [u32]>,
 }
@@ -177,6 +180,29 @@ pub struct Aipw {
     pub min_propensity: f64,
     /// The largest propensity used, after truncation.
     pub max_propensity: f64,
+    /// The persons, and those of them with a positive weight.
+    n: (usize, usize),
+    covariance: Covariance,
+}
+
+/// The table of the two means `mean1` and `mean0` on the outcome's scale,
+/// with the influence-function covariance of [`Aipw::influence`], the only
+/// one the estimator has ([`VarianceKind::Robust`]).
+impl Tidy for Aipw {
+    type Error = Error;
+
+    fn coefficients(&self, level: Level, variance: VarianceKind) -> Result<Coefficients> {
+        let theta = [self.contrast.mean1.estimate, self.contrast.mean0.estimate];
+        means_table(theta, &self.covariance, level, variance)
+    }
+
+    fn default_variance(&self) -> VarianceKind {
+        VarianceKind::Robust
+    }
+
+    fn glance(&self) -> Glance {
+        Glance::new(self.n.0, self.n.1, true)
+    }
 }
 
 /// What the estimators share: the terms of the ratios, and the influences of the
@@ -297,7 +323,8 @@ fn finish(
         rule(cluster.is_some()),
     )?;
     let clusters = clusters(cluster, n)?;
-    let contrast = contrast(c.theta, &influence, clusters.as_ref(), opts.level)?;
+    let (contrast, covariance) =
+        contrast_and_covariance(c.theta, &influence, clusters.as_ref(), opts.level)?;
     Ok(Aipw {
         estimand: opts.estimand,
         contrast,
@@ -306,21 +333,32 @@ fn finish(
         n_trimmed: c.clipped.iter().filter(|&&x| x).count(),
         min_propensity: c.e.iter().copied().fold(f64::INFINITY, f64::min),
         max_propensity: c.e.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        n: (n, c.omega.iter().filter(|&&w| w > 0.0).count()),
+        covariance,
     })
 }
 
 /// The augmented estimator on given predictions of the outcome and propensity
 /// models, with the variance of the efficient influence function.
 ///
+/// For a binary outcome, every outcome 0 or 1, the predictions `mu1` and
+/// `mu0` are probabilities and one outside `[0, 1]`, such as a log odds or a
+/// percent, is refused.
+///
 /// # Errors
 ///
 /// [`Error::Input`] for inputs of different lengths, no persons, a value that is
-/// not finite, a negative weight and a propensity outside `(0, 1)`;
+/// not finite, a propensity outside `(0, 1)` and, for a binary outcome, a
+/// prediction outside `[0, 1]`;
 /// [`Error::Invalid`] for truncation limits that are not `0 < lower < upper <
 /// 1`, an estimand other than the ATE, ATT and ATC, a group without persons
 /// of positive weight and a target population of weight 0.
 pub fn aipw(input: &AipwInput<'_>, opts: &AipwOptions) -> Result<Aipw> {
     let c = core(input, opts)?;
+    if is_binary(input.outcome) {
+        check_probabilities("mu1", input.mu1)?;
+        check_probabilities("mu0", input.mu0)?;
+    }
     finish(&c, &c.influence, input.cluster, Variance::Efficient, opts)
 }
 
@@ -336,8 +374,9 @@ pub struct GlmInput<'a> {
     pub outcome_design: MatRef<'a, f64>,
     /// The design of the propensity model, with the intercept as a column.
     pub propensity_design: MatRef<'a, f64>,
-    /// Case weights, 1 for each person when `None`.
-    pub weight: Option<&'a [f64]>,
+    /// Case weights, 1 for each person when `None`; a person of weight 0
+    /// leaves the estimate.
+    pub weight: Option<CaseWeights<'a>>,
     /// The cluster of each person.
     pub cluster: Option<&'a [u32]>,
 }
@@ -419,7 +458,8 @@ fn block(
 ///
 /// The errors of [`aipw`]; [`Error::Input`] for a design with another number
 /// of rows than the data, without columns or with a value that is not finite;
-/// [`Error::Invalid`] for an outcome family other than the three above;
+/// [`Error::Invalid`] for an outcome family other than the three above and a
+/// design without a constant (intercept) column;
 /// [`Error::Aliased`] for a model that has an aliased column, [`Error::Fit`]
 /// for a response outside the support of the family, [`Error::Separation`]
 /// for a propensity model whose fitted probabilities are numerically 0 or 1
@@ -430,6 +470,8 @@ pub fn aipw_glm(input: &GlmInput<'_>, family: Family, opts: &AipwOptions) -> Res
     check_len("outcome", input.outcome.len(), n)?;
     check_design("outcome_design", input.outcome_design, n)?;
     check_design("propensity_design", input.propensity_design, n)?;
+    check_intercept("outcome_design", input.outcome_design)?;
+    check_intercept("propensity_design", input.propensity_design)?;
     let (link, variance_function) = canonical(family)?;
     let omega = case_weights("weight", input.weight, n)?;
     let a: Vec<f64> = input

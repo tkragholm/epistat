@@ -5,8 +5,9 @@ use epistat_causal::Estimand;
 use epistat_causal::Influence;
 use epistat_causal::aipw::AipwInput;
 use epistat_causal::tmle::{
-    OutcomeModel, PropensityBound, Targeting, Tmle, TmleOptions, tmle, tmle_glm,
+    OutcomeModel, PropensityBound, Targeting, Tmle, TmleGlmOptions, TmleOptions, tmle, tmle_glm,
 };
+use epistat_causal::{CaseWeights, ProbabilityBounds};
 use epistat_glm::Family;
 
 use crate::sim::{Simulated, push_estimate};
@@ -32,10 +33,13 @@ pub fn run(s: &Simulated, case: Case) -> Vec<f64> {
         tmle_glm(
             &s.input(),
             Family::Binomial,
-            &TmleOptions {
-                estimand: target,
+            &TmleGlmOptions {
+                tmle: TmleOptions {
+                    estimand: target,
+
+                    ..opts
+                },
                 outcome_model: model,
-                ..opts
             },
         )
         .unwrap()
@@ -48,7 +52,7 @@ pub fn run(s: &Simulated, case: Case) -> Vec<f64> {
                 mu1: &m.0,
                 mu0: &m.1,
                 propensity: &m.2,
-                weight: Some(&s.weight),
+                weight: Some(CaseWeights::new(&s.weight).expect("weights")),
                 cluster: Some(&s.cluster),
             },
             &TmleOptions {
@@ -65,7 +69,7 @@ pub fn flatten(r: &Tmle) -> Vec<f64> {
     let mut out = vec![
         r.n_trimmed as f64,
         r.n_used as f64,
-        r.propensity_bound,
+        r.propensity_bound.map_or(0.0, |b| b.lower()),
         r.range.0,
         r.range.1,
         r.score,
@@ -151,11 +155,13 @@ pub fn run_survival(s: &Simulated, horizon: usize) -> Vec<f64> {
             censoring1: c1.as_ref(),
             censoring0: c0.as_ref(),
             propensity: &g,
-            weight: Some(&s.weight),
+            weight: Some(CaseWeights::new(&s.weight).expect("weights")),
             cluster: Some(&s.cluster),
         },
         &SurvivalOptions {
-            propensity_bound: PropensityBound::At(0.05),
+            propensity_bound: PropensityBound::At(
+                ProbabilityBounds::new(0.05, 1.0 - 0.05).unwrap(),
+            ),
             ..SurvivalOptions::new(horizon)
         },
     )
@@ -165,7 +171,7 @@ pub fn run_survival(s: &Simulated, horizon: usize) -> Vec<f64> {
         r.iterations[1] as f64,
         r.score[0],
         r.score[1],
-        r.propensity_bound,
+        r.propensity_bound.unwrap_or(0.0),
         r.n_trimmed as f64,
     ];
     out.extend(r.epsilon.iter().flatten());

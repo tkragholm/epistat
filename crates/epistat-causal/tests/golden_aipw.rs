@@ -11,6 +11,7 @@
 
 mod sim;
 
+use epistat_causal::CaseWeights;
 use epistat_causal::aipw::{AipwInput, AipwOptions, aipw, aipw_glm};
 use epistat_causal::{Estimand, ProbabilityBounds};
 use epistat_glm::Family;
@@ -51,7 +52,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
             mu1: &m.0,
             mu0: &m.1,
             propensity: &m.2,
-            weight: Some(&s.weight),
+            weight: Some(CaseWeights::new(&s.weight).expect("weights")),
             cluster: Some(&s.cluster),
         },
         &AipwOptions {

@@ -337,7 +337,7 @@ fn main_models_and_observed_risk_match_gformula() {
         main_outcome_terms(),
         main_competing_terms(),
         &main_interventions(),
-        &GFormulaOptions::new(SEED),
+        &GFormulaOptions::new(Seed(SEED)),
         |g| {
             for (name, j) in [("L1", 0), ("L2", 1), ("A", 2)] {
                 let fit = g.models.covariates[j].as_ref().expect("fitted");
@@ -364,7 +364,7 @@ fn main_risks_agree_within_monte_carlo_error() {
     let m = &r.main;
     let options = GFormulaOptions {
         simulated: Some(4 * m.simulated),
-        ..GFormulaOptions::new(SEED)
+        ..GFormulaOptions::new(Seed(SEED))
     };
     with_main(
         m,
@@ -451,7 +451,7 @@ fn deterministic_risks_match_gformula() {
         ],
         vec![Intercept, Lag(0, 1), Baseline(W), Period],
         &static_strategies(m.periods),
-        &GFormulaOptions::new(SEED),
+        &GFormulaOptions::new(Seed(SEED)),
         |g| check_exact(&g, &m.exact1, 6),
     );
     // With baseline lags and four periods: Y ~ A + lag1_A + lag2_A +
@@ -473,7 +473,7 @@ fn deterministic_risks_match_gformula() {
         &GFormulaOptions {
             baseline_lags: true,
             periods: Some(4),
-            ..GFormulaOptions::new(SEED)
+            ..GFormulaOptions::new(Seed(SEED))
         },
         |g| check_exact(&g, &m.exact2, 4),
     );
@@ -505,7 +505,7 @@ fn bootstrap_matches_gformula_and_covers_the_truth() {
     let b = m.bootstrap.replicates;
     let options = GFormulaOptions {
         bootstrap: Some(Replicates::new(b, Seed(SEED))),
-        ..GFormulaOptions::new(SEED)
+        ..GFormulaOptions::new(Seed(SEED))
     };
     with_main(
         m,
@@ -522,8 +522,8 @@ fn bootstrap_matches_gformula_and_covers_the_truth() {
                     let v = &g.strategies[s].value[t];
                     let (se, se_r) = (v.se.unwrap(), m.bootstrap.risk_se[s][t]);
                     assert_within_standard_errors(se, se * relative, se_r, se_r * relative, 5.0);
-                    assert!(v.lower.unwrap() <= v.estimate.unwrap());
-                    assert!(v.estimate.unwrap() <= v.upper.unwrap());
+                    assert!(v.interval.and_then(|i| i.lower).unwrap() <= v.estimate.unwrap());
+                    assert!(v.estimate.unwrap() <= v.interval.and_then(|i| i.upper).unwrap());
                     if s > 0 {
                         let d = &g.strategies[s].difference[t];
                         let (se, se_r) = (d.se.unwrap(), m.bootstrap.difference_se[s][t]);
@@ -620,7 +620,7 @@ fn eof_run(e: &Eof, binary: bool, simulated: Option<usize>) -> GFormula {
     };
     let options = GFormulaOptions {
         simulated,
-        ..GFormulaOptions::new(SEED)
+        ..GFormulaOptions::new(Seed(SEED))
     };
     gformula(&data, &covariates, &outcome, &interventions, &options).expect("g-formula")
 }
@@ -713,7 +713,7 @@ fn deterministic_end_of_follow_up_matches_gformula() {
             &covariates,
             &outcome,
             &interventions,
-            &GFormulaOptions::new(SEED),
+            &GFormulaOptions::new(Seed(SEED)),
         )
         .unwrap();
         let z = g.models.covariates[0].as_ref().unwrap();
@@ -782,7 +782,7 @@ fn two_periods_match_the_exact_g_formula() {
         &interventions,
         &GFormulaOptions {
             simulated: Some(400_000),
-            ..GFormulaOptions::new(SEED)
+            ..GFormulaOptions::new(Seed(SEED))
         },
     )
     .unwrap();

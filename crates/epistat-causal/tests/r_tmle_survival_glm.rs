@@ -17,6 +17,8 @@
 //! the estimator itself (`r_tmle_survival.rs`, below `1e-12` here); they are
 //! checked to `1e-8`.
 
+use epistat_causal::CaseWeights;
+use epistat_causal::ProbabilityBounds;
 use epistat_causal::tmle::PropensityBound;
 use epistat_causal::tmle::survival::{
     IntervalDesign, SurvivalGlmInput, SurvivalInput, SurvivalOptions, tmle_survival,
@@ -85,7 +87,7 @@ fn the_fitted_models_and_the_estimator_agree_with_r() {
     for s in &r.scenarios {
         let opts = SurvivalOptions {
             propensity_bound: if s.bound > 0.0 {
-                PropensityBound::At(s.bound)
+                PropensityBound::At(ProbabilityBounds::new(s.bound, 1.0 - s.bound).unwrap())
             } else {
                 PropensityBound::None
             },
@@ -104,7 +106,9 @@ fn the_fitted_models_and_the_estimator_agree_with_r() {
                 fill: &censoring_fill,
             }),
             propensity: z.as_ref(),
-            weight: s.weighted.then_some(s.weights.as_slice()),
+            weight: s
+                .weighted
+                .then(|| CaseWeights::new(&s.weights).expect("weights")),
             cluster: s.cluster.as_deref(),
         };
         let got = tmle_survival_glm(&input, &opts).expect("fits");
@@ -112,7 +116,11 @@ fn the_fitted_models_and_the_estimator_agree_with_r() {
         for i in 0..n {
             for k in 0..t {
                 for (m, want) in [(&got.hazard1, &s.hazard1), (&got.hazard0, &s.hazard0)] {
-                    assert!((m[(i, k)] - want[i][k]).abs() < 1e-10, "{} hazard", s.name);
+                    assert!(
+                        (m.get(i, k).expect("hazard") - want[i][k]).abs() < 1e-10,
+                        "{} hazard",
+                        s.name
+                    );
                 }
             }
             for k in 0..t - 1 {
@@ -121,7 +129,7 @@ fn the_fitted_models_and_the_estimator_agree_with_r() {
                     (&got.censoring0, &s.censoring0),
                 ] {
                     assert!(
-                        (m[(i, k)] - want[i][k]).abs() < 1e-10,
+                        (m.get(i, k).expect("hazard") - want[i][k]).abs() < 1e-10,
                         "{} censoring",
                         s.name
                     );
@@ -135,10 +143,10 @@ fn the_fitted_models_and_the_estimator_agree_with_r() {
                 time: &r.time,
                 event: &r.event,
                 treatment: &treatment,
-                hazard1: got.hazard1.as_ref(),
-                hazard0: got.hazard0.as_ref(),
-                censoring1: got.censoring1.as_ref(),
-                censoring0: got.censoring0.as_ref(),
+                hazard1: view(&got.hazard1),
+                hazard0: view(&got.hazard0),
+                censoring1: view(&got.censoring1),
+                censoring0: view(&got.censoring0),
                 propensity: &got.propensity,
                 weight: input.weight,
                 cluster: input.cluster,
@@ -195,4 +203,9 @@ fn censoring_without_a_model_is_an_error() {
         cluster: None,
     };
     assert!(tmle_survival_glm(&input, &SurvivalOptions::new(2)).is_err());
+}
+
+/// A row-major result matrix as a view.
+fn view(m: &epistat_core::Matrix) -> epistat_linalg::MatRef<'_, f64> {
+    epistat_linalg::MatRef::from_row_major_slice(m.as_slice(), m.n_rows(), m.n_columns())
 }

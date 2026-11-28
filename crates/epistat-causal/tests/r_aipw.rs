@@ -38,6 +38,7 @@
 //! rounding, far below the tolerances, and the standard errors are compared
 //! as they are.
 
+use epistat_causal::CaseWeights;
 use epistat_causal::aipw::{Aipw, AipwInput, AipwOptions, GlmInput, Variance, aipw, aipw_glm};
 use epistat_causal::{Estimand, ProbabilityBounds};
 use epistat_glm::Family;
@@ -225,7 +226,9 @@ fn core_matches_the_hand_written_estimator() {
             mu1: &s.mu1,
             mu0: &s.mu0,
             propensity: &s.propensity,
-            weight: s.weighted.then_some(s.weights.as_slice()),
+            weight: s
+                .weighted
+                .then(|| CaseWeights::new(&s.weights).expect("weights")),
             cluster: s.cluster.as_deref(),
         };
         let got = aipw(
@@ -263,7 +266,9 @@ fn glm_wrapper_matches_the_jackknife_of_refits() {
             treatment: &treatment,
             outcome_design: x.as_ref(),
             propensity_design: x.as_ref(),
-            weight: s.weighted.then_some(s.weights.as_slice()),
+            weight: s
+                .weighted
+                .then(|| CaseWeights::new(&s.weights).expect("weights")),
             cluster: s.cluster.as_deref(),
         };
         let got = aipw_glm(

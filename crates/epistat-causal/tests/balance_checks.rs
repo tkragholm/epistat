@@ -4,6 +4,7 @@
 
 mod balance_sim;
 
+use epistat_causal::CaseWeights;
 use epistat_causal::Error;
 use epistat_causal::Estimand;
 use epistat_causal::balance::OutcomeOptions;
@@ -29,7 +30,7 @@ fn entropy_balancing_matches_the_target_moments_exactly() {
             &EntropyInput {
                 treatment: &sim.a,
                 covariates: cols.as_ref(),
-                sample_weight: Some(&sim.s),
+                sample_weight: Some(CaseWeights::new(&sim.s).expect("weights")),
                 base_weight: Some(&sim.q),
             },
             &EntropyOptions {
@@ -183,9 +184,11 @@ fn entropy_balancing_refuses_constant_and_collinear_columns() {
 fn entropy_balancing_refuses_bad_inputs() {
     let sim = balance_sim::simulate(100);
     let short = vec![1.0; 99];
+    // A column of the wrong length is refused by the estimator; the values
+    // themselves are checked when the weights are built.
     let r = entropy_balance(
         &EntropyInput {
-            sample_weight: Some(&short),
+            sample_weight: Some(CaseWeights::new(&short).expect("weights")),
             ..base(&sim)
         },
         &EntropyOptions::default(),
@@ -236,7 +239,7 @@ fn a_case_weight_of_two_is_a_repeated_row() {
         };
         let one = entropy_balance(
             &EntropyInput {
-                sample_weight: Some(&s),
+                sample_weight: Some(CaseWeights::new(&s).expect("weights")),
                 ..base(&sim)
             },
             &opts,
@@ -293,7 +296,7 @@ fn a_case_weight_of_two_is_a_repeated_row() {
         &CbpsInput {
             treatment: &sim.a,
             design: sim.x.as_ref(),
-            sample_weight: Some(&s),
+            sample_weight: Some(CaseWeights::new(&s).expect("weights")),
         },
         &opts,
     )
@@ -323,7 +326,7 @@ fn cbps_balances_the_weighted_groups_and_flips_for_the_controls() {
             &CbpsInput {
                 treatment: &sim.a,
                 design: sim.x.as_ref(),
-                sample_weight: Some(&sim.s),
+                sample_weight: Some(CaseWeights::new(&sim.s).expect("weights")),
             },
             &CbpsOptions {
                 estimand: target,
@@ -509,7 +512,7 @@ fn a_repeated_call_gives_the_same_bits() {
             &EntropyInput {
                 treatment: &sim.a,
                 covariates: cols.as_ref(),
-                sample_weight: Some(&sim.s),
+                sample_weight: Some(CaseWeights::new(&sim.s).expect("weights")),
                 base_weight: None,
             },
             &EntropyOptions::default(),

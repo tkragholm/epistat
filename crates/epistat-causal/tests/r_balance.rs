@@ -46,6 +46,7 @@
     reason = "the cluster labels written by R are small whole numbers"
 )]
 
+use epistat_causal::CaseWeights;
 use epistat_causal::Estimand;
 use epistat_causal::balance::OutcomeOptions;
 use epistat_causal::balance::{
@@ -288,7 +289,7 @@ fn entropy_balancing_matches_weightit_and_the_own_solver() {
             &EntropyInput {
                 treatment: &t,
                 covariates: cols.as_ref(),
-                sample_weight: case.use_s.then_some(&d.s[..]),
+                sample_weight: case.use_s.then(|| CaseWeights::new(&d.s).expect("weights")),
                 base_weight: case.use_q.then_some(&d.q[..]),
             },
             &opts(&case.estimand),
@@ -489,7 +490,7 @@ fn the_stacked_variance_of_entropy_balancing_is_the_infinitesimal_jackknife() {
                 &EntropyInput {
                     treatment: &t,
                     covariates: d.raw().as_ref(),
-                    sample_weight: Some(&d.s),
+                    sample_weight: Some(CaseWeights::new(&d.s).expect("weights")),
                     base_weight: Some(&d.q),
                 },
                 &opts(&ij.estimand),
@@ -557,7 +558,7 @@ fn cbps_matches_the_package_and_the_own_solver() {
             &CbpsInput {
                 treatment: &t,
                 design: x.as_ref(),
-                sample_weight: case.use_s.then_some(&d.s[..]),
+                sample_weight: case.use_s.then(|| CaseWeights::new(&d.s).expect("weights")),
             },
             &cbps_opts(&case.att, &case.ident, case.twostep, case.std),
         )
@@ -661,7 +662,7 @@ fn the_stacked_variance_of_cbps_is_the_infinitesimal_jackknife() {
             &CbpsInput {
                 treatment: &t,
                 design: x.as_ref(),
-                sample_weight: Some(&d.s),
+                sample_weight: Some(CaseWeights::new(&d.s).expect("weights")),
             },
             &cbps_opts(
                 &ij.estimand,
@@ -730,7 +731,7 @@ fn the_stacked_variance_of_the_continuously_updated_cbps_is_the_infinitesimal_ja
             &CbpsInput {
                 treatment: &t,
                 design: x.as_ref(),
-                sample_weight: Some(&d.s),
+                sample_weight: Some(CaseWeights::new(&d.s).expect("weights")),
             },
             &cbps_opts(&ij.estimand, "over", false, ij.std.unwrap()),
         )
