@@ -46,7 +46,7 @@
 //!
 //! [`SimplexLeastSquares::solve`] repeats the step and records `f` after each
 //! one. It stops after step `t >= 2` when `f(t-1) - f(t) <= tolerance`, or
-//! after `max_iter` steps, which is the loop of `synthdid`'s `sc.weight.fw`:
+//! after `max_iterations` steps, which is the loop of `synthdid`'s `sc.weight.fw`:
 //! that package passes `tolerance = min.decrease^2`. A step that does not lower
 //! `f` (to rounding) therefore ends the search too.
 //!
@@ -78,6 +78,7 @@
 
 use epistat_core::check;
 
+use crate::Termination;
 use crate::error::{Error, domain};
 
 /// When [`SimplexLeastSquares::solve`] stops.
@@ -86,20 +87,55 @@ pub struct FrankWolfeOptions {
     /// Stop after step `t >= 2` when the objective fell by no more than this.
     pub tolerance: f64,
     /// The largest number of steps.
-    pub max_iter: usize,
+    pub max_iterations: usize,
+}
+
+impl Default for FrankWolfeOptions {
+    /// A tolerance of `1e-6` and 1000 steps, `sc.weight.fw`'s defaults in
+    /// `synthdid`: `max.iter = 1000` and `min.decrease = 1e-3`, whose square
+    /// is the tolerance. `synthdid_estimate` passes a `min.decrease` scaled
+    /// by the noise level of the outcome instead.
+    fn default() -> Self {
+        Self {
+            tolerance: 1e-6,
+            max_iterations: 1000,
+        }
+    }
 }
 
 /// The result of [`SimplexLeastSquares::solve`].
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
+#[must_use = "a search can stop without converging: check `converged` or call `require_converged()`"]
 pub struct FrankWolfeSolution {
     /// The last iterate, on the simplex.
     pub x: Vec<f64>,
     /// The objective after each step, `values.len()` steps in all.
     pub values: Vec<f64>,
-    /// `false` when the search stopped at `max_iter` with the last decrease
-    /// still above the tolerance.
+    /// `false` when the search stopped at `max_iterations` with the last
+    /// decrease still above the tolerance.
     pub converged: bool,
+    /// [`Termination::CostTolerance`] or [`Termination::MaxIterations`].
+    pub termination: Termination,
+}
+
+impl FrankWolfeSolution {
+    /// The result, or [`Error::NotConverged`] when its convergence test was
+    /// not met.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotConverged`] with the termination and the iterations used.
+    pub fn require_converged(self) -> Result<Self, Error> {
+        if self.converged {
+            Ok(self)
+        } else {
+            Err(Error::NotConverged {
+                termination: self.termination,
+                iterations: self.values.len(),
+            })
+        }
+    }
 }
 
 /// An iterate with the product `A x` that the steps update.
@@ -287,9 +323,9 @@ impl<'a> SimplexLeastSquares<'a> {
         options: FrankWolfeOptions,
     ) -> Result<FrankWolfeSolution, Error> {
         let mut state = self.start(x0)?;
-        let mut values = Vec::with_capacity(options.max_iter.min(1 << 14));
+        let mut values = Vec::with_capacity(options.max_iterations.min(1 << 14));
         let mut converged = false;
-        while values.len() < options.max_iter {
+        while values.len() < options.max_iterations {
             self.step(&mut state);
             values.push(self.value(&state));
             let t = values.len();
@@ -302,6 +338,11 @@ impl<'a> SimplexLeastSquares<'a> {
             x: state.x,
             values,
             converged,
+            termination: if converged {
+                Termination::CostTolerance
+            } else {
+                Termination::MaxIterations
+            },
         })
     }
 }
@@ -358,7 +399,7 @@ mod tests {
                 vec![0.5, 0.5],
                 FrankWolfeOptions {
                     tolerance: 0.0,
-                    max_iter: 50,
+                    max_iterations: 50,
                 },
             )
             .unwrap();

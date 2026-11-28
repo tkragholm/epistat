@@ -26,9 +26,16 @@
 //!
 //! Each module describes its algorithm, stopping rules and defaults, and lists
 //! its references. Every solver returns the crate's one [`Error`].
+//!
+//! The iterative searches (BFGS, Nelder-Mead, Brent, bisection, ITP and
+//! Frank-Wolfe) return `Ok` when they reach their iteration limit, with
+//! `converged: false` and the [`Termination`] that ended them; call
+//! `require_converged()` on the result for an error instead. The simplex
+//! solvers return [`Error::IterationLimit`] when their pivot budget runs out.
 #![warn(missing_docs)]
 
 mod error;
+mod termination;
 
 pub mod bfgs;
 pub mod bounded_simplex;
@@ -42,3 +49,4 @@ pub mod root;
 pub mod simplex;
 
 pub use error::Error;
+pub use termination::Termination;

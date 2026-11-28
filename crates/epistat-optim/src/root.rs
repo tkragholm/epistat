@@ -60,11 +60,13 @@
 //!    average performance preserving minmax optimality. ACM Trans Math Softw.
 //!    2020;47(1):5. doi:10.1145/3423597
 
+use crate::Termination;
 use crate::error::{Error, domain};
 
 /// A root found in a bracket.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[must_use = "a search can stop without converging: check `converged` or call `require_converged()`"]
 pub struct Root {
     /// The root.
     pub x: f64,
@@ -76,6 +78,28 @@ pub struct Root {
     pub evaluations: usize,
     /// Whether the stopping rule was met before the iteration limit.
     pub converged: bool,
+    /// [`Termination::BracketTolerance`], [`Termination::ExactRoot`] or
+    /// [`Termination::MaxIterations`].
+    pub termination: Termination,
+}
+
+impl Root {
+    /// The result, or [`Error::NotConverged`] when its convergence test was
+    /// not met.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotConverged`] with the termination and the iterations used.
+    pub fn require_converged(self) -> Result<Self, Error> {
+        if self.converged {
+            Ok(self)
+        } else {
+            Err(Error::NotConverged {
+                termination: self.termination,
+                iterations: self.iterations,
+            })
+        }
+    }
 }
 
 /// Settings of [`bisect`].
@@ -204,6 +228,11 @@ pub fn bisect(
         iterations,
         evaluations: iterations + 3,
         converged,
+        termination: if converged {
+            Termination::BracketTolerance
+        } else {
+            Termination::MaxIterations
+        },
     })
 }
 
@@ -280,18 +309,19 @@ pub fn itp(
     let (mut a, mut b) = (lower, upper);
     let mut ya = evaluate(a)?;
     let mut yb = evaluate(b)?;
-    let done = |x: f64, value: f64, iterations: usize, evaluations: usize, converged: bool| Root {
+    let done = |x: f64, value: f64, iterations: usize, evaluations: usize, termination| Root {
         x,
         value,
         iterations,
         evaluations,
-        converged,
+        converged: Termination::is_converged(termination),
+        termination,
     };
     if ya == 0.0 {
-        return Ok(done(a, ya, 0, 2, true));
+        return Ok(done(a, ya, 0, 2, Termination::ExactRoot));
     }
     if yb == 0.0 {
-        return Ok(done(b, yb, 0, 2, true));
+        return Ok(done(b, yb, 0, 2, Termination::ExactRoot));
     }
     let s = sign(yb);
     if (ya > 0.0) == (yb > 0.0) {
@@ -352,12 +382,23 @@ pub fn itp(
             a = x;
             ya = y;
         } else {
-            return Ok(done(x, y, iterations, iterations + 2, true));
+            return Ok(done(
+                x,
+                y,
+                iterations,
+                iterations + 2,
+                Termination::ExactRoot,
+            ));
         }
     }
     let x = a + (b - a) / 2.0;
     let value = evaluate(x)?;
-    Ok(done(x, value, iterations, iterations + 3, converged))
+    let termination = if converged {
+        Termination::BracketTolerance
+    } else {
+        Termination::MaxIterations
+    };
+    Ok(done(x, value, iterations, iterations + 3, termination))
 }
 
 #[cfg(test)]
