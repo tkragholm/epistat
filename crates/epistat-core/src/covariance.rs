@@ -189,6 +189,35 @@ impl Covariance {
     }
 }
 
+impl core::fmt::Display for Covariance {
+    /// The matrix as R prints one: rows and columns numbered from 1 as
+    /// `[1,]` and `[,1]`, entries right-aligned with four significant digits,
+    /// or the decimals of a precision such as `{:.3}`, and `NA` where
+    /// undefined.
+    ///
+    /// ```
+    /// use epistat_core::Covariance;
+    ///
+    /// let v = Covariance::new(2, vec![Some(4.0), Some(1.0), Some(1.0), None])?;
+    /// assert_eq!(v.to_string(), "       [,1]   [,2]\n[1,]  4.000  1.000\n[2,]  1.000     NA");
+    /// # Ok::<(), epistat_core::InputError>(())
+    /// ```
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let decimals = f.precision();
+        let header: Vec<String> = (1..=self.dim).map(|j| format!("[,{j}]")).collect();
+        let header: Vec<&str> = header.iter().map(String::as_str).collect();
+        let rows: Vec<(String, Vec<String>)> = (0..self.dim)
+            .map(|i| {
+                let cells = (0..self.dim)
+                    .map(|j| crate::format::optional(self.get(i, j), 4, decimals))
+                    .collect();
+                (format!("[{},]", i + 1), cells)
+            })
+            .collect();
+        crate::format::table(f, &header, &rows)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,6 +293,20 @@ mod tests {
         assert!(v.is_symmetric());
         let asymmetric = Covariance::new(2, vec![Some(2.0), Some(1.0), None, Some(3.0)]).unwrap();
         assert!(!asymmetric.is_symmetric());
+    }
+
+    #[test]
+    fn a_covariance_prints_as_a_matrix() {
+        let v = Covariance::from_values(2, &[0.012_344, -0.5, -0.5, 12.0]).unwrap();
+        assert_eq!(
+            v.to_string(),
+            "         [,1]     [,2]\n[1,]  0.01234  -0.5000\n[2,]  -0.5000    12.00"
+        );
+        assert_eq!(
+            format!("{v:.2}"),
+            "       [,1]   [,2]\n[1,]   0.01  -0.50\n[2,]  -0.50  12.00"
+        );
+        assert_eq!(Covariance::new(0, Vec::new()).unwrap().to_string(), "");
     }
 
     #[cfg(feature = "serde")]

@@ -567,14 +567,21 @@ mod tests {
         let estimate = Estimate::point(0.510)
             .with_interval(Some(interval))
             .with_p_value(Some(0.2));
-        assert_eq!(estimate.to_string(), "0.510 (95% CI 0.428 to 0.608), p = 0.20");
+        assert_eq!(
+            estimate.to_string(),
+            "0.510 (95% CI 0.428 to 0.608), p = 0.20"
+        );
         assert_eq!(
             format!("{estimate:.2}"),
             "0.51 (95% CI 0.43 to 0.61), p = 0.20"
         );
-        let tiny = Estimate::point(2.0).with_se(Some(0.25)).with_p_value(Some(0.0));
+        let tiny = Estimate::point(2.0)
+            .with_se(Some(0.25))
+            .with_p_value(Some(0.0));
         assert_eq!(tiny.to_string(), "2.00 (se 0.250), p < 2e-16");
-        let ratio = Estimate::point(1.5).with_se(Some(0.2)).with_scale(Scale::Log);
+        let ratio = Estimate::point(1.5)
+            .with_se(Some(0.2))
+            .with_scale(Scale::Log);
         assert_eq!(ratio.to_string(), "1.50 (se of log 0.200)");
         assert_eq!(Estimate::point(-3.0).to_string(), "-3.00");
     }
@@ -584,15 +591,18 @@ mod tests {
     fn coverage_round_trips_and_defaults_to_pointwise() {
         let band = Interval::simultaneous(Some(1.0), Some(2.0), Level::P95, 2.5).unwrap();
         let text = serde_json::to_string(&band).unwrap();
-        assert!(text.contains(r#""coverage":{"simultaneous":{"critical":2.5}}"#), "{text}");
+        assert!(
+            text.contains(r#""coverage":{"simultaneous":{"critical":2.5}}"#),
+            "{text}"
+        );
         assert_eq!(serde_json::from_str::<Interval>(&text).unwrap(), band);
         let old = r#"{"lower":1.0,"upper":2.0,"level":{"confidence":0.95}}"#;
         assert_eq!(
             serde_json::from_str::<Interval>(old).unwrap().coverage,
             Coverage::Pointwise
         );
-        let bad = r#"{"lower":1.0,"upper":2.0,"level":{"confidence":0.95},"coverage":{"simultaneous":{"critical":-1.0}}}"#;
-        assert!(serde_json::from_str::<Interval>(bad).is_err());
+        let negative = r#"{"lower":1.0,"upper":2.0,"level":{"confidence":0.95},"coverage":{"simultaneous":{"critical":-1.0}}}"#;
+        assert!(serde_json::from_str::<Interval>(negative).is_err());
     }
 
     #[cfg(feature = "serde")]
