@@ -10,5 +10,8 @@ parameters, and the adjustment of p-values for several tests (Bonferroni,
 Holm, Hochberg, Hommel, Benjamini-Hochberg and Benjamini-Yekutieli), and the
 contrast curve of a spline term against a reference value with pointwise or
 simultaneous bands, checked against `rms::Predict` and `Epi::ci.lin`.
-Clusters are numbered in order of first appearance and every sum runs in a
-fixed order, so results do not depend on hashing or on the number of threads.
+Clusters are numbered in sorted code order, or in order of first appearance
+for `Clusters::from_labels_first_seen`, and every sum runs in a fixed order,
+so results do not depend on hashing or on the number of threads.
+`Clusters::per_unit` is the choice for person-period data and
+`Clusters::per_row` for one row per unit.

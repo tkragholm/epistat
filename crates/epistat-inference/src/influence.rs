@@ -18,7 +18,34 @@
 //!
 //! Some references report the dfbeta scale instead, `D_i = psi_i / n`, whose
 //! squares sum to the variance (R's `survival` and `riskRegression` among
-//! them). [`Influence::from_dfbeta`] multiplies such values by `n`.
+//! them). Values on the wrong scale give a variance off by a factor of `n^2`,
+//! so [`Influence::from_values`] takes the scale as a required
+//! [`InfluenceScale`] and multiplies dfbeta values by `n`:
+//!
+//! ```
+//! use epistat_core::Level;
+//! use epistat_inference::influence::{ClusterRule, Influence, InfluenceScale, Keys};
+//! use epistat_inference::interval::try_normal;
+//!
+//! // The influence function of a mean, psi_i = x_i - mean, for six units.
+//! let x = [2.0, 4.0, 3.0, 7.0, 5.0, 3.0];
+//! let mean = x.iter().sum::<f64>() / 6.0;
+//! let psi: Vec<f64> = x.iter().map(|v| v - mean).collect();
+//! let influence = Influence::from_values(
+//!     psi,
+//!     Keys::Units((0..6).collect()),
+//!     1,
+//!     InfluenceScale::PerUnit,
+//!     ClusterRule::SmallSample,
+//! )?;
+//! let variance = influence.variance(None)?;
+//! let se = variance.standard_errors()[0].expect("six units");
+//! // With singleton clusters SmallSample is sd(x)^2 / n.
+//! assert!((se * se - 3.2 / 6.0).abs() < 1e-15);
+//! let interval = try_normal(mean, se, Level::P95)?;
+//! assert!(interval.lower < Some(mean) && interval.upper > Some(mean));
+//! # Ok::<(), epistat_inference::Error>(())
+//! ```
 //!
 //! # Method
 //!
@@ -128,6 +155,30 @@ pub enum ClusterRule {
     NoSmallSample,
 }
 
+/// The scale of influence-function values: per unit, the scale of every
+/// epistat estimator, or dfbeta, `psi_i / n`, whose squares sum to the
+/// variance.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum InfluenceScale {
+    /// `theta_hat - theta ~ sum(psi_i) / n`, the scale of the module.
+    PerUnit,
+    /// `D_i = psi_i / n`, the scale of `residuals(fit, type = "dfbeta")` in
+    /// R's `survival`; the values are multiplied by the number of keys.
+    Dfbeta,
+}
+
+/// The keys of an influence function's values, one per value of a column.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Keys {
+    /// The caller's unit codes, for an estimator whose data carry a unit
+    /// column.
+    Units(Vec<u32>),
+    /// Row positions in the estimator's input, for an estimator whose data
+    /// carry no unit column.
+    Rows(Vec<u32>),
+}
+
 /// What the keys of an influence function, or of clusters looked up by key,
 /// are.
 #[non_exhaustive]
@@ -172,9 +223,40 @@ pub struct Influence {
 }
 
 impl Influence {
+    /// The influence function with `columns` columns, one value per key in
+    /// each, column after column, on the scale `scale`.
+    ///
+    /// Keys in increasing order are checked in one pass; keys in another
+    /// order are accepted and checked through a hash set.
+    ///
+    /// # Errors
+    ///
+    /// [`InputError::Empty`] for no keys or no columns,
+    /// [`InputError::Length`] unless there are `columns` values per key,
+    /// [`InputError::NotFinite`] for a value that is not finite, and
+    /// [`InputError::Duplicate`] for a key that repeats.
+    pub fn from_values(
+        values: Vec<f64>,
+        keys: Keys,
+        columns: usize,
+        scale: InfluenceScale,
+        rule: ClusterRule,
+    ) -> Result<Self, Error> {
+        let (keys, keyed_by) = match keys {
+            Keys::Units(units) => (units, KeyedBy::Units),
+            Keys::Rows(rows) => (rows, KeyedBy::Rows),
+        };
+        let values = match scale {
+            InfluenceScale::PerUnit => values,
+            InfluenceScale::Dfbeta => scale_dfbeta(values, keys.len()),
+        };
+        Self::build(values, keys, keyed_by, columns, rule)
+    }
+
     /// The influence function with `columns` columns of `units.len()` values
     /// each, column after column, on the per-unit scale, keyed by the
-    /// caller's unit codes `units`.
+    /// caller's unit codes `units`: [`Influence::from_values`] with
+    /// [`Keys::Units`] and [`InfluenceScale::PerUnit`].
     ///
     /// Units in increasing code are checked in one pass; units in another
     /// order are accepted and checked through a hash set.
@@ -195,7 +277,8 @@ impl Influence {
     }
 
     /// [`Influence::new`] keyed by `rows`, positions in the estimator's input,
-    /// for an estimator whose data have no unit column. Its variance takes
+    /// for an estimator whose data have no unit column: [`Influence::from_values`]
+    /// with [`Keys::Rows`] and [`InfluenceScale::PerUnit`]. Its variance takes
     /// positional clusters or clusters from [`Clusters::per_row`], and refuses
     /// clusters keyed by unit codes.
     ///
@@ -212,7 +295,9 @@ impl Influence {
     }
 
     /// The influence function from values on the dfbeta scale, whose squares
-    /// sum to the variance, multiplied by the number of units.
+    /// sum to the variance, multiplied by the number of units:
+    /// [`Influence::from_values`] with [`Keys::Units`] and
+    /// [`InfluenceScale::Dfbeta`].
     ///
     /// # Errors
     ///
@@ -227,7 +312,9 @@ impl Influence {
         Self::new(scaled, units, columns, rule)
     }
 
-    /// [`Influence::from_dfbeta`] keyed by rows, as [`Influence::over_rows`].
+    /// [`Influence::from_dfbeta`] keyed by rows, as [`Influence::over_rows`]:
+    /// [`Influence::from_values`] with [`Keys::Rows`] and
+    /// [`InfluenceScale::Dfbeta`].
     ///
     /// # Errors
     ///
@@ -405,7 +492,11 @@ impl Influence {
     /// Clusters from [`Clusters::per_unit`] or [`Clusters::per_row`] are
     /// looked up by key, so they may cover more keys than this influence
     /// function, and they must be keyed as it is. Other clusters are matched
-    /// by position and must cover exactly its keys. See the module for the
+    /// by position: entry `i` is the cluster of [`Influence::keys`]`[i]`, and
+    /// only their number is checked, so clusters listed in another order than
+    /// the keys pair each value with the wrong cluster. Build clusters with
+    /// [`Clusters::per_unit`] or [`Clusters::per_row`] unless they come from
+    /// the same rows as the influence function. See the module for the
     /// formula.
     ///
     /// # Errors
@@ -901,6 +992,45 @@ mod tests {
             Influence::from_dfbeta(vec![0.25, -0.5], vec![0, 1], 1, ClusterRule::NoSmallSample)
                 .unwrap();
         assert_eq!(influence.column(0), [0.5, -1.0]);
+    }
+
+    #[test]
+    fn one_constructor_with_the_scale_named_builds_the_four_old_ones() {
+        let values = vec![0.25, -0.5, 0.125, 1.5, -0.75, 0.0];
+        let keys = vec![4, 1, 7];
+        let rule = ClusterRule::SmallSample;
+        let build = |keys: Keys, scale| {
+            Influence::from_values(values.clone(), keys, 2, scale, rule).unwrap()
+        };
+        assert_eq!(
+            build(Keys::Units(keys.clone()), InfluenceScale::PerUnit),
+            Influence::new(values.clone(), keys.clone(), 2, rule).unwrap()
+        );
+        assert_eq!(
+            build(Keys::Rows(keys.clone()), InfluenceScale::PerUnit),
+            Influence::over_rows(values.clone(), keys.clone(), 2, rule).unwrap()
+        );
+        assert_eq!(
+            build(Keys::Units(keys.clone()), InfluenceScale::Dfbeta),
+            Influence::from_dfbeta(values.clone(), keys.clone(), 2, rule).unwrap()
+        );
+        let rows = build(Keys::Rows(keys.clone()), InfluenceScale::Dfbeta);
+        assert_eq!(
+            rows,
+            Influence::from_dfbeta_over_rows(values.clone(), keys, 2, rule).unwrap()
+        );
+        assert_eq!(rows.keyed_by(), KeyedBy::Rows);
+        assert_eq!(rows.column(1), [4.5, -2.25, 0.0]);
+        assert!(matches!(
+            Influence::from_values(
+                vec![1.0],
+                Keys::Rows(vec![]),
+                1,
+                InfluenceScale::Dfbeta,
+                rule
+            ),
+            Err(Error::Input(InputError::Empty { .. }))
+        ));
     }
 
     #[test]

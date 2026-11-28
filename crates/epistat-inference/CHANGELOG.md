@@ -37,6 +37,7 @@ Confidence levels, bootstrap settings and errors now use the shared types of `ep
 - `interval::try_normal`, the normal interval with its standard error checked: a negative standard error is `InputError::Domain` and a NaN estimate or standard error `InputError::NotFinite`, where `interval::normal` returns reversed or undefined limits.
 - `sandwich::covariance`, the sandwich as an `epistat_core::Covariance`, and `sandwich::defined_standard_errors`, the square roots of the diagonal with `None` for a negative or NaN variance, as `Covariance::standard_errors` gives them. `sandwich::standard_errors` still reads a negative variance as zero.
 - `simultaneous::sup_t_from_covariance` takes any `CovarianceInput`, so an `epistat_core::Covariance` goes in as it is; a faer `MatRef` still does.
+- `Influence::from_values`, one constructor that takes the keys as `Keys::Units` or `Keys::Rows` and the scale of the values as a required `InfluenceScale::PerUnit` or `InfluenceScale::Dfbeta`, so values on the dfbeta scale cannot be read per unit by default, which gave a variance `n^2` times too small. `Influence::new`, `over_rows`, `from_dfbeta` and `from_dfbeta_over_rows` are each one of its four forms.
 
 ### Deprecated
 
