@@ -9,6 +9,7 @@ use epistat_survival::msreg::{
     MsBaseline, MsFitOptions, MsOptions, MsProfile, MsTerm, MsTerms, MsVarType, ProbTransDirection,
     ProbTransMethod, ProbTransOptions, fit, probtrans,
 };
+use epistat_testkit::{Tolerance, assert_close};
 
 /// Five subjects in state 1: a move to state 2 at 1, to 3 at 1, to 3 at 2, a
 /// censoring at 3 and a move to 2 at 4.
@@ -21,9 +22,8 @@ fn small() -> (Vec<u32>, Vec<f64>, Vec<i32>, Vec<u32>) {
     )
 }
 
-fn close(a: f64, b: f64) {
-    assert!((a - b).abs() <= 1e-14 * b.abs().max(1.0), "{a} is not {b}");
-}
+/// `|a - b| <= 1e-14 max(|b|, 1)`.
+const CLOSE: Tolerance = Tolerance::exact().abs(1e-14).rel(1e-14);
 
 #[test]
 fn greenwood_variance_by_hand() {
@@ -47,16 +47,16 @@ fn greenwood_variance_by_hand() {
         .unwrap();
     assert_eq!(h.time, vec![1.0, 2.0, 4.0]);
     // Transition 0 is 1 -> 2 and transition 1 is 1 -> 3, at risk 5, 3, 1.
-    close(h.cumulative_hazard[0][2], 1.0 / 5.0 + 1.0);
+    assert_close(&[h.cumulative_hazard[0][2]], &[1.0 / 5.0 + 1.0], CLOSE);
     let var12 = 4.0 / 125.0;
     let var13 = 4.0 / 125.0 + 2.0 / 27.0;
     let cov = -1.0 / 125.0;
-    close(h.covariance_of(0, 0).unwrap()[0], var12);
-    close(h.covariance_of(0, 0).unwrap()[2], var12);
-    close(h.covariance_of(1, 1).unwrap()[0], 4.0 / 125.0);
-    close(h.covariance_of(1, 1).unwrap()[2], var13);
-    close(h.covariance_of(0, 1).unwrap()[0], cov);
-    close(h.covariance_of(0, 1).unwrap()[2], cov);
+    assert_close(&[h.covariance_of(0, 0).unwrap()[0]], &[var12], CLOSE);
+    assert_close(&[h.covariance_of(0, 0).unwrap()[2]], &[var12], CLOSE);
+    assert_close(&[h.covariance_of(1, 1).unwrap()[0]], &[4.0 / 125.0], CLOSE);
+    assert_close(&[h.covariance_of(1, 1).unwrap()[2]], &[var13], CLOSE);
+    assert_close(&[h.covariance_of(0, 1).unwrap()[0]], &[cov], CLOSE);
+    assert_close(&[h.covariance_of(0, 1).unwrap()[2]], &[cov], CLOSE);
     // The Aalen form differs: d / n^2 per event time.
     let aalen = model.msfit(&[], &MsFitOptions::default()).unwrap();
     assert!((aalen.covariance_of(0, 0).unwrap()[2] - var12).abs() > 1e-3);
@@ -91,9 +91,10 @@ fn fixed_horizon_is_the_product_from_the_other_end() {
         assert_eq!(fixed.time[0].to_bits(), 0.0f64.to_bits());
         for from in 0..3 {
             for to in 0..3 {
-                close(
-                    fixed.probability_of(0, from, to).unwrap(),
-                    forward.probability_of(last, from, to).unwrap(),
+                assert_close(
+                    &[fixed.probability_of(0, from, to).unwrap()],
+                    &[forward.probability_of(last, from, to).unwrap()],
+                    CLOSE,
                 );
             }
         }

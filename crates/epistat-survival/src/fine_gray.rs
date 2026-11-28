@@ -1088,6 +1088,7 @@ fn prepare(
 mod tests {
     use epistat_core::Covariance;
     use epistat_linalg::Mat;
+    use epistat_testkit::Tolerance;
 
     use epistat_linalg::MatRef;
     use epistat_rng::Stream;
@@ -1167,10 +1168,6 @@ mod tests {
         (0..20).map(|i| if i < 10 { 1.0 } else { 0.0 }).collect()
     }
 
-    fn close(a: f64, b: f64, tolerance: f64) -> bool {
-        (a - b).abs() < tolerance
-    }
-
     /// Subject 1 of the R example (time 3, competing event) is split at the
     /// censoring times after it, 5, 9 and 10, and runs to 14. Intervals and
     /// weights from `survival::finegray(..., etype = "c1")`, R 4.6.1,
@@ -1191,7 +1188,7 @@ mod tests {
             0.587_755_102_040_816_2,
         ];
         for (&k, want) in subject.iter().zip(expected) {
-            assert!(close(rows.weight[k], want, 1e-12));
+            assert!(Tolerance::exact().abs(1e-12).accepts(rows.weight[k], want));
         }
         assert!(rows.weight.iter().all(|&w| w > 0.0 && w <= 1.0 + 1e-12));
     }
@@ -1212,7 +1209,11 @@ mod tests {
         let stops: Vec<f64> = subject.iter().map(|&k| rows.stop[k]).collect();
         assert_eq!(stops, [2.0, 4.0, 6.0]);
         for (&k, want) in subject.iter().zip([1.0, 0.8, 0.533_333_333_3]) {
-            assert!(close(rows.weight[k], want, 1e-9), "{:?}", rows.weight);
+            assert!(
+                Tolerance::exact().abs(1e-9).accepts(rows.weight[k], want),
+                "{:?}",
+                rows.weight
+            );
         }
     }
 
@@ -1249,11 +1250,15 @@ mod tests {
             let fit = fit_rows(&rows, &x);
             assert!(fit.converged);
             assert!(
-                close(fit.coefficients[0].unwrap(), 0.151_472_434_751_664, 1e-10),
+                Tolerance::exact()
+                    .abs(1e-10)
+                    .accepts(fit.coefficients[0].unwrap(), 0.151_472_434_751_664),
                 "{fit:?}"
             );
             assert!(
-                close(fit.se[0].unwrap(), 0.634_301_730_060_493, 1e-10),
+                Tolerance::exact()
+                    .abs(1e-10)
+                    .accepts(fit.se[0].unwrap(), 0.634_301_730_060_493),
                 "{fit:?}"
             );
         }
@@ -1267,14 +1272,18 @@ mod tests {
     fn censoring_curve_orders_failures_before_tied_censoring() {
         let curve = censoring_curve(&[1.0, 2.0, 2.0, 3.0, 4.0], &[0, 0, 1, 0, 1], &[1.0; 5]);
         assert_eq!(curve.time, [1.0, 2.0, 3.0]);
-        assert!(close(curve.at(0.5), 1.0, 1e-15));
-        assert!(close(curve.at(1.0), 0.8, 1e-15));
-        assert!(close(curve.at(2.5), 0.8 * (1.0 - 1.0 / 3.0), 1e-15));
-        assert!(close(
-            curve.at(3.0),
-            0.8 * (1.0 - 1.0 / 3.0) * (1.0 - 1.0 / 2.0),
-            1e-15
-        ));
+        assert!(Tolerance::exact().abs(1e-15).accepts(curve.at(0.5), 1.0));
+        assert!(Tolerance::exact().abs(1e-15).accepts(curve.at(1.0), 0.8));
+        assert!(
+            Tolerance::exact()
+                .abs(1e-15)
+                .accepts(curve.at(2.5), 0.8 * (1.0 - 1.0 / 3.0))
+        );
+        assert!(
+            Tolerance::exact()
+                .abs(1e-15)
+                .accepts(curve.at(3.0), 0.8 * (1.0 - 1.0 / 3.0) * (1.0 - 1.0 / 2.0))
+        );
     }
 
     /// The censoring curve as the blocks of tied times, which sums the weight
@@ -1405,10 +1414,9 @@ mod tests {
             &options(1, Ties::Breslow),
         )
         .unwrap();
-        assert!(close(
+        assert!(Tolerance::exact().abs(1e-10).accepts(
             plain.coefficients[0].unwrap(),
-            clustered.coefficients[0].unwrap(),
-            1e-10
+            clustered.coefficients[0].unwrap()
         ));
         assert_eq!((plain.n_rows, plain.n_used), (20, 20));
         assert_eq!((clustered.n_rows, clustered.n_used), (20, 20));
@@ -1446,7 +1454,10 @@ mod tests {
         .unwrap();
         assert_eq!(plain.rank, 3);
         for (a, b) in plain.coefficients.iter().zip(&clustered.coefficients) {
-            assert!(close(a.unwrap(), b.unwrap(), 1e-9), "{plain:?}");
+            assert!(
+                Tolerance::exact().abs(1e-9).accepts(a.unwrap(), b.unwrap()),
+                "{plain:?}"
+            );
         }
         for (a, b) in plain
             .covariance
@@ -1454,12 +1465,11 @@ mod tests {
             .iter()
             .zip(clustered.covariance.as_slice())
         {
-            assert!(close(a.unwrap(), b.unwrap(), 1e-9));
+            assert!(Tolerance::exact().abs(1e-9).accepts(a.unwrap(), b.unwrap()));
         }
-        assert!(close(
+        assert!(Tolerance::exact().abs(1e-9).accepts(
             plain.tests.score.unwrap().statistic,
-            clustered.tests.score.unwrap().statistic,
-            1e-9
+            clustered.tests.score.unwrap().statistic
         ));
         let robust = clustered.robust_covariance.as_ref().unwrap();
         assert_eq!(robust.dim(), 3);
