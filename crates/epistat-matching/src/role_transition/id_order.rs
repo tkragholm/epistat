@@ -72,6 +72,17 @@ impl IdOrder {
         Some(Self::from_sorted(by_id, distinct))
     }
 
+    /// The order of records whose ids have the ranks `ranks`, distinct and
+    /// from 0, as the codes of `epistat_core::Codes` give them: the record of
+    /// rank 0 comes first. No id is compared.
+    pub(crate) fn from_ranks(ranks: &[u32]) -> Self {
+        let mut by_id = vec![0_u32; ranks.len()];
+        for (idx, &rank) in ranks.iter().enumerate() {
+            by_id[rank as usize] = u32::try_from(idx).expect("at most u32::MAX records");
+        }
+        Self::from_sorted(by_id, true)
+    }
+
     fn from_sorted(by_id: Vec<u32>, distinct: bool) -> Self {
         let mut rank = vec![0_u32; by_id.len()];
         for (position, &idx) in by_id.iter().enumerate() {

@@ -96,6 +96,92 @@ pub enum Error {
         /// The columns the batch has.
         present: Vec<String>,
     },
+    /// An id is on two rows of a view, named by its label and both rows.
+    #[error("the id `{id}` is on rows {first} and {row}; give every unit its own id")]
+    DuplicateIdRows {
+        /// The id.
+        id: String,
+        /// Its first row.
+        first: usize,
+        /// The row that repeats it.
+        row: usize,
+    },
+    /// Two distinct labels of a column print as the same text, which the
+    /// engine would read as one.
+    #[error("two distinct labels of {column} print as `{text}`; give them distinct text")]
+    AmbiguousLabel {
+        /// The column, or `ids`.
+        column: String,
+        /// The text both print as.
+        text: String,
+    },
+    /// A numeric column holds NaN or an infinity; a missing value is a null.
+    #[error(
+        "column {column} is not finite at row {row} (id `{id}`); give a missing value as a null"
+    )]
+    NonFiniteValue {
+        /// The column.
+        column: String,
+        /// The row.
+        row: usize,
+        /// The id of the row.
+        id: String,
+    },
+    /// An option names a column the view does not have.
+    #[error("no column `{name}`; the data have {}", known.join(", "))]
+    UnknownColumn {
+        /// The name asked for.
+        name: String,
+        /// The columns the view has, in the order they were added.
+        known: Vec<String>,
+    },
+    /// A column has another kind than the option that names it needs.
+    #[error("column {name} is {found}, and a {expected} column is needed here")]
+    WrongColumnKind {
+        /// The column.
+        name: String,
+        /// The kind needed.
+        expected: crate::ColumnKind,
+        /// The kind it has.
+        found: crate::ColumnKind,
+    },
+    /// An exact key is null on a row, and a null is not a value of it.
+    #[error(
+        "the exact key {column} is null at row {row} (id `{id}`); give it a value, or let a null \
+         be a level of its own with missing_as_level()"
+    )]
+    NullKey {
+        /// The column.
+        column: String,
+        /// The first row with a null.
+        row: usize,
+        /// The id of the row.
+        id: String,
+    },
+    /// A person's index date is before their birth date.
+    #[error("the index date of `{id}` at row {row} is before their birth date")]
+    IndexBeforeBirth {
+        /// The id.
+        id: String,
+        /// The row.
+        row: usize,
+    },
+    /// A residence spell belongs to a person who is not in the cohort.
+    #[error("residence spell {row} is of `{person}`, who is not in the cohort")]
+    UnknownSpellPerson {
+        /// The person's label.
+        person: String,
+        /// The row of the spell.
+        row: usize,
+    },
+    /// A residence spell starts after it ends.
+    #[error("residence spell {row} of `{person}` starts after it ends")]
+    SpellOrder {
+        /// The person's label.
+        person: String,
+        /// The row of the spell.
+        row: usize,
+    },
     /// No case, or no control, has a value under a strata key a constraint
     /// requires, so every pair would be refused on it.
     #[error(
@@ -861,6 +947,15 @@ impl Classify for Error {
             Self::DuplicateColumn { .. } => "matching.duplicate_column",
             Self::TooManyValues { .. } => "matching.too_many_values",
             Self::MissingColumn { .. } => "matching.missing_column",
+            Self::DuplicateIdRows { .. } => "matching.duplicate_id_rows",
+            Self::AmbiguousLabel { .. } => "matching.ambiguous_label",
+            Self::NonFiniteValue { .. } => "matching.non_finite_value",
+            Self::UnknownColumn { .. } => "matching.unknown_column",
+            Self::WrongColumnKind { .. } => "matching.wrong_column_kind",
+            Self::NullKey { .. } => "matching.null_key",
+            Self::IndexBeforeBirth { .. } => "matching.index_before_birth",
+            Self::UnknownSpellPerson { .. } => "matching.unknown_spell_person",
+            Self::SpellOrder { .. } => "matching.spell_order",
             Self::MissingStratum { .. } => "matching.missing_stratum",
             Self::WrongType { .. } => "matching.wrong_type",
             Self::NullValue { .. } => "matching.null_value",
@@ -1008,6 +1103,46 @@ mod tests {
             Error::MissingColumn {
                 column: String::new(),
                 present: Vec::new(),
+            },
+            Error::DuplicateIdRows {
+                id: String::new(),
+                first: 0,
+                row: 1,
+            },
+            Error::AmbiguousLabel {
+                column: String::new(),
+                text: String::new(),
+            },
+            Error::NonFiniteValue {
+                column: String::new(),
+                row: 0,
+                id: String::new(),
+            },
+            Error::UnknownColumn {
+                name: String::new(),
+                known: Vec::new(),
+            },
+            Error::WrongColumnKind {
+                name: String::new(),
+                expected: crate::ColumnKind::Categorical,
+                found: crate::ColumnKind::Numeric,
+            },
+            Error::NullKey {
+                column: String::new(),
+                row: 0,
+                id: String::new(),
+            },
+            Error::IndexBeforeBirth {
+                id: String::new(),
+                row: 0,
+            },
+            Error::UnknownSpellPerson {
+                person: String::new(),
+                row: 0,
+            },
+            Error::SpellOrder {
+                person: String::new(),
+                row: 0,
             },
             Error::MissingStratum {
                 key: "x",
@@ -1201,6 +1336,15 @@ mod tests {
                 | Error::DuplicateColumn { .. }
                 | Error::TooManyValues { .. }
                 | Error::MissingColumn { .. }
+                | Error::DuplicateIdRows { .. }
+                | Error::AmbiguousLabel { .. }
+                | Error::NonFiniteValue { .. }
+                | Error::UnknownColumn { .. }
+                | Error::WrongColumnKind { .. }
+                | Error::NullKey { .. }
+                | Error::IndexBeforeBirth { .. }
+                | Error::UnknownSpellPerson { .. }
+                | Error::SpellOrder { .. }
                 | Error::MissingStratum { .. }
                 | Error::WrongType { .. }
                 | Error::NullValue { .. }
