@@ -125,6 +125,10 @@ fn rttright_with_a_start_against_survival() {
                 *e = i;
             }
         }
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "setting a flag per entry is the same in any order"
+        )]
         for &i in best.values() {
             last[i] = true;
         }

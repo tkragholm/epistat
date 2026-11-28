@@ -424,6 +424,10 @@ fn check_subclass(label: &str, run: &Run, data: &Data, outcome: &Subclassificati
         .enumerate()
         .map(|(r, s)| (*s, r + 1))
         .collect();
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each entry is asserted on its own"
+    )]
     for (row, subclass) in &assigned {
         assert_eq!(
             Some(rank[subclass]),

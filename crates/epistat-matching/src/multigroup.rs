@@ -536,6 +536,10 @@ pub fn vector_match<R: CovariateRecord>(
             .iter()
             .map(|pair: &MatchedPair| pair.case_id.as_str())
             .collect();
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "adding one to each id's count is the same in any order"
+        )]
         for id in matched {
             *counts.entry(id).or_default() += 1;
         }

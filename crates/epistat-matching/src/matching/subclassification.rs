@@ -921,6 +921,10 @@ mod tests {
                             assert_eq!(assigned(&new), old.assignments, "{context}");
                             let new_weights = weights(&new);
                             assert_eq!(new_weights.len(), old.weights.len(), "{context}");
+                            #[expect(
+                                clippy::iter_over_hash_type,
+                                reason = "each entry is asserted on its own"
+                            )]
                             for (id, weight) in &old.weights {
                                 assert_eq!(
                                     new_weights[id].to_bits(),

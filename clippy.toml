@@ -1,0 +1,22 @@
+# Results are identical across thread counts and runs (decisions 104, 111
+# and 121). Rayon's reductions split the work by the size of the pool and
+# combine the parts in the order the threads finish, so a floating-point
+# reduction through them depends on the thread count. A sum over parallel work
+# goes through fixed blocks added in block order, or a collect followed by a
+# sequential sum. An order-independent reduction, such as an integer count,
+# takes `#[expect(clippy::disallowed_methods, reason = "..")]`.
+#
+# Iteration over a hash map or set follows the hasher's seed, which is random
+# per process, and is warned by `clippy::iter_over_hash_type` in Cargo.toml.
+disallowed-methods = [
+    { path = "rayon::iter::ParallelIterator::sum", reason = "the result depends on the thread count: add fixed blocks in block order" },
+    { path = "rayon::iter::ParallelIterator::product", reason = "the result depends on the thread count: multiply fixed blocks in block order" },
+    { path = "rayon::iter::ParallelIterator::reduce", reason = "the combination order depends on the thread count: collect and reduce in order" },
+    { path = "rayon::iter::ParallelIterator::reduce_with", reason = "the combination order depends on the thread count: collect and reduce in order" },
+    { path = "rayon::iter::ParallelIterator::fold", reason = "the split into folds depends on the thread count: fold fixed blocks instead" },
+    { path = "rayon::iter::ParallelIterator::fold_with", reason = "the split into folds depends on the thread count: fold fixed blocks instead" },
+    { path = "rayon::iter::ParallelIterator::try_fold", reason = "the split into folds depends on the thread count: fold fixed blocks instead" },
+    { path = "rayon::iter::ParallelIterator::try_fold_with", reason = "the split into folds depends on the thread count: fold fixed blocks instead" },
+    { path = "rayon::iter::ParallelIterator::try_reduce", reason = "the combination order depends on the thread count: collect and reduce in order" },
+    { path = "rayon::iter::ParallelIterator::try_reduce_with", reason = "the combination order depends on the thread count: collect and reduce in order" },
+]

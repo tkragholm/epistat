@@ -52,7 +52,22 @@ impl core::fmt::Display for ErrorKind {
 }
 
 /// The kind and the stable code of an error, what a binding reads.
-pub trait Classify {
+///
+/// An implementor is an error that can cross threads and be kept, so a
+/// binding or a test can take `&dyn Classify`, print it and walk its
+/// [`source`](std::error::Error::source) chain without knowing the crate.
+///
+/// ```
+/// use epistat_core::{Classify, ErrorKind, InputError};
+///
+/// fn describe(error: &dyn Classify) -> String {
+///     format!("{} ({}): {error}", error.code(), error.kind())
+/// }
+///
+/// let error = InputError::Empty { what: "time" };
+/// assert_eq!(describe(&error), "input.empty (input): time is empty");
+/// ```
+pub trait Classify: std::error::Error + Send + Sync + 'static {
     /// What kind of failure this is.
     fn kind(&self) -> ErrorKind;
 
