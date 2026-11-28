@@ -160,6 +160,10 @@ pub fn survfit_paths(
             })
             .push(i);
     }
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "every subject is checked and all failures give the same error"
+    )]
     for rows_of in members.values() {
         for pair in rows_of.windows(2) {
             if paths.start[pair[1]] < paths.stop[pair[0]] {

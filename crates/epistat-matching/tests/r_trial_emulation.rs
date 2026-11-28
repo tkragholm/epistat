@@ -781,6 +781,10 @@ fn draws_are_uniform_over_the_risk_set_in_both() {
         .iter()
         .zip(&ours)
         .map(|(draw, seen)| {
+            #[expect(
+                clippy::iter_over_hash_type,
+                reason = "each entry is asserted on its own"
+            )]
             for member in seen.keys() {
                 assert!(draw.members.contains(member), "drawn outside the risk set");
             }

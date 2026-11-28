@@ -109,6 +109,10 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "differs")]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the test needs a sum that follows the thread count"
+    )]
     fn a_reduction_that_follows_the_threads_fails() {
         assert_same_on_threads(|| {
             let threads = rayon::current_num_threads();

@@ -142,6 +142,10 @@ impl ScoreTable {
     pub fn from_map(scores: &RapidHashMap<String, f64>) -> Self {
         let mut ids = Vec::with_capacity(scores.len());
         let mut values = Vec::with_capacity(scores.len());
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "the table follows the map's order until the matching lane sorts its ids"
+        )]
         for (id, score) in scores {
             ids.push(id.clone());
             values.push(*score);
@@ -1648,6 +1652,10 @@ mod tests {
                 .collect();
             let table = VectorTable::from_map(&vectors, dimension);
             let metric = IdMapMahalanobisDistance::new(&table, &inverse);
+            #[expect(
+                clippy::iter_over_hash_type,
+                reason = "each pair is asserted on its own"
+            )]
             for (a, left) in &vectors {
                 for (b, right) in &vectors {
                     let got = metric
