@@ -3,7 +3,7 @@
 
 mod ccw_run;
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_survival::weighting::trials::bootstrap_trials;
 use epistat_testkit::{POOLS, assert_same_on_pools};
 
@@ -14,7 +14,7 @@ fn the_analysis_is_the_same_on_every_pool() {
     let c = ccw_run::cloned(&r, &d);
     assert_same_on_pools(&POOLS, || ccw_run::analyse(&r, &c, None).flatten());
     assert_same_on_pools(&POOLS, || {
-        bootstrap_trials(&r.input.id, Bootstrap::new(5, 1), |counts| {
+        bootstrap_trials(&r.input.id, Bootstrap::new(5, Seed(1)), |counts| {
             Ok(ccw_run::analyse(&r, &c, Some(&c.case_weights(counts)?)).flatten())
         })
         .into_iter()

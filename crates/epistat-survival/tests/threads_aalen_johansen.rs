@@ -11,7 +11,7 @@
     reason = "the grid values and counts are far below the limits of the casts"
 )]
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::aalen_johansen::{
@@ -129,7 +129,7 @@ fn bootstrap_does_not_depend_on_the_number_of_threads() {
                 &data,
                 &exposed,
                 &cells,
-                Bootstrap::new(37, 1000),
+                Bootstrap::new(37, Seed(1000)),
                 &ages,
                 1,
                 &opts,

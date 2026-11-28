@@ -33,7 +33,7 @@
 
 use std::collections::BTreeSet;
 
-use epistat_core::{Bootstrap, Level};
+use epistat_core::{Bootstrap, Level, Seed};
 use epistat_did::att_gt::{
     self, Aggte, AggteOptions, AggteType, AggteWeights, AttGt, AttGtOptions, BasePeriod,
     ComparisonGroup, FitFailure, NuisanceOptions, SkipReason, UnbalancedPanel,
@@ -301,7 +301,7 @@ fn study_att_gt(
             ..NuisanceOptions::default()
         },
         level: Level::confidence(CONFIDENCE).expect("level"),
-        bootstrap: (!clustered).then_some(Bootstrap::new(1, 17_431)),
+        bootstrap: (!clustered).then_some(Bootstrap::new(1, Seed(17_431))),
         ..AttGtOptions::default()
     };
     att_gt::estimate(&panel, &options).expect("ATT(g,t)")
@@ -524,7 +524,7 @@ fn pairwise(out: &mut Vec<(&'static str, u64)>, rows: &[Row]) {
                 estimator: Estimator::DoublyRobust,
                 nuisance: nuisance_options(),
                 level: Level::confidence(CONFIDENCE).expect("level"),
-                bootstrap: Some(Bootstrap::new(1, 20_260_819)),
+                bootstrap: Some(Bootstrap::new(1, Seed(20_260_819))),
             },
         )
         .expect("two-period estimate");

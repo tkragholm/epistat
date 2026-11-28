@@ -13,8 +13,8 @@
 
 mod ccw_run;
 
-use epistat_survival::Bootstrap;
 use epistat_survival::weighting::trials::PersonCounts;
+use epistat_survival::{Bootstrap, Seed};
 use epistat_testkit::Fingerprint;
 
 /// The root seed whose replicate 0 draws from seed 99,
@@ -40,7 +40,11 @@ fn bits_are_unchanged() {
     let d = ccw_run::data(&r);
     let c = ccw_run::cloned(&r, &d);
     let counts = c
-        .case_weights(&PersonCounts::draw(&r.input.id, Bootstrap::new(1, ROOT), 0))
+        .case_weights(&PersonCounts::draw(
+            &r.input.id,
+            Bootstrap::new(1, Seed(ROOT)),
+            0,
+        ))
         .unwrap();
     let got: Vec<(String, usize, u64)> = [
         ("analysis", ccw_run::analyse(&r, &c, None).flatten()),

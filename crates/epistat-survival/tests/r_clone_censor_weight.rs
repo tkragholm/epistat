@@ -17,8 +17,8 @@
 
 mod ccw_run;
 
-use epistat_core::Bootstrap;
 use epistat_core::Panel;
+use epistat_core::{Bootstrap, Seed};
 use epistat_linalg::Mat;
 use epistat_survival::weighting::clone::{
     Adherence, CloneInput, DeviationModel, Strategy, clone_censor, deviation_weights,
@@ -178,7 +178,7 @@ fn a_bootstrap_of_counts_of_one_is_the_data_and_depends_on_the_seed_only() {
             .build()
             .unwrap();
         pool.install(|| {
-            bootstrap_trials(&r.input.id, Bootstrap::new(3, 11), |counts| {
+            bootstrap_trials(&r.input.id, Bootstrap::new(3, Seed(11)), |counts| {
                 Ok(ccw_run::analyse(&r, &c, Some(&c.case_weights(counts)?)).flatten())
             })
             .into_iter()

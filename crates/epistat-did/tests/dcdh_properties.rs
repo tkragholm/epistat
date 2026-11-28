@@ -353,7 +353,7 @@ fn invalid_input_is_refused() {
     let error = estimate(
         &rows,
         &DcdhOptions {
-            bootstrap: Some(epistat_core::Bootstrap::new(1, 3)),
+            bootstrap: Some(epistat_core::Bootstrap::new(1, epistat_core::Seed(3))),
             ..config
         },
     );

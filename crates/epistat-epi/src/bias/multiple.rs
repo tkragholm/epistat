@@ -167,7 +167,7 @@ pub fn probabilistic_multiple(
     let mut draws = Draws::new(names, opts.bootstrap.replicates, opts.random_error);
     let mut parameters = vec![f64::NAN; width];
     for r in 0..opts.bootstrap.replicates {
-        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed, r as u64));
+        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed.value(), r as u64));
         parameters.fill(f64::NAN);
         let value = (|| {
             let mut cells = *t;

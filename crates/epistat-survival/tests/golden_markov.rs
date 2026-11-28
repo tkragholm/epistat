@@ -22,7 +22,7 @@
     reason = "the inputs are a few hundred rows, far below the limits of the casts"
 )]
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_rng::Stream;
 use epistat_survival::markov::{MarkovOptions, MarkovTest, test};
 use epistat_survival::timefix::TimeFix;
@@ -282,7 +282,7 @@ const GRID: [f64; 7] = [0.3, 0.9, 1.6, 2.4, 3.5, 4.8, 6.1];
 
 #[test]
 fn tests_on_a_process() {
-    let seeds = Bootstrap::new(25, 77);
+    let seeds = Bootstrap::new(25, Seed(77));
     let dense = process(120, 41, false, |id| id as u32);
     for qualifying in 1..=3 {
         let codes: Vec<u32> = (1..=qualifying).collect();
@@ -291,11 +291,11 @@ fn tests_on_a_process() {
     }
     check_test(
         "dense no seeds",
-        &run(&dense, &GRID, &[1, 2], Bootstrap::new(0, 0)).unwrap(),
+        &run(&dense, &GRID, &[1, 2], Bootstrap::new(0, Seed(0))).unwrap(),
     );
     check_test(
         "dense one seed",
-        &run(&dense, &GRID, &[1, 2], Bootstrap::new(1, 5)).unwrap(),
+        &run(&dense, &GRID, &[1, 2], Bootstrap::new(1, Seed(5))).unwrap(),
     );
     // Landmarks out of order, repeated, before the data and past it.
     let odd_grid = [4.8, 0.3, 0.3, 0.0, 99.0, 2.4, -1.0];
@@ -319,7 +319,7 @@ fn tests_on_a_process() {
 
 #[test]
 fn tests_on_awkward_stays() {
-    let seeds = Bootstrap::new(15, 0);
+    let seeds = Bootstrap::new(15, Seed(0));
     let base = process(80, 43, false, |id| id as u32);
 
     // Stays in states that do not qualify: state 2 and some stays in state 1
@@ -452,11 +452,11 @@ fn refusals() {
     let c = process(10, 44, false, |id| id as u32);
     check_text(
         "refuse/no states",
-        &message(run(&c, &GRID, &[], Bootstrap::new(0, 0))),
+        &message(run(&c, &GRID, &[], Bootstrap::new(0, Seed(0)))),
     );
     check_text(
         "refuse/no landmark",
-        &message(run(&c, &[], &[1], Bootstrap::new(0, 0))),
+        &message(run(&c, &[], &[1], Bootstrap::new(0, Seed(0)))),
     );
     let short = SurvBuf::builder(c.stop.clone(), c.status.clone())
         .start(c.start[1..].to_vec())

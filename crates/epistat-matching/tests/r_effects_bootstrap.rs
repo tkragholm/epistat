@@ -34,7 +34,7 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_matching::UnitRole;
 use epistat_matching::effects::{
     BootstrapSpec, BootstrapStatistic, EffectSpec, MatchedSample, OutcomeModel, UnitData, bootstrap,
@@ -273,7 +273,7 @@ fn bootstrap_agrees_with_boot() {
         let out = bootstrap(
             &sample,
             &spec,
-            &BootstrapSpec::new(Bootstrap::new(REPLICATES, SEED)),
+            &BootstrapSpec::new(Bootstrap::new(REPLICATES, Seed(SEED))),
         )
         .unwrap();
         let rel = if binary { 1e-6 } else { 1e-9 };

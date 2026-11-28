@@ -62,7 +62,7 @@
 //! 3. Armstrong TB, Kolesár M. Optimal inference in a class of regression
 //!    models. Econometrica 2018;86(2):655-83. doi:10.3982/ECTA14434
 
-use epistat_core::{Bootstrap, Estimate, EventStudy, InputError, Interval, Level};
+use epistat_core::{Bootstrap, Estimate, EventStudy, InputError, Interval, Level, Seed};
 
 use crate::error::Error;
 pub use crate::sensitivity::SolverCounts;
@@ -306,7 +306,7 @@ pub struct HonestOptions {
     pub monotonicity: Option<Monotonicity>,
     /// The draws of the least-favourable critical value and their seed, for
     /// the `C-LF` hybrid. `HonestDiD`'s R default is 1,000 draws from seed 0,
-    /// so a caller who wants R's numbers passes `Bootstrap::new(1_000, 0)`.
+    /// so a caller who wants R's numbers passes `Bootstrap::new(1_000, Seed(0))`.
     pub least_favorable: Bootstrap,
 }
 
@@ -584,7 +584,7 @@ fn simulation(bootstrap: Bootstrap, what: &'static str) -> Result<LeastFavorable
     }
     Ok(LeastFavorableSimulation::new(
         bootstrap.replicates,
-        bootstrap.seed,
+        bootstrap.seed.value(),
     ))
 }
 
@@ -898,7 +898,7 @@ impl Surface {
         Self {
             basis: true,
             pairwise_contrasts: true,
-            random: Bootstrap::new(random, seed),
+            random: Bootstrap::new(random, Seed(seed)),
         }
     }
 }
@@ -961,7 +961,7 @@ pub struct JointPathOptions {
     /// The draws of the least-favourable critical value under the
     /// relative-magnitude restriction and their seed. `HonestDiD`'s R default
     /// is 1,000 draws from seed 0, so a caller who wants R's numbers passes
-    /// `Bootstrap::new(1_000, 0)`.
+    /// `Bootstrap::new(1_000, Seed(0))`.
     pub least_favorable: Bootstrap,
     /// The least-favourable first stage under the relative-magnitude
     /// restriction (`C-LF`); without it the conditional test alone. The
@@ -1307,7 +1307,7 @@ const fn engine_surface(surface: Surface) -> HonestOptimizationSurfaceConfig {
         include_basis: surface.basis,
         include_pairwise_contrasts: surface.pairwise_contrasts,
         random_unit_directions: surface.random.replicates,
-        random_seed: surface.random.seed,
+        random_seed: surface.random.seed.value(),
     }
 }
 

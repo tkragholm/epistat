@@ -27,12 +27,12 @@
 
 use std::collections::BTreeMap;
 
-use epistat_causal::Bootstrap as Replicates;
 use epistat_causal::Panel;
 use epistat_causal::gformula::{
     Action, Competing, Covariate, CovariateKind, GFormula, GFormulaOptions, History, Intervention,
     Outcome, PersonPeriods, Restriction, Rule, Term, gformula,
 };
+use epistat_causal::{Bootstrap as Replicates, Seed};
 use epistat_testkit::{
     Tolerance, assert_close, assert_within_standard_errors, load_json, na_f64_vec,
 };
@@ -504,7 +504,7 @@ fn bootstrap_matches_gformula_and_covers_the_truth() {
     let m = &r.main;
     let b = m.bootstrap.replicates;
     let options = GFormulaOptions {
-        bootstrap: Some(Replicates::new(b, SEED)),
+        bootstrap: Some(Replicates::new(b, Seed(SEED))),
         ..GFormulaOptions::new(SEED)
     };
     with_main(

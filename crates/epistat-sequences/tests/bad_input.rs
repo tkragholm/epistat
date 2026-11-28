@@ -5,7 +5,7 @@
 //! panel fixes how many weights there are, so it has the code of a length
 //! error.
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_sequences::positionwise::{self, silhouette};
 use epistat_sequences::{
     Distance, FitSettings, NullModel, Panel, Restarts, condensed, fit_typology, indel_for,
@@ -67,7 +67,7 @@ fn weights_of_a_typology_are_checked() {
                     &w,
                     NullModel::StateIndependence,
                     settings(distance),
-                    Bootstrap::new(2, 1),
+                    Bootstrap::new(2, Seed(1)),
                 )
             })
         });

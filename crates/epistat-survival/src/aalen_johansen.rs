@@ -1187,7 +1187,7 @@ pub fn bootstrap(
         },
         data.n_clusters(),
         cells,
-        bootstrap.seed,
+        bootstrap.seed.value(),
         ages.to_vec(),
         code,
         bootstrap.replicates,
@@ -1522,7 +1522,7 @@ mod tests {
         BootstrapOptions, Cell, Draw, Error, RowWindows, Scratch, advance_step, bootstrap, scatter,
     };
     use crate::surv::SurvData;
-    use epistat_core::Bootstrap;
+    use epistat_core::{Bootstrap, Seed};
 
     #[test]
     fn advance_steps_the_survival_and_each_incidence() {
@@ -1710,7 +1710,7 @@ mod tests {
                 &data,
                 &exposed,
                 &cells,
-                Bootstrap::new(5, 7),
+                Bootstrap::new(5, Seed(7)),
                 &[4.0, 2.0],
                 1,
                 &BootstrapOptions::new(Draw::PerCell),
@@ -1743,7 +1743,7 @@ mod tests {
                 &data,
                 &exposed,
                 &wide,
-                Bootstrap::new(2, 1),
+                Bootstrap::new(2, Seed(1)),
                 &[1.0],
                 1,
                 &opts
@@ -1755,7 +1755,7 @@ mod tests {
             &data,
             &exposed,
             &none,
-            Bootstrap::new(2, 1),
+            Bootstrap::new(2, Seed(1)),
             &[1.0],
             1,
             &BootstrapOptions::new(Draw::Shared),
@@ -1772,7 +1772,7 @@ mod estimate_tests {
     };
     use crate::surv::SurvData;
     use crate::timefix::TimeFix;
-    use epistat_core::Bootstrap;
+    use epistat_core::{Bootstrap, Seed};
 
     const EXACT: AalenJohansenOptions = AalenJohansenOptions {
         timefix: TimeFix::Exact,
@@ -1942,7 +1942,7 @@ mod estimate_tests {
             exposed,
             cells,
         } = frame();
-        let seeds = Bootstrap::new(7, 3);
+        let seeds = Bootstrap::new(7, Seed(3));
         let ages = [0.5, 6.0, 3.0, 30.0];
         let data = SurvData::builder(&time, &event)
             .n_codes(2)
@@ -1989,7 +1989,7 @@ mod estimate_tests {
             &data,
             &exposed,
             &all,
-            Bootstrap::new(5, 9),
+            Bootstrap::new(5, Seed(9)),
             &[2.0, 6.0],
             1,
             &opts,
@@ -2006,7 +2006,7 @@ mod estimate_tests {
             &first_five,
             &exposed[..5],
             &first,
-            Bootstrap::new(5, 9),
+            Bootstrap::new(5, Seed(9)),
             &[2.0, 6.0],
             1,
             &opts,
@@ -2031,7 +2031,7 @@ mod estimate_tests {
                 data,
                 exposed,
                 &cells,
-                Bootstrap::new(10, 1),
+                Bootstrap::new(10, Seed(1)),
                 &[1.0],
                 cause,
                 &BootstrapOptions::new(Draw::PerCell),

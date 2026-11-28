@@ -18,7 +18,7 @@
 #[expect(dead_code, reason = "the shared helpers serve several tests")]
 mod rows;
 
-use epistat_core::{Bootstrap as Draws, Classify};
+use epistat_core::{Bootstrap as Draws, Classify, Seed};
 use epistat_did::Error;
 use epistat_did::att_gt::{
     AggteOptions, AggteType, AttGt, AttGtOptions, Band, BasePeriod, Estimator,
@@ -537,7 +537,7 @@ fn check_bootstrap(label: &str, got: &Summary, want: &BootAgg, biters: usize) {
 fn boot_config(aggregation: AggteType, replicates: usize, seed: u64) -> AggteOptions {
     AggteOptions {
         aggregation,
-        bootstrap: Some(Draws::new(replicates, seed)),
+        bootstrap: Some(Draws::new(replicates, Seed(seed))),
         band: Band::Uniform,
         ..AggteOptions::default()
     }

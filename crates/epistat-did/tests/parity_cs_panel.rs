@@ -12,7 +12,7 @@ use epistat_testkit::load_json;
 #[path = "common/att_gt_rows.rs"]
 mod rows;
 
-use epistat_core::{Bootstrap, InputError, Level};
+use epistat_core::{Bootstrap, InputError, Level, Seed};
 use epistat_did::att_gt::{
     AggteOptions, AggteType, AggteWeights, AttGt, AttGtOptions, BasePeriod, ComparisonGroup,
     Design, Estimator, NuisanceOptions,
@@ -490,7 +490,7 @@ fn mboot_bands_agree_with_did_within_simulation_error() {
 
     let bands = out
         .fit
-        .bands(Level::default(), Bootstrap::new(20_000, 20_260_819))
+        .bands(Level::default(), Bootstrap::new(20_000, Seed(20_260_819)))
         .expect("mboot bands")
         .cells;
 
@@ -619,7 +619,7 @@ fn clustered_mboot_bands_agree_with_did() {
     );
     // `unit_order` is the sorted id list, which is exactly our unit index.
     assert_eq!(fixture.unit_order.len(), out.influence_functions[0].len());
-    let draws = Bootstrap::new(20_000, 20_260_819);
+    let draws = Bootstrap::new(20_000, Seed(20_260_819));
 
     let bands = out
         .fit
@@ -725,7 +725,7 @@ fn clustering_by_unit_reproduces_the_unclustered_standard_error() {
         );
     }
 
-    let draws = Bootstrap::new(2_000, 4_242);
+    let draws = Bootstrap::new(2_000, Seed(4_242));
     let plain_bands = out.fit.bands(Level::default(), draws).expect("plain");
     let singleton_bands = by_unit
         .fit

@@ -121,20 +121,26 @@ pub fn bootstrap_trials<T: Send>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::Seed;
 
     #[test]
     fn counts_follow_the_ids_and_the_seed() {
         let ids = [9, 9, 3, 3, 3, 12];
-        let a = PersonCounts::draw(&ids, Bootstrap::new(1, 5), 0);
+        let a = PersonCounts::draw(&ids, Bootstrap::new(1, Seed(5)), 0);
         assert_eq!(a.persons(), &[3, 9, 12]);
         assert_eq!(a.counts().iter().sum::<u32>(), 3);
-        assert_eq!(a, PersonCounts::draw(&[12, 3, 9], Bootstrap::new(1, 5), 0));
+        assert_eq!(
+            a,
+            PersonCounts::draw(&[12, 3, 9], Bootstrap::new(1, Seed(5)), 0)
+        );
         let w = a.case_weights(&ids).expect("known ids");
         assert_eq!(w[0], f64::from(a.count(9).expect("drawn from")));
         assert!(a.case_weights(&[4]).is_err());
-        let runs = bootstrap_trials(&ids, Bootstrap::new(2, 5), |c| Ok(c.counts().to_vec()));
+        let runs = bootstrap_trials(&ids, Bootstrap::new(2, Seed(5)), |c| {
+            Ok(c.counts().to_vec())
+        });
         for (r, run) in runs.iter().enumerate() {
-            let drawn = PersonCounts::draw(&ids, Bootstrap::new(2, 5), r);
+            let drawn = PersonCounts::draw(&ids, Bootstrap::new(2, Seed(5)), r);
             assert_eq!(run.as_ref().expect("runs"), drawn.counts());
         }
     }

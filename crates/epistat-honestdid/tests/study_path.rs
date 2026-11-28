@@ -22,7 +22,7 @@
 //! appends them to that file. Print them with
 //! `STUDY_PATH_PRINT=1 cargo test -p epistat-honestdid --test study_path -- --nocapture`.
 
-use epistat_core::{Bootstrap, Covariance, EventStudy, Level};
+use epistat_core::{Bootstrap, Covariance, EventStudy, Level, Seed};
 use epistat_did::StaggeredPanel;
 use epistat_did::att_gt::{
     self, Aggte, AggteOptions, AggteType, AttGt, AttGtOptions, BasePeriod, ComparisonGroup,
@@ -242,7 +242,7 @@ fn study_att_gt(
             ..NuisanceOptions::default()
         },
         level: Level::confidence(CONFIDENCE).expect("level"),
-        bootstrap: (!clustered).then_some(Bootstrap::new(1, 17_431)),
+        bootstrap: (!clustered).then_some(Bootstrap::new(1, Seed(17_431))),
         ..AttGtOptions::default()
     };
     att_gt::estimate(&panel, &options).expect("ATT(g,t)")
@@ -336,7 +336,7 @@ fn honest(out: &mut Vec<(&'static str, u64)>, study: &EventStudy) {
     let level = Level::confidence(CONFIDENCE).expect("level");
     let options = HonestOptions {
         level,
-        ..HonestOptions::new(Bootstrap::new(DRAWS, 0))
+        ..HonestOptions::new(Bootstrap::new(DRAWS, Seed(0)))
     };
     let scale = honest_scale(study.covariance());
     let input = scaled(study, scale);
@@ -405,8 +405,8 @@ fn honest(out: &mut Vec<(&'static str, u64)>, study: &EventStudy) {
             &JointPathOptions {
                 level,
                 null: 0.0 / scale,
-                calibration: Calibration::Gaussian(Bootstrap::new(DRAWS, JOINT_SEED)),
-                ..JointPathOptions::new(Bootstrap::new(DRAWS, 0))
+                calibration: Calibration::Gaussian(Bootstrap::new(DRAWS, Seed(JOINT_SEED))),
+                ..JointPathOptions::new(Bootstrap::new(DRAWS, Seed(0)))
             },
         )
         .expect("joint path");

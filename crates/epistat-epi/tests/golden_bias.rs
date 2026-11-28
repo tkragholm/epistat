@@ -4,7 +4,7 @@
 //! confounding. Recorded on aarch64 macOS and asserted only there. Elsewhere the
 //! test computes the hash and, when `EPISTAT_HASH_OUT` is set, appends it to
 //! that file.
-use epistat_core::{Bootstrap, Estimate, Level};
+use epistat_core::{Bootstrap, Estimate, Level, Seed};
 use epistat_epi::Counts2x2;
 use epistat_epi::bias::{
     ConfoundingMeasure, Dist, Kind, Pair, ProbOptions, probabilistic_confounding,
@@ -21,7 +21,7 @@ const T: Counts2x2 = Counts2x2 {
 
 fn options(random_error: bool) -> ProbOptions {
     ProbOptions {
-        bootstrap: Bootstrap::new(20_000, 2026),
+        bootstrap: Bootstrap::new(20_000, Seed(2026)),
         random_error,
         level: Level::alpha(0.05).unwrap(),
     }

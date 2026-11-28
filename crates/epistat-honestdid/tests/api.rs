@@ -19,7 +19,7 @@
 //!   `e_ref`: the difference of two independent unbiased estimates has
 //!   standard error at most `e + e_ref`, and five of those bound it.
 
-use epistat_core::{Bootstrap, Classify, Covariance, ErrorKind, EventStudy, Level};
+use epistat_core::{Bootstrap, Classify, Covariance, ErrorKind, EventStudy, Level, Seed};
 use epistat_honestdid::Error;
 use epistat_honestdid::honest::{
     self, Calibration, Directions, HonestOptions, JointMethod, JointPathOptions, Method,
@@ -121,7 +121,7 @@ fn relative_magnitude_matches_the_package_on_the_average_effect() {
         &study,
         &target,
         &restriction,
-        &HonestOptions::new(Bootstrap::new(1_000, 0)),
+        &HonestOptions::new(Bootstrap::new(1_000, Seed(0))),
     )
     .expect("summary");
     let identified = honest::summarize(
@@ -130,7 +130,7 @@ fn relative_magnitude_matches_the_package_on_the_average_effect() {
         &restriction,
         &HonestOptions {
             method: Some(Method::IdentifiedSet),
-            ..HonestOptions::new(Bootstrap::new(1_000, 0))
+            ..HonestOptions::new(Bootstrap::new(1_000, Seed(0)))
         },
     )
     .expect("identified sets");
@@ -225,7 +225,7 @@ fn smoothness_identified_sets_match_the_package() {
                 &Restriction::Smoothness { m: vec![case.m] },
                 &HonestOptions {
                     method: Some(Method::IdentifiedSet),
-                    ..HonestOptions::new(Bootstrap::new(1_000, 0))
+                    ..HonestOptions::new(Bootstrap::new(1_000, Seed(0)))
                 },
             )
             .expect("identified set");
@@ -306,7 +306,7 @@ fn pretrend_power_matches_the_tight_reference() {
         tolerance: 1e-6,
         ..PretrendOptions::new(
             Violation::Delta(case.delta.clone()),
-            Bootstrap::new(12, 20_260_125),
+            Bootstrap::new(12, Seed(20_260_125)),
         )
     };
     let analysis = pretrends::power(&study, &options).expect("power");
@@ -368,15 +368,15 @@ fn joint_regions_cover_every_period_and_calibrate_below_bonferroni() {
     let bonferroni = honest::joint_path(
         &study,
         &restriction,
-        &JointPathOptions::new(Bootstrap::new(1_000, 0)),
+        &JointPathOptions::new(Bootstrap::new(1_000, Seed(0))),
     )
     .expect("path");
     let gaussian = honest::joint_path(
         &study,
         &restriction,
         &JointPathOptions {
-            calibration: Calibration::Gaussian(Bootstrap::new(5_000, 7)),
-            ..JointPathOptions::new(Bootstrap::new(1_000, 0))
+            calibration: Calibration::Gaussian(Bootstrap::new(5_000, Seed(7))),
+            ..JointPathOptions::new(Bootstrap::new(1_000, Seed(0)))
         },
     )
     .expect("calibrated path");
@@ -395,7 +395,7 @@ fn joint_regions_cover_every_period_and_calibrate_below_bonferroni() {
         &JointPathOptions {
             method: JointMethod::Flci,
             directions: Directions::Weights(vec![vec![1.0, 0.0], vec![0.5, 0.5]]),
-            ..JointPathOptions::new(Bootstrap::new(1_000, 0))
+            ..JointPathOptions::new(Bootstrap::new(1_000, Seed(0)))
         },
     )
     .expect("joint FLCI");
@@ -418,7 +418,7 @@ fn unusable_input_is_refused_with_a_code() {
         mbar,
         bound: RmBound::ParallelTrends,
     };
-    let options = HonestOptions::new(Bootstrap::new(1_000, 0));
+    let options = HonestOptions::new(Bootstrap::new(1_000, Seed(0)));
     let cases: Vec<(Error, &str, ErrorKind)> = vec![
         (
             honest::summarize(
@@ -485,7 +485,7 @@ fn unusable_input_is_refused_with_a_code() {
             honest::joint_path(
                 &study,
                 &rm(vec![0.5, 1.0]),
-                &JointPathOptions::new(Bootstrap::new(1_000, 0)),
+                &JointPathOptions::new(Bootstrap::new(1_000, Seed(0))),
             )
             .unwrap_err(),
             "input.length",
@@ -498,7 +498,7 @@ fn unusable_input_is_refused_with_a_code() {
                     mbar: vec![1.0],
                     bound: RmBound::LinearTrend,
                 },
-                &JointPathOptions::new(Bootstrap::new(1_000, 0)),
+                &JointPathOptions::new(Bootstrap::new(1_000, Seed(0))),
             )
             .unwrap_err(),
             "honestdid.unsupported",
@@ -507,7 +507,7 @@ fn unusable_input_is_refused_with_a_code() {
         (
             pretrends::power(
                 &study,
-                &PretrendOptions::new(Violation::Power(1.5), Bootstrap::new(12, 1)),
+                &PretrendOptions::new(Violation::Power(1.5), Bootstrap::new(12, Seed(1))),
             )
             .unwrap_err(),
             "input.domain",
@@ -516,7 +516,7 @@ fn unusable_input_is_refused_with_a_code() {
         (
             pretrends::power(
                 &study,
-                &PretrendOptions::new(Violation::Delta(vec![0.0; 5]), Bootstrap::new(1, 1)),
+                &PretrendOptions::new(Violation::Delta(vec![0.0; 5]), Bootstrap::new(1, Seed(1))),
             )
             .unwrap_err(),
             "input.domain",
@@ -550,7 +550,7 @@ fn bad_columns_are_input_errors() {
     let study = small_study();
     let options = HonestOptions {
         method: Some(Method::IdentifiedSet),
-        ..HonestOptions::new(Bootstrap::new(1_000, 0))
+        ..HonestOptions::new(Bootstrap::new(1_000, Seed(0)))
     };
     let rm = |mbar: Vec<f64>| Restriction::RelativeMagnitude {
         mbar,
@@ -582,7 +582,7 @@ fn bad_columns_are_input_errors() {
             let violation = Violation::Delta(bad.column(&[0.0, 0.0, 0.0, 0.1, 0.2]));
             pretrends::power(
                 &study,
-                &PretrendOptions::new(violation, Bootstrap::new(12, 3)),
+                &PretrendOptions::new(violation, Bootstrap::new(12, Seed(3))),
             )
             .map(|analysis| analysis.power.value)
         })

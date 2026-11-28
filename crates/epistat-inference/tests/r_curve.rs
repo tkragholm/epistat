@@ -17,7 +17,7 @@
 //! limits are the estimate plus or minus a multiple of the standard error. The
 //! test prints the largest deviation in units of its bound.
 
-use epistat_core::{Bootstrap, Level};
+use epistat_core::{Bootstrap, Level, Seed};
 use epistat_inference::curve::{Band, contrast_curve};
 use epistat_inference::simultaneous::sup_t_from_covariance;
 use epistat_linalg::Mat;
@@ -165,7 +165,7 @@ fn simultaneous_band_uses_the_sup_t_value() {
     let basis =
         NaturalSpline::new(&case.interior, (case.boundary[0], case.boundary[1]), false).unwrap();
     let cov = matrix(&case.cov);
-    let band = Band::SupT(Bootstrap::new(20_000, 20_261_123));
+    let band = Band::SupT(Bootstrap::new(20_000, Seed(20_261_123)));
     let alpha = Level::alpha(0.05).unwrap();
     let run = || {
         contrast_curve(
@@ -219,7 +219,7 @@ fn simultaneous_band_uses_the_sup_t_value() {
         s
     });
     let draws = 200_000;
-    let want = sup_t_from_covariance(full.as_ref(), alpha, Bootstrap::new(draws, 7)).unwrap();
+    let want = sup_t_from_covariance(full.as_ref(), alpha, Bootstrap::new(draws, Seed(7))).unwrap();
     let got = contrast_curve(
         &basis,
         &small,
@@ -227,7 +227,7 @@ fn simultaneous_band_uses_the_sup_t_value() {
         &case.coef,
         cov.as_ref(),
         alpha,
-        Band::SupT(Bootstrap::new(draws, 11)),
+        Band::SupT(Bootstrap::new(draws, Seed(11))),
     )
     .unwrap()
     .critical;

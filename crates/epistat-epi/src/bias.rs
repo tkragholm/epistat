@@ -1239,7 +1239,7 @@ pub fn probabilistic_misclass(
         opts,
     );
     for r in 0..opts.bootstrap.replicates {
-        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed, r as u64));
+        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed.value(), r as u64));
         let mut parameters = [f64::NAN; 4];
         let draw = misclass_draw(
             t,
@@ -1387,7 +1387,7 @@ pub fn probabilistic_selection(
         opts,
     );
     for r in 0..opts.bootstrap.replicates {
-        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed, r as u64));
+        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed.value(), r as u64));
         let mut parameters = [f64::NAN; 4];
         let draw = (|| {
             let p = draw_selection(s, &mut stream, &mut parameters)?;
@@ -1503,7 +1503,7 @@ pub fn probabilistic_confounding(
         opts.random_error,
     );
     for r in 0..opts.bootstrap.replicates {
-        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed, r as u64));
+        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed.value(), r as u64));
         let mut parameters = [f64::NAN; 3];
         let adjusted = draw_confounding(
             t,
@@ -1560,6 +1560,7 @@ fn draw_confounding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::Seed;
     use epistat_testkit::Tolerance;
 
     const TRUE: Counts2x2 = Counts2x2 {
@@ -1898,7 +1899,7 @@ mod tests {
 
     fn options(draws: usize, random_error: bool) -> ProbOptions {
         ProbOptions {
-            bootstrap: Bootstrap::new(draws, 11),
+            bootstrap: Bootstrap::new(draws, Seed(11)),
             random_error,
             level: Level::alpha(0.05).unwrap(),
         }
@@ -1945,7 +1946,7 @@ mod tests {
                 &se,
                 &sp,
                 &ProbOptions {
-                    bootstrap: Bootstrap::new(2000, seed),
+                    bootstrap: Bootstrap::new(2000, Seed(seed)),
                     ..options(2000, true)
                 },
             )

@@ -164,8 +164,9 @@ impl NuisanceOptions {
     /// The internal configuration of the estimators at `level`, with
     /// `bootstrap` for their intervals.
     pub(crate) fn config(&self, level: Level, bootstrap: Option<Bootstrap>) -> DrDidConfig {
-        let (replicates, seed) =
-            bootstrap.map_or((0, 0), |bootstrap| (bootstrap.replicates, bootstrap.seed));
+        let (replicates, seed) = bootstrap.map_or((0, 0), |bootstrap| {
+            (bootstrap.replicates, bootstrap.seed.value())
+        });
         DrDidConfig {
             confidence_level: level.confidence_value(),
             propensity_clip: self.propensity_clip,

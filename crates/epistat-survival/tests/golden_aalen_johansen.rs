@@ -21,7 +21,7 @@
     reason = "the grid values and counts are far below the limits of the casts"
 )]
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_rng::Stream;
 use epistat_survival::aalen_johansen::{
     AalenJohansenOptions, BootstrapOptions, Draw, RowWindows, bootstrap, estimate,
@@ -215,7 +215,7 @@ fn options(draw: Draw) -> BootstrapOptions {
 
 /// `replicates` replicates from the root seed of the recorded draws.
 const fn root(replicates: usize) -> Bootstrap {
-    Bootstrap::new(replicates, 11)
+    Bootstrap::new(replicates, Seed(11))
 }
 
 fn bootstrap_cases(out: &mut Vec<(String, Vec<u64>)>) {

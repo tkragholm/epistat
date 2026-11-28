@@ -815,7 +815,7 @@ pub fn estimate_effects(
 pub fn cluster_resamples(n_clusters: usize, bootstrap: Bootstrap) -> Vec<Vec<usize>> {
     (0..bootstrap.replicates)
         .map(|r| {
-            let mut stream = Stream::seeded(replicate_seed(bootstrap.seed, r as u64));
+            let mut stream = Stream::seeded(replicate_seed(bootstrap.seed.value(), r as u64));
             (0..n_clusters).map(|_| stream.below(n_clusters)).collect()
         })
         .collect()
@@ -917,7 +917,7 @@ pub fn bootstrap(
     let points: Vec<Contrasts> = (0..settings.bootstrap.replicates)
         .into_par_iter()
         .map(|index| {
-            let counts = resample_counts(g, replicate_seed(seed, index as u64));
+            let counts = resample_counts(g, replicate_seed(seed.value(), index as u64));
             let rows: Vec<usize> = counts
                 .iter()
                 .zip(&members)
@@ -969,6 +969,7 @@ pub fn bootstrap(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_core::Seed;
 
     /// Eight pairs of one treated and one control row, outcomes chosen so that
     /// the weighted means are easy to read.
@@ -993,10 +994,20 @@ mod tests {
         let sample = pairs_sample();
         let spec = EffectSpec::new(OutcomeModel::Linear);
         assert_eq!(
-            bootstrap(&sample, &spec, &BootstrapSpec::new(Bootstrap::new(1, 7))).unwrap_err(),
+            bootstrap(
+                &sample,
+                &spec,
+                &BootstrapSpec::new(Bootstrap::new(1, Seed(7)))
+            )
+            .unwrap_err(),
             Error::Bootstrap
         );
-        let two = bootstrap(&sample, &spec, &BootstrapSpec::new(Bootstrap::new(2, 7))).unwrap();
+        let two = bootstrap(
+            &sample,
+            &spec,
+            &BootstrapSpec::new(Bootstrap::new(2, Seed(7))),
+        )
+        .unwrap();
         assert!(two.difference.summary.se.is_finite());
     }
 
@@ -1035,7 +1046,11 @@ mod tests {
                 .se
                 .is_some()
         );
-        let boot = bootstrap(&sample, &spec, &BootstrapSpec::new(Bootstrap::new(10, 1)));
+        let boot = bootstrap(
+            &sample,
+            &spec,
+            &BootstrapSpec::new(Bootstrap::new(10, Seed(1))),
+        );
         assert_eq!(boot.unwrap_err(), Error::MissingPair { row: 0 });
     }
 
@@ -1085,9 +1100,9 @@ mod tests {
         reason = "the released draws are checked against the counts"
     )]
     fn resamples_are_the_draws_the_counts_tally() {
-        let a = cluster_resamples(5, Bootstrap::new(20, 3));
-        assert_eq!(a, cluster_resamples(5, Bootstrap::new(20, 3)));
-        assert_ne!(a, cluster_resamples(5, Bootstrap::new(20, 4)));
+        let a = cluster_resamples(5, Bootstrap::new(20, Seed(3)));
+        assert_eq!(a, cluster_resamples(5, Bootstrap::new(20, Seed(3))));
+        assert_ne!(a, cluster_resamples(5, Bootstrap::new(20, Seed(4))));
         for (r, draw) in a.iter().enumerate() {
             let mut counts = vec![0_u32; 5];
             for &c in draw {
@@ -1101,7 +1116,12 @@ mod tests {
     fn the_bootstrap_summarises_its_replicates() {
         let sample = pairs_sample();
         let spec = EffectSpec::new(OutcomeModel::Linear);
-        let out = bootstrap(&sample, &spec, &BootstrapSpec::new(Bootstrap::new(50, 11))).unwrap();
+        let out = bootstrap(
+            &sample,
+            &spec,
+            &BootstrapSpec::new(Bootstrap::new(50, Seed(11))),
+        )
+        .unwrap();
         let d = &out.difference;
         assert_eq!(d.replicates.len(), 50);
         assert!((d.summary.estimate - 2.625).abs() < 1e-12);
@@ -1111,7 +1131,11 @@ mod tests {
                 && d.summary.estimate < d.summary.normal.upper.unwrap()
         );
         assert!(out.ratio.is_none() && out.odds_ratio.is_none());
-        let few = bootstrap(&sample, &spec, &BootstrapSpec::new(Bootstrap::new(0, 11)));
+        let few = bootstrap(
+            &sample,
+            &spec,
+            &BootstrapSpec::new(Bootstrap::new(0, Seed(11))),
+        );
         assert_eq!(few.unwrap_err(), Error::Bootstrap);
     }
 }

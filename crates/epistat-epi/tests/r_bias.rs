@@ -7,7 +7,7 @@
 //! standard errors of their difference, estimated from the ten runs on each
 //! side.
 
-use epistat_core::{Bootstrap, Estimate, Level};
+use epistat_core::{Bootstrap, Estimate, Level, Seed};
 use epistat_epi::Counts2x2;
 use epistat_epi::bias::{
     Confounder, ConfoundingMeasure, Dist, Kind, Misclass, Pair, ProbOptions, ProbResult,
@@ -235,7 +235,7 @@ fn runs(k: usize, reps: usize, f: impl Fn(&ProbOptions) -> ProbResult) -> Runs {
         results: (0..k)
             .map(|i| {
                 f(&ProbOptions {
-                    bootstrap: Bootstrap::new(reps, 4_000 + i as u64),
+                    bootstrap: Bootstrap::new(reps, Seed(4_000 + i as u64)),
                     random_error: true,
                     level: Level::alpha(0.05).unwrap(),
                 })
@@ -413,7 +413,7 @@ fn probabilistic_confounding_agrees_with_a_direct_simulation() {
                 &prevalence,
                 &association,
                 &ProbOptions {
-                    bootstrap: Bootstrap::new(r.reps, 9_000 + i as u64),
+                    bootstrap: Bootstrap::new(r.reps, Seed(9_000 + i as u64)),
                     random_error: false,
                     level: Level::alpha(0.05).unwrap(),
                 },
@@ -441,7 +441,7 @@ fn the_draws_do_not_depend_on_the_thread_pool() {
             &se,
             &sp,
             &ProbOptions {
-                bootstrap: Bootstrap::new(3_000, 1),
+                bootstrap: Bootstrap::new(3_000, Seed(1)),
                 random_error: true,
                 level: Level::alpha(0.05).unwrap(),
             },

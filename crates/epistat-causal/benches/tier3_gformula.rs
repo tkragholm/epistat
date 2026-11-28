@@ -22,12 +22,12 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
-use epistat_causal::Bootstrap;
 use epistat_causal::Panel;
 use epistat_causal::gformula::{
     Action, Competing, Covariate, CovariateKind, GFormulaOptions, History, Intervention, Outcome,
     PersonPeriods, Rule, Term, gformula,
 };
+use epistat_causal::{Bootstrap, Seed};
 
 /// The root seed of the simulation and the bootstrap of every run here.
 const GFORMULA_SEED: u64 = 20_261_124;
@@ -179,7 +179,7 @@ fn main() {
         censoring: None,
     };
     let options = GFormulaOptions {
-        bootstrap: (method == "gf_boot").then_some(Bootstrap::new(20, GFORMULA_SEED)),
+        bootstrap: (method == "gf_boot").then_some(Bootstrap::new(20, Seed(GFORMULA_SEED))),
         ..GFormulaOptions::new(GFORMULA_SEED)
     };
     let covariates = covariates();

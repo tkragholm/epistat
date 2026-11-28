@@ -17,7 +17,7 @@
 //! appends them to that file. Print them with
 //! `STUDY_PATH_PRINT=1 cargo test --test study_path -- --nocapture`.
 
-use epistat_core::{Bootstrap, Interval, Level};
+use epistat_core::{Bootstrap, Interval, Level, Seed};
 use epistat_inference::interval::{self, Percentile};
 use epistat_inference::simultaneous::multiplier_bands;
 use epistat_linalg::MatRef;
@@ -101,8 +101,8 @@ fn cases() -> Vec<(&'static str, u64)> {
     // Row-major aggregates by clusters is column-major clusters by aggregates.
     let influence = MatRef::from_column_major_slice(&flat, n_clusters, n_aggregates);
     let level = Level::alpha(BAND_ALPHA).expect("alpha");
-    let bands =
-        multiplier_bands(influence, None, level, Bootstrap::new(1_000, 17_431)).expect("bands");
+    let bands = multiplier_bands(influence, None, level, Bootstrap::new(1_000, Seed(17_431)))
+        .expect("bands");
     let mut h = Hash::new();
     h.f(bands.critical);
     for &se in &bands.se {

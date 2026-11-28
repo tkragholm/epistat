@@ -12,7 +12,7 @@
 //! | [`Interval`], [`Coverage`], [`Estimate`], [`Scale`], [`Contrast`] | how an estimator reports a number |
 //! | [`Covariance`] | a covariance matrix that knows its dimension |
 //! | [`EventStudy`] | event-study coefficients, their covariance and the reference period |
-//! | [`Bootstrap`] | the replicates and root seed of a randomised call |
+//! | [`Bootstrap`], [`Seed`] | the replicates and root seed of a randomised call |
 //! | [`Estimand`] | the population an average treatment effect is averaged over |
 //! | [`Codes`] | labels as dense `u32` codes in sorted order, and back |
 //! | [`Panel`] | the validated unit-and-period key of person-period data |
@@ -42,7 +42,7 @@ mod format;
 pub mod level;
 pub mod panel;
 
-pub use bootstrap::Bootstrap;
+pub use bootstrap::{Bootstrap, Seed};
 pub use check::InputError;
 pub use codes::Codes;
 pub use covariance::Covariance;

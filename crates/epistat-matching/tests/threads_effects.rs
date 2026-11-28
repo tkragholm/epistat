@@ -5,7 +5,7 @@
 //! with the logistic model and its interactions, so that the fit, the
 //! two-way covariance and every replicate enter the comparison.
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_matching::UnitRole;
 use epistat_matching::effects::{
     BootstrapSpec, Clustering, EffectSpec, MatchedSample, OutcomeModel, UnitData, bootstrap,
@@ -80,7 +80,12 @@ fn effects_do_not_depend_on_the_number_of_threads() {
         bits.push(out.difference.estimate);
         bits.push(out.difference.se.unwrap());
         bits.push(out.odds_ratio.unwrap().se.unwrap());
-        let boot = bootstrap(&sample, &spec, &BootstrapSpec::new(Bootstrap::new(60, 7))).unwrap();
+        let boot = bootstrap(
+            &sample,
+            &spec,
+            &BootstrapSpec::new(Bootstrap::new(60, Seed(7))),
+        )
+        .unwrap();
         bits.extend(boot.difference.replicates);
         bits.extend(boot.odds_ratio.unwrap().replicates);
         bits

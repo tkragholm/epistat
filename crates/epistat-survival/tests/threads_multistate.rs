@@ -15,7 +15,7 @@
     reason = "the inputs are a few thousand rows, far below the limits of the casts"
 )]
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::lowlevel::integrate;
@@ -141,7 +141,7 @@ fn bootstrap_does_not_depend_on_the_number_of_threads() {
     let ascending = event_times(&p);
     let mut descending = ascending.clone();
     descending.reverse();
-    let seeds = Bootstrap::new(41, 500);
+    let seeds = Bootstrap::new(41, Seed(500));
     for times in [&ascending, &descending] {
         for horizons in [vec![], vec![2.0, 7.5, 30.0]] {
             assert_same_on_pools(&POOLS, || {

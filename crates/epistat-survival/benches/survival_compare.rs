@@ -38,7 +38,7 @@
     reason = "a benchmark program: the cohort has fewer than 2^32 rows, times are whole days, and the names follow the R script"
 )]
 
-use epistat_core::Bootstrap;
+use epistat_core::{Bootstrap, Seed};
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::aalen_johansen::{
@@ -335,7 +335,7 @@ fn run_aj_boot(c: &Cohort, reps: usize) -> Timed {
             &data,
             &exposed,
             &cells,
-            Bootstrap::new(boot, SEED),
+            Bootstrap::new(boot, Seed(SEED)),
             &ages,
             1,
             &opts,

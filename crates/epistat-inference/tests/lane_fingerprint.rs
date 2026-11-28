@@ -8,7 +8,7 @@
 
 #![expect(deprecated, reason = "the digest pins the 0.3 influence functions")]
 
-use epistat_core::{Bootstrap, Level};
+use epistat_core::{Bootstrap, Level, Seed};
 use epistat_epi::{balance, rosenbaum, signed_rank};
 use epistat_inference::Clusters;
 use epistat_inference::bootstrap;
@@ -65,14 +65,14 @@ fn fingerprint() -> u64 {
         if let Some(cov) = clustered_covariance(&[&x, &w], &clusters).unwrap() {
             h = h.f64s(&cov);
         }
-        h = h.f64s(&bootstrap::cluster_totals(&[&x, &w], Bootstrap::new(40, 9)).unwrap());
-        h = h.f64s(&bootstrap::multiplier(1.0, &x, Bootstrap::new(40, 5)).unwrap());
+        h = h.f64s(&bootstrap::cluster_totals(&[&x, &w], Bootstrap::new(40, Seed(9))).unwrap());
+        h = h.f64s(&bootstrap::multiplier(1.0, &x, Bootstrap::new(40, Seed(5))).unwrap());
         let both = Mat::from_fn(x.len(), 2, |i, j| [x[i], w[i]][j]);
         let bands = multiplier_bands(
             both.as_ref(),
             None,
             Level::alpha(0.05).unwrap(),
-            Bootstrap::new(60, 3),
+            Bootstrap::new(60, Seed(3)),
         )
         .unwrap();
         h = h.f64(bands.critical);

@@ -664,7 +664,7 @@ mod tests {
     use super::*;
     use crate::utils::usize_to_f64;
     use approx::assert_relative_eq;
-    use epistat_core::Bootstrap;
+    use epistat_core::{Bootstrap, Seed};
     use rstest::rstest;
 
     fn fitted(x: &Mat<f64>, y: &[f64], options: TwoPartOptions) -> TwoPartModel {
@@ -904,7 +904,7 @@ mod tests {
         let result = bootstrap(
             &data,
             &TwoPartOptions::default(),
-            Bootstrap::new(10, 7),
+            Bootstrap::new(10, Seed(7)),
             Some(50),
         )
         .expect("bootstrap");
@@ -925,14 +925,14 @@ mod tests {
             .expect("data");
         let options = TwoPartOptions::default();
         assert!(matches!(
-            bootstrap(&data, &options, Bootstrap::new(5, 1), None),
+            bootstrap(&data, &options, Bootstrap::new(5, Seed(1)), None),
             Err(Error::Unsupported { .. })
         ));
         assert!(matches!(
             bootstrap(
                 &data.without_clusters(),
                 &options,
-                Bootstrap::new(0, 1),
+                Bootstrap::new(0, Seed(1)),
                 None
             ),
             Err(Error::Input(_))

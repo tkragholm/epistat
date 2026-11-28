@@ -145,7 +145,7 @@ pub fn sup_t_from_covariance(
         .map_init(
             || (vec![0.0; dim], vec![0.0; dim]),
             |(z, t), r| {
-                let mut stream = Stream::seeded(replicate_seed(seed, r));
+                let mut stream = Stream::seeded(replicate_seed(seed.value(), r));
                 stream.fill_normals(z);
                 lower_times(&lower, dim, z, t);
                 t.iter().map(|v| v.abs()).fold(0.0, f64::max)
@@ -282,7 +282,7 @@ pub fn multiplier_bands(
     draws.par_chunks_mut(width).enumerate().for_each_init(
         || vec![0.0; groups],
         |signs, (r, row)| {
-            let mut stream = Stream::seeded(replicate_seed(seed, r as u64));
+            let mut stream = Stream::seeded(replicate_seed(seed.value(), r as u64));
             for chunk in signs.chunks_mut(64) {
                 let mut bits = stream.next_u64();
                 for sign in chunk {
@@ -357,6 +357,7 @@ fn from_draws(
 mod tests {
     use super::*;
     use epistat_core::InputError;
+    use epistat_core::Seed;
     use epistat_linalg::Mat;
     use epistat_testkit::{assert_same_on_threads, load_json};
     use serde::Deserialize;
@@ -508,7 +509,7 @@ mod tests {
                 by_unit(&influence).as_ref(),
                 clusters,
                 alpha(0.05),
-                Bootstrap::new(700, 11),
+                Bootstrap::new(700, Seed(11)),
             )
             .unwrap();
             let (draws, sigma) = bootstrap_maxima(&influence, clusters, 700, 11);
@@ -544,7 +545,7 @@ mod tests {
                 by_unit(&influence).as_ref(),
                 clusters,
                 alpha(reference.alpha),
-                Bootstrap::new(reference.biters, 3),
+                Bootstrap::new(reference.biters, Seed(3)),
             )
             .unwrap();
             // The critical value: both runs have the standard error of the
@@ -595,7 +596,7 @@ mod tests {
                     by_unit(&influence).as_ref(),
                     clusters,
                     alpha(0.05),
-                    Bootstrap::new(900, 5),
+                    Bootstrap::new(900, Seed(5)),
                 )
                 .unwrap();
                 out.push(bands.critical);
@@ -613,7 +614,7 @@ mod tests {
             by_unit(&[&flat, &varied]).as_ref(),
             None,
             alpha(0.05),
-            Bootstrap::new(400, 1),
+            Bootstrap::new(400, Seed(1)),
         )
         .unwrap();
         assert_eq!(bands.se[0], None);
@@ -626,7 +627,7 @@ mod tests {
     #[test]
     fn invalid_input_is_an_error() {
         let column = [1.0, -1.0, 2.0];
-        let ten = Bootstrap::new(10, 1);
+        let ten = Bootstrap::new(10, Seed(1));
         let level = alpha(0.05);
         assert!(matches!(
             multiplier_bands(Mat::<f64>::zeros(3, 0).as_ref(), None, level, ten),
@@ -637,7 +638,7 @@ mod tests {
                 by_unit(&[&column]).as_ref(),
                 None,
                 level,
-                Bootstrap::new(0, 1)
+                Bootstrap::new(0, Seed(1))
             ),
             Err(Error::Input(InputError::Empty { .. }))
         ));
@@ -720,8 +721,8 @@ mod tests {
     #[test]
     fn sup_t_follows_its_definition_to_the_bit() {
         let cov = matrix(&reference().supt.cov);
-        let got =
-            sup_t_from_covariance(cov.as_ref(), alpha(0.05), Bootstrap::new(4_001, 9)).unwrap();
+        let got = sup_t_from_covariance(cov.as_ref(), alpha(0.05), Bootstrap::new(4_001, Seed(9)))
+            .unwrap();
         let mut maxima = supt_maxima(&cov, 4_001, 9);
         let expected = quantile::type7_unsorted(&mut maxima, 1.0 - 0.05).unwrap();
         assert_eq!(got.to_bits(), expected.to_bits());
@@ -736,7 +737,7 @@ mod tests {
             let got = sup_t_from_covariance(
                 cov.as_ref(),
                 Level::alpha(alpha).unwrap(),
-                Bootstrap::new(draws, 21),
+                Bootstrap::new(draws, Seed(21)),
             )
             .unwrap();
             let mut maxima = supt_maxima(&cov, draws, 21);
@@ -752,7 +753,8 @@ mod tests {
     fn sup_t_of_one_coordinate_is_the_pointwise_value() {
         let cov = Mat::from_fn(1, 1, |_, _| 7.5);
         let got =
-            sup_t_from_covariance(cov.as_ref(), alpha(0.05), Bootstrap::new(400_000, 4)).unwrap();
+            sup_t_from_covariance(cov.as_ref(), alpha(0.05), Bootstrap::new(400_000, Seed(4)))
+                .unwrap();
         assert!((got - normal::quantile(0.975)).abs() < 0.01);
     }
 
@@ -761,7 +763,8 @@ mod tests {
         let cov = matrix(&reference().supt.cov);
         assert_same_on_threads(|| {
             vec![
-                sup_t_from_covariance(cov.as_ref(), alpha(0.05), Bootstrap::new(5_000, 2)).unwrap(),
+                sup_t_from_covariance(cov.as_ref(), alpha(0.05), Bootstrap::new(5_000, Seed(2)))
+                    .unwrap(),
             ]
         });
     }
@@ -770,12 +773,17 @@ mod tests {
     fn sup_t_rejects_what_it_cannot_standardise() {
         let zero_variance = Mat::from_fn(2, 2, |i, j| if i == j && i == 0 { 0.0 } else { 1.0 });
         assert_eq!(
-            sup_t_from_covariance(zero_variance.as_ref(), alpha(0.05), Bootstrap::new(10, 1)),
+            sup_t_from_covariance(
+                zero_variance.as_ref(),
+                alpha(0.05),
+                Bootstrap::new(10, Seed(1))
+            ),
             Err(Error::NotFinite)
         );
         let above_one = Mat::from_fn(2, 2, |i, j| if i == j { 1.0 } else { 2.0 });
         assert!(
-            sup_t_from_covariance(above_one.as_ref(), alpha(0.05), Bootstrap::new(10, 1)).is_ok()
+            sup_t_from_covariance(above_one.as_ref(), alpha(0.05), Bootstrap::new(10, Seed(1)))
+                .is_ok()
         );
         let indefinite = Mat::from_fn(3, 3, |i, j| match (i, j) {
             _ if i == j => 1.0,
@@ -783,17 +791,21 @@ mod tests {
             _ => 0.9,
         });
         assert_eq!(
-            sup_t_from_covariance(indefinite.as_ref(), alpha(0.05), Bootstrap::new(10, 1)),
+            sup_t_from_covariance(
+                indefinite.as_ref(),
+                alpha(0.05),
+                Bootstrap::new(10, Seed(1))
+            ),
             Err(Error::NotFinite)
         );
         let wide = Mat::<f64>::zeros(2, 3);
         assert!(matches!(
-            sup_t_from_covariance(wide.as_ref(), alpha(0.05), Bootstrap::new(10, 1)),
+            sup_t_from_covariance(wide.as_ref(), alpha(0.05), Bootstrap::new(10, Seed(1))),
             Err(Error::Input(InputError::Length { .. }))
         ));
         let empty = Mat::<f64>::zeros(0, 0);
         assert!(matches!(
-            sup_t_from_covariance(empty.as_ref(), alpha(0.05), Bootstrap::new(10, 1)),
+            sup_t_from_covariance(empty.as_ref(), alpha(0.05), Bootstrap::new(10, Seed(1))),
             Err(Error::Input(InputError::Empty { .. }))
         ));
     }
