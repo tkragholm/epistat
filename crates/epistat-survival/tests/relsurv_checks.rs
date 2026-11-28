@@ -130,6 +130,73 @@ fn an_interval_without_events_is_at_the_boundary() {
     }
 }
 
+/// An interval whose deaths are few for its expected deaths can have the
+/// maximum of its excess hazard at 0. On the log scale its score vanishes as
+/// the log excess hazard goes to minus infinity, so Newton's method meets its
+/// tolerance on the way there, near `exp(-33)` for these data; the fit must
+/// report the interval at the boundary all the same.
+///
+/// The interval keeps one of its deaths. Aggregated into cells, the death is
+/// summed with the expected deaths of its cell, the derivative of the log
+/// likelihood in the excess hazard at 0 is negative, and the maximum is on the
+/// boundary. Record by record the death sits on a record whose expected deaths
+/// are a small share of one, so the derivative is positive and the maximum is
+/// inside, at a small excess hazard. The cohort with all its deaths has every
+/// interval inside.
+#[test]
+fn an_interval_with_few_deaths_reaches_the_boundary_when_it_should() {
+    let t = table();
+    let cuts = [0.0, 100.0, 300.0, 700.0, 1500.0, 2700.0];
+    let full = cohort(800, 5, false);
+    let mut few = cohort(800, 5, false);
+    let mut left = 1;
+    for i in 0..few.time.len() {
+        if few.status[i] == 1 && few.time[i] > 100.0 && few.time[i] <= 300.0 {
+            if left > 0 {
+                left -= 1;
+            } else {
+                few.status[i] = 0;
+            }
+        }
+    }
+    for aggregate in [false, true] {
+        let opts = ExcessOptions {
+            aggregate,
+            ..ExcessOptions::new(&cuts)
+        };
+        let data = full.data(false);
+        let expected = full.expected(&t, &data);
+        let fit = excess_hazard(&data, &[&full.x2], &expected, &opts).unwrap();
+        assert!(fit.converged);
+        assert!(fit.at_bound.iter().all(|&b| !b), "{:?}", fit.at_bound);
+        assert!(fit.coefficients.iter().all(|b| b.unwrap().is_finite()));
+
+        let data = few.data(false);
+        let expected = few.expected(&t, &data);
+        let fit = excess_hazard(&data, &[&few.x2], &expected, &opts).unwrap();
+        assert!(fit.converged);
+        assert_eq!(fit.events[1].to_bits(), 1.0_f64.to_bits());
+        assert!(fit.expected_events[1] > fit.events[1]);
+        let cov = fit.covariance.as_ref().unwrap();
+        if aggregate {
+            assert_eq!(fit.at_bound, [false, true, false, false, false, false]);
+            assert_eq!(fit.coefficients[1], Some(f64::NEG_INFINITY));
+            for k in 0..cuts.len() {
+                assert!(cov.get(1, k).is_none() && cov.get(k, 1).is_none());
+            }
+        } else {
+            assert!(fit.at_bound.iter().all(|&b| !b), "{:?}", fit.at_bound);
+            assert!(cov.get(1, 1).unwrap() > 0.0);
+        }
+        assert!(
+            fit.coefficients
+                .iter()
+                .enumerate()
+                .all(|(k, b)| (aggregate && k == 1) || b.unwrap().is_finite())
+        );
+    }
+}
+
 #[test]
 fn zero_expected_hazard_gives_the_ordinary_flexible_model() {
     let c = cohort(500, 7, true);

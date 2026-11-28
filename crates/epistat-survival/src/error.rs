@@ -99,10 +99,15 @@ pub enum Error {
     /// needs a binary status.
     #[error("{0}")]
     NotApplicable(String),
-    /// The options ask for something the method does not do, such as a
-    /// robust variance of the exact partial likelihood.
-    #[error("not available: {0}")]
-    Unsupported(String),
+    /// The options or the data ask for something the method does not do,
+    /// such as a robust variance of the exact partial likelihood.
+    #[error("not available: {message}")]
+    Unsupported {
+        /// The option or the column that asks for it, such as `"ties"`.
+        what: &'static str,
+        /// What is not available.
+        message: String,
+    },
     /// An iteration did not meet its criterion within its limit.
     #[error("no convergence in {iterations} iterations")]
     NotConverged {
@@ -122,8 +127,31 @@ pub enum Error {
     Singular,
     /// A quantity the computation needs is not defined on this input, such as
     /// a risk score that overflows or a risk set whose weights sum to 0.
-    #[error("undefined: {0}")]
-    Undefined(String),
+    #[error("undefined: {message}")]
+    Undefined {
+        /// The quantity, such as `"risk score"`.
+        what: &'static str,
+        /// Where and why it is not defined.
+        message: String,
+    },
+    /// A matrix the computation factorises or inverts, an information or a
+    /// covariance, is not positive definite where the method needs it to be.
+    #[error("undefined: {message}")]
+    NotPositiveDefinite {
+        /// The matrix, such as `"information"`.
+        matrix: &'static str,
+        /// Where it is not positive definite.
+        message: String,
+    },
+    /// The data do not identify a parameter of the model, such as a frailty
+    /// variance when every cluster has one row.
+    #[error("undefined: {message}")]
+    NotIdentified {
+        /// The parameter, such as `"theta"`.
+        what: &'static str,
+        /// Why the data do not identify it.
+        message: String,
+    },
     /// A step of the computation broke an invariant it relies on. This is a
     /// fault of the crate, not of the input, and is worth reporting.
     #[error("internal: {0}")]
@@ -216,14 +244,36 @@ impl Error {
         Self::Internal(message.into())
     }
 
-    /// An [`Error::Unsupported`] with `message`.
-    pub(crate) fn unsupported(message: impl Into<String>) -> Self {
-        Self::Unsupported(message.into())
+    /// An [`Error::Unsupported`] of `what` with `message`.
+    pub(crate) fn unsupported(what: &'static str, message: impl Into<String>) -> Self {
+        Self::Unsupported {
+            what,
+            message: message.into(),
+        }
     }
 
-    /// An [`Error::Undefined`] with `message`.
-    pub(crate) fn undefined(message: impl Into<String>) -> Self {
-        Self::Undefined(message.into())
+    /// An [`Error::Undefined`] of `what` with `message`.
+    pub(crate) fn undefined(what: &'static str, message: impl Into<String>) -> Self {
+        Self::Undefined {
+            what,
+            message: message.into(),
+        }
+    }
+
+    /// An [`Error::NotPositiveDefinite`] of `matrix` with `message`.
+    pub(crate) fn not_positive_definite(matrix: &'static str, message: impl Into<String>) -> Self {
+        Self::NotPositiveDefinite {
+            matrix,
+            message: message.into(),
+        }
+    }
+
+    /// An [`Error::NotIdentified`] of `what` with `message`.
+    pub(crate) fn not_identified(what: &'static str, message: impl Into<String>) -> Self {
+        Self::NotIdentified {
+            what,
+            message: message.into(),
+        }
     }
 
     /// A closure that wraps a glm error as the failure of `model`.
@@ -247,11 +297,13 @@ impl Classify for Error {
             | Self::NoInformation(_)
             | Self::Fit(_)
             | Self::NotApplicable(_) => ErrorKind::Input,
-            Self::Unsupported(_) => ErrorKind::Unsupported,
+            Self::Unsupported { .. } => ErrorKind::Unsupported,
             Self::NotConverged { .. }
             | Self::Aliased { .. }
             | Self::Singular
-            | Self::Undefined(_)
+            | Self::Undefined { .. }
+            | Self::NotPositiveDefinite { .. }
+            | Self::NotIdentified { .. }
             | Self::Internal(_) => ErrorKind::Numerical,
             Self::Model { source, .. } | Self::Glm(source) => source.kind(),
             Self::Linalg(error) => error.kind(),
@@ -274,11 +326,13 @@ impl Classify for Error {
             Self::NoInformation(_) => "survival.no_information",
             Self::Fit(_) => "survival.fit",
             Self::NotApplicable(_) => "survival.not_applicable",
-            Self::Unsupported(_) => "survival.unsupported",
+            Self::Unsupported { .. } => "survival.unsupported",
             Self::NotConverged { .. } => "survival.not_converged",
             Self::Aliased { .. } => "survival.aliased",
             Self::Singular => "survival.singular",
-            Self::Undefined(_) => "survival.undefined",
+            Self::Undefined { .. } => "survival.undefined",
+            Self::NotPositiveDefinite { .. } => "survival.not_positive_definite",
+            Self::NotIdentified { .. } => "survival.not_identified",
             Self::Internal(_) => "survival.internal",
             Self::Model { source, .. } | Self::Glm(source) => source.code(),
             Self::Linalg(error) => error.code(),
@@ -329,11 +383,13 @@ mod tests {
                 Error::fit("x"),
                 Error::not_applicable("x"),
                 Error::internal("x"),
-                Error::unsupported("x"),
+                Error::unsupported("x", "x"),
                 Error::NotConverged { iterations: 1 },
                 Error::Aliased { column: 0 },
                 Error::Singular,
-                Error::undefined("x"),
+                Error::undefined("x", "x"),
+                Error::not_positive_definite("x", "x"),
+                Error::not_identified("x", "x"),
             ],
         );
     }

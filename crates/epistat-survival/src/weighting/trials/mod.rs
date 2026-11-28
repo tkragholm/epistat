@@ -88,7 +88,7 @@
 //!    object-oriented implementation of clustered covariances in R. J Stat Softw
 //!    2020;95(1):1-36.
 
-use epistat_core::{Covariance, InputError, check};
+use epistat_core::{Covariance, InputError, Panel, check};
 use epistat_glm::robust::SandwichType;
 use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
@@ -115,10 +115,9 @@ pub use protocol::{ProtocolPanel, ProtocolRows, protocol_rows};
 /// The rows of a person-period data set, ordered by person and then period.
 #[derive(Debug, Clone, Copy)]
 pub struct PersonPeriod<'a> {
-    /// The person of each row. The rows of a person are next to each other.
-    pub id: &'a [u64],
-    /// The period of each row, increasing within a person.
-    pub period: &'a [i64],
+    /// The person (the unit) and the period of each row, sorted by person and
+    /// then period, each pair once.
+    pub panel: Panel<'a>,
     /// The treatment in the period.
     pub treatment: &'a [bool],
     /// The treatment in the period before, `false` in the first row of a person.
@@ -127,26 +126,12 @@ pub struct PersonPeriod<'a> {
 
 impl PersonPeriod<'_> {
     fn check(&self) -> Result<usize> {
-        let n = self.id.len();
+        let n = self.panel.len();
         check_lengths(&[
-            ("id", n),
-            ("period", self.period.len()),
+            ("panel", n),
             ("treatment", self.treatment.len()),
             ("previous", self.previous.len()),
         ])?;
-        for i in 1..n {
-            if self.id[i] == self.id[i - 1] && self.period[i] <= self.period[i - 1] {
-                return Err(Error::order(format!(
-                    "period: row {i} is not after the row before it for person {}",
-                    self.id[i]
-                )));
-            }
-            if self.id[i] < self.id[i - 1] {
-                return Err(Error::order(format!(
-                    "id: the rows of a person must be next to each other and ordered, row {i}"
-                )));
-            }
-        }
         Ok(n)
     }
 }
@@ -377,8 +362,7 @@ fn ratio_weights(
 ///
 /// # Errors
 ///
-/// An input error for rows that are not ordered by person and period, for
-/// slices or designs of another length than the rows, a design with no column or
+/// An input error for slices or designs of another length than the panel, a design with no column or
 /// a value that is not finite, a group of the previous treatment without rows or
 /// without both treated and untreated rows, `rows` of another length than the
 /// data or a case weight that is negative or not finite, and a model that has
@@ -444,8 +428,8 @@ pub fn censoring_weights(
 /// the follow-up time of each row.
 #[derive(Debug, Clone, Copy)]
 pub struct TrialRows<'a> {
-    /// The person of each row.
-    pub id: &'a [u64],
+    /// The person of each row, a unit code of the [`PersonPeriod`] panel.
+    pub unit: &'a [u32],
     /// The period in which the trial of the row started.
     pub trial_period: &'a [i64],
     /// The periods since the start of the trial, 0 in the first row.
@@ -477,38 +461,38 @@ pub fn trial_weights(
             found: row_weight.len(),
         }));
     }
-    let m = rows.id.len();
+    let m = rows.unit.len();
     check_lengths(&[
-        ("id", m),
+        ("unit", m),
         ("trial_period", rows.trial_period.len()),
         ("follow_up", rows.follow_up.len()),
     ])?;
     let mut cumulative = vec![0.0; n];
     for i in 0..n {
-        cumulative[i] = if i > 0 && data.id[i] == data.id[i - 1] {
+        cumulative[i] = if i > 0 && data.panel.unit()[i] == data.panel.unit()[i - 1] {
             cumulative[i - 1] * row_weight[i]
         } else {
             row_weight[i]
         };
     }
     // The first row of every person.
-    let mut starts: Vec<(u64, usize, usize)> = Vec::new();
+    let mut starts: Vec<(u32, usize, usize)> = Vec::new();
     for i in 0..n {
-        if i == 0 || data.id[i] != data.id[i - 1] {
-            starts.push((data.id[i], i, i + 1));
+        if i == 0 || data.panel.unit()[i] != data.panel.unit()[i - 1] {
+            starts.push((data.panel.unit()[i], i, i + 1));
         } else if let Some(last) = starts.last_mut() {
             last.2 = i + 1;
         }
     }
-    let find = |id: u64, period: i64| -> Option<usize> {
+    let find = |id: u32, period: i64| -> Option<usize> {
         let k = starts.binary_search_by_key(&id, |s| s.0).ok()?;
         let (_, a, b) = starts[k];
-        let at = data.period[a..b].binary_search(&period).ok()?;
+        let at = data.panel.period()[a..b].binary_search(&period).ok()?;
         Some(a + at)
     };
     (0..m)
         .map(|r| {
-            let (id, s) = (rows.id[r], rows.trial_period[r]);
+            let (id, s) = (rows.unit[r], rows.trial_period[r]);
             let t = s + rows.follow_up[r];
             let (Some(a), Some(b)) = (find(id, s), find(id, t)) else {
                 return Err(Error::out_of_range(format!(
@@ -530,8 +514,8 @@ pub struct MsmInput<'a> {
     pub outcome: &'a [bool],
     /// The weight of the row.
     pub weight: &'a [f64],
-    /// The person of the row, the cluster of the covariance.
-    pub person: &'a [u64],
+    /// The person of the row, a unit code, the cluster of the covariance.
+    pub unit: &'a [u32],
 }
 
 /// The outcome model of the stacked trials.
@@ -629,9 +613,9 @@ fn fit_design(input: &MsmInput<'_>) -> Result<Msm> {
     check_lengths(&[
         ("outcome", n),
         ("weight", input.weight.len()),
-        ("person", input.person.len()),
+        ("unit", input.unit.len()),
     ])?;
-    let clusters = Clusters::from_labels_first_seen(input.person);
+    let clusters = Clusters::from_labels_first_seen(input.unit);
     let rows = DesignRows {
         input,
         cluster: clusters.of(),
@@ -703,7 +687,7 @@ pub struct TrialSpans<'a> {
 /// [`TrialRows`], weighting them with [`trial_weights`] and fitting them as a
 /// [`MsmRows::Design`], and the memory is that of the data.
 ///
-/// [`fit_msm`] refuses rows that are not ordered by person and period, a
+/// [`fit_msm`] refuses a
 /// `row_weight` or `outcome` of another length than the rows, spans of
 /// different lengths, a trial that is empty, ends beyond the data or leaves
 /// its person, trials not ordered by their first row, and `columns` of 0.
@@ -765,7 +749,7 @@ fn fit_trials(t: &TrialDesign<'_>) -> Result<Msm> {
                 "trial {k}: the rows {a} to {b} are not a span of the {n} rows"
             )));
         }
-        if data.id[a] != data.id[b - 1] {
+        if data.panel.unit()[a] != data.panel.unit()[b - 1] {
             return Err(Error::order(format!(
                 "trial {k}: the rows {a} to {b} have more than one person"
             )));
@@ -778,7 +762,7 @@ fn fit_trials(t: &TrialDesign<'_>) -> Result<Msm> {
     }
     let mut cumulative = vec![0.0; n];
     for i in 0..n {
-        cumulative[i] = if i > 0 && data.id[i] == data.id[i - 1] {
+        cumulative[i] = if i > 0 && data.panel.unit()[i] == data.panel.unit()[i - 1] {
             cumulative[i - 1] * row_weight[i]
         } else {
             row_weight[i]
@@ -787,13 +771,13 @@ fn fit_trials(t: &TrialDesign<'_>) -> Result<Msm> {
     let stack = Stack::new(
         trials.start.len(),
         |k| trials.end[k] - trials.start[k],
-        |k| data.id[trials.start[k]],
+        |k| data.panel.unit()[trials.start[k]],
     );
     let rows = TrialStack {
         trials: *trials,
         outcome,
         cumulative,
-        person: data.id,
+        person: data.panel.unit(),
         columns,
         design,
         stack,
@@ -813,11 +797,11 @@ impl Stack {
     /// The stack of `spans` spans of `length(k)` rows each, with the clusters
     /// numbered in the order in which the `label` of a span first appears, the
     /// labels of a cluster being next to each other.
-    fn new(spans: usize, length: impl Fn(usize) -> usize, label: impl Fn(usize) -> u64) -> Self {
+    fn new(spans: usize, length: impl Fn(usize) -> usize, label: impl Fn(usize) -> u32) -> Self {
         let mut blocks = Vec::new();
         let (mut rows, mut clusters) = (0_usize, 0_usize);
         let mut next = 0_usize;
-        let mut last: Option<u64> = None;
+        let mut last: Option<u32> = None;
         for k in 0..spans {
             let len = length(k);
             if len == 0 {
@@ -857,7 +841,7 @@ struct TrialStack<'a> {
     trials: TrialSpans<'a>,
     outcome: &'a [bool],
     cumulative: Vec<f64>,
-    person: &'a [u64],
+    person: &'a [u32],
     columns: usize,
     design: &'a (dyn Fn(usize, usize, &mut [f64]) + Sync),
     stack: Stack,
@@ -939,6 +923,7 @@ pub(crate) fn fit_msm_rows(rows: &(impl Rows + Clustered), columns: usize) -> Re
     }
     if cov.as_slice().iter().any(Option::is_none) {
         return Err(Error::undefined(
+            "covariance",
             "outcome model: the covariance is not defined",
         ));
     }

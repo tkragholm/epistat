@@ -1363,6 +1363,7 @@ mod curve_tests {
     use crate::error::Result;
     use crate::surv::SurvData;
     use crate::timefix::TimeFix;
+    use epistat_testkit::Tolerance;
 
     /// The curves of the rows, with times compared as they are.
     fn curves(
@@ -1394,9 +1395,7 @@ mod curve_tests {
         )
     }
 
-    fn close(got: f64, expected: f64) -> bool {
-        (got - expected).abs() < 1e-12
-    }
+    const CLOSE: Tolerance = Tolerance::exact().abs(1e-12);
 
     /// `survival::survfit(Surv(time, state) ~ 1, weights = wt)`, R 4.6.1,
     /// survival 3.8.6. Rows are
@@ -1462,11 +1461,11 @@ mod curve_tests {
         assert_eq!(out.causes, vec![1, 2]);
         assert_eq!(out.time.len(), reference.len());
         for (row, &(t, risk, free, c1, c2)) in reference.iter().enumerate() {
-            assert!(close(out.time[row], t));
-            assert!(close(out.n_risk[row], risk), "n_risk at {t}");
-            assert!(close(out.event_free[row], free), "S at {t}");
-            assert!(close(out.cif[0][row], c1), "F_1 at {t}");
-            assert!(close(out.cif[1][row], c2), "F_2 at {t}");
+            assert!(CLOSE.accepts(out.time[row], t));
+            assert!(CLOSE.accepts(out.n_risk[row], risk), "n_risk at {t}");
+            assert!(CLOSE.accepts(out.event_free[row], free), "S at {t}");
+            assert!(CLOSE.accepts(out.cif[0][row], c1), "F_1 at {t}");
+            assert!(CLOSE.accepts(out.cif[1][row], c2), "F_2 at {t}");
         }
     }
 
@@ -1494,9 +1493,9 @@ mod curve_tests {
         let out = curves(&time, &event, &[1.0; 3], &[0; 3], Some(&entry)).unwrap();
         assert_eq!(out.time, vec![1.0, 3.0, 4.0]);
         assert_eq!(out.n_risk, vec![2.0, 2.0, 1.0]);
-        assert!(close(out.cif[0][0], 0.5));
-        assert!(close(out.cif[0][1], 0.75));
-        assert!(close(out.event_free[1], 0.25));
+        assert!(CLOSE.accepts(out.cif[0][0], 0.5));
+        assert!(CLOSE.accepts(out.cif[0][1], 0.75));
+        assert!(CLOSE.accepts(out.event_free[1], 0.25));
     }
 
     /// Someone entering exactly at an exit time is not at risk at it.

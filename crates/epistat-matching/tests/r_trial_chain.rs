@@ -28,6 +28,7 @@
 #[path = "common/trial_panel.rs"]
 mod trial_panel;
 use chrono::{Days, NaiveDate};
+use epistat_core::Panel;
 use epistat_linalg::Mat;
 use epistat_matching::{BaseRecord, TrialColumns, TrialOptions, expand_trial_columns};
 use epistat_survival::weighting::trials::{
@@ -37,7 +38,7 @@ use epistat_survival::weighting::trials::{
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
-use trial_panel::{PanelPeriod, PanelPerson, PanelRows, expand_trials, persons};
+use trial_panel::{PanelPeriod, PanelPerson, PanelRows, expand_trials};
 
 #[derive(Deserialize)]
 struct PanelJson {
@@ -93,7 +94,7 @@ fn day(period: i64) -> NaiveDate {
         .expect("a date")
 }
 
-/// The panel of the persons, in the order of their rows.
+/// The panel of the in the order of their rows.
 fn panel(p: &PanelJson) -> Vec<PanelPerson<BaseRecord>> {
     let mut panel: Vec<PanelPerson<BaseRecord>> = Vec::new();
     for i in 0..p.id.len() {
@@ -154,16 +155,14 @@ fn weights(
     }
     let treatment = cols.known_treatment().expect("known treatment");
     let chosen = protocol_rows(&ProtocolPanel {
-        id: &cols.person,
-        period: &cols.period,
+        panel: Panel::new(&cols.unit, &cols.period).expect("sorted"),
         treatment: &treatment,
         eligible: &cols.eligible,
         outcome: &cols.event,
     })
     .expect("rows");
     let data = PersonPeriod {
-        id: &cols.person,
-        period: &cols.period,
+        panel: Panel::new(&cols.unit, &cols.period).expect("sorted"),
         treatment: &treatment,
         previous: &chosen.previous,
     };
@@ -233,7 +232,7 @@ fn weights(
         &data,
         &row_weight,
         &TrialRows {
-            id: &persons(t),
+            unit: &t.unit,
             trial_period: &t.trial_period,
             follow_up: &t.follow_up_time,
         },
@@ -286,7 +285,7 @@ fn the_chain_agrees_with_trial_emulation() {
             design: design.as_ref(),
             outcome: &t.outcome,
             weight: &weight,
-            person: &persons(&t),
+            unit: &t.unit,
         })
         .expect("outcome model");
         let tol = if a.estimand == "ITT" { 1e-9 } else { 1e-6 };
@@ -319,8 +318,8 @@ fn the_columns_point_at_their_panel_rows() {
     let cols = PanelRows::of(&people);
     let t = expand_trial_columns(&cols.panel(), &TrialOptions::default()).expect("valid");
     for i in 0..t.len() {
-        assert_eq!(cols.person[t.row[i]], u64::from(t.unit[i]));
-        assert_eq!(cols.person[t.start_row[i]], u64::from(t.unit[i]));
+        assert_eq!(cols.unit[t.row[i]], t.unit[i]);
+        assert_eq!(cols.unit[t.start_row[i]], t.unit[i]);
         assert_eq!(cols.period[t.start_row[i]], t.trial_period[i]);
         assert_eq!(
             cols.period[t.row[i]] - cols.period[t.start_row[i]],

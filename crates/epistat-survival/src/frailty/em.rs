@@ -101,9 +101,9 @@ pub(super) fn fit_em(
             })?);
         }
         state.beta = beta;
-        let (lambda, events_part) = layout
-            .cluster_hazards(&state)
-            .ok_or_else(|| Error::undefined("a risk score of an EM step is not finite"))?;
+        let (lambda, events_part) = layout.cluster_hazards(&state).ok_or_else(|| {
+            Error::undefined("risk score", "a risk score of an EM step is not finite")
+        })?;
         marginal = events_part + gamma_part(&layout.events, &lambda, theta);
         for (i, w) in state.w.iter_mut().enumerate() {
             let d = f64::from(layout.events[i]);

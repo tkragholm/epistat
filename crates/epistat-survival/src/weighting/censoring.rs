@@ -218,7 +218,10 @@ impl<'a> ProcessNuisance<'a> {
                     .iter()
                     .map(|c| {
                         c.ok_or_else(|| {
-                            Error::undefined("the covariance of the censoring model is undefined")
+                            Error::undefined(
+                                "covariance",
+                                "the covariance of the censoring model is undefined",
+                            )
                         })
                     })
                     .collect::<Result<_>>()?;
@@ -245,7 +248,10 @@ impl<'a> ProcessNuisance<'a> {
                 let mut score = Mat::<f64>::zeros(n_units, p);
                 for (j, column) in residuals.iter().enumerate() {
                     let column = column.as_ref().ok_or_else(|| {
-                        Error::undefined("a score residual of the censoring model is undefined")
+                        Error::undefined(
+                            "score residual",
+                            "a score residual of the censoring model is undefined",
+                        )
                     })?;
                     for r in 0..n {
                         score[(unit_of_row[r], j)] += column[r];
@@ -323,8 +329,12 @@ impl<'a> ProcessNuisance<'a> {
                         e1[i * p + j] = ej[i];
                     }
                 }
-                let bad =
-                    || Error::undefined("the sum of the risk scores of a risk set is not positive");
+                let bad = || {
+                    Error::undefined(
+                        "risk set",
+                        "the sum of the risk scores of a risk set is not positive",
+                    )
+                };
                 for i in 0..l {
                     let count = counts[i];
                     let w = count as f64;

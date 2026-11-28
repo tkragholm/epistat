@@ -85,9 +85,10 @@ impl Csc<'_> {
             }
             let value = f64::exp(eta);
             if !value.is_finite() {
-                return Err(Error::undefined(format!(
-                    "levels: the risk score of row {row} in model {m} is not finite"
-                )));
+                return Err(Error::undefined(
+                    "risk score",
+                    format!("levels: the risk score of row {row} in model {m} is not finite"),
+                ));
             }
             buf.theta[m] = value;
         }

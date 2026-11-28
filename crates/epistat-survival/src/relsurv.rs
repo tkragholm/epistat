@@ -166,8 +166,11 @@
 //! fixed at an excess hazard of 0 and reported in [`ExcessFit::at_bound`]
 //! with the coefficient minus infinity, and the other parameters are fitted
 //! given it. An interval with events can also have its maximum there, when
-//! its deaths are few for its expected deaths; it is fixed when its fitted
-//! excess events fall below `1e-10` of its events.
+//! its deaths are few for its expected deaths. The log likelihood is concave
+//! in the excess hazard `exp(alpha_k)`, so the maximum is at 0 exactly when
+//! the derivative in the excess hazard at 0 is not positive; an interval is
+//! fixed when the fit converges with that derivative not positive, or when
+//! its fitted excess events fall below `1e-10` of its events before then.
 //!
 //! # Expected survival and relative survival
 //!

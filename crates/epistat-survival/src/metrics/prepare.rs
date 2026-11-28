@@ -74,11 +74,14 @@ pub(super) fn sort_rows(data: &SurvData<'_>, timefix: TimeFix, cause: u32) -> Re
     if let Some(weight) = data.weight()
         && let Some(position) = weight.iter().position(|&w| w != 0.0 && w != 1.0)
     {
-        return Err(Error::unsupported(format!(
-            "weights other than 0 and 1 are not supported, as in riskRegression::Score and \
+        return Err(Error::unsupported(
+            "weight",
+            format!(
+                "weights other than 0 and 1 are not supported, as in riskRegression::Score and \
                  timeROC: row {position} has weight {}",
-            weight[position]
-        )));
+                weight[position]
+            ),
+        ));
     }
     let mut rows: Vec<u32> = data.used_rows().collect();
     if rows.is_empty() {

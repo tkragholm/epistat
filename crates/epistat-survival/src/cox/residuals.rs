@@ -351,6 +351,7 @@ impl Stratum {
 
 fn not_finite_risk() -> Error {
     Error::undefined(
+        "risk score",
         "the risk score or the denominator of a partial-likelihood term is not finite and positive at the coefficients",
     )
 }
@@ -364,6 +365,7 @@ fn efron(ties: Ties) -> Result<bool> {
         Ok(false)
     } else {
         Err(Error::unsupported(
+            "ties",
             "ties: residuals are defined for Breslow and Efron ties only",
         ))
     }
@@ -781,6 +783,7 @@ fn deviance(m: f64, status: f64) -> Result<f64> {
         let argument = status - m;
         if argument <= 0.0 || !argument.is_finite() {
             return Err(Error::undefined(
+                "deviance residual",
                 "the martingale residual is not below the status, so its deviance residual is not defined",
             ));
         }

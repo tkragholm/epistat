@@ -222,7 +222,8 @@ pub fn net_survival_test(
         .map(|e| covariance[(e / r) * g + e % r])
         .collect();
     let lower = cholesky_lower(&reduced, r, Pivot::Strict).ok_or_else(|| {
-        Error::undefined(
+        Error::not_positive_definite(
+            "covariance",
             "the covariance of the test is not positive definite, as when a group has no deaths",
         )
     })?;

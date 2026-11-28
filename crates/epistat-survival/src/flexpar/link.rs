@@ -112,25 +112,40 @@ pub(super) fn survival(scale: FlexparScale, eta: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn close(a: f64, b: f64, tol: f64) -> bool {
-        (a - b).abs() <= tol * (1.0 + b.abs())
-    }
+    use epistat_testkit::Tolerance;
 
     #[test]
     fn the_tail_is_continuous_where_the_method_changes() {
         let (below, l_below) = log_upper_tail(TAIL_START - 1e-12);
         let (above, l_above) = log_upper_tail(TAIL_START + 1e-12);
-        assert!(close(below, above, 1e-11), "{below} {above}");
-        assert!(close(l_below, l_above, 1e-11));
+        assert!(
+            Tolerance::exact()
+                .abs(1e-11 * (1.0 + f64::abs(above)))
+                .accepts(below, above),
+            "{below} {above}"
+        );
+        assert!(
+            Tolerance::exact()
+                .abs(1e-11 * (1.0 + f64::abs(l_above)))
+                .accepts(l_below, l_above)
+        );
     }
 
     #[test]
     fn the_far_tail_matches_the_known_asymptote() {
         // ln Phi(-40) = -804.608442013754 (to 15 digits, from the asymptotic series).
         let (value, l) = log_upper_tail(40.0);
-        assert!(close(value, -804.608_442_013_754, 1e-13), "{value}");
-        assert!(close(l, 40.0 + 1.0 / 40.0, 1e-3));
+        assert!(
+            Tolerance::exact()
+                .abs(1e-13 * (1.0 + f64::abs(-804.608_442_013_754)))
+                .accepts(value, -804.608_442_013_754),
+            "{value}"
+        );
+        assert!(
+            Tolerance::exact()
+                .abs(1e-3 * (1.0 + f64::abs(40.0 + 1.0 / 40.0)))
+                .accepts(l, 40.0 + 1.0 / 40.0)
+        );
     }
 
     #[test]
@@ -145,8 +160,18 @@ mod tests {
                 let (_, h1, h2) = cumulative(scale, eta);
                 let d1 = (cumulative(scale, eta + h).0 - cumulative(scale, eta - h).0) / (2.0 * h);
                 let d2 = (cumulative(scale, eta + h).1 - cumulative(scale, eta - h).1) / (2.0 * h);
-                assert!(close(h1, d1, 1e-7), "{scale:?} {eta} {h1} {d1}");
-                assert!(close(h2, d2, 1e-6), "{scale:?} {eta} {h2} {d2}");
+                assert!(
+                    Tolerance::exact()
+                        .abs(1e-7 * (1.0 + f64::abs(d1)))
+                        .accepts(h1, d1),
+                    "{scale:?} {eta} {h1} {d1}"
+                );
+                assert!(
+                    Tolerance::exact()
+                        .abs(1e-6 * (1.0 + f64::abs(d2)))
+                        .accepts(h2, d2),
+                    "{scale:?} {eta} {h2} {d2}"
+                );
                 let (_, g1, g2) = log_hazard_factor(scale, eta);
                 let e1 = (log_hazard_factor(scale, eta + h).0
                     - log_hazard_factor(scale, eta - h).0)
@@ -154,8 +179,18 @@ mod tests {
                 let e2 = (log_hazard_factor(scale, eta + h).1
                     - log_hazard_factor(scale, eta - h).1)
                     / (2.0 * h);
-                assert!(close(g1, e1, 1e-7), "{scale:?} {eta} {g1} {e1}");
-                assert!(close(g2, e2, 1e-6), "{scale:?} {eta} {g2} {e2}");
+                assert!(
+                    Tolerance::exact()
+                        .abs(1e-7 * (1.0 + f64::abs(e1)))
+                        .accepts(g1, e1),
+                    "{scale:?} {eta} {g1} {e1}"
+                );
+                assert!(
+                    Tolerance::exact()
+                        .abs(1e-6 * (1.0 + f64::abs(e2)))
+                        .accepts(g2, e2),
+                    "{scale:?} {eta} {g2} {e2}"
+                );
             }
         }
     }
@@ -169,7 +204,11 @@ mod tests {
         ] {
             for &eta in &[-3.0, 0.0, 2.0] {
                 let s = survival(scale, eta);
-                assert!(close(s, (-cumulative(scale, eta).0).exp(), 1e-14));
+                assert!(
+                    Tolerance::exact()
+                        .abs(1e-14 * (1.0 + f64::abs((-cumulative(scale, eta).0).exp())))
+                        .accepts(s, (-cumulative(scale, eta).0).exp())
+                );
             }
         }
     }
