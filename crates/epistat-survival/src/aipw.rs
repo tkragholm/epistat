@@ -150,6 +150,7 @@ use epistat_core::Level;
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::{ClusterRule, Influence};
 use epistat_linalg::MatRef;
+use epistat_stats::weighted::ProbabilityBounds;
 use rayon::prelude::*;
 
 use crate::check::{check_ascending, refuse_non_finite, refuse_non_finite_matrix};
@@ -242,9 +243,10 @@ pub struct AipwSurvOptions {
     /// the augmentation, `None` for the exact sum over every censoring time. See
     /// the module documentation.
     pub grid: Option<usize>,
-    /// Limits `(lower, upper)` within `(0, 1)` to which the propensity is
-    /// truncated, which changes the estimand. `None` is no truncation.
-    pub truncation: Option<(f64, f64)>,
+    /// Limits within `(0, 1)`, the lower below the upper, to which the
+    /// propensity is truncated, which changes the estimand. `None` is no
+    /// truncation.
+    pub truncation: Option<ProbabilityBounds>,
 }
 
 impl Default for AipwSurvOptions {
@@ -498,7 +500,7 @@ impl Model {
         times: &[f64],
         opts: &AipwSurvOptions,
     ) -> Result<Self> {
-        if let Some((lo, hi)) = opts.truncation
+        if let Some((lo, hi)) = opts.truncation.map(|b| (b.lower(), b.upper()))
             && !(0.0 < lo && lo < hi && hi < 1.0)
         {
             return Err(Error::options(format!(
@@ -613,8 +615,8 @@ impl Model {
                     "treatment model: row {i} has fitted probability {e}"
                 )));
             }
-            if let Some((lo, hi)) = opts.truncation {
-                let clamped = e.clamp(lo, hi);
+            if let Some(bounds) = opts.truncation {
+                let clamped = bounds.apply(e);
                 if clamped.to_bits() != e.to_bits() {
                     n_trimmed += 1;
                 }

@@ -29,6 +29,7 @@
 //! most `16 omega sqrt(V_ii V_jj)`; the sums of the crate add `64 rows eps`.
 
 use epistat_linalg::Mat;
+use epistat_stats::weighted::ProbabilityBounds;
 use epistat_survival::SurvData;
 use epistat_survival::cox::CoxOptions;
 use epistat_survival::weighting::cox as wcox;
@@ -146,7 +147,9 @@ fn weights_match_ipwtm() {
             },
             z.as_ref(),
             zn.as_ref().map(Mat::as_ref),
-            &PooledOptions { truncation: trunc },
+            &PooledOptions {
+                truncation: trunc.map(|(l, u): (f64, f64)| ProbabilityBounds::new(l, u).unwrap()),
+            },
         )
         .unwrap();
         assert_eq!(c.stabilise, zn.is_some());
@@ -267,7 +270,9 @@ fn variances_match_the_jackknife_of_refits() {
             },
             z.as_ref(),
             zn.as_ref().map(Mat::as_ref),
-            &PooledOptions { truncation: trunc },
+            &PooledOptions {
+                truncation: trunc.map(|(l, u): (f64, f64)| ProbabilityBounds::new(l, u).unwrap()),
+            },
         )
         .unwrap();
         let x = Mat::from_fn(rows, 2, |i, j| {
