@@ -11,6 +11,7 @@ First release of `epistat-semicontinuous`, which continues `semicontinuous_model
 - `lognormal::fit`: log-normal regression with Duan's smearing retransformation.
 - `mtp::fit`: the marginalised two-part model for panels, fitted by MCMC with correlated subject effects.
 - `compare::compare`, `cross_validate` and `select`: in-sample metrics, AIC and BIC, K-fold cross-validation and the Park test, over a `Candidate`. A Tweedie power that is not finite is refused with `Error::Input`.
+- `ModelFitMetrics::r2` is `Option<f64>`, `None` where the outcome does not vary. The cross-validated `r2` is the mean over the folds where it is defined, as caret's `na.rm = TRUE`, and `None` when no fold has one; the other metrics average over every fold. `CrossValidation::constant_folds` and `ModelComparison::constant_folds` count the folds whose held-out outcome is constant. The ranking guard judges a score without `r2` by its RMSE being finite.
 - `CostData` and `LongitudinalData`, checked views of the columns built with `CostData::builder(x, y)`. Bad input is `Error::Input(InputError)`.
 - Each fit returns the model with its report. A relaxed ridge ladder for fits that fail is opt-in and reported, and an intercept-only logit is reported as `AllPositive`, `AllZero` or `Separable`. Undefined quantities (AIC, BIC, outcome shares, the Park test, MTP summaries) are `Option`.
 - `Error` with `Classify` and stable `semicontinuous.*` codes. Intervals are `epistat_core::Interval` and levels are `Level`. `MtpOptions`, `CompareOptions` and `CrossValidationOptions` are built with `new(seed)`, with no default seed.
@@ -18,4 +19,4 @@ First release of `epistat-semicontinuous`, which continues `semicontinuous_model
 
 ### Results
 
-No released result changes.
+No released result changes, apart from the R-squared of an outcome that does not vary. `semicontinuous_models` reported it as 0 and averaged that 0 into the cross-validated R-squared, which pulled the mean toward 0 and could carry a fit that failed on the other folds past the ranking guard. A cross-validation with a constant held-out fold now has a different `r2` and can rank differently; one without such a fold gives the same bits.
