@@ -14,6 +14,7 @@ use epistat_inference::Clusters;
 use epistat_inference::bootstrap;
 use epistat_inference::influence::{clustered_covariance, clustered_variance, standard_error};
 use epistat_inference::simultaneous::multiplier_bands;
+use epistat_linalg::Mat;
 use epistat_stats::{mcmc, quantile};
 use epistat_testkit::{Fingerprint, on_threads};
 
@@ -66,8 +67,9 @@ fn fingerprint() -> u64 {
         }
         h = h.f64s(&bootstrap::cluster_totals(&[&x, &w], Bootstrap::new(40, 9)).unwrap());
         h = h.f64s(&bootstrap::multiplier(1.0, &x, Bootstrap::new(40, 5)).unwrap());
+        let both = Mat::from_fn(x.len(), 2, |i, j| [x[i], w[i]][j]);
         let bands = multiplier_bands(
-            &[&x, &w],
+            both.as_ref(),
             None,
             Level::alpha(0.05).unwrap(),
             Bootstrap::new(60, 3),

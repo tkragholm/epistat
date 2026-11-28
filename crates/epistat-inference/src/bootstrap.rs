@@ -51,7 +51,8 @@
 //!
 //! # Edge cases
 //!
-//! - An empty influence function is [`InputError::Empty`].
+//! - An empty influence function is [`InputError::Empty`], and one with a
+//!   value that is not finite is [`InputError::NotFinite`].
 //! - No columns is [`InputError::Empty`] and columns of different lengths
 //!   are [`InputError::Length`]. Columns of length zero give an empty
 //!   result.
@@ -83,11 +84,13 @@ use crate::{Error, check_length, empty};
 ///
 /// # Errors
 ///
-/// [`InputError::Empty`] for an empty influence function.
+/// [`InputError::Empty`] for an empty influence function and
+/// [`InputError::NotFinite`] for a value of it that is not finite.
 pub fn multiplier(estimate: f64, psi: &[f64], bootstrap: Bootstrap) -> Result<Vec<f64>, Error> {
     if psi.is_empty() {
         return Err(empty("influence function"));
     }
+    epistat_core::check::finite("influence function", psi)?;
     let Bootstrap { replicates, seed } = bootstrap;
     let n = psi.len() as f64;
     let mut out = vec![0.0; replicates];

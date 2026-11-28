@@ -224,7 +224,7 @@ impl MultiplierBands {
 /// Simultaneous bands by the multiplier bootstrap, as `did::mboot` computes
 /// them.
 ///
-/// `influence` holds one column per estimate, each over the same `n` units.
+/// `influence` is `n x k`, one column per estimate over the same `n` units.
 /// `clusters` assigns the units to clusters, one multiplier per cluster, or is
 /// `None` for one per unit; the clusters are matched to the units by
 /// position. Replicate `r` draws its multipliers from
@@ -235,25 +235,27 @@ impl MultiplierBands {
 ///
 /// [`InputError::Empty`](epistat_core::InputError::Empty) for no estimates,
 /// no units or no replicates,
-/// [`InputError::Length`](epistat_core::InputError::Length) when the columns
-/// or the clusters differ in length,
+/// [`InputError::Length`](epistat_core::InputError::Length) when the clusters
+/// are not one per unit,
 /// [`InputError::NotFinite`](epistat_core::InputError::NotFinite) for an
 /// influence value that is not finite, and [`Error::NotFinite`] when no
 /// estimate gives a finite critical value.
 pub fn multiplier_bands(
-    influence: &[&[f64]],
+    influence: MatRef<'_, f64>,
     clusters: Option<&Clusters>,
     level: Level,
     bootstrap: Bootstrap,
 ) -> Result<MultiplierBands, Error> {
     let Bootstrap { replicates, seed } = bootstrap;
-    let n = influence
-        .first()
-        .ok_or_else(|| empty("influence columns"))?
-        .len();
-    for column in influence {
-        check_length("influence column", n, column.len())?;
-        epistat_core::check::finite("influence column", column)?;
+    if influence.ncols() == 0 {
+        return Err(empty("influence columns"));
+    }
+    let n = influence.nrows();
+    let columns: Vec<Vec<f64>> = (0..influence.ncols())
+        .map(|j| influence.col(j).iter().copied().collect())
+        .collect();
+    for (j, column) in columns.iter().enumerate() {
+        epistat_core::check::finite_column("influence", j, column)?;
     }
     if n == 0 {
         return Err(empty("influence column"));
@@ -261,13 +263,13 @@ pub fn multiplier_bands(
     if replicates == 0 {
         return Err(empty("replicates"));
     }
-    let width = influence.len();
+    let width = columns.len();
     let (sums, groups): (Vec<Vec<f64>>, usize) = match clusters {
-        None => (influence.iter().map(|c| c.to_vec()).collect(), n),
+        None => (columns, n),
         Some(clusters) => {
             check_length("clusters", n, clusters.len())?;
             (
-                influence
+                columns
                     .iter()
                     .map(|c| clusters.sums(c.iter().copied()))
                     .collect(),
@@ -412,6 +414,11 @@ mod tests {
         values.iter().map(Vec::as_slice).collect()
     }
 
+    /// The units-by-estimates matrix of one influence column per estimate.
+    fn by_unit(columns: &[&[f64]]) -> Mat<f64> {
+        Mat::from_fn(columns[0].len(), columns.len(), |i, j| columns[j][i])
+    }
+
     /// The Monte Carlo standard error of the `1 - alpha` quantile of `maxima`,
     /// `sqrt(p (1 - p) / B) / f`, with the density `f` from the quantiles at
     /// `p +- 0.01`.
@@ -497,8 +504,13 @@ mod tests {
         let influence = columns(&reference.influence);
         let clusters = Clusters::from_sorted_labels(&reference.clusters);
         for clusters in [None, Some(&clusters)] {
-            let got = multiplier_bands(&influence, clusters, alpha(0.05), Bootstrap::new(700, 11))
-                .unwrap();
+            let got = multiplier_bands(
+                by_unit(&influence).as_ref(),
+                clusters,
+                alpha(0.05),
+                Bootstrap::new(700, 11),
+            )
+            .unwrap();
             let (draws, sigma) = bootstrap_maxima(&influence, clusters, 700, 11);
             let groups = clusters.map_or(influence[0].len(), Clusters::count);
             let expected = from_draws(
@@ -529,7 +541,7 @@ mod tests {
         ];
         for (clusters, r) in runs {
             let ours = multiplier_bands(
-                &influence,
+                by_unit(&influence).as_ref(),
                 clusters,
                 alpha(reference.alpha),
                 Bootstrap::new(reference.biters, 3),
@@ -579,9 +591,13 @@ mod tests {
         assert_same_on_threads(|| {
             let mut out = Vec::new();
             for clusters in [None, Some(&clusters)] {
-                let bands =
-                    multiplier_bands(&influence, clusters, alpha(0.05), Bootstrap::new(900, 5))
-                        .unwrap();
+                let bands = multiplier_bands(
+                    by_unit(&influence).as_ref(),
+                    clusters,
+                    alpha(0.05),
+                    Bootstrap::new(900, 5),
+                )
+                .unwrap();
                 out.push(bands.critical);
                 out.extend(bands.se.iter().map(|s| s.unwrap()));
             }
@@ -593,8 +609,13 @@ mod tests {
     fn a_degenerate_estimate_has_no_standard_error() {
         let flat = vec![0.0; 50];
         let varied: Vec<f64> = (0..50).map(|i| f64::from(i % 7) - 3.0).collect();
-        let bands =
-            multiplier_bands(&[&flat, &varied], None, alpha(0.05), Bootstrap::new(400, 1)).unwrap();
+        let bands = multiplier_bands(
+            by_unit(&[&flat, &varied]).as_ref(),
+            None,
+            alpha(0.05),
+            Bootstrap::new(400, 1),
+        )
+        .unwrap();
         assert_eq!(bands.se[0], None);
         assert!(bands.se[1].is_some());
         assert!(bands.critical.is_finite());
@@ -608,19 +629,29 @@ mod tests {
         let ten = Bootstrap::new(10, 1);
         let level = alpha(0.05);
         assert!(matches!(
-            multiplier_bands(&[], None, level, ten),
+            multiplier_bands(Mat::<f64>::zeros(3, 0).as_ref(), None, level, ten),
             Err(Error::Input(InputError::Empty { .. }))
         ));
         assert!(matches!(
-            multiplier_bands(&[&column], None, level, Bootstrap::new(0, 1)),
+            multiplier_bands(
+                by_unit(&[&column]).as_ref(),
+                None,
+                level,
+                Bootstrap::new(0, 1)
+            ),
             Err(Error::Input(InputError::Empty { .. }))
         ));
         assert!(matches!(
-            multiplier_bands(&[&column], Some(&Clusters::singletons(2)), level, ten),
+            multiplier_bands(
+                by_unit(&[&column]).as_ref(),
+                Some(&Clusters::singletons(2)),
+                level,
+                ten
+            ),
             Err(Error::Input(InputError::Length { .. }))
         ));
         assert!(matches!(
-            multiplier_bands(&[&[1.0, f64::NAN, 0.0]], None, level, ten),
+            multiplier_bands(by_unit(&[&[1.0, f64::NAN, 0.0]]).as_ref(), None, level, ten),
             Err(Error::Input(InputError::NotFinite { row: 1, .. }))
         ));
     }
