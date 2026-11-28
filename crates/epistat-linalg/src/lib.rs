@@ -9,9 +9,9 @@
 //! re-exported for the same reason. [`matmul`], [`Accum`], [`MatMut`], [`Par`]
 //! and [`get_global_parallelism`] are faer's general matrix product and the
 //! types it takes, for callers that need the product of faer's kernel into
-//! their own buffers. [`Solve`] and [`SolveLstsq`] are the traits of faer's
-//! factorisation objects; they remain re-exported until epistat-did calls
-//! the wrappers of [`solve`](mod@solve) instead, and are then removed.
+//! their own buffers. faer's factorisation traits are not re-exported: a
+//! caller solves through [`solve`](crate::solve()), [`Factor`] or the
+//! wrappers of [`solve`](mod@solve), each of which runs on one thread.
 //!
 //! The modules, each with its own method notes:
 //!
@@ -87,7 +87,6 @@ pub use factor::{
     inverse, solve,
 };
 pub use faer::linalg::matmul::matmul;
-pub use faer::prelude::{Solve, SolveLstsq};
 pub use faer::{Accum, Col, Mat, MatMut, MatRef, Par, Side, get_global_parallelism, mat};
 
 /// The error of the products over a design under its name in 0.3.

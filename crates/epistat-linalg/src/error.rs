@@ -123,10 +123,7 @@ mod tests {
             Error::TooFewObservations,
             Error::TooFewDistinct,
         ];
-        let mut codes: Vec<&str> = all.iter().map(Classify::code).collect();
-        codes.sort_unstable();
-        codes.dedup();
-        assert_eq!(codes.len(), all.len());
+        epistat_testkit::assert_codes_unique("linalg", &all);
         assert_eq!(Error::Singular.kind(), ErrorKind::Numerical);
         assert_eq!(Error::TooFewKnots.kind(), ErrorKind::Input);
         let weight = weight_error(&[1.0, -2.0]).unwrap();
