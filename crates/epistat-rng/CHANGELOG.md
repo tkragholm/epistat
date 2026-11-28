@@ -17,6 +17,7 @@ The draws that take parameters now return one error type that carries a stable c
 - `replicate_seeds(bootstrap)`, the seed of every replicate of a `Bootstrap`.
 - `Stream::binomial(n, p)`, a binomial draw that stays fast for large `n`.
 - `mix64`, the SplitMix64 output function without the increment. `splitmix64(x)` is `mix64(x + GAMMA)`.
+- `Stream::wishart_from_scale` and `Stream::inverse_wishart_from_scale`, which take the scale matrix itself, read its dimension from its length, refuse one that is not symmetric or not positive definite, and factorise it, so the draws are those of `wishart` and `inverse_wishart` with its Cholesky factor. The factor forms stay; a scale passed to them where the factor belongs drew from another distribution without an error.
 - `rademacher_sums`, which draws `rademacher_sum` for several streams at once and returns, per stream, the same value and final state as the single-stream call.
 
 ### Deprecated

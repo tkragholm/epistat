@@ -243,11 +243,58 @@ impl Stream {
         factor
     }
 
+    /// A Wishart matrix with `df` degrees of freedom and scale `S`, given as
+    /// the row-major `S` itself, by the Bartlett decomposition: the draws of
+    /// [`Stream::wishart`] with `L` the Cholesky factor of `S`, computed
+    /// here, and the dimension read from the length of `scale`. The mean of
+    /// the result is `df S`.
+    ///
+    /// ```
+    /// use epistat_rng::Stream;
+    ///
+    /// let scale = [2.0, 0.5, 0.5, 1.0];
+    /// let w = Stream::seeded(7).wishart_from_scale(5.0, &scale)?;
+    /// assert_eq!(w.len(), 4);
+    /// assert_eq!(w[1], w[2]);
+    /// // A factor given where the scale belongs is not symmetric.
+    /// assert!(Stream::seeded(7).wishart_from_scale(5.0, &[1.4, 0.0, 0.3, 0.9]).is_err());
+    /// # Ok::<(), epistat_rng::Error>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] when `scale` is empty or its length is not a square, an
+    /// entry is not finite, it is not symmetric to `1e-12` relative, it is
+    /// not positive definite, or `df` is not above the dimension minus 1.
+    pub fn wishart_from_scale(&mut self, df: f64, scale: &[f64]) -> Result<Vec<f64>, Error> {
+        let (factor, dim) = scale_factor(scale)?;
+        self.wishart(df, &factor, dim)
+    }
+
+    /// [`Stream::inverse_wishart`] with the scale `S` given itself, as
+    /// [`Stream::wishart_from_scale`] takes it. The mean is
+    /// `S / (df - dim - 1)` for `df > dim + 1`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Stream::wishart_from_scale`].
+    pub fn inverse_wishart_from_scale(
+        &mut self,
+        df: f64,
+        scale: &[f64],
+    ) -> Result<Vec<f64>, Error> {
+        let (factor, dim) = scale_factor(scale)?;
+        self.inverse_wishart(df, &factor, dim)
+    }
+
     /// A Wishart matrix with `df` degrees of freedom and scale `L L'`, as a
     /// row-major `dim` by `dim` matrix, by the Bartlett decomposition.
     ///
-    /// `scale_cholesky` is `L`, row-major and lower triangular. Its upper
-    /// triangle is not read. The mean of the result is `df L L'`.
+    /// `scale_cholesky` is `L`, row-major and lower triangular, not the
+    /// scale `S` itself: a scale passed here gives draws of another
+    /// distribution without an error, since only the triangle below and on
+    /// the diagonal is read and checked. [`Stream::wishart_from_scale`]
+    /// takes `S` and factorises it. The mean of the result is `df L L'`.
     ///
     /// # Errors
     ///
@@ -330,6 +377,72 @@ impl Stream {
         }
         Ok(out)
     }
+}
+
+/// The largest relative difference between `S[i][j]` and `S[j][i]` that
+/// [`scale_factor`] takes for rounding.
+const SYMMETRY_TOLERANCE: f64 = 1e-12;
+
+/// The lower Cholesky factor of the row-major symmetric `scale` and its
+/// dimension, by the column-by-column algorithm in a fixed order, reading
+/// the lower triangle.
+fn scale_factor(scale: &[f64]) -> Result<(Vec<f64>, usize), Error> {
+    if scale.is_empty() {
+        return Err(Error::Input(InputError::Empty { what: "scale" }));
+    }
+    let dim = scale.len().isqrt();
+    if dim * dim != scale.len() {
+        return Err(Error::Input(InputError::Length {
+            what: "scale",
+            expected: (dim + 1) * (dim + 1),
+            found: scale.len(),
+        }));
+    }
+    if let Some(at) = scale.iter().position(|v| !v.is_finite()) {
+        return Err(Error::Input(InputError::NotFinite {
+            what: "scale",
+            row: at / dim,
+            column: Some(at % dim),
+        }));
+    }
+    for row in 0..dim {
+        for col in 0..row {
+            let (below, above) = (scale[row * dim + col], scale[col * dim + row]);
+            if (below - above).abs() > SYMMETRY_TOLERANCE * below.abs().max(above.abs()) {
+                return Err(Error::Input(InputError::Domain {
+                    what: "scale",
+                    value: above,
+                    domain: "a symmetric matrix",
+                    row: Some(col),
+                }));
+            }
+        }
+    }
+    let mut factor = vec![0.0; dim * dim];
+    for col in 0..dim {
+        let mut pivot = scale[col * dim + col];
+        for k in 0..col {
+            pivot -= factor[col * dim + k] * factor[col * dim + k];
+        }
+        if pivot.is_nan() || pivot <= 0.0 {
+            return Err(Error::Input(InputError::Domain {
+                what: "scale",
+                value: pivot,
+                domain: "a positive definite matrix",
+                row: Some(col),
+            }));
+        }
+        let diagonal = pivot.sqrt();
+        factor[col * dim + col] = diagonal;
+        for row in col + 1..dim {
+            let mut value = scale[row * dim + col];
+            for k in 0..col {
+                value -= factor[row * dim + k] * factor[col * dim + k];
+            }
+            factor[row * dim + col] = value / diagonal;
+        }
+    }
+    Ok((factor, dim))
 }
 
 fn check_wishart(df: f64, scale_cholesky: &[f64], dim: usize) -> Result<(), Error> {
