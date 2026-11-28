@@ -14,16 +14,20 @@
 //! ```
 //!
 //! which avoids the cancellation of `x ln m - m - ln x!` for large `x`.
-//! `bd0` is summed as a series when `x` is within a tenth of `np`. The tails
-//! are regularised gamma and beta functions: `P(X <= x) = Q(x + 1, m)` for
-//! the Poisson distribution and `I_{1 - p}(n - x, x + 1)` for the binomial.
+//! `stirlerr` is the Stirling correction `ln Γ*(x)` and `bd0(x, m)` is
+//! `x (λ - 1 - ln λ)` at `λ = m / x`, both from `dist/stirling.rs`, which
+//! the incomplete gamma function shares. The tails are regularised gamma and
+//! beta functions: `P(X <= x) = Q(x + 1, m)` for the Poisson distribution and
+//! `I_{1 - p}(n - x, x + 1)` for the binomial.
 //!
 //! # Accuracy
 //!
-//! `stirlerr` below 15 is computed from `ln_gamma` and above 15 from its
-//! series to the term in `n^-9`, whose first omitted term is below `2e-16`.
-//! The point probabilities then agree with R's to about `1e-14` relative, the
-//! tails to the accuracy of the incomplete gamma and beta functions.
+//! `stirlerr` from 10 on is the Stirling series to the term in `x^-15`,
+//! whose first omitted term is below `2e-18`, and below 10 the difference
+//! `ln Γ(x) - (x - 1/2) ln x + x - ln(2π)/2`, with an absolute error of about
+//! `1e-14` at most. `bd0` is formed without cancellation near `x = m`. The
+//! point probabilities are then accurate to about `1e-14` relative, the tails
+//! to the accuracy of the incomplete gamma and beta functions.
 //!
 //! # References
 //!
@@ -31,47 +35,10 @@
 //!    2000. <https://www.r-project.org/doc/reports/CLoader-dbinom-2002.pdf>
 
 use super::beta::regularised as regularised_beta;
-use super::gamma::{ln_gamma, lower_regularised, upper_regularised};
+use super::gamma::{lower_regularised, upper_regularised};
+use super::stirling::{bd0, ln_gamma_star as stirlerr};
 
-const LN_SQRT_2PI: f64 = 0.918_938_533_204_672_8;
 const TWO_PI: f64 = std::f64::consts::TAU;
-
-fn stirlerr(n: f64) -> f64 {
-    if n <= 15.0 {
-        return ln_gamma(n + 1.0) - (n + 0.5) * n.ln() + n - LN_SQRT_2PI;
-    }
-    let n2 = n * n;
-    let s0 = 1.0 / 12.0;
-    let s1 = 1.0 / 360.0;
-    let s2 = 1.0 / 1260.0;
-    let s3 = 1.0 / 1680.0;
-    let s4 = 1.0 / 1188.0;
-    (s0 - (s1 - (s2 - (s3 - s4 / n2) / n2) / n2) / n2) / n
-}
-
-#[expect(
-    clippy::float_cmp,
-    reason = "the series stops when a term no longer changes the sum"
-)]
-fn bd0(x: f64, np: f64) -> f64 {
-    if (x - np).abs() < 0.1 * (x + np) {
-        let v = (x - np) / (x + np);
-        let mut s = (x - np) * v;
-        let mut ej = 2.0 * x * v;
-        let v2 = v * v;
-        for j in 1..1000 {
-            ej *= v2;
-            let s1 = s + ej / f64::from(2 * j + 1);
-            if s1 == s {
-                return s1;
-            }
-            s = s1;
-        }
-        s
-    } else {
-        x * (x / np).ln() + np - x
-    }
-}
 
 /// The count `x` stands for, R's rule for a point probability: `x` rounded
 /// when it is within `1e-7 max(1, |x|)` of a non-negative integer, `None`

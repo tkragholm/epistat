@@ -327,6 +327,6 @@ fn fingerprint_of_the_strata() {
     eprintln!("sir fingerprint {hash:#018x}");
     epistat_testkit::hash_out("fingerprint_of_the_strata", hash);
     if epistat_testkit::RECORDED_PLATFORM {
-        assert_eq!(hash, 0xfd35_816f_3da9_0113);
+        assert_eq!(hash, 0xf4d9_9389_3161_d45c);
     }
 }

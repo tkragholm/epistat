@@ -204,7 +204,7 @@ fn cases() -> Vec<(&'static str, u64)> {
 
 const GOLDEN: &[(&str, u64)] = &[
     ("normal_compat", 0xe56f_cc5e_b5a8_cf1f),
-    ("normal_quantile_chi_square_sf", 0x3122_08bc_1d2b_b7fb),
+    ("normal_quantile_chi_square_sf", 0x1389_f9cd_138a_ac97),
     ("rounded_rank", 0xa822_9567_b4df_a6f7),
     ("weighted_moments", 0x43b3_eae4_9d1c_c391),
     ("standardisation", 0xe413_b9e2_bf88_91fa),

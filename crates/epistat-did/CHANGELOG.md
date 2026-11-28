@@ -27,3 +27,4 @@ Deprecated items are removed in the next release that breaks the API.
 ### Results
 
 - The improved two-period estimators (`Estimator::Improved`) form their interval with the normal quantile of the level asked for, as the other two-period estimators do, where they reported `att +- 1.96 se` labelled 95 per cent whatever the level, as `DRDID`'s `drdid_imp_panel` and `drdid_imp_rc` do. At 95 per cent each limit moves by `(1.96 - 1.959964) se`, about `3.6e-5 se`; at other levels the interval is the one asked for. Estimates and standard errors do not change.
+- The Wald p-value of the pre-test of `att_gt` and the Hausman p-value of `did_cc` change by at most 9e-16 relative (8 units in the last place), because the chi-square tail in `epistat-stats` is computed by a new method.
