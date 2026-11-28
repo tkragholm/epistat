@@ -38,8 +38,8 @@
 //! rounding, far below the tolerances, and the standard errors are compared
 //! as they are.
 
-use epistat_causal::Estimand;
 use epistat_causal::aipw::{Aipw, AipwInput, AipwOptions, GlmInput, Variance, aipw, aipw_glm};
+use epistat_causal::{Estimand, ProbabilityBounds};
 use epistat_glm::Family;
 use epistat_linalg::Mat;
 use epistat_testkit::load_json;
@@ -148,7 +148,10 @@ fn family(name: &str) -> Family {
 
 fn options(s: &Scenario) -> AipwOptions {
     AipwOptions {
-        truncation: s.trunc.as_ref().map(|t| (t[0], t[1])),
+        truncation: s
+            .trunc
+            .as_ref()
+            .map(|t| ProbabilityBounds::new(t[0], t[1]).unwrap()),
         ..AipwOptions::default()
     }
 }

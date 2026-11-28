@@ -54,4 +54,5 @@ pub mod tmle;
 
 pub use epistat_core::{Bootstrap, Contrast, Estimand, Estimate, Level, Panel};
 pub use epistat_inference::{ClusterRule, Clusters, Influence, KeyedBy};
+pub use epistat_stats::weighted::ProbabilityBounds;
 pub use error::{Error, Model, Result};

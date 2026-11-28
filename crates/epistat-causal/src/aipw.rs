@@ -90,6 +90,7 @@ use epistat_core::{Contrast, Estimand, Level};
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::Influence;
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, weighted_gram};
+use epistat_stats::weighted::ProbabilityBounds;
 
 use crate::error::{Error, Model, Result, domain_at, empty};
 use crate::shared::{
@@ -117,9 +118,9 @@ pub struct AipwOptions {
     pub estimand: Estimand,
     /// The level of the confidence limits, by default 95%.
     pub level: Level,
-    /// Limits `(lower, upper)`, with `0 < lower < upper < 1`, at which the
-    /// propensity is truncated. The default is no truncation.
-    pub truncation: Option<(f64, f64)>,
+    /// Bounds at which the propensity is truncated, with
+    /// `0 < lower < upper < 1`. The default is no truncation.
+    pub truncation: Option<ProbabilityBounds>,
 }
 
 impl Default for AipwOptions {
@@ -205,8 +206,8 @@ fn core(input: &AipwInput<'_>, opts: &AipwOptions) -> Result<Core> {
     if let Some(c) = input.cluster {
         check_len("cluster", c.len(), n)?;
     }
-    if let Some((lo, hi)) = opts.truncation
-        && !(0.0 < lo && lo < hi && hi < 1.0)
+    if let Some(bounds) = opts.truncation
+        && !(0.0 < bounds.lower() && bounds.lower() < bounds.upper() && bounds.upper() < 1.0)
     {
         return Err(Error::invalid(
             "truncation",
@@ -226,7 +227,7 @@ fn core(input: &AipwInput<'_>, opts: &AipwOptions) -> Result<Core> {
         if !(p > 0.0 && p < 1.0) {
             return Err(domain_at("propensity", p, "(0, 1)", i));
         }
-        let q = opts.truncation.map_or(p, |(lo, hi)| p.clamp(lo, hi));
+        let q = opts.truncation.map_or(p, |bounds| bounds.apply(p));
         clipped.push(q.to_bits() != p.to_bits());
         e.push(q);
     }
