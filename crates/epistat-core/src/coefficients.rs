@@ -60,6 +60,7 @@ use core::fmt;
 
 use crate::check::{self, InputError};
 use crate::covariance::Covariance;
+use crate::error::Classify;
 use crate::estimate::{Estimate, Interval, Scale};
 use crate::format;
 use crate::hypothesis::Reference;
@@ -835,7 +836,7 @@ impl fmt::Display for Glance {
 /// ```
 pub trait Tidy {
     /// The error of the fit's crate.
-    type Error;
+    type Error: Classify;
 
     /// The coefficient table with intervals at `level` and standard errors
     /// from the covariance `variance` names.
@@ -871,7 +872,6 @@ pub trait Tidy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::Classify;
 
     const Z: f64 = 1.959_963_984_540_054;
 

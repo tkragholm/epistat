@@ -85,7 +85,16 @@
 //! use epistat_core::{Classify, ErrorKind};
 //! use epistat_testkit::assert_codes_unique;
 //!
+//! #[derive(Debug)]
 //! enum Error { Singular, NotConverged }
+//!
+//! impl std::fmt::Display for Error {
+//!     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//!         f.write_str("the fit failed")
+//!     }
+//! }
+//!
+//! impl std::error::Error for Error {}
 //!
 //! impl Classify for Error {
 //!     fn kind(&self) -> ErrorKind { ErrorKind::Numerical }
@@ -338,10 +347,19 @@ pub fn assert_codes_unique<E: Classify>(prefix: &str, errors: &[E]) {
 /// use epistat_core::{Classify, ErrorKind};
 /// use epistat_testkit::assert_codes_documented;
 ///
+/// #[derive(Debug)]
 /// enum Error {
 ///     /// `demo.singular`: the design is singular.
 ///     Singular,
 /// }
+///
+/// impl std::fmt::Display for Error {
+///     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+///         f.write_str("the design is singular")
+///     }
+/// }
+///
+/// impl std::error::Error for Error {}
 ///
 /// impl Classify for Error {
 ///     fn kind(&self) -> ErrorKind { ErrorKind::Numerical }
@@ -376,6 +394,14 @@ mod tests {
 
     #[derive(Debug)]
     struct Fail(ErrorKind, &'static str);
+
+    impl std::fmt::Display for Fail {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(self.1)
+        }
+    }
+
+    impl std::error::Error for Fail {}
 
     impl Classify for Fail {
         fn kind(&self) -> ErrorKind {
