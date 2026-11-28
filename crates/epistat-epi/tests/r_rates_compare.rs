@@ -161,27 +161,36 @@ fn tests_of_a_common_rate_ratio() {
             .collect();
         let h = rate_ratio_homogeneity(&strata).unwrap().unwrap();
         let name = &case.name;
-        assert_eq!(h.likelihood_ratio.df, case.df, "{name}");
-        assert_eq!(h.pearson.df, case.df, "{name}");
+        assert_eq!(h.likelihood_ratio.df, Some(case.df as f64), "{name}");
+        assert_eq!(h.pearson.df, Some(case.df as f64), "{name}");
         check(&mut worst, h.ratio, case.ratio, 1e-10);
         check(
             &mut worst,
-            h.likelihood_ratio.statistic,
+            h.likelihood_ratio.statistic.unwrap(),
             case.deviance,
             1e-12,
         );
         check(
             &mut worst,
-            h.likelihood_ratio.statistic,
+            h.likelihood_ratio.statistic.unwrap(),
             case.poisson_lr,
             1e-12,
         );
-        check(&mut worst, h.pearson.statistic, case.pearson, 1e-10);
+        check(
+            &mut worst,
+            h.pearson.statistic.unwrap(),
+            case.pearson,
+            1e-10,
+        );
         let bd = rate_ratio_breslow_day(&strata, false).unwrap().unwrap();
         let ta = rate_ratio_breslow_day(&strata, true).unwrap().unwrap();
-        assert_eq!((bd.df, ta.df), (case.df, case.df), "{name}");
-        check(&mut worst, bd.statistic, case.breslow_day, 1e-12);
-        check(&mut worst, ta.statistic, case.tarone, 1e-12);
+        assert_eq!(
+            (bd.df, ta.df),
+            (Some(case.df as f64), Some(case.df as f64)),
+            "{name}"
+        );
+        check(&mut worst, bd.statistic.unwrap(), case.breslow_day, 1e-12);
+        check(&mut worst, ta.statistic.unwrap(), case.tarone, 1e-12);
     }
     eprintln!("homogeneity: worst deviation {worst:.3} of its bound");
     assert!(worst <= 1.0, "{worst}");

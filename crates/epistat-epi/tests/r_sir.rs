@@ -210,29 +210,35 @@ fn homogeneity_and_trend() {
     ratio(
         &mut worst,
         "homogeneity",
-        h.statistic,
+        h.statistic.unwrap(),
         r.strata.homogeneity.statistic,
         1e-9,
     );
     ratio(
         &mut worst,
         "homogeneity p",
-        h.p_value,
+        h.p_value.unwrap(),
         r.strata.homogeneity.p,
         1e-7,
     );
-    assert_eq!(h.df, 2);
+    assert_eq!(h.df, Some(2.0));
     let t = sir_trend(&r.strata.observed, &r.strata.expected, &r.strata.score)
         .unwrap()
         .unwrap();
     ratio(
         &mut worst,
         "trend",
-        t.statistic,
+        t.statistic.unwrap(),
         r.strata.trend.statistic,
         1e-9,
     );
-    ratio(&mut worst, "trend p", t.p_value, r.strata.trend.p, 1e-7);
+    ratio(
+        &mut worst,
+        "trend p",
+        t.p_value.unwrap(),
+        r.strata.trend.p,
+        1e-7,
+    );
     let two = sir_trend(
         &[r.strata.observed[0], r.strata.observed[2]],
         &[r.strata.expected[0], r.strata.expected[2]],
@@ -243,7 +249,7 @@ fn homogeneity_and_trend() {
     ratio(
         &mut worst,
         "trend, two strata",
-        two.statistic,
+        two.statistic.unwrap(),
         r.strata.trend_two.statistic,
         1e-9,
     );
@@ -252,14 +258,14 @@ fn homogeneity_and_trend() {
     ratio(
         &mut worst,
         "big homogeneity",
-        h.statistic,
+        h.statistic.unwrap(),
         b.homogeneity.statistic,
         1e-9,
     );
     ratio(
         &mut worst,
         "big homogeneity p",
-        h.p_value,
+        h.p_value.unwrap(),
         b.homogeneity.p,
         1e-7,
     );
@@ -269,11 +275,17 @@ fn homogeneity_and_trend() {
     ratio(
         &mut worst,
         "big trend",
-        t.statistic,
+        t.statistic.unwrap(),
         b.trend.statistic,
         1e-9,
     );
-    ratio(&mut worst, "big trend p", t.p_value, b.trend.p, 1e-7);
+    ratio(
+        &mut worst,
+        "big trend p",
+        t.p_value.unwrap(),
+        b.trend.p,
+        1e-7,
+    );
     eprintln!("tests: worst deviation {worst:.3} of its bound");
 }
 
@@ -323,7 +335,10 @@ fn fingerprint_of_the_strata() {
     let t = sir_trend(&r.big.observed, &r.big.expected, &r.big.score)
         .unwrap()
         .unwrap();
-    let hash = hash.f64(h.statistic).f64(t.statistic).finish();
+    let hash = hash
+        .f64(h.statistic.unwrap())
+        .f64(t.statistic.unwrap())
+        .finish();
     eprintln!("sir fingerprint {hash:#018x}");
     epistat_testkit::hash_out("fingerprint_of_the_strata", hash);
     if epistat_testkit::RECORDED_PLATFORM {
