@@ -64,13 +64,14 @@ fn counting_does_not_depend_on_the_number_of_threads() {
                 &Timeline {
                     id: &id,
                     time: &t,
-                    status: &status,
+                    status: (&status).into(),
                     covariates: &covs,
                 },
                 &TimelineOptions {
                     status: kind,
                     repeated,
                     lvcf: true,
+                    ..TimelineOptions::new(kind)
                 },
             );
             let mut out = Vec::new();

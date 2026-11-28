@@ -56,6 +56,18 @@ pub struct CondenseOptions {
     /// Merge a row that ended in an event into the next row, as R does. When
     /// `false`, only rows without an event are merged into their successor.
     pub merge_over_events: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
+}
+
+impl Default for CondenseOptions {
+    /// Merging over events, as `survcondense` does.
+    fn default() -> Self {
+        Self {
+            merge_over_events: true,
+            _extensible: epistat_core::Extensible::NEW,
+        }
+    }
 }
 
 /// The rows left after merging, as columns of equal length.

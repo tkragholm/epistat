@@ -156,6 +156,7 @@ fn run(reference: &Reference, c: &Case) -> Output {
                 estimand: Estimand::Ate,
                 stabilise: s.stab,
                 optimal_subset: None,
+                ..Default::default()
             },
         )
         .unwrap()

@@ -318,7 +318,7 @@ fn train_model(
             x,
             p,
             jumps.iter().map(|&j| base.grid[j]),
-        )?;
+        );
         let mut lam_over_s0 = vec![0.0; n_grid];
         let mut e_lam = vec![0.0; n_grid * p];
         for (l, &j) in jumps.iter().enumerate() {
@@ -423,7 +423,7 @@ fn risk_sets(
     x: MatRef<'_, f64>,
     p: usize,
     times: impl DoubleEndedIterator<Item = f64> + ExactSizeIterator,
-) -> Result<(Vec<f64>, Vec<f64>)> {
+) -> (Vec<f64>, Vec<f64>) {
     let surv = data.followup();
     let stop = surv.stop();
     let start = surv.start();
@@ -468,7 +468,7 @@ fn risk_sets(
             e[l * p + a] = s1[a].value() / s0[l];
         }
     }
-    Ok((s0, e))
+    (s0, e)
 }
 
 /// How the influence function treats the product-limit survival of the

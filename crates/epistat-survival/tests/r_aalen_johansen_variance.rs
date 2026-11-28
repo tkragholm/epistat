@@ -141,6 +141,7 @@ fn matches_r_survfit() {
         let opts = AalenJohansenVarianceOptions {
             horizons: case.tau.clone(),
             influence_times: all_times.clone(),
+            ..Default::default()
         };
         let groups = case.use_group.then_some(case.group.as_slice());
         let got = variance(&data, groups, &AalenJohansenOptions::default(), &opts).unwrap();

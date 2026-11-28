@@ -606,7 +606,7 @@ impl RateTable {
                 None => offtable += length * weight_of(i),
             },
             &mut |_, _| {},
-        )?;
+        );
         let expected_cells = self.expected_cells(&person_time)?;
         let total = compensated(expected_cells.iter().copied());
         Ok(Expected {

@@ -326,6 +326,7 @@ fn net_survival_matches_relsurv() {
             grid: Grid::EventTimes,
             level: Level::default(),
             transform,
+            ..Default::default()
         };
         let curves = net_survival(&data, &expected, &opts).unwrap();
         assert_eq!(curves.len(), run.strata.len());

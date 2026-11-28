@@ -175,6 +175,7 @@ fn weights_and_summaries_match_weightit() {
             estimand: estimand(&r.estimand),
             stabilise: r.stabilise,
             optimal_subset: None,
+            ..Default::default()
         };
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         let eta = eta_bounds(&z, &r.coefficients, r.kappa);
@@ -291,6 +292,7 @@ fn cox_case(reference: &Reference, c: &RCox) -> (f64, f64) {
         estimand: estimand(&ri.estimand),
         stabilise: ri.stabilise,
         optimal_subset: None,
+        ..Default::default()
     };
     let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
     let rows = c.stop.len();

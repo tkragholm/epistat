@@ -164,6 +164,8 @@ pub struct LexisOptions {
     /// with at least two breaks, see the module documentation. `splitMulti`'s
     /// `drop = TRUE`. The default is no cropping, as `splitLexis`.
     pub crop: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// The pieces of a split, as columns of equal length.

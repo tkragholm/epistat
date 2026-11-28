@@ -294,6 +294,8 @@ pub struct ScoreOptions {
     pub controls: ControlSet,
     /// How a row at exactly the evaluation time is counted, area only.
     pub horizon: HorizonRule,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for ScoreOptions {
@@ -307,6 +309,7 @@ impl Default for ScoreOptions {
             predicted: Predicted::AbsoluteRisk,
             controls: ControlSet::EventFreeAndCompeting,
             horizon: HorizonRule::Inclusive,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

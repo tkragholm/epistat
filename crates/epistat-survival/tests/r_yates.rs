@@ -168,6 +168,7 @@ fn population_means_match_r() {
                 link,
                 centre: case.centre.clone(),
                 test,
+                ..Default::default()
             },
         )
         .unwrap();

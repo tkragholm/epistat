@@ -153,6 +153,8 @@ pub struct TmergeOptions {
     /// The value of a `tdc` or `cumtdc` before its first observation when the
     /// operation has no `init`. `None` is missing.
     pub tdcstart: Option<f64>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for TmergeOptions {
@@ -162,6 +164,7 @@ impl Default for TmergeOptions {
             delay: 0.0,
             na_rm: true,
             tdcstart: None,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -179,15 +182,15 @@ pub struct Spans<'a> {
 
 /// The observations of one operation: rows with an id, a time and optionally
 /// a value.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Observations<'a> {
     /// The subject of each observation.
     pub id: &'a [u32],
     /// The time of each observation, `None` when missing.
-    pub time: &'a [Option<f64>],
+    pub time: epistat_core::Col<'a, f64>,
     /// The value of each observation, `None` for an operation without
     /// values.
-    pub value: Option<&'a [Option<f64>]>,
+    pub value: Option<epistat_core::Col<'a, f64>>,
 }
 
 /// What kind of variable an operation made.
@@ -579,7 +582,7 @@ impl Tmerge {
         }
         let n = obs.id.len();
         check_lengths(&[("id", n), ("time", obs.time.len())])?;
-        if let Some(v) = obs.value {
+        if let Some(v) = &obs.value {
             check_lengths(&[("id", n), ("value", v.len())])?;
         }
         if let Some(i) = obs
@@ -594,7 +597,7 @@ impl Tmerge {
             }
             .into());
         }
-        if let Some(v) = obs.value
+        if let Some(v) = &obs.value
             && let Some(i) = v.iter().position(|x| x.is_some_and(|x| !x.is_finite()))
         {
             return Err(InputError::NotFinite {
@@ -628,10 +631,10 @@ impl Tmerge {
                 missid += 1;
                 continue;
             };
-            let Some(mut time) = obs.time[i] else {
+            let Some(mut time) = obs.time.get(i) else {
                 continue;
             };
-            let value = obs.value.map(|v| v[i]);
+            let value = obs.value.as_ref().map(|v| v.get(i));
             if let Some(v) = value
                 && self.options.na_rm
                 && v.is_none()

@@ -129,6 +129,7 @@ fn weighted_curves_match_survfit_and_finite_differences() {
             },
             stabilise: r.stabilise,
             optimal_subset: None,
+            ..Default::default()
         };
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         let data = builder.build().unwrap();

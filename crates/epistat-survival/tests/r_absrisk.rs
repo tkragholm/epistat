@@ -415,6 +415,7 @@ fn absolute_risk_matches_r() {
                 influence: InfluenceForm::Exponential,
                 limits: RiskLimits::LogLog,
                 level: Level::default(),
+                ..Default::default()
             };
             let got = model
                 .predict(&new, &case.times, case.cause, &ropts)

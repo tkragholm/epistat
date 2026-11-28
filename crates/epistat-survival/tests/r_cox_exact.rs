@@ -161,6 +161,7 @@ fn run(reference: &Reference, r: &RFit) -> CoxModelFit {
             start: start.clone(),
             max_iterations: r.iter_max,
             tolerance: r.eps,
+            ..Default::default()
         };
         let sets = MatchedSets {
             offset,

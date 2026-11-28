@@ -86,6 +86,8 @@ pub struct IpcwOptions {
     /// The rule that makes times equal when they differ by rounding error,
     /// applied to the times before anything is estimated.
     pub timefix: TimeFix,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for IpcwOptions {
@@ -94,6 +96,7 @@ impl Default for IpcwOptions {
             stabilise: false,
             ties: Ties::Efron,
             timefix: TimeFix::default(),
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -277,6 +280,7 @@ pub(super) fn fit_parts<'a>(
                 centring: Centring::Given(zero.clone()),
                 hazard: None,
                 variance: CoxVariance::Model,
+                _extensible: epistat_core::Extensible::NEW,
             },
         )?;
         for r in 0..n {

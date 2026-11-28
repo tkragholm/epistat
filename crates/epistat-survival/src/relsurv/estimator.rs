@@ -87,6 +87,8 @@ pub struct NetOptions {
     pub level: Level,
     /// The scale of the limits.
     pub transform: NetTransform,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for NetOptions {
@@ -96,6 +98,7 @@ impl Default for NetOptions {
             grid: Grid::EventTimes,
             level: Level::default(),
             transform: NetTransform::LogLog,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

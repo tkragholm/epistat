@@ -96,6 +96,8 @@ pub struct PseudoIpcwOptions {
     pub method: IpcwMethod,
     /// How near-equal times are treated, `survival`'s rule by default.
     pub timefix: TimeFix,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl PseudoIpcwOptions {
@@ -107,6 +109,7 @@ impl PseudoIpcwOptions {
             target,
             method: IpcwMethod::default(),
             timefix: TimeFix::default(),
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

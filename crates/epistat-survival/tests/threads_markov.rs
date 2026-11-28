@@ -63,6 +63,7 @@ fn markov_test_does_not_depend_on_the_number_of_threads() {
     // between thread counts.
     let opts = MarkovOptions {
         timefix: TimeFix::Exact,
+        ..Default::default()
     };
     assert_same_on_pools(&POOLS, || {
         let t = test(&data, &[1, 2], 2, &grid, seeds, &opts).unwrap();

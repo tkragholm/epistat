@@ -53,6 +53,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
                 grid,
                 level: Level::confidence(0.9).unwrap(),
                 transform: NetTransform::LogLog,
+                ..Default::default()
             };
             let mut v = Vec::new();
             for s in net_survival(&data, &expected, &opts).unwrap() {

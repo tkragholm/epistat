@@ -85,6 +85,7 @@ fn test_reports_its_rows_and_leaves_a_state_without_variance_untested() {
     let seeds = Bootstrap::new(25, Seed(77));
     let opts = MarkovOptions {
         timefix: epistat_survival::timefix::TimeFix::Exact,
+        ..Default::default()
     };
     let mut undefined = 0;
     // (qualifying codes, target code)

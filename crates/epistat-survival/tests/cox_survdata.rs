@@ -62,14 +62,17 @@ fn sample(n: usize, seed: u64) -> Sample {
     s
 }
 
-const NO_FIX: CoxOptions = CoxOptions {
-    ties: Ties::Efron,
-    timefix: TimeFix::Exact,
-    cause: None,
-    start: None,
-    max_iterations: 20,
-    tolerance: 1e-9,
-};
+fn no_fix() -> CoxOptions {
+    CoxOptions {
+        ties: Ties::Efron,
+        timefix: TimeFix::Exact,
+        cause: None,
+        start: None,
+        max_iterations: 20,
+        tolerance: 1e-9,
+        ..Default::default()
+    }
+}
 
 #[test]
 fn every_combination_of_columns_fits() {
@@ -92,7 +95,7 @@ fn every_combination_of_columns_fits() {
                         builder = builder.stratum(&s.stratum).cluster(&s.cluster);
                     }
                     let data = builder.build().unwrap();
-                    let opts = CoxOptions { ties, ..NO_FIX };
+                    let opts = CoxOptions { ties, ..no_fix() };
                     let model = fit(&data, x.as_ref(), &opts).unwrap();
                     assert!(model.converged && model.coefficients[2].is_none());
                     assert_eq!(model.n_rows, n);
@@ -121,7 +124,7 @@ fn rows_of_weight_zero_are_counted_and_not_fitted() {
         .weight(&s.weight)
         .build()
         .unwrap();
-    let model = fit(&data, x.as_ref(), &NO_FIX).unwrap();
+    let model = fit(&data, x.as_ref(), &no_fix()).unwrap();
     let positive = s.weight.iter().filter(|&&w| w > 0.0).count();
     assert!(positive < n);
     assert_eq!((model.n_rows, model.n_used), (n, positive));
@@ -140,7 +143,7 @@ fn the_event_code_picks_the_cause() {
     for code in 1..=3_i32 {
         let opts = CoxOptions {
             cause: Some(code.unsigned_abs()),
-            ..NO_FIX
+            ..no_fix()
         };
         let got = fit(&data, x.as_ref(), &opts).unwrap();
         // The same rows with the status 1 for this cause and 0 for the rest.
@@ -149,11 +152,11 @@ fn the_event_code_picks_the_cause() {
             .weight(&s.weight)
             .build()
             .unwrap();
-        let want = fit(&reference, x.as_ref(), &NO_FIX).unwrap();
+        let want = fit(&reference, x.as_ref(), &no_fix()).unwrap();
         assert_eq!(format!("{got:?}"), format!("{want:?}"));
     }
     for cause in [None, Some(0), Some(4)] {
-        let opts = CoxOptions { cause, ..NO_FIX };
+        let opts = CoxOptions { cause, ..no_fix() };
         assert!(matches!(
             fit(&data, x.as_ref(), &opts),
             Err(ref e) if e.kind() == ErrorKind::Input
@@ -165,10 +168,10 @@ fn the_event_code_picks_the_cause() {
     }
     let binary: Vec<i32> = s.status.iter().map(|&c| i32::from(c == 1)).collect();
     let data = SurvData::builder(&s.stop, &binary).build().unwrap();
-    let one = fit(&data, x.as_ref(), &NO_FIX).unwrap();
+    let one = fit(&data, x.as_ref(), &no_fix()).unwrap();
     let explicit = CoxOptions {
         cause: Some(1),
-        ..NO_FIX
+        ..no_fix()
     };
     assert_eq!(
         format!("{one:?}"),
@@ -176,7 +179,7 @@ fn the_event_code_picks_the_cause() {
     );
     let two = CoxOptions {
         cause: Some(2),
-        ..NO_FIX
+        ..no_fix()
     };
     assert!(fit(&data, x.as_ref(), &two).is_err());
 }
@@ -195,14 +198,14 @@ fn times_that_differ_by_rounding_tie_by_default() {
         .collect();
     let exact = SurvData::builder(&s.stop, &status).build().unwrap();
     let rough = SurvData::builder(&blurred, &status).build().unwrap();
-    let want = fit(&exact, x.as_ref(), &NO_FIX).unwrap();
+    let want = fit(&exact, x.as_ref(), &no_fix()).unwrap();
     let opts = CoxOptions::default();
     assert_eq!(opts.timefix, TimeFix::default());
     let got = fit(&rough, x.as_ref(), &opts).unwrap();
     // Tied times take the smallest value of their chain, which is a time of
     // the unblurred data, so the fit has the same bits.
     assert_eq!(format!("{got:?}"), format!("{want:?}"));
-    let untied = fit(&rough, x.as_ref(), &NO_FIX).unwrap();
+    let untied = fit(&rough, x.as_ref(), &no_fix()).unwrap();
     assert_ne!(format!("{untied:?}"), format!("{want:?}"));
 }
 
@@ -217,28 +220,28 @@ fn the_design_must_fit_the_data() {
     let nan = Mat::from_fn(n, 1, |i, _| if i == 3 { f64::NAN } else { 1.0 });
     for x in [short.as_ref(), nan.as_ref()] {
         assert!(matches!(
-            fit(&data, x, &NO_FIX),
+            fit(&data, x, &no_fix()),
             Err(ref e) if e.kind() == ErrorKind::Input
         ));
         assert!(matches!(
-            score_residuals(&data, x, &[Some(0.0)], &NO_FIX),
+            score_residuals(&data, x, &[Some(0.0)], &no_fix()),
             Err(ref e) if e.kind() == ErrorKind::Input
         ));
     }
     // A design without columns is the null model, as coxph(~ 1); a coefficient
     // given for it is still the wrong length.
-    let null = fit(&data, empty.as_ref(), &NO_FIX).unwrap();
+    let null = fit(&data, empty.as_ref(), &no_fix()).unwrap();
     assert!(null.coefficients.is_empty() && null.rank == 0);
     assert_eq!(
         null.log_partial_likelihood,
         null.null_log_partial_likelihood
     );
     assert!(matches!(
-        score_residuals(&data, empty.as_ref(), &[Some(0.0)], &NO_FIX),
+        score_residuals(&data, empty.as_ref(), &[Some(0.0)], &no_fix()),
         Err(ref e) if e.kind() == ErrorKind::Input
     ));
     let x = Mat::from_fn(n, 1, |i, _| s.x[(i, 0)]);
-    assert!(score_residuals(&data, x.as_ref(), &[Some(0.0), Some(0.0)], &NO_FIX).is_err());
+    assert!(score_residuals(&data, x.as_ref(), &[Some(0.0), Some(0.0)], &no_fix()).is_err());
 }
 
 /// Cluster codes that skip values are recoded to dense ones. The sums are the
@@ -258,8 +261,8 @@ fn sparse_cluster_codes_change_only_the_order_of_a_sum() {
         .cluster(&sparse)
         .build()
         .unwrap();
-    let a = fit(&dense, x.as_ref(), &NO_FIX).unwrap();
-    let b = fit(&spread, x.as_ref(), &NO_FIX).unwrap();
+    let a = fit(&dense, x.as_ref(), &no_fix()).unwrap();
+    let b = fit(&spread, x.as_ref(), &no_fix()).unwrap();
     assert_eq!(
         format!("{:?}", a.coefficients),
         format!("{:?}", b.coefficients)

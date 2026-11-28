@@ -59,7 +59,7 @@ impl Pool {
             person: &self.person,
             start: &self.start,
             end: &self.end,
-            first_event: &self.first,
+            first_event: (&self.first).into(),
             key: keyed.then_some(&self.key[..]),
         }
     }
@@ -190,7 +190,7 @@ fn the_draw_is_uniform_by_rejection_and_by_listing() {
         person: &person,
         start: &start,
         end: &end,
-        first_event: &first,
+        first_event: (&first).into(),
         key: None,
     };
     let eligible = [7, 507, 1007, 1507];
@@ -225,7 +225,7 @@ fn sampling_does_not_depend_on_the_number_of_threads() {
                 person: &person,
                 start: &start,
                 end: &end,
-                first_event: &first,
+                first_event: (&first).into(),
                 key: Some(&key),
             },
             ControlRule::FutureCases { gap: 3 },

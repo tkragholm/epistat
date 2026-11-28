@@ -84,6 +84,8 @@ pub struct SurvregPredictOptions {
     /// of the model-based one, as `predict.survreg` does for a fit with
     /// `robust = TRUE`.
     pub robust: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// `SurvregPredictOptions`, under its name in 0.3.
@@ -151,6 +153,8 @@ pub struct DfbetaOptions {
     /// other groups, give their codes as the cluster or the id column of the
     /// data.
     pub collapse: Collapse,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// The dfbeta residuals: for each row (or group of rows), the approximate

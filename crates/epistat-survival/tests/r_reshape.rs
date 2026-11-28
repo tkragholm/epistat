@@ -72,6 +72,7 @@ fn split_matches_survsplit_exactly() {
             } else {
                 TimeFix::Exact
             },
+            ..Default::default()
         };
         let got = builder
             .build()
@@ -173,6 +174,7 @@ fn run_tmerge(case: &TmCase) -> Result<Tmerge, String> {
         delay: case.delay,
         na_rm: case.na_rm,
         tdcstart: case.tdcstart,
+        ..Default::default()
     };
     let mut tm = if let Some(span) = &case.span {
         Tmerge::new(
@@ -192,8 +194,8 @@ fn run_tmerge(case: &TmCase) -> Result<Tmerge, String> {
     for op in &case.ops {
         let obs = Observations {
             id: &op.id,
-            time: &op.time,
-            value: op.value.as_deref(),
+            time: (&op.time).into(),
+            value: op.value.as_deref().map(Into::into),
         };
         match op.kind.as_str() {
             "tdc" => tm.tdc(&op.name, &obs, op.init),
@@ -329,6 +331,7 @@ fn condense_matches_survcondense_exactly() {
             &key,
             &CondenseOptions {
                 merge_over_events: case.merge_over_events,
+                ..Default::default()
             },
         )
         .unwrap();

@@ -174,6 +174,7 @@ fn fit_record(fit: Result<CoxModelFit, epistat_survival::Error>) -> Vec<u64> {
 const ROWS: RowsOptions = RowsOptions {
     timefix: TimeFix::Exact,
     censoring_strata: CensoringStrata::Pooled,
+    _extensible: epistat_core::Extensible::NEW,
 };
 
 fn options(cause: u32, ties: Ties) -> FineGrayOptions {

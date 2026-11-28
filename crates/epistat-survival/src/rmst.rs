@@ -144,6 +144,8 @@ pub struct RmstOptions {
     pub timefix: TimeFix,
     /// The confidence level, `1 - alpha` of `rmst2`.
     pub level: Level,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl RmstOptions {
@@ -155,6 +157,7 @@ impl RmstOptions {
             tau,
             timefix: TimeFix::default(),
             level: Level::default(),
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

@@ -75,6 +75,7 @@ fn fit_tt_is_the_same_on_every_pool() {
                 ..CoxOptions::default()
             },
             max_expanded_rows: None,
+            ..Default::default()
         };
         assert_same_on_pools(&POOLS, || {
             let r = fit_tt(&data, x.as_ref(), &transforms, &opts).unwrap();

@@ -211,6 +211,8 @@ pub struct ConcordanceOptions {
     /// Return the influence of each row on the concordance, `dfbeta` of
     /// `concordance`. Needs `variance`.
     pub influence: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for ConcordanceOptions {
@@ -223,6 +225,7 @@ impl Default for ConcordanceOptions {
             ymax: None,
             variance: true,
             influence: false,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

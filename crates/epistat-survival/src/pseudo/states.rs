@@ -102,6 +102,8 @@ pub struct StateOptions {
     /// [`PseudoOptions::max_influence_values`](super::PseudoOptions). `None`
     /// sets no bound.
     pub max_influence_values: Option<usize>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl StateOptions {
@@ -115,6 +117,7 @@ impl StateOptions {
             initial: None,
             timefix: TimeFix::default(),
             max_influence_values: None,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -367,17 +370,17 @@ struct Stratum {
 }
 
 /// The distinct stop times of the rows used, ascending.
-fn exit_times(data: &SurvData<'_>) -> Result<Vec<f64>> {
+fn exit_times(data: &SurvData<'_>) -> Vec<f64> {
     let stop = data.followup().stop();
     let mut times: Vec<f64> = data.used_rows().map(|r| stop[r as usize]).collect();
     times.sort_by(f64::total_cmp);
     times.dedup_by(|a, b| a.total_cmp(b).is_eq());
-    Ok(times)
+    times
 }
 
 fn one_stratum(data: &SurvData<'_>, at: &[f64], opts: &StateOptions) -> Result<Stratum> {
     let k = at.len();
-    let grid = exit_times(data)?;
+    let grid = exit_times(data);
     let Some(&last) = grid.last() else {
         return Err(Error::no_information("no row has positive weight"));
     };
@@ -392,6 +395,7 @@ fn one_stratum(data: &SurvData<'_>, at: &[f64], opts: &StateOptions) -> Result<S
         timefix: TimeFix::Exact,
         rate_tolerance: None,
         initial: opts.initial.clone(),
+        _extensible: epistat_core::Extensible::NEW,
     };
     if opts.target == StateTarget::CumulativeHazard {
         return hazards(data, &grid, at, beyond);
@@ -415,6 +419,7 @@ fn one_stratum(data: &SurvData<'_>, at: &[f64], opts: &StateOptions) -> Result<S
             origin: opts.origin,
             horizons: Vec::new(),
             influence_times: Vec::new(),
+            _extensible: epistat_core::Extensible::NEW,
         },
     )?
     .clusters;
@@ -461,6 +466,7 @@ fn one_stratum(data: &SurvData<'_>, at: &[f64], opts: &StateOptions) -> Result<S
                     origin: opts.origin,
                     horizons: Vec::new(),
                     influence_times: chunk.to_vec(),
+                    _extensible: epistat_core::Extensible::NEW,
                 },
             )?;
             Ok(vec![influence])

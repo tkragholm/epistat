@@ -218,6 +218,7 @@ impl Columns {
 /// The options of every test here: times are compared as they are.
 const OPTIONS: MarkovOptions = MarkovOptions {
     timefix: TimeFix::Exact,
+    _extensible: epistat_core::Extensible::NEW,
 };
 
 /// The test of the transition from the first qualifying code to code 2.

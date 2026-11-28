@@ -157,6 +157,8 @@ pub struct RoystonOptions {
     /// Compute `C.GH`, which costs time quadratic in the rows used. The
     /// default is `true`, as `royston` always computes it.
     pub gonen_heller: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for RoystonOptions {
@@ -167,6 +169,7 @@ impl Default for RoystonOptions {
             ties: true,
             adjust: None,
             gonen_heller: true,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -216,6 +219,8 @@ pub struct FitOptions {
     pub adjust: bool,
     /// Compute `C.GH`, see [`RoystonOptions::gonen_heller`].
     pub gonen_heller: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for FitOptions {
@@ -224,6 +229,7 @@ impl Default for FitOptions {
             ties: true,
             adjust: false,
             gonen_heller: true,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -408,6 +414,7 @@ pub fn from_fit(
             ties: opts.ties,
             adjust,
             gonen_heller: opts.gonen_heller,
+            _extensible: epistat_core::Extensible::NEW,
         },
     )?;
     if let (Some(l1), Some(l0)) = (

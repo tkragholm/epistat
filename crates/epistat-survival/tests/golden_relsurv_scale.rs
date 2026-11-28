@@ -94,6 +94,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
                 grid,
                 level: Level::default(),
                 transform: NetTransform::Log,
+                ..Default::default()
             };
             let mut v = Vec::new();
             for s in net_survival(&data, &expected, &opts).unwrap() {

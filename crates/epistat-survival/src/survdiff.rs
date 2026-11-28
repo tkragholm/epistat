@@ -95,6 +95,8 @@ pub struct SurvdiffOptions {
     /// How times that differ by rounding error are treated before the test.
     /// `survival::aeqSurv` by default.
     pub timefix: TimeFix,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// `SurvdiffOptions`, under its name in 0.3.

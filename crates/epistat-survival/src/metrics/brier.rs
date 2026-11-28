@@ -93,6 +93,8 @@ pub struct BrierOptions {
     /// Move the censoring times right by half the smallest gap, `ties = TRUE`
     /// of `brier`.
     pub ties: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for BrierOptions {
@@ -100,6 +102,7 @@ impl Default for BrierOptions {
         Self {
             timefix: TimeFix::default(),
             ties: true,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

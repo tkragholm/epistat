@@ -113,6 +113,8 @@ pub struct IptwOptions {
     /// subjects inside it and 0 outside. Only with the estimand `Ate`. `None`,
     /// the default, keeps everyone.
     pub optimal_subset: Option<OptimalSubset>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for IptwOptions {
@@ -121,6 +123,7 @@ impl Default for IptwOptions {
             estimand: Estimand::Ate,
             stabilise: false,
             optimal_subset: None,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

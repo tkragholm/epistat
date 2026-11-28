@@ -95,6 +95,8 @@ pub struct CalibrationOptions {
     /// How the groups are formed. Without a default: the number of groups has
     /// no principled value.
     pub groups: Groups,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl CalibrationOptions {
@@ -105,6 +107,7 @@ impl CalibrationOptions {
             timefix: TimeFix::Exact,
             cause: 1,
             groups,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

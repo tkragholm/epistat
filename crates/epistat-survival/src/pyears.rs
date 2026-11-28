@@ -120,6 +120,8 @@ pub struct PyearsOptions {
     /// `pyears` has no tie rule; [`TimeFix::default`] gives `survival`'s
     /// `aeqSurv` rule for callers who want near-ties merged.
     pub timefix: TimeFix,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for PyearsOptions {
@@ -128,6 +130,7 @@ impl Default for PyearsOptions {
             scale: 1.0,
             cause: None,
             timefix: TimeFix::Exact,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -276,7 +279,7 @@ pub fn pyears(data: &SurvData<'_>, dims: &[Dimension<'_>], opts: &PyearsOptions)
                     events[cell] += weight_of(i);
                 }
             },
-        )?;
+        );
     }
     for value in &mut person_time {
         *value /= opts.scale;
@@ -458,7 +461,7 @@ impl Cursor<'_> {
         data: &SurvData<'_>,
         on_piece: &mut impl FnMut(usize, Option<usize>, f64),
         on_end: &mut impl FnMut(usize, Option<usize>),
-    ) -> Result<()> {
+    ) {
         let surv = data.followup();
         let stop = surv.stop();
         let start = surv.start();
@@ -477,7 +480,6 @@ impl Cursor<'_> {
             });
             on_end(i, last);
         }
-        Ok(())
     }
 }
 

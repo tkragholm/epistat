@@ -27,6 +27,8 @@ pub struct ReadOptions {
     /// which is `summary.survfit`'s default. `Some(true)` is an error for
     /// times that are not strictly increasing.
     pub sum: Option<bool>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// Where chosen times fall among the times of a curve.

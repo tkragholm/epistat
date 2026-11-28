@@ -266,6 +266,8 @@ pub struct PseudoOptions {
     /// the recursion for each, and the values do not change. `None`, the
     /// default, sets no bound and takes one run.
     pub max_influence_values: Option<usize>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl PseudoOptions {
@@ -278,6 +280,7 @@ impl PseudoOptions {
             method: PseudoMethod::default(),
             timefix: TimeFix::default(),
             max_influence_values: None,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

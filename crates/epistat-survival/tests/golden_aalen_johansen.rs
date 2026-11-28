@@ -102,6 +102,7 @@ fn push_curves(
 /// Times are compared as they are.
 const EXACT: AalenJohansenOptions = AalenJohansenOptions {
     timefix: TimeFix::Exact,
+    _extensible: epistat_core::Extensible::NEW,
 };
 
 /// The curves of rows with the given columns, one stratum per group code, and

@@ -54,10 +54,12 @@ fn variance_does_not_depend_on_the_number_of_threads() {
         .unwrap();
     let opts = AalenJohansenOptions {
         timefix: TimeFix::Exact,
+        ..Default::default()
     };
     let v = AalenJohansenVarianceOptions {
         horizons: vec![0.5, 3.0, 20.0, 40.0],
         influence_times: vec![0.5, 4.0, 9.0, 30.0],
+        ..Default::default()
     };
     assert_same_on_pools(&POOLS, || {
         let got = variance(&data, Some(&stratum), &opts, &v).unwrap();

@@ -220,6 +220,8 @@ pub struct CscOptions {
     pub timefix: TimeFix,
     /// What the models are, `surv.type`. `Hazard`, as in `CSC`.
     pub surv_type: SurvType,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for CscOptions {
@@ -228,6 +230,7 @@ impl Default for CscOptions {
             ties: Ties::Efron,
             timefix: TimeFix::default(),
             surv_type: SurvType::Hazard,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -282,6 +285,8 @@ pub struct RiskOptions {
     pub limits: RiskLimits,
     /// The confidence level.
     pub level: Level,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for RiskOptions {
@@ -292,6 +297,7 @@ impl Default for RiskOptions {
             influence: InfluenceForm::Exact,
             limits: RiskLimits::LogLog,
             level: Level::default(),
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

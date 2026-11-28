@@ -184,6 +184,8 @@ pub struct StandardiseOptions {
     /// cause-specific models, see [`InfluenceForm`]. Not read for one Cox model
     /// or without `product_limit`.
     pub influence: InfluenceForm,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for StandardiseOptions {
@@ -193,6 +195,7 @@ impl Default for StandardiseOptions {
             level: ConfidenceLevel::default(),
             product_limit: true,
             influence: InfluenceForm::Exact,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

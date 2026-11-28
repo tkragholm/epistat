@@ -328,6 +328,8 @@ pub struct MsOptions {
     /// The relative change of the log partial likelihood at which the iteration
     /// stops, as in [`CoxOptions`].
     pub tolerance: f64,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for MsOptions {
@@ -343,6 +345,7 @@ impl Default for MsOptions {
             start: None,
             max_iterations: cox.max_iterations,
             tolerance: cox.tolerance,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

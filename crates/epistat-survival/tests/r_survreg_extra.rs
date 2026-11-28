@@ -495,6 +495,7 @@ fn extra_options_match_r() {
                         strata: r.use_strata.then(|| strata.clone()),
                         offset: (r.use_offset && with_offset).then(|| offset.clone()),
                         robust: r.robust != "none",
+                        ..Default::default()
                     },
                 )
                 .unwrap()

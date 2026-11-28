@@ -247,6 +247,8 @@ pub struct AipwSurvOptions {
     /// propensity is truncated, which changes the estimand. `None` is no
     /// truncation.
     pub truncation: Option<ProbabilityBounds>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for AipwSurvOptions {
@@ -259,6 +261,7 @@ impl Default for AipwSurvOptions {
             product_limit: false,
             grid: None,
             truncation: None,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -435,6 +438,7 @@ fn cox_model(
             centring: Centring::Given(zero.clone()),
             hazard: Some(CoxHazardType::Breslow),
             variance: CoxVariance::Model,
+            _extensible: epistat_core::Extensible::NEW,
         },
     )?;
     let steps = base.strata.first().map_or(

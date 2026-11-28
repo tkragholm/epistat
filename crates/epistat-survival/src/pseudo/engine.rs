@@ -87,10 +87,12 @@ pub(super) fn run(
                 data,
                 &AalenJohansenOptions {
                     timefix: TimeFix::Exact,
+                    _extensible: epistat_core::Extensible::NEW,
                 },
                 &AalenJohansenVarianceOptions {
                     horizons: Vec::new(),
                     influence_times: chunk.to_vec(),
+                    _extensible: epistat_core::Extensible::NEW,
                 },
             )?;
             let t = chunk.len();

@@ -46,6 +46,7 @@ fn propensity_model_input_is_checked() {
         estimand: Estimand::Att,
         stabilise: true,
         optimal_subset: None,
+        ..Default::default()
     };
     assert!(iptw::fit(&treat, z.as_ref(), &att).is_err());
     let aliased = Mat::from_fn(
@@ -73,6 +74,7 @@ fn weights_of_each_estimand() {
             estimand: Estimand::Att,
             stabilise: false,
             optimal_subset: None,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -89,6 +91,7 @@ fn weights_of_each_estimand() {
             estimand: Estimand::Atc,
             stabilise: false,
             optimal_subset: None,
+            ..Default::default()
         },
     )
     .unwrap();

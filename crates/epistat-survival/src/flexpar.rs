@@ -214,6 +214,8 @@ pub struct FlexParOptions {
     pub tolerance: f64,
     /// The most Newton iterations in one run of the method.
     pub max_iterations: usize,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for FlexParOptions {
@@ -225,6 +227,7 @@ impl Default for FlexParOptions {
             tvc: Vec::new(),
             tolerance: 1e-12,
             max_iterations: 50,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

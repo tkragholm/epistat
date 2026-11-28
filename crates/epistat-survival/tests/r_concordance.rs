@@ -266,6 +266,7 @@ fn every_case_matches_survival_concordance() {
             ymax: case.ymax,
             variance: true,
             influence: true,
+            ..Default::default()
         };
         let got = estimate(&data, x, &opts).unwrap();
         let name = case.name.as_str();

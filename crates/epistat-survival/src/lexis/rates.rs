@@ -99,6 +99,8 @@ pub struct RateOptions {
     pub tolerance: f64,
     /// R's `maxit`.
     pub max_iterations: usize,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for RateOptions {
@@ -108,6 +110,7 @@ impl Default for RateOptions {
         Self {
             tolerance: glm.tolerance,
             max_iterations: glm.max_iterations,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

@@ -44,6 +44,8 @@ pub struct FlexparPredictOptions {
     /// Predict from a fit whose derivative in log time is not positive
     /// everywhere on the data.
     pub allow_non_monotone: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// An estimate at a time with its delta-method standard error and limits.

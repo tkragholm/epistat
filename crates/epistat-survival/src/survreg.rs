@@ -327,6 +327,8 @@ pub struct SurvregOptions {
     /// Relative size below which a pivot of the information matrix is zero,
     /// `toler.chol` of `survreg.control`. 1e-10.
     pub toler_chol: f64,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for SurvregOptions {
@@ -339,6 +341,7 @@ impl Default for SurvregOptions {
             max_iterations: 30,
             tolerance: 1e-9,
             toler_chol: 1e-10,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

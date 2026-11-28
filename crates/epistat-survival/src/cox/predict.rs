@@ -355,6 +355,8 @@ pub struct BaselineOptions {
     pub hazard: Option<CoxHazardType>,
     /// The covariance used for the variance parts.
     pub variance: CoxVariance,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// The options of [`predict`] and [`predict_terms`].
@@ -372,6 +374,8 @@ pub struct CoxPredictOptions {
     pub se_fit: bool,
     /// The hazard form of the expected number, `None` as in [`BaselineOptions`].
     pub hazard: Option<CoxHazardType>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for CoxPredictOptions {
@@ -382,6 +386,7 @@ impl Default for CoxPredictOptions {
             variance: CoxVariance::Auto,
             se_fit: false,
             hazard: None,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -432,6 +437,8 @@ pub struct CoxSurvfitOptions {
     /// stratum, `censor = TRUE` of `survfit` and its default, with `n_censor`
     /// at the times without an event. Otherwise at the event times only.
     pub censor_times: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for CoxSurvfitOptions {
@@ -446,6 +453,7 @@ impl Default for CoxSurvfitOptions {
             curve_type: CurveType::ExpCumulativeHazard,
             start_time: None,
             censor_times: true,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

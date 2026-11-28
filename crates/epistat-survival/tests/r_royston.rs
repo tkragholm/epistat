@@ -288,6 +288,7 @@ fn from_fit_matches_r() {
                     ties: res.ties,
                     adjust: res.adjust,
                     gonen_heller: true,
+                    ..Default::default()
                 },
             )
             .unwrap();

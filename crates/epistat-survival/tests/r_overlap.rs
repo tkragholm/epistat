@@ -151,6 +151,7 @@ fn weights_match_weightit_and_psweight() {
             estimand,
             stabilise: false,
             optimal_subset,
+            ..Default::default()
         };
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         let eta = eta_bounds(&z, &r.coefficients, r.kappa);
@@ -318,6 +319,7 @@ fn cox_variances_match_finite_differences_of_refits() {
             estimand,
             stabilise: false,
             optimal_subset,
+            ..Default::default()
         };
         let w = iptw::fit(&treat, z.as_ref(), &opts).unwrap();
         // Rows of weight 0 do not enter the fit.

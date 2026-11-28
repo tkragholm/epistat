@@ -250,6 +250,7 @@ fn main() {
                 estimand: Estimand::Ato,
                 stabilise: false,
                 optimal_subset: None,
+                ..Default::default()
             };
             let (times, fit) = common::timed(common::reps(), || {
                 iptw::fit(&treated, design.as_ref(), &options).expect("overlap weights")
@@ -305,7 +306,10 @@ fn main() {
                     },
                     z.as_ref(),
                     Some(zn.as_ref()),
-                    &PooledOptions { truncation: None },
+                    &PooledOptions {
+                        truncation: None,
+                        ..Default::default()
+                    },
                 )
                 .expect("ipwtm")
             });

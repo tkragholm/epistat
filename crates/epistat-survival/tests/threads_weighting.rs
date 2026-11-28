@@ -111,6 +111,7 @@ fn weighting_is_the_same_on_every_pool() {
                     estimand,
                     stabilise,
                     optimal_subset: None,
+                    ..Default::default()
                 },
             )
             .unwrap();

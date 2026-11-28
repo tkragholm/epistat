@@ -79,6 +79,7 @@ fn pyears_matches_survival() {
             scale: case.scale,
             cause: None,
             timefix: TimeFix::Exact,
+            ..Default::default()
         };
         let got = pyears(&data, &dims, &opts).unwrap();
         let name = &case.name;

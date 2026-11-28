@@ -254,6 +254,7 @@ pub(super) fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &MsOptions) -> 
         start: opts.start.clone(),
         max_iterations: opts.max_iterations,
         tolerance: opts.tolerance,
+        _extensible: epistat_core::Extensible::NEW,
     };
     let mut fit = cox::fit(&stacked.as_data(), design.as_ref(), &cox_options)?;
     fit.n_rows = data.n_rows();

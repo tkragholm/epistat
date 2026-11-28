@@ -193,6 +193,8 @@ pub struct YatesOptions {
     pub centre: Option<Vec<f64>>,
     /// The tests. `Global`, as `yates`.
     pub test: YatesTest,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// One Wald test of a contrast of the PMMs.

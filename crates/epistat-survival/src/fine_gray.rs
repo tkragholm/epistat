@@ -667,6 +667,8 @@ pub struct RowsOptions {
     pub timefix: TimeFix,
     /// Whether the stratum column of the data is the censoring stratum.
     pub censoring_strata: CensoringStrata,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// The options of [`fit`].
@@ -687,6 +689,8 @@ pub struct FineGrayOptions {
     pub max_iterations: usize,
     /// Whether the stratum column of the data is the censoring stratum.
     pub censoring_strata: CensoringStrata,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl FineGrayOptions {
@@ -703,6 +707,7 @@ impl FineGrayOptions {
             tolerance: cox.tolerance,
             max_iterations: cox.max_iterations,
             censoring_strata: CensoringStrata::Pooled,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

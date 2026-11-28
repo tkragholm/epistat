@@ -129,17 +129,35 @@ pub struct TimelineOptions {
     /// Carry the last value of a covariate forward over missing values.
     /// `fromtimeline`'s default is `true`.
     pub lvcf: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
+}
+
+impl TimelineOptions {
+    /// The options for a status of kind `status`, which has no default since
+    /// it says what the column holds, with the defaults of `Surv2` and
+    /// `fromtimeline`: [`Repeated::Collapse`] and the last value carried
+    /// forward.
+    #[must_use]
+    pub const fn new(status: StatusKind) -> Self {
+        Self {
+            status,
+            repeated: Repeated::Collapse,
+            lvcf: true,
+            _extensible: epistat_core::Extensible::NEW,
+        }
+    }
 }
 
 /// The observations of a timeline data set, one entry per row in each column.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Timeline<'a> {
     /// The subject of each row.
     pub id: &'a [u32],
     /// The time of the observation, finite.
     pub time: &'a [f64],
     /// What was observed, `None` when missing.
-    pub status: &'a [Option<u32>],
+    pub status: epistat_core::Col<'a, u32>,
     /// Covariate columns, with NaN for a missing value.
     pub covariates: &'a [&'a [f64]],
 }
@@ -314,7 +332,7 @@ pub fn counting(timeline: &Timeline<'_>, opts: &TimelineOptions) -> Result<Count
     // first appearance of each state stays with `First` (rule 5).
     let mut status: Vec<Option<u32>> = order
         .iter()
-        .map(|&r| match (timeline.status[r as usize], opts.status) {
+        .map(|&r| match (timeline.status.get(r as usize), opts.status) {
             (None, StatusKind::States(_)) => Some(0),
             (s, _) => s,
         })

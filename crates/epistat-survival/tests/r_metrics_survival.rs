@@ -175,6 +175,7 @@ fn rttright_against_survival() {
         let opts = RttrightOptions {
             timefix: timefix_of(case.timefix.unwrap_or(true)),
             renorm: case.renorm.unwrap_or(true),
+            ..Default::default()
         };
         let got = rttright::estimate(&data, case.times.as_deref(), &opts).unwrap();
         let want: Vec<Vec<f64>> = match &case.w {
@@ -272,6 +273,7 @@ fn brier_against_survival() {
         let opts = BrierOptions {
             timefix: timefix_of(case.timefix),
             ties: case.ties,
+            ..Default::default()
         };
         let times = if case.times_given {
             case.times.clone()

@@ -68,6 +68,7 @@ fn fields() -> Vec<(String, Vec<f64>)> {
                 estimand,
                 stabilise: false,
                 optimal_subset,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -109,6 +110,7 @@ fn fields() -> Vec<(String, Vec<f64>)> {
             stabilise.then(|| numerator.as_ref()),
             &PooledOptions {
                 truncation: trunc.map(|(l, u): (f64, f64)| ProbabilityBounds::new(l, u).unwrap()),
+                ..Default::default()
             },
         )
         .unwrap();

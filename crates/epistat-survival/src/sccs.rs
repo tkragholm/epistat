@@ -196,6 +196,8 @@ pub struct SccsOptions {
     pub alias_tolerance: f64,
     /// Whether to form the person-level sandwich covariance.
     pub robust: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for SccsOptions {
@@ -205,6 +207,7 @@ impl Default for SccsOptions {
             tolerance: 1e-10,
             alias_tolerance: f64::EPSILON.powf(0.75),
             robust: false,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

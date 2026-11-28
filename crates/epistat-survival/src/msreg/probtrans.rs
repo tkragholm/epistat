@@ -49,6 +49,8 @@ pub struct ProbTransOptions {
     /// probabilities at each time, `covariance` of `probtrans`. As there, it
     /// implies the standard errors.
     pub covariance: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for ProbTransOptions {
@@ -58,6 +60,7 @@ impl Default for ProbTransOptions {
             method: ProbTransMethod::Aalen,
             direction: ProbTransDirection::Forward,
             covariance: false,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

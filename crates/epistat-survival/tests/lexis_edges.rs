@@ -183,7 +183,10 @@ fn crop_keeps_the_follow_up_inside_the_breaks() {
             entry: &a,
             breaks: &[2.0, 4.0, 6.0],
         }],
-        &LexisOptions { crop: true },
+        &LexisOptions {
+            crop: true,
+            ..Default::default()
+        },
     )
     .unwrap();
     // Row 0 keeps [2, 6), its event is cut off. Row 1 keeps [2, 3) and ends
@@ -208,7 +211,10 @@ fn bad_input_is_an_error() {
     assert!(scale(&short, &[1.0]).is_err());
     assert!(scale(&bad, &[1.0]).is_err());
     assert!(scale(&good, &[f64::INFINITY]).is_err());
-    let one = LexisOptions { crop: true };
+    let one = LexisOptions {
+        crop: true,
+        ..Default::default()
+    };
     assert!(
         split_lexis(
             &d,
@@ -383,6 +389,7 @@ fn fit_on_cells_equals_fit_on_pieces() {
     let tight = RateOptions {
         tolerance: 1e-12,
         max_iterations: 50,
+        ..Default::default()
     };
     let on_pieces = fit_rates(
         &out.length,
@@ -479,7 +486,10 @@ fn split_cells_equals_split_then_aggregate() {
         },
     ];
     for crop in [false, true] {
-        let options = LexisOptions { crop };
+        let options = LexisOptions {
+            crop,
+            ..Default::default()
+        };
         let direct = split_cells(
             &d,
             &scales,

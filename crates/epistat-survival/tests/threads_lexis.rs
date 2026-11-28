@@ -47,7 +47,10 @@ fn lexis_does_not_depend_on_the_number_of_threads() {
                         breaks: &breaks_b,
                     },
                 ],
-                &LexisOptions { crop },
+                &LexisOptions {
+                    crop,
+                    ..Default::default()
+                },
             )
             .unwrap();
             let mut v: Vec<f64> = Vec::new();
@@ -102,7 +105,10 @@ fn lexis_does_not_depend_on_the_number_of_threads() {
                 ],
                 &[],
                 None,
-                &LexisOptions { crop },
+                &LexisOptions {
+                    crop,
+                    ..Default::default()
+                },
             )
             .unwrap();
             v.extend(&direct.length);

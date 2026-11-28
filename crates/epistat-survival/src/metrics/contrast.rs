@@ -49,6 +49,8 @@ use crate::error::{Error, Result};
 pub struct ContrastOptions {
     /// The confidence level of the limits, `conf.int` of `Score`.
     pub level: Level,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// The difference between two models at each time.

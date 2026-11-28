@@ -362,6 +362,8 @@ pub struct FrailtyOptions {
     /// [`Theta::Profile`] gives with Breslow ties; `None` leaves the interval
     /// out and saves its fits, about ten. A 95% level by default.
     pub level: Option<Level>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for FrailtyOptions {
@@ -376,6 +378,7 @@ impl Default for FrailtyOptions {
             max_iterations: 50,
             theta_tolerance: 1e-6,
             level: Some(Level::default()),
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

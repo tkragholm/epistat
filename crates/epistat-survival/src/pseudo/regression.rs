@@ -130,6 +130,8 @@ pub struct PseudoRegressionOptions {
     pub tolerance: f64,
     /// The most steps taken.
     pub max_iterations: usize,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl PseudoRegressionOptions {
@@ -142,6 +144,7 @@ impl PseudoRegressionOptions {
             covariance: SandwichType::Hc0,
             tolerance: 1e-8,
             max_iterations: 25,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

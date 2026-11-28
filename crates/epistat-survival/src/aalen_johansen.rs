@@ -428,6 +428,8 @@ pub struct AalenJohansenOptions {
     /// How near-equal times are treated. The default is `survival`'s rule,
     /// see [`TimeFix`].
     pub timefix: TimeFix,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// The weighted Aalen-Johansen estimate for every group, as
@@ -508,6 +510,8 @@ pub struct AalenJohansenVarianceOptions {
     /// and zero before the first. Empty, the default, asks for none: the
     /// influence of all clusters at all times is not kept.
     pub influence_times: Vec<f64>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// `AalenJohansenVarianceOptions`, under its name in 0.3.
@@ -1124,6 +1128,8 @@ pub struct BootstrapOptions {
     /// How near-equal times are treated. The default is `survival`'s rule,
     /// see [`TimeFix`].
     pub timefix: TimeFix,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl BootstrapOptions {
@@ -1134,6 +1140,7 @@ impl BootstrapOptions {
         Self {
             draw,
             timefix: TimeFix::default(),
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -1406,6 +1413,7 @@ mod curve_tests {
             &builder.build()?,
             &AalenJohansenOptions {
                 timefix: TimeFix::Exact,
+                _extensible: epistat_core::Extensible::NEW,
             },
         )
     }
@@ -1791,6 +1799,7 @@ mod estimate_tests {
 
     const EXACT: AalenJohansenOptions = AalenJohansenOptions {
         timefix: TimeFix::Exact,
+        _extensible: epistat_core::Extensible::NEW,
     };
 
     fn bits(values: &[f64]) -> Vec<u64> {
@@ -1970,6 +1979,7 @@ mod estimate_tests {
             let opts = BootstrapOptions {
                 draw,
                 timefix: TimeFix::Exact,
+                _extensible: epistat_core::Extensible::NEW,
             };
             let first = bootstrap(&data, &exposed, &cells, seeds, &ages, 1, &opts).unwrap();
             let second = bootstrap(&data, &exposed, &cells, seeds, &ages, 1, &opts).unwrap();
@@ -1999,6 +2009,7 @@ mod estimate_tests {
         let opts = BootstrapOptions {
             draw: Draw::PerCell,
             timefix: TimeFix::Exact,
+            _extensible: epistat_core::Extensible::NEW,
         };
         let new = bootstrap(
             &data,
@@ -2168,6 +2179,7 @@ mod variance_tests {
         let v = AalenJohansenVarianceOptions {
             horizons: vec![],
             influence_times: times.clone(),
+            _extensible: epistat_core::Extensible::NEW,
         };
         let got = variance(&data, None, &AalenJohansenOptions::default(), &v).unwrap();
         let g = &got.groups[0];
@@ -2217,10 +2229,12 @@ mod variance_tests {
             AalenJohansenVarianceOptions {
                 horizons: vec![2.0, 1.0],
                 influence_times: vec![],
+                _extensible: epistat_core::Extensible::NEW,
             },
             AalenJohansenVarianceOptions {
                 horizons: vec![],
                 influence_times: vec![f64::NAN],
+                _extensible: epistat_core::Extensible::NEW,
             },
         ] {
             assert!(matches!(

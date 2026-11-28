@@ -106,6 +106,7 @@ fn survreg_extra_options() {
                         strata: Some(stratum.clone()),
                         offset: Some(offset.clone()),
                         robust: true,
+                        ..Default::default()
                     },
                 )
                 .unwrap();
@@ -118,6 +119,7 @@ fn survreg_extra_options() {
                 standardise: true,
                 weighted: true,
                 collapse: Collapse::Cluster,
+                ..Default::default()
             },
         ] {
             out.extend(

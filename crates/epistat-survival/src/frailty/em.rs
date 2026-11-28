@@ -91,6 +91,7 @@ pub(super) fn fit_em(
             start: Some(state.beta.clone()),
             max_iterations: 100,
             tolerance: 1e-14,
+            _extensible: epistat_core::Extensible::NEW,
         };
         let shifted = input.data.with_offset(&offset)?;
         let fit = crate::cox::fit(&shifted, input.x, &options)?;

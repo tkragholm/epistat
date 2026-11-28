@@ -198,6 +198,8 @@ pub struct CaseCohortOptions {
     /// The relative change of the log partial likelihood at which the fits
     /// stop, `eps` of `coxph.control`.
     pub tolerance: f64,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl CaseCohortOptions {
@@ -212,6 +214,7 @@ impl CaseCohortOptions {
             ties: Ties::Efron,
             cause: None,
             tolerance: 1e-9,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -292,6 +295,7 @@ impl Stack {
             start: start.map(<[f64]>::to_vec),
             max_iterations,
             tolerance: control.tolerance,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 

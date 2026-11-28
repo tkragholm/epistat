@@ -1,6 +1,7 @@
 //! Cases of the data tools that R does not accept or accepts differently,
 //! and the rules of the module documentation that no reference covers.
 
+use epistat_core::Col;
 use epistat_survival::SurvData;
 use epistat_survival::condense::{CondenseOptions, condense};
 use epistat_survival::split::{SplitOptions, split};
@@ -63,6 +64,7 @@ fn condense_without_a_merge_returns_every_row() {
         &[1, 1],
         &CondenseOptions {
             merge_over_events: true,
+            ..Default::default()
         },
     )
     .unwrap();
@@ -74,6 +76,7 @@ fn condense_needs_a_start_and_an_id() {
     let (stop, status, id) = ([10.0], [0], [1]);
     let options = CondenseOptions {
         merge_over_events: true,
+        ..Default::default()
     };
     let no_start = SurvData::builder(&stop, &status)
         .id(&id)
@@ -108,7 +111,7 @@ fn an_operation_with_no_valid_observation_changes_nothing() {
     let mut tm = one_subject();
     let obs = Observations {
         id: &[99],
-        time: &[Some(3.0)],
+        time: Col::from_options(&[Some(3.0)]),
         value: None,
     };
     tm.event("e", &obs).unwrap();
@@ -122,7 +125,7 @@ fn a_time_that_is_not_finite_is_refused() {
     let mut tm = one_subject();
     let obs = Observations {
         id: &[7],
-        time: &[Some(f64::INFINITY)],
+        time: Col::from_options(&[Some(f64::INFINITY)]),
         value: None,
     };
     assert!(tm.event("e", &obs).is_err());
@@ -133,7 +136,7 @@ fn an_event_cannot_take_the_name_of_a_covariate() {
     let mut tm = one_subject();
     let obs = Observations {
         id: &[7],
-        time: &[Some(3.0)],
+        time: Col::from_options(&[Some(3.0)]),
         value: None,
     };
     tm.tdc("x", &obs, None).unwrap();
@@ -154,8 +157,8 @@ fn a_missing_value_in_cumevent_is_refused() {
     let mut tm = one_subject();
     let obs = Observations {
         id: &[7],
-        time: &[Some(3.0)],
-        value: Some(&[None]),
+        time: Col::from_options(&[Some(3.0)]),
+        value: Some(Col::from_options(&[None])),
     };
     let mut tm_keep = Tmerge::new(
         &[7],

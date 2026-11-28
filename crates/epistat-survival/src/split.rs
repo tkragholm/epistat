@@ -76,6 +76,8 @@ pub struct SplitOptions {
     pub zero: f64,
     /// The tie rule applied to the times and the cut points together.
     pub timefix: TimeFix,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for SplitOptions {
@@ -84,6 +86,7 @@ impl Default for SplitOptions {
         Self {
             zero: 0.0,
             timefix: TimeFix::default(),
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

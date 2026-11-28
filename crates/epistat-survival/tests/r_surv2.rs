@@ -54,12 +54,12 @@ struct Result {
 }
 
 fn options(case: &Case) -> TimelineOptions {
+    let status = if case.m == 0 {
+        StatusKind::Binary
+    } else {
+        StatusKind::States(case.m)
+    };
     TimelineOptions {
-        status: if case.m == 0 {
-            StatusKind::Binary
-        } else {
-            StatusKind::States(case.m)
-        },
         repeated: match case.repeated.as_str() {
             "events" => Repeated::Events,
             "collapse" => Repeated::Collapse,
@@ -67,6 +67,7 @@ fn options(case: &Case) -> TimelineOptions {
             other => panic!("repeated {other}"),
         },
         lvcf: case.lvcf,
+        ..TimelineOptions::new(status)
     }
 }
 
@@ -82,7 +83,7 @@ fn run(case: &Case) -> epistat_survival::Result<Counting> {
         &Timeline {
             id: &case.input.id,
             time: &case.input.time,
-            status: &case.input.status,
+            status: (&case.input.status).into(),
             covariates: &cols,
         },
         &options(case),
@@ -144,13 +145,12 @@ fn the_help_page_example() {
             &Timeline {
                 id: &id,
                 time: &time,
-                status: &status,
+                status: (&status).into(),
                 covariates: &[],
             },
             &TimelineOptions {
-                status: StatusKind::States(3),
                 repeated,
-                lvcf: true,
+                ..TimelineOptions::new(StatusKind::States(3))
             },
         )
         .unwrap()

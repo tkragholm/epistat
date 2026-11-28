@@ -263,6 +263,8 @@ pub struct SurvfitOptions {
     /// for the model-based one, and `None` for `survfit`'s rule, see the
     /// [module documentation](self).
     pub robust: Option<bool>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for SurvfitOptions {
@@ -277,6 +279,7 @@ impl Default for SurvfitOptions {
             level: Level::default(),
             conf_lower: ConfLower::default(),
             robust: None,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

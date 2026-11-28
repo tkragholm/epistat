@@ -131,6 +131,7 @@ fn fits_match_r() {
                 ..CoxOptions::default()
             },
             max_expanded_rows: None,
+            ..Default::default()
         };
         let got = fit_tt(&data, x.as_ref(), &transforms, &opts).unwrap();
         let model = &got.fit;

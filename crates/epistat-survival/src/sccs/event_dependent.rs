@@ -112,6 +112,8 @@ pub struct EventDependentOptions {
     pub max_iterations: usize,
     /// The options of each fit.
     pub fit: SccsOptions,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for EventDependentOptions {
@@ -123,6 +125,7 @@ impl Default for EventDependentOptions {
                 tolerance: 1e-12,
                 ..SccsOptions::default()
             },
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

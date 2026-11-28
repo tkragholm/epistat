@@ -156,6 +156,8 @@ pub struct TtOptions {
     /// limit but the `u32` row count and the memory of the machine, which
     /// the function cannot check. There is no principled default.
     pub max_expanded_rows: Option<usize>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// A Cox fit with time-transform covariates.

@@ -77,6 +77,8 @@ pub struct KmOptions {
     /// The event code when the status has several codes, which are then
     /// censoring for this estimate. It is `None` or `Some(1)` for one code.
     pub cause: Option<u32>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// The weighted curves at the chosen times.

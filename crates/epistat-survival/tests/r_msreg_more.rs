@@ -345,6 +345,7 @@ fn check_profile(
                 method,
                 direction,
                 covariance: pt.covariance,
+                ..Default::default()
             },
         )
         .unwrap();

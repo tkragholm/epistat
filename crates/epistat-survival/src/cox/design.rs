@@ -634,6 +634,8 @@ pub struct CoxOptions {
     /// The relative change of the log partial likelihood at which the
     /// iteration stops, `eps` of `coxph.control`. It must be positive.
     pub tolerance: f64,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for CoxOptions {
@@ -645,6 +647,7 @@ impl Default for CoxOptions {
             start: None,
             max_iterations: MAX_ITERATIONS,
             tolerance: EPS,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

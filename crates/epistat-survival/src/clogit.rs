@@ -144,6 +144,8 @@ pub struct ClogitOptions {
     /// The relative change of the log likelihood at convergence, `eps` of
     /// `coxph.control`.
     pub tolerance: f64,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for ClogitOptions {
@@ -154,6 +156,7 @@ impl Default for ClogitOptions {
             start: None,
             max_iterations: base.max_iterations,
             tolerance: base.tolerance,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

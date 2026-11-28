@@ -309,6 +309,7 @@ fn options(initial: Option<&[f64]>) -> MultistateOptions {
         timefix: TimeFix::Exact,
         rate_tolerance: Some(1e-9),
         initial: initial.map(<[f64]>::to_vec),
+        ..Default::default()
     }
 }
 

@@ -31,7 +31,17 @@ fn reading_does_not_depend_on_the_number_of_threads() {
                     .unwrap();
                 let fit = estimate(&data, Some(&stratum), &SurvfitOptions::default()).unwrap();
                 let mut out = Vec::new();
-                for c in fit.at(&times, &ReadOptions { extend, sum }).unwrap() {
+                for c in fit
+                    .at(
+                        &times,
+                        &ReadOptions {
+                            extend,
+                            sum,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap()
+                {
                     for column in [
                         &c.time,
                         &c.n_risk,

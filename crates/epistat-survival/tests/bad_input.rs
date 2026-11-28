@@ -680,6 +680,7 @@ fn follow_up_tools_refuse_bad_columns() {
                 &shortened(bad, &key),
                 &CondenseOptions {
                     merge_over_events: true,
+                    ..Default::default()
                 },
             )
             .map(|_| ())
@@ -1287,7 +1288,7 @@ fn merging_and_windows_refuse_bad_columns() {
                 "x",
                 &Observations {
                     id: &ids,
-                    time: &obs_time,
+                    time: epistat_core::Col::from_options(&obs_time),
                     value: None,
                 },
                 None,
@@ -1304,7 +1305,7 @@ fn merging_and_windows_refuse_bad_columns() {
                 "x",
                 &Observations {
                     id: &obs_id,
-                    time: &times,
+                    time: (&times).into(),
                     value: None,
                 },
                 None,
@@ -1316,7 +1317,7 @@ fn merging_and_windows_refuse_bad_columns() {
             "y",
             &Observations {
                 id: &obs_id,
-                time: &obs_time,
+                time: epistat_core::Col::from_options(&obs_time),
                 value: None,
             },
         )
@@ -1338,6 +1339,7 @@ fn timelines_and_exposure_windows_refuse_bad_columns() {
         status: StatusKind::Binary,
         repeated: Repeated::Collapse,
         lvcf: true,
+        ..TimelineOptions::new(StatusKind::Binary)
     };
     rejects("surv2::counting id", |bad| {
         let ids = shortened(bad, &id);
@@ -1346,7 +1348,7 @@ fn timelines_and_exposure_windows_refuse_bad_columns() {
                 &Timeline {
                     id: &ids,
                     time: &time,
-                    status: &status,
+                    status: epistat_core::Col::from_options(&status),
                     covariates: &[],
                 },
                 &options,
@@ -1361,7 +1363,7 @@ fn timelines_and_exposure_windows_refuse_bad_columns() {
                 &Timeline {
                     id: &id,
                     time: &times,
-                    status: &status,
+                    status: epistat_core::Col::from_options(&status),
                     covariates: &[],
                 },
                 &options,
@@ -1376,7 +1378,7 @@ fn timelines_and_exposure_windows_refuse_bad_columns() {
                 &Timeline {
                     id: &id,
                     time: &time,
-                    status: &statuses,
+                    status: (&statuses).into(),
                     covariates: &[],
                 },
                 &options,
@@ -1686,6 +1688,7 @@ fn standardisation_refuses_bad_columns() {
         link: InverseLink::Identity,
         centre: None,
         test: YatesTest::Global,
+        ..Default::default()
     };
     rejects("yates::yates coefficients", |bad| {
         let coefficients = col(bad, &coefficients);
@@ -2106,7 +2109,7 @@ fn control_sampling_and_clones_refuse_bad_columns() {
                     person: &candidate_person,
                     start: &start,
                     end: &end,
-                    first_event: &first_event,
+                    first_event: epistat_core::Col::from_options(&first_event),
                     key: None,
                 },
                 ControlRule::EventFree,
@@ -2129,7 +2132,7 @@ fn control_sampling_and_clones_refuse_bad_columns() {
                     person: &candidate_person,
                     start: &start,
                     end: &ends,
-                    first_event: &first_event,
+                    first_event: epistat_core::Col::from_options(&first_event),
                     key: None,
                 },
                 ControlRule::EventFree,

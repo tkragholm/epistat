@@ -149,6 +149,7 @@ fn weights_match_ipwtm() {
             zn.as_ref().map(Mat::as_ref),
             &PooledOptions {
                 truncation: trunc.map(|(l, u): (f64, f64)| ProbabilityBounds::new(l, u).unwrap()),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -272,6 +273,7 @@ fn variances_match_the_jackknife_of_refits() {
             zn.as_ref().map(Mat::as_ref),
             &PooledOptions {
                 truncation: trunc.map(|(l, u): (f64, f64)| ProbabilityBounds::new(l, u).unwrap()),
+                ..Default::default()
             },
         )
         .unwrap();

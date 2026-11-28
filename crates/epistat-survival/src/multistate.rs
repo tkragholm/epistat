@@ -721,6 +721,8 @@ pub struct MultistateOptions {
     /// forms it in each replicate from the replicate's weights, so it refuses
     /// a distribution given here.
     pub initial: Option<Vec<f64>>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// `MultistateOptions`, under its name in 0.3.
@@ -1118,6 +1120,8 @@ pub struct OccupationVarianceOptions {
     /// that of the initial distribution before the first. The influence of all
     /// clusters at all times is not kept, see [`OccupationVariance::influence`].
     pub influence_times: Vec<f64>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl OccupationVarianceOptions {
@@ -1128,6 +1132,7 @@ impl OccupationVarianceOptions {
             origin,
             horizons: Vec::new(),
             influence_times: Vec::new(),
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

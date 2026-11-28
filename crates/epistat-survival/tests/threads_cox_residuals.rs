@@ -98,6 +98,7 @@ fn residuals_and_zph() {
                     transform,
                     groups: Some(groups.to_vec()),
                     singledf: false,
+                    ..Default::default()
                 };
                 let got = zph(&data, x.as_ref(), &model, &opts).unwrap();
                 for t in got.tests.iter().chain(std::iter::once(&got.global)) {

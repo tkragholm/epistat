@@ -59,7 +59,7 @@ pub struct CaseEvents<'a> {
 }
 
 /// The people who may be drawn as controls, one entry per person.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Candidates<'a> {
     /// The person code, as in the exposure data.
     pub person: &'a [u32],
@@ -68,7 +68,7 @@ pub struct Candidates<'a> {
     /// The last observed day.
     pub end: &'a [i64],
     /// The day of the person's first event, `None` without one.
-    pub first_event: &'a [Option<i64>],
+    pub first_event: epistat_core::Col<'a, i64>,
     /// The matching key, compared with that of the case; `None` when the
     /// cases have none.
     pub key: Option<&'a [u64]>,
@@ -198,7 +198,13 @@ pub fn sample_controls(
     }
     let key_of = |i: usize| candidates.key.map_or(0, |k| k[i]);
     let mut order: Vec<usize> = (0..m).collect();
-    order.sort_by_key(|&i| (key_of(i), candidates.first_event[i].unwrap_or(i64::MAX), i));
+    order.sort_by_key(|&i| {
+        (
+            key_of(i),
+            candidates.first_event.get(i).unwrap_or(i64::MAX),
+            i,
+        )
+    });
     let mut groups: Vec<Group> = Vec::new();
     for &i in &order {
         let k = key_of(i);
@@ -213,7 +219,7 @@ pub fn sample_controls(
         groups[last].members.push(i);
         groups[last]
             .first
-            .push(candidates.first_event[i].unwrap_or(i64::MAX));
+            .push(candidates.first_event.get(i).unwrap_or(i64::MAX));
     }
     let per: Vec<Vec<usize>> = (0..n)
         .into_par_iter()

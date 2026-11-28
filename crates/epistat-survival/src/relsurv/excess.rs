@@ -43,6 +43,8 @@ pub struct ExcessOptions {
     pub tolerance: f64,
     /// The most iterations.
     pub max_iterations: usize,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl ExcessOptions {
@@ -55,6 +57,7 @@ impl ExcessOptions {
             aggregate: false,
             tolerance: 1e-12,
             max_iterations: 100,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

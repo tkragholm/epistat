@@ -107,6 +107,8 @@ pub struct RttrightOptions {
     /// Divide the case weights of each stratum by their total, so that the
     /// weights of a stratum sum to 1 (`renorm = TRUE`, as in `rttright`).
     pub renorm: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for RttrightOptions {
@@ -114,6 +116,7 @@ impl Default for RttrightOptions {
         Self {
             timefix: TimeFix::default(),
             renorm: true,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

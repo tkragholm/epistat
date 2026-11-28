@@ -93,7 +93,15 @@ fn run(case: &Case, breaks: &[Vec<f64>], crop: bool) -> Lexis {
             breaks: b,
         })
         .collect();
-    split_lexis(&data, &scales, &LexisOptions { crop }).unwrap()
+    split_lexis(
+        &data,
+        &scales,
+        &LexisOptions {
+            crop,
+            ..Default::default()
+        },
+    )
+    .unwrap()
 }
 
 /// Worst deviation over the entries and lengths, in units of the tolerance.

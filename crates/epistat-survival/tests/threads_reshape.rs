@@ -53,6 +53,7 @@ fn split_and_condense_do_not_depend_on_the_number_of_threads() {
                 &key,
                 &CondenseOptions {
                     merge_over_events: merge,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -88,8 +89,8 @@ fn tmerge_does_not_depend_on_the_number_of_threads() {
         .unwrap();
         let obs = Observations {
             id: &oid,
-            time: &time,
-            value: Some(&value),
+            time: (&time).into(),
+            value: Some((&value).into()),
         };
         tm.tdc("x", &obs, None).unwrap();
         tm.cumtdc("c", &obs, None).unwrap();

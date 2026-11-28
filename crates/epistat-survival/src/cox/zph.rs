@@ -122,6 +122,8 @@ pub struct ZphOptions {
     /// Test a term of several columns as its one linear predictor, `singledf`
     /// of `cox.zph`.
     pub singledf: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for ZphOptions {
@@ -131,6 +133,7 @@ impl Default for ZphOptions {
             transform: ZphTransform::Km,
             groups: None,
             singledf: false,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

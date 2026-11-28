@@ -31,6 +31,8 @@ pub struct MsFitOptions {
     /// An offset of the profile, added to the linear predictor of every
     /// transition, as the offset of `newdata`.
     pub offset: f64,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for MsFitOptions {
@@ -41,6 +43,7 @@ impl Default for MsFitOptions {
             se: true,
             vartype: MsVarType::Aalen,
             offset: 0.0,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -299,6 +302,7 @@ impl MsModel {
                 centring: Centring::Coxph,
                 hazard: opts.hazard,
                 variance: opts.variance,
+                _extensible: epistat_core::Extensible::NEW,
             },
         )?;
         let beta: Vec<f64> = self

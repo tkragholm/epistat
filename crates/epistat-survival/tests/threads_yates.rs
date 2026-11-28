@@ -55,6 +55,7 @@ fn population_means_are_the_same_on_every_pool() {
                         link,
                         centre: None,
                         test,
+                        ..Default::default()
                     },
                 )
                 .unwrap();

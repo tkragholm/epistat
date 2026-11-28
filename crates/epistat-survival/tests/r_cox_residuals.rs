@@ -361,10 +361,9 @@ impl Setup<'_> {
         collapse: Collapse,
     ) -> CoxResiduals {
         let opts = ResidualOptions {
-            kind,
             weighted,
             collapse,
-            cox: self.opts(),
+            ..ResidualOptions::new(kind, self.opts())
         };
         let got = residuals(data, self.x.as_ref(), &self.fit, &opts).unwrap();
         if got.columns.len() == self.p {
@@ -886,6 +885,7 @@ fn check_zph(s: &Setup<'_>, worst: &mut Worst) {
             transform: zph_transform(&z.transform),
             groups: groups.clone(),
             singledf: z.singledf,
+            ..Default::default()
         };
         let got = zph(&s.data(), s.x.as_ref(), &s.fit, &opts).unwrap();
         let label = format!("{name} zph {} singledf {}", z.transform, z.singledf);

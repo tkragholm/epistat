@@ -296,6 +296,8 @@ pub struct PooledOptions {
     /// are truncated; `ipwtm(trunc = t)` is `ProbabilityBounds::new(t, 1 - t)`.
     /// The default, `None`, does not truncate.
     pub truncation: Option<ProbabilityBounds>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// Fit the pooled logistic model of `event` on `design` and weight the rows of

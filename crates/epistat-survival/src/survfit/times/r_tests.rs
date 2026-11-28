@@ -220,6 +220,7 @@ fn reads_and_starting_points_match_r() {
             let opts = ReadOptions {
                 extend: rd.extend,
                 sum: rd.dosum,
+                _extensible: epistat_core::Extensible::NEW,
             };
             for (c, s) in curves.iter().zip(&rd.groups) {
                 let name = format!(
@@ -275,6 +276,7 @@ fn reads_equal_a_scan_of_the_rows() {
                         &ReadOptions {
                             extend: true,
                             sum: Some(sum),
+                            _extensible: epistat_core::Extensible::NEW,
                         },
                     )
                     .unwrap();
@@ -347,6 +349,7 @@ fn estimated_lung_curve_read_matches_r() {
             let ropts = ReadOptions {
                 extend: rd.extend,
                 sum: rd.dosum,
+                _extensible: epistat_core::Extensible::NEW,
             };
             let got = fit.at(&rd.times, &ropts).unwrap();
             for (g, s) in got.iter().zip(&rd.groups) {
@@ -419,6 +422,7 @@ fn aalen_johansen_curves_are_read_by_the_same_index() {
             let opts = ReadOptions {
                 extend: rd.extend,
                 sum: None,
+                _extensible: epistat_core::Extensible::NEW,
             };
             let index = CurveIndex::new(&time, &r.cr.times, &opts).unwrap();
             same("time", index.time(), &want.time);

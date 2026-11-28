@@ -129,6 +129,8 @@ pub struct SmoothOptions {
     /// `round` of `plotCalibration`, which is 2. `None` leaves them as they
     /// are. Not used when the bandwidth is at least 1.
     pub rounding: Option<i32>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl SmoothOptions {
@@ -141,6 +143,7 @@ impl SmoothOptions {
             cause: 1,
             bandwidth,
             rounding: Some(2),
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }
@@ -422,6 +425,8 @@ pub struct RecalibrationOptions {
     pub tolerance: f64,
     /// The most steps taken: 25.
     pub max_iterations: usize,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl RecalibrationOptions {
@@ -434,6 +439,7 @@ impl RecalibrationOptions {
             scale,
             tolerance: 1e-8,
             max_iterations: 25,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

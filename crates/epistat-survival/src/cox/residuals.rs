@@ -187,6 +187,8 @@ pub struct ResidualOptions {
     /// tie rule, the rule for the times and the event code. The offset is that
     /// of the data.
     pub cox: CoxOptions,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl ResidualOptions {
@@ -199,6 +201,7 @@ impl ResidualOptions {
             weighted: None,
             collapse: Collapse::None,
             cox,
+            _extensible: epistat_core::Extensible::NEW,
         }
     }
 }

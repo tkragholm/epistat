@@ -32,6 +32,7 @@ fn overlap_weights_are_the_same_on_every_pool() {
                     estimand,
                     stabilise: false,
                     optimal_subset,
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -88,6 +89,7 @@ fn treatment_weights_are_the_same_on_every_pool() {
                 &PooledOptions {
                     truncation: trunc
                         .map(|(l, u): (f64, f64)| ProbabilityBounds::new(l, u).unwrap()),
+                    ..Default::default()
                 },
             )
             .unwrap();
