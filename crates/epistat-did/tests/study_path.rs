@@ -397,7 +397,7 @@ fn att_gt_digest(fitted: &AttGt) -> u64 {
 fn aggregations(out: &mut Vec<(&'static str, u64)>, fitted: &AttGt, clustered: &AttGt) {
     let level = Level::confidence(CONFIDENCE).expect("level");
     let families = clustered.clusters().expect("clusters").to_vec();
-    let clusters = Clusters::from_labels_first_seen(&families);
+    let clusters = Clusters::from_labels_first_seen(&families).unwrap();
     let run = |fit: &AttGt, options: AggteOptions| fit.aggregate(&options).expect("aggregation");
     let by_share = |aggregation| AggteOptions {
         aggregation,
@@ -541,7 +541,7 @@ fn pairwise(out: &mut Vec<(&'static str, u64)>, rows: &[Row]) {
         let families: Vec<u32> = frame.iter().map(|row| row.4).collect();
         h_att.fs(&did_cluster_sums(
             fitted.influence.column(0),
-            &Clusters::from_labels_first_seen(&families),
+            &Clusters::from_labels_first_seen(&families).unwrap(),
         )
         .expect("sums"));
 

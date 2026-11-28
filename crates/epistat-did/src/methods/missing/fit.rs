@@ -478,7 +478,7 @@ pub(super) fn fold_assignment(
     for (pos, &g) in order.iter().enumerate() {
         position[g] = pos;
     }
-    let group = |i: usize| clusters.map_or(i, |c| c.of()[i]);
+    let group = |i: usize| clusters.map_or(i, |c| c.of()[i] as usize);
     let fold = (0..n).map(|i| position[group(i)] % folds).collect();
     let half = (0..n)
         .map(|i| (position[group(i)] / folds) % 2 == 1)

@@ -334,7 +334,11 @@ pub(crate) struct UnitIndex {
 }
 
 impl UnitIndex {
-    pub(crate) fn new(unit: &[u32], used: &[bool], clusters: Option<&[u32]>) -> Self {
+    pub(crate) fn new(
+        unit: &[u32],
+        used: &[bool],
+        clusters: Option<&[u32]>,
+    ) -> Result<Self, Error> {
         let levels = unit.iter().copied().max().map_or(0, |m| m as usize + 1);
         let mut present = vec![false; levels];
         let mut cluster_of = vec![0u32; levels];
@@ -355,18 +359,18 @@ impl UnitIndex {
                 labels.push(cluster_of[code as usize]);
             }
         }
-        Self {
+        Ok(Self {
             units,
             position,
-            clusters: Clusters::from_labels_first_seen(&labels),
-        }
+            clusters: Clusters::from_labels_first_seen(&labels)?,
+        })
     }
 
     /// The sums by cluster of per-unit values.
     pub(crate) fn cluster_sums(&self, by_unit: &[f64]) -> Vec<f64> {
         let mut out = vec![0.0; self.clusters.count()];
         for (value, &c) in by_unit.iter().zip(self.clusters.of()) {
-            out[c] += value;
+            out[c as usize] += value;
         }
         out
     }
@@ -444,7 +448,7 @@ pub fn estimate(
     let used: Vec<bool> = stage.adjusted.iter().map(Option::is_some).collect();
     let dropped_rows: Vec<usize> = (0..n).filter(|&i| !used[i]).collect();
     let treated_rows: Vec<usize> = (0..n).filter(|&i| used[i] && stage.treated[i]).collect();
-    let index = UnitIndex::new(panel.unit(), &used, panel.clusters());
+    let index = UnitIndex::new(panel.unit(), &used, panel.clusters())?;
     let n_units = index.units.len();
 
     // The estimands.

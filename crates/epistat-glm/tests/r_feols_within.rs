@@ -100,7 +100,7 @@ fn between_within_splits_each_column_into_family_mean_and_deviation() {
     let x = Mat::from_fn(5, 2, |i, j| {
         [[1.0, 4.0], [3.0, 4.0], [5.0, 4.0], [2.0, 9.0], [4.0, 9.0]][i][j]
     });
-    let clusters = Clusters::from_labels_first_seen(&[7, 7, 7, 9, 9]);
+    let clusters = Clusters::from_labels_first_seen(&[7, 7, 7, 9, 9]).unwrap();
     let (means, deviations) = between_within(x.as_ref(), &clusters).unwrap();
     assert_eq!((means.nrows(), means.ncols()), (2, 2));
     assert!((means[(0, 0)] - 3.0).abs() < 1e-15 && (means[(1, 0)] - 3.0).abs() < 1e-15);

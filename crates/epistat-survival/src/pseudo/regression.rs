@@ -372,7 +372,7 @@ pub fn fit(
         .collect();
     let a = weighted_gram(x, &weight)?;
     let scored = Mat::from_fn(n, p, |i, j| w[i] * derivative[i] * x[(i, j)]);
-    let clusters = Clusters::from_sorted_labels(cluster);
+    let clusters = Clusters::from_sorted_labels(cluster)?;
     let a_inverse = inverse(a.as_ref(), &Attempt::SYMMETRIC)?.x;
     // The factor of each score: 1, or 1 / (1 - h) with h the leverage.
     let (factor, leverage): (Vec<f64>, Option<Vec<f64>>) = match opts.covariance {

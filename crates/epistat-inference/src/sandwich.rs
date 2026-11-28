@@ -120,7 +120,7 @@ pub fn meat(
     for (row, &cluster) in clusters.of().iter().enumerate() {
         let r = residual(row);
         for j in 0..p {
-            sums[(cluster, j)] += r * x[(row, j)];
+            sums[(cluster as usize, j)] += r * x[(row, j)];
         }
     }
     Ok(row_scaled_gram(sums.as_ref(), |_| 1.0))
@@ -279,7 +279,7 @@ mod tests {
     fn clustered_meat_sums_scores_within_clusters() {
         let x = Mat::from_fn(4, 1, |_, _| 1.0);
         let residuals = [1.0, -1.0, 2.0, 1.0];
-        let clusters = Clusters::from_labels_first_seen(&["a", "a", "b", "b"]);
+        let clusters = Clusters::from_labels_first_seen(&["a", "a", "b", "b"]).unwrap();
         let m = meat(x.as_ref(), |i| residuals[i], Some(&clusters)).unwrap();
         assert!((m[(0, 0)] - 9.0).abs() < 1e-15);
     }

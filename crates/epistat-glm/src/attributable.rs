@@ -341,7 +341,7 @@ pub fn attributable_logistic(
         Some(clusters) => {
             let mut sums = vec![0.0; clusters.count()];
             for (i, &k) in clusters.of().iter().enumerate() {
-                sums[k] += z[i];
+                sums[k as usize] += z[i];
             }
             let c = sums.len();
             (sums, c)

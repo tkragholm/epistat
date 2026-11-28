@@ -631,7 +631,7 @@ fn fit_design(input: &MsmInput<'_>) -> Result<Msm> {
         ("weight", input.weight.len()),
         ("person", input.person.len()),
     ])?;
-    let clusters = Clusters::from_labels_first_seen(input.person);
+    let clusters = Clusters::from_labels_first_seen(input.person)?;
     let rows = DesignRows {
         input,
         cluster: clusters.of(),
@@ -644,7 +644,7 @@ fn fit_design(input: &MsmInput<'_>) -> Result<Msm> {
 /// order in which the persons first appear.
 struct DesignRows<'a> {
     input: &'a MsmInput<'a>,
-    cluster: &'a [usize],
+    cluster: &'a [u32],
     n_clusters: usize,
 }
 
@@ -666,7 +666,7 @@ impl Rows for DesignRows<'_> {
             }
             block.y[i] = f64::from(u8::from(self.input.outcome[r]));
             block.weight[i] = self.input.weight[r];
-            block.cluster[i] = self.cluster[r];
+            block.cluster[i] = self.cluster[r] as usize;
         }
     }
 }

@@ -145,7 +145,7 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
         person: input.person,
     })?;
 
-    let clusters = Clusters::from_labels_first_seen(input.person);
+    let clusters = Clusters::from_labels_first_seen(input.person)?;
     let g = clusters.count();
     let of = clusters.of();
     let mut u = vec![0.0; g * p];
@@ -158,7 +158,7 @@ pub fn fit_msm_competing(input: &MsmInput<'_>, competing: &[bool]) -> Result<Msm
             *xj = input.design[(r, j)];
         }
         let w = input.weight[r];
-        let c = of[r];
+        let c = of[r] as usize;
         let q = expit(&x, &competing_fit.coefficients);
         let d = f64::from(u8::from(competing[r]));
         add_score(&mut v[c * p..(c + 1) * p], &x, w * (d - q));

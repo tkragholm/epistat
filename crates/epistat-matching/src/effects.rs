@@ -704,11 +704,11 @@ fn covariance(
     match spec.clustering {
         Clustering::Pair => {
             terms.push((
-                Clusters::from_labels_first_seen(pairs.as_deref().unwrap_or(&[])),
+                Clusters::from_labels_first_seen(pairs.as_deref().unwrap_or(&[]))?,
                 1.0,
             ));
         }
-        Clustering::Unit => terms.push((Clusters::from_labels_first_seen(&sample.unit), 1.0)),
+        Clustering::Unit => terms.push((Clusters::from_labels_first_seen(&sample.unit)?, 1.0)),
         Clustering::PairAndUnit => {
             let pairs = pairs.unwrap_or_default();
             let both: Vec<(usize, usize)> = pairs
@@ -716,9 +716,9 @@ fn covariance(
                 .copied()
                 .zip(sample.unit.iter().copied())
                 .collect();
-            terms.push((Clusters::from_labels_first_seen(&pairs), 1.0));
-            terms.push((Clusters::from_labels_first_seen(&sample.unit), 1.0));
-            terms.push((Clusters::from_labels_first_seen(&both), -1.0));
+            terms.push((Clusters::from_labels_first_seen(&pairs)?, 1.0));
+            terms.push((Clusters::from_labels_first_seen(&sample.unit)?, 1.0));
+            terms.push((Clusters::from_labels_first_seen(&both)?, -1.0));
         }
     }
     if terms.iter().any(|(c, _)| c.count() < 2) {
@@ -895,14 +895,14 @@ pub fn bootstrap(
     settings: &BootstrapSpec,
 ) -> Result<BootstrapEffects, Error> {
     let labels = sample.pair_labels()?;
-    let clusters = Clusters::from_sorted_labels(&labels);
+    let clusters = Clusters::from_sorted_labels(&labels)?;
     let g = clusters.count();
     if settings.bootstrap.replicates < 2 || g < 2 {
         return Err(Error::Bootstrap);
     }
     let mut members: Vec<Vec<usize>> = vec![Vec::new(); g];
     for (row, &c) in clusters.of().iter().enumerate() {
-        members[c].push(row);
+        members[c as usize].push(row);
     }
     let observed = point_contrasts(sample, spec)?;
     let draws = cluster_resamples(g, settings.bootstrap);

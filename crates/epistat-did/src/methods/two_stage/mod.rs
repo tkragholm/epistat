@@ -204,7 +204,7 @@ pub fn estimate(panel: &StaggeredPanel<'_>, options: &TwoStageOptions) -> Result
     let used: Vec<bool> = stage.adjusted.iter().map(Option::is_some).collect();
     let dropped_rows: Vec<usize> = (0..n).filter(|&i| !used[i]).collect();
     let treated_rows: Vec<usize> = (0..n).filter(|&i| used[i] && stage.treated[i]).collect();
-    let index = UnitIndex::new(panel.unit(), &used, panel.clusters());
+    let index = UnitIndex::new(panel.unit(), &used, panel.clusters())?;
     let n_units = index.units.len();
 
     // The indicator of each row: its term, or None.

@@ -225,7 +225,7 @@ fn fit_iptw(
             0.0
         }
     });
-    let ones = Clusters::singletons(n_units);
+    let ones = Clusters::singletons(n_units)?;
     let b = meat(psi.as_ref(), |_| 1.0, Some(&ones))?;
     let stacked = sandwich(a.as_ref(), b.as_ref(), &GENERAL)?;
     let b_beta = Mat::from_fn(p, p, |i, j| b[(k + i, k + j)]);
@@ -333,7 +333,7 @@ fn fit_general(
     let vmat = Mat::from_fn(p, p, |i, j| v[i * p + j]);
     let information = inverse(vmat.as_ref(), &Attempt::SYMMETRIC)?.x;
     let minus_information = Mat::from_fn(p, p, |i, j| -information[(i, j)]);
-    let ones = Clusters::singletons(prepared.n_units);
+    let ones = Clusters::singletons(prepared.n_units)?;
     let form = |psi: &Mat<f64>| -> Result<Mat<f64>> {
         let b = meat(psi.as_ref(), |_| 1.0, Some(&ones))?;
         sandwich(minus_information.as_ref(), b.as_ref(), &Attempt::SYMMETRIC).map_err(Error::from)

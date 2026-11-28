@@ -611,7 +611,7 @@ fn the_uniform_critical_value_has_the_stated_coverage_on_fresh_draws() {
                 Some(c) => {
                     let mut sums = vec![0.0; c.count()];
                     for (value, &cluster) in point.influence.iter().zip(c.of()) {
-                        sums[cluster] += value;
+                        sums[cluster as usize] += value;
                     }
                     sums
                 }

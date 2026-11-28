@@ -415,7 +415,7 @@ fn singleton_clusters_give_the_unclustered_standard_error() {
         &MissingOptions::default(),
     )
     .unwrap();
-    let clusters = Clusters::singletons(sim.treated.len());
+    let clusters = Clusters::singletons(sim.treated.len()).unwrap();
     let clustered = att_missing_pre(
         &MissingPreData {
             clusters: Some(&clusters),
@@ -452,7 +452,7 @@ fn cross_fitting_keeps_a_cluster_in_one_fold() {
     let y0: Vec<Option<f64>> = (0..n).map(|i| base.y0[i / 2]).collect();
     let y1: Vec<f64> = (0..n).map(|i| base.y1[i / 2]).collect();
     let labels: Vec<usize> = (0..n).map(|i| i / 2).collect();
-    let clusters = Clusters::from_labels_first_seen(&labels);
+    let clusters = Clusters::from_labels_first_seen(&labels).unwrap();
     let est = att_missing_pre(
         &MissingPreData {
             treated: &treated,
@@ -524,7 +524,7 @@ fn the_folds_are_balanced_and_keep_clusters_whole() {
     );
 
     let labels: Vec<usize> = (0..1000).map(|i| (i * 7) % 100).collect();
-    let clusters = Clusters::from_labels_first_seen(&labels);
+    let clusters = Clusters::from_labels_first_seen(&labels).unwrap();
     let grouped = missing_cross_fit_folds(1000, Some(&clusters), 4, 7).unwrap();
     for i in 0..1000 {
         for j in 0..1000 {
