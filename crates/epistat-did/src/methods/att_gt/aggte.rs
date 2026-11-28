@@ -87,7 +87,7 @@ use epistat_inference::{ClusterRule, Clusters, Influence};
 
 use crate::error::Error;
 use crate::inference::did_clusters::{covariance, standard_error};
-use crate::inference::{normal_interval, z_score_for_confidence};
+use crate::inference::{estimate_from_parts, finite, normal_interval, z_score_for_confidence};
 use crate::util::usize_to_f64;
 
 use super::{AttGt, BasePeriod, aggregation, cell_estimate};
@@ -343,17 +343,50 @@ pub(super) struct Cell {
     pub total_weight: f64,
 }
 
-/// One aggregated point before it becomes an [`AggtePoint`].
+/// One aggregated point before it becomes an [`AggtePoint`]; a standard error
+/// or interval end that is not finite is `None`.
 #[derive(Debug, Clone)]
 pub(super) struct Point {
     pub key: i64,
     pub att: f64,
-    pub se: f64,
-    pub ci_low: f64,
-    pub ci_high: f64,
+    pub se: Option<f64>,
+    pub interval: (Option<f64>, Option<f64>),
     pub influence: Vec<f64>,
     pub n_cells: usize,
     pub total_weight: f64,
+}
+
+impl Point {
+    /// The point at `key` with the normal interval at `confidence_level`.
+    pub(super) fn normal(
+        key: i64,
+        (att, influence): (f64, Vec<f64>),
+        se: f64,
+        confidence_level: f64,
+        n_cells: usize,
+        total_weight: f64,
+    ) -> Self {
+        let (lower, upper) = normal_interval(att, se, confidence_level);
+        Self {
+            key,
+            att,
+            se: finite(se),
+            interval: (finite(lower), finite(upper)),
+            influence,
+            n_cells,
+            total_weight,
+        }
+    }
+
+    /// Replaces the standard error, and the interval by `att -/+ critical se`.
+    fn rescale(&mut self, se: Option<f64>, critical: f64) {
+        self.se = se.and_then(finite);
+        let margin = self.se.map(|se| critical * se);
+        self.interval = (
+            margin.and_then(|margin| finite(self.att - margin)),
+            margin.and_then(|margin| finite(self.att + margin)),
+        );
+    }
 }
 
 /// A summary before it becomes an [`Aggte`].
@@ -529,17 +562,14 @@ fn finish(
     clusters: &Clusters,
 ) -> Point {
     let se = standard_error(&influence, clusters);
-    let (ci_low, ci_high) = normal_interval(att, se, confidence_level);
-    Point {
+    Point::normal(
         key,
-        att,
+        (att, influence),
         se,
-        ci_low,
-        ci_high,
-        influence,
-        n_cells: selected.len(),
-        total_weight: selected.iter().map(|&c| cells[c].total_weight).sum(),
-    }
+        confidence_level,
+        selected.len(),
+        selected.iter().map(|&c| cells[c].total_weight).sum(),
+    )
 }
 
 /// Position of each period or cohort in the sorted list of those that occur
@@ -873,12 +903,6 @@ fn apply_bootstrap(
         // An error here means that no draw gave a finite studentised maximum,
         // so there are no bootstrap standard errors either.
         let standard_errors = bands.as_ref().ok().map(|bands| bands.se.clone());
-        for (index, point) in summary.points.iter_mut().enumerate() {
-            point.se = standard_errors
-                .as_ref()
-                .and_then(|se| se[index])
-                .unwrap_or(f64::NAN);
-        }
         if let (true, Ok(bands)) = (uniform_band, bands.as_ref())
             && bands.critical.is_finite()
             && bands.critical >= pointwise
@@ -886,10 +910,9 @@ fn apply_bootstrap(
             summary.critical_value = bands.critical;
             summary.uniform_band = true;
         }
-        for point in &mut summary.points {
-            let margin = summary.critical_value * point.se;
-            point.ci_low = point.att - margin;
-            point.ci_high = point.att + margin;
+        for (index, point) in summary.points.iter_mut().enumerate() {
+            let se = standard_errors.as_ref().and_then(|se| se[index]);
+            point.rescale(se, summary.critical_value);
         }
     }
 
@@ -897,10 +920,7 @@ fn apply_bootstrap(
         let bands = level.and_then(|level| {
             multiplier_bands(&[overall.influence.as_slice()], clusters, level, bootstrap)
         });
-        overall.se = bands.ok().and_then(|bands| bands.se[0]).unwrap_or(f64::NAN);
-        let margin = pointwise * overall.se;
-        overall.ci_low = overall.att - margin;
-        overall.ci_high = overall.att + margin;
+        overall.rescale(bands.ok().and_then(|bands| bands.se[0]), pointwise);
     }
     Ok(summary)
 }
@@ -978,8 +998,7 @@ fn into_aggte(
     cells_influence: &Influence,
 ) -> Result<Aggte, Error> {
     let level = options.level;
-    let estimate =
-        |point: &Point| cell_estimate(point.att, point.se, (point.ci_low, point.ci_high), level);
+    let estimate = |point: &Point| estimate_from_parts(point.att, point.se, point.interval, level);
     let points: Vec<AggtePoint> = summary
         .points
         .iter()

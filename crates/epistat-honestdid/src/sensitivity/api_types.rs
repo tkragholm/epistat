@@ -1,4 +1,5 @@
 use super::solver_tally::SolverCounts;
+use crate::sensitivity::EngineError;
 use crate::util::InferenceConfig;
 
 /// Sensitivity restrictions for `HonestDiD` robustness analysis.
@@ -181,25 +182,14 @@ pub enum HonestRelativeMagnitudeBound {
 }
 
 /// Monte Carlo settings of the simulation behind a least-favorable critical
-/// value.
-///
-/// The defaults are the 1,000 draws and seed 0 that `HonestDiD` uses. More
-/// draws shrink the simulation error of the critical value.
+/// value, from the caller's draws and seed. `HonestDiD` uses 1,000 draws from
+/// seed 0. More draws shrink the simulation error of the critical value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LeastFavorableSimulation {
     /// Number of simulated draws.
     pub draws: usize,
     /// Seed of the simulation.
     pub seed: u64,
-}
-
-impl Default for LeastFavorableSimulation {
-    fn default() -> Self {
-        Self {
-            draws: 1_000,
-            seed: 0,
-        }
-    }
 }
 
 impl LeastFavorableSimulation {
@@ -213,9 +203,13 @@ impl LeastFavorableSimulation {
     ///
     /// # Errors
     /// Returns an error if `draws` is zero.
-    pub fn validate(self) -> Result<(), String> {
+    pub fn validate(self) -> Result<(), EngineError> {
         if self.draws == 0 {
-            return Err("least-favorable simulation draws must be positive".to_string());
+            return Err(EngineError::domain(
+                "least-favourable draws",
+                0.0,
+                "[1, inf)",
+            ));
         }
         Ok(())
     }
@@ -259,21 +253,27 @@ impl SmoothnessConfidenceSetConfig {
     /// # Errors
     /// Returns an error if `hybrid_kappa` is not finite, outside `[0, alpha]`,
     /// or if the requested grid size is too small.
-    pub fn validate(self, inference: InferenceConfig) -> Result<(), String> {
+    pub fn validate(self, inference: InferenceConfig) -> Result<(), EngineError> {
         let alpha = 1.0 - inference.confidence_level;
         if !self.hybrid_kappa.is_finite() {
-            return Err("smoothness hybrid_kappa must be finite".to_string());
+            return Err(EngineError::domain(
+                "hybrid_kappa",
+                self.hybrid_kappa,
+                "[0, alpha]",
+            ));
         }
         if !(0.0..=alpha).contains(&self.hybrid_kappa) {
-            return Err(format!(
-                "smoothness hybrid_kappa must lie in [0, alpha]={alpha}, got {}",
-                self.hybrid_kappa
+            return Err(EngineError::domain(
+                "hybrid_kappa",
+                self.hybrid_kappa,
+                "[0, alpha]",
             ));
         }
         if self.grid_points < 2 {
-            return Err(format!(
-                "smoothness conditional grid_points must be at least 2, got {}",
-                self.grid_points
+            return Err(EngineError::domain(
+                "grid_points",
+                self.grid_points as f64,
+                "[2, inf)",
             ));
         }
         Ok(())
@@ -295,27 +295,38 @@ pub struct RelativeMagnitudeConfidenceSetConfig {
     /// `alpha / 10`.
     pub hybrid_kappa: f64,
     /// Number of simulated draws behind the least-favorable critical value,
-    /// positive. The default is 1,000.
+    /// positive.
     pub least_favorable_draws: usize,
-    /// Seed of the simulation behind the least-favorable critical value. The
-    /// default is 0.
+    /// Seed of the simulation behind the least-favorable critical value.
     pub least_favorable_seed: u64,
 }
 
 impl RelativeMagnitudeConfidenceSetConfig {
     /// Build the default conditional-CS configuration for a target confidence
-    /// level.
+    /// level, with the draws and seed of `simulation`.
     ///
     /// `hybrid_kappa` is `alpha / 10`, with `alpha = 1 - confidence_level`. The
     /// first stage selects the `1 - kappa` quantile of the simulated
-    /// least-favorable distribution from the fixed number of draws.
+    /// least-favorable distribution from the given number of draws.
     #[must_use]
-    pub fn from_inference(inference: InferenceConfig) -> Self {
+    pub fn from_inference(
+        inference: InferenceConfig,
+        simulation: LeastFavorableSimulation,
+    ) -> Self {
         Self {
             hybrid: RelativeMagnitudeHybrid::LeastFavorable,
             hybrid_kappa: (1.0 - inference.confidence_level) / 10.0,
-            least_favorable_draws: 1_000,
-            least_favorable_seed: 0,
+            least_favorable_draws: simulation.draws,
+            least_favorable_seed: simulation.seed,
+        }
+    }
+
+    /// The draws and seed of the least-favorable simulation.
+    #[must_use]
+    pub const fn simulation(self) -> LeastFavorableSimulation {
+        LeastFavorableSimulation {
+            draws: self.least_favorable_draws,
+            seed: self.least_favorable_seed,
         }
     }
 
@@ -324,18 +335,27 @@ impl RelativeMagnitudeConfidenceSetConfig {
     /// # Errors
     /// Returns an error if `hybrid_kappa` is not finite or is outside
     /// `[0, alpha]`, where `alpha = 1 - confidence_level`.
-    pub fn validate(self, inference: InferenceConfig) -> Result<(), String> {
+    pub fn validate(self, inference: InferenceConfig) -> Result<(), EngineError> {
         let alpha = 1.0 - inference.confidence_level;
         if !self.hybrid_kappa.is_finite() {
-            return Err("relative-magnitude hybrid_kappa must be finite".to_string());
+            return Err(EngineError::domain(
+                "hybrid_kappa",
+                self.hybrid_kappa,
+                "[0, alpha]",
+            ));
         }
         if self.least_favorable_draws == 0 {
-            return Err("relative-magnitude least_favorable_draws must be positive".to_string());
+            return Err(EngineError::domain(
+                "least-favourable draws",
+                0.0,
+                "[1, inf)",
+            ));
         }
         if !(0.0..=alpha).contains(&self.hybrid_kappa) {
-            return Err(format!(
-                "relative-magnitude hybrid_kappa must lie in [0, alpha]={alpha}, got {}",
-                self.hybrid_kappa
+            return Err(EngineError::domain(
+                "hybrid_kappa",
+                self.hybrid_kappa,
+                "[0, alpha]",
             ));
         }
         Ok(())
@@ -403,21 +423,41 @@ pub enum HonestJointPathMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HonestJointPathConfig {
     /// Method used to set the pointwise level so that the family of intervals
-    /// has the requested joint coverage. The default is
-    /// [`HonestJointPathMethod::GaussianSimulated`].
+    /// has the requested joint coverage.
     pub method: HonestJointPathMethod,
     /// Number of simulated draws behind the max-`|t|` critical value, positive.
-    /// Used only by [`HonestJointPathMethod::GaussianSimulated`]. The default is
-    /// 20,000.
+    /// Read only by [`HonestJointPathMethod::GaussianSimulated`].
     pub simulation_draws: usize,
-    /// Seed of the simulation behind the max-`|t|` critical value. Used only by
-    /// [`HonestJointPathMethod::GaussianSimulated`]. The default is 42.
+    /// Seed of the simulation behind the max-`|t|` critical value. Read only
+    /// by [`HonestJointPathMethod::GaussianSimulated`].
     pub simulation_seed: u64,
 }
 
 impl HonestJointPathConfig {
+    /// Bonferroni calibration, which simulates nothing, so its draws and seed
+    /// are zero and never read.
+    #[must_use]
+    pub const fn bonferroni() -> Self {
+        Self {
+            method: HonestJointPathMethod::Bonferroni,
+            simulation_draws: 0,
+            simulation_seed: 0,
+        }
+    }
+
+    /// Gaussian-simulated calibration with the caller's draws and seed.
+    #[must_use]
+    pub const fn gaussian(simulation: LeastFavorableSimulation) -> Self {
+        Self {
+            method: HonestJointPathMethod::GaussianSimulated,
+            simulation_draws: simulation.draws,
+            simulation_seed: simulation.seed,
+        }
+    }
+
     /// Gaussian-simulated calibration with 20,000 draws and seed 42.
     #[must_use]
+    #[cfg(test)]
     pub const fn default_for_production() -> Self {
         Self {
             method: HonestJointPathMethod::GaussianSimulated,
@@ -633,21 +673,6 @@ pub struct HonestOptimizationSurfaceConfig {
     pub random_seed: u64,
 }
 
-impl HonestOptimizationSurfaceConfig {
-    /// Basis and pairwise-contrast directions plus 250 random directions, seed
-    /// 1729.
-    #[must_use]
-    #[cfg(test)]
-    pub const fn default_for_production() -> Self {
-        Self {
-            include_basis: true,
-            include_pairwise_contrasts: true,
-            random_unit_directions: 250,
-            random_seed: 1729,
-        }
-    }
-}
-
 /// Adaptive enrichment settings for optimization-surface direction sets.
 ///
 /// The adaptive routine adds random directions in batches, up to the
@@ -686,22 +711,19 @@ impl HonestOptimizationSurfaceAdaptiveConfig {
     ///
     /// # Errors
     /// Returns an error if the adaptive parameters are invalid.
-    pub fn validate(self) -> Result<(), String> {
+    pub fn validate(self) -> Result<(), EngineError> {
         if self.random_batch_size == 0 {
-            return Err(
-                "optimization surface adaptive random_batch_size must be positive".to_string(),
-            );
+            return Err(EngineError::domain("batch", 0.0, "[1, inf)"));
         }
         if self.max_iterations == 0 {
-            return Err(
-                "optimization surface adaptive max_iterations must be positive".to_string(),
-            );
+            return Err(EngineError::domain("max_iterations", 0.0, "[1, inf)"));
         }
         if !self.pointwise_tolerance.is_finite() || self.pointwise_tolerance < 0.0 {
-            return Err(
-                "optimization surface adaptive pointwise_tolerance must be finite and non-negative"
-                    .to_string(),
-            );
+            return Err(EngineError::domain(
+                "tolerance",
+                self.pointwise_tolerance,
+                "finite and non-negative",
+            ));
         }
         Ok(())
     }
@@ -724,8 +746,6 @@ pub struct HonestOptimizationSurfaceAdaptiveRunConfig {
     pub adaptive: HonestOptimizationSurfaceAdaptiveConfig,
 }
 
-impl HonestOptimizationSurfaceAdaptiveRunConfig {}
-
 /// Which directions the directional region of the `HonestDiD` workflow covers.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg(test)]
@@ -746,13 +766,18 @@ pub enum HonestWorkflowDirectionMode {
 
 #[cfg(test)]
 impl HonestWorkflowDirectionMode {
-    /// Adaptive optimization-surface directions with the
-    /// `default_for_production` surface and adaptive settings.
+    /// Adaptive optimization-surface directions: the basis, the pairwise
+    /// contrasts and up to 250 random directions drawn from `random_seed`,
+    /// with the `default_for_production` adaptive settings.
     #[must_use]
-    #[cfg(test)]
-    pub const fn default_for_production() -> Self {
+    pub const fn adaptive_surface(random_seed: u64) -> Self {
         Self::OptimizationSurfaceAdaptive {
-            surface: HonestOptimizationSurfaceConfig::default_for_production(),
+            surface: HonestOptimizationSurfaceConfig {
+                include_basis: true,
+                include_pairwise_contrasts: true,
+                random_unit_directions: 250,
+                random_seed,
+            },
             adaptive: HonestOptimizationSurfaceAdaptiveConfig::default_for_production(),
         }
     }
@@ -841,32 +866,30 @@ impl HonestEventStudyInput {
     /// # Errors
     /// Returns an error if the coefficient vector, covariance matrix, or period
     /// labels are inconsistent.
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), EngineError> {
         let total_periods = self.pre_periods.len() + self.post_periods.len();
         if self.betahat.len() != total_periods {
-            return Err(format!(
-                "event-study coefficient length {} does not match pre+post periods {}",
+            return Err(EngineError::length(
+                "event-study coefficients",
+                total_periods,
                 self.betahat.len(),
-                total_periods
             ));
         }
-        if self.covariance.len() != total_periods
-            || self.covariance.iter().any(|row| row.len() != total_periods)
+        if let Some(found) = std::iter::once(self.covariance.len())
+            .chain(self.covariance.iter().map(Vec::len))
+            .find(|&len| len != total_periods)
         {
-            return Err(
-                "event-study covariance matrix dimensions do not match coefficients".to_string(),
-            );
+            return Err(EngineError::length(
+                "event-study covariance",
+                total_periods,
+                found,
+            ));
         }
-        if self.betahat.iter().any(|value| !value.is_finite()) {
-            return Err("event-study coefficients must be finite".to_string());
-        }
-        if self
-            .covariance
-            .iter()
-            .flat_map(|row| row.iter())
-            .any(|value| !value.is_finite())
-        {
-            return Err("event-study covariance values must be finite".to_string());
+        EngineError::check_finite("event-study coefficients", &self.betahat)?;
+        for (row, values) in self.covariance.iter().enumerate() {
+            if values.iter().any(|value| !value.is_finite()) {
+                return Err(EngineError::not_finite("event-study covariance", row));
+            }
         }
         Ok(())
     }

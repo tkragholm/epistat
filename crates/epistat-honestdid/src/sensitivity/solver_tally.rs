@@ -29,6 +29,7 @@ struct Tally {
 /// `AlmostSolved` when Clarabel stops at its reduced tolerances without
 /// reaching the full ones, and its solution is used as it is. A retried program
 /// that then ends `AlmostSolved` is counted in both fields.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SolverCounts {
     /// Programs that needed the retry.

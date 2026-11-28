@@ -637,7 +637,7 @@ pub fn original(study: &EventStudy, target: &Target, level: Level) -> Result<Est
     let input = engine_input(study)?;
     let weights = target.weights(study)?;
     let set = engine::compute_original_confidence_set(&input, &weights, inference(level))
-        .map_err(Error::Solver)?;
+        .map_err(Error::from)?;
     Ok(Estimate::point(set.estimate)
         .with_se(defined(set.se))
         .with_interval(Some(interval(set.ci.0, set.ci.1, level))))
@@ -655,7 +655,10 @@ pub fn original(study: &EventStudy, target: &Target, level: Level) -> Result<Est
 /// grid; [`Error::Unsupported`] for a sign and a monotonicity restriction
 /// together, or a method the restriction does not have (the FLCI and `C-F`
 /// under the relative-magnitude restriction, the FLCI with a sign or
-/// monotonicity restriction); [`Error::Solver`] when a program fails.
+/// monotonicity restriction); [`Error::Solver`] when a program does not
+/// solve, and the other numerical variants of [`Error`] when a critical
+/// value cannot be found, a target is degenerate or the conditional test
+/// accepts no value of its grid.
 pub fn summarize(
     study: &EventStudy,
     target: &Target,
@@ -730,7 +733,7 @@ pub fn summarize(
             .map(|mut summaries| summaries.remove(0))
         }
     }
-    .map_err(Error::Solver)?;
+    .map_err(Error::from)?;
     Ok(SensitivitySummary {
         rows: summary
             .rows
@@ -768,7 +771,7 @@ fn identified_sets(
     let values = if values.is_empty() {
         match restriction {
             Restriction::Smoothness { .. } => {
-                engine::default_smoothness_m_values(input).map_err(Error::Solver)?
+                engine::default_smoothness_m_values(input).map_err(Error::from)?
             }
             Restriction::RelativeMagnitude { .. } => {
                 engine::default_relative_magnitude_mbar_values()
@@ -804,7 +807,7 @@ fn identified_sets(
                     )
                 }
             }
-            .map_err(Error::Solver)?;
+            .map_err(Error::from)?;
             let identified = IdentifiedSet::from_pair(set.lb, set.ub);
             Ok(SensitivityRow {
                 value,
@@ -842,7 +845,7 @@ pub fn smoothness_bound_from_pretrends(study: &EventStudy, level: Level) -> Resu
         .into());
     }
     engine::estimate_smoothness_upper_bound_from_pretrends(&input, level.alpha_value())
-        .map_err(Error::Solver)
+        .map_err(Error::from)
 }
 
 /// How the pointwise level of a joint region is chosen.
@@ -1026,7 +1029,7 @@ pub struct JointPathRegion {
     /// The joint level asked for.
     pub level: Level,
     /// The pointwise confidence level of each interval.
-    pub pointwise_level: f64,
+    pub pointwise_level: Level,
     /// The simulated max-`|t|` critical value, under
     /// [`Calibration::Gaussian`].
     pub critical_value: Option<f64>,
@@ -1051,7 +1054,9 @@ pub struct JointPathRegion {
 /// is negative or not finite, directions of the wrong length or all zero, no
 /// draws, or an undefined covariance entry; [`Error::Unsupported`] for the
 /// linear-trend bound, or the FLCI on the optimisation surface;
-/// [`Error::Solver`] when a program fails.
+/// [`Error::Solver`] when a program does not solve, and the other numerical
+/// variants of [`Error`] when a critical value cannot be found or a direction
+/// is degenerate.
 pub fn joint_path(
     study: &EventStudy,
     restriction: &Restriction,
@@ -1090,20 +1095,13 @@ pub fn joint_path(
         } else {
             RelativeMagnitudeHybrid::ArpOnly
         },
-        least_favorable_draws: least_favorable.draws,
-        least_favorable_seed: least_favorable.seed,
-        ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+        ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference, least_favorable)
     };
     let joint_config = match options.calibration {
-        Calibration::Bonferroni => HonestJointPathConfig {
-            method: HonestJointPathMethod::Bonferroni,
-            ..HonestJointPathConfig::default_for_production()
-        },
-        Calibration::Gaussian(bootstrap) => HonestJointPathConfig {
-            method: HonestJointPathMethod::GaussianSimulated,
-            simulation_draws: simulation(bootstrap, "calibration draws")?.draws,
-            simulation_seed: bootstrap.seed,
-        },
+        Calibration::Bonferroni => HonestJointPathConfig::bonferroni(),
+        Calibration::Gaussian(bootstrap) => {
+            HonestJointPathConfig::gaussian(simulation(bootstrap, "calibration draws")?)
+        }
     };
     let n_post = input.num_post_periods();
     let level = options.level;
@@ -1140,7 +1138,7 @@ pub fn joint_path(
                 let problem = engine::build_relative_magnitude_multi_flci_problem(
                     &input, &sets, mbar, inference,
                 )
-                .map_err(Error::Solver)?;
+                .map_err(Error::from)?;
                 engine::compute_relative_magnitude_multi_flci_with_config(
                     &problem,
                     rm_config,
@@ -1150,7 +1148,7 @@ pub fn joint_path(
             HonestSensitivity::Smoothness(m) => {
                 let problem =
                     engine::build_smoothness_multi_flci_problem(&input, &sets, m, inference)
-                        .map_err(Error::Solver)?;
+                        .map_err(Error::from)?;
                 engine::compute_smoothness_multi_flci_with_config(
                     &problem,
                     SmoothnessFlciConfig::default_for_production(),
@@ -1158,7 +1156,7 @@ pub fn joint_path(
                 )
             }
         }
-        .map_err(Error::Solver)?;
+        .map_err(Error::from)?;
         let pointwise = pointwise_level(result.pointwise_confidence_level)?;
         let points = result
             .points
@@ -1167,7 +1165,7 @@ pub fn joint_path(
             .map(|(i, point)| {
                 let original =
                     engine::compute_original_confidence_set(&input, &point.post_weights, inference)
-                        .map_err(Error::Solver)?;
+                        .map_err(Error::from)?;
                 Ok(JointPathPoint {
                     period: periods.then(|| study.post_periods()[i]),
                     original: Estimate::point(original.estimate)
@@ -1189,7 +1187,7 @@ pub fn joint_path(
             .collect::<Result<_, Error>>()?;
         return Ok(JointPathRegion {
             level,
-            pointwise_level: result.pointwise_confidence_level,
+            pointwise_level: pointwise,
             critical_value: critical(result.method, result.calibrated_max_t_critical_value),
             value,
             points,
@@ -1206,7 +1204,7 @@ pub fn joint_path(
                 rm_config,
                 joint_config,
             )
-            .map_err(Error::Solver)?;
+            .map_err(Error::from)?;
             let pointwise = pointwise_level(region.pointwise_confidence_level)?;
             let points = region
                 .points
@@ -1225,7 +1223,7 @@ pub fn joint_path(
                 .collect();
             return Ok(JointPathRegion {
                 level,
-                pointwise_level: region.pointwise_confidence_level,
+                pointwise_level: pointwise,
                 critical_value: critical(region.method, region.calibrated_max_t_critical_value),
                 value,
                 points,
@@ -1272,12 +1270,12 @@ pub fn joint_path(
             )
         }
     }
-    .map_err(Error::Solver)?;
+    .map_err(Error::from)?;
     let pointwise = pointwise_level(region.pointwise_confidence_level)?;
     let diagnostics = region.diagnostics;
     Ok(JointPathRegion {
         level,
-        pointwise_level: region.pointwise_confidence_level,
+        pointwise_level: pointwise,
         critical_value: critical(region.method, region.calibrated_max_t_critical_value),
         value,
         points: region
@@ -1314,10 +1312,8 @@ const fn engine_surface(surface: Surface) -> HonestOptimizationSurfaceConfig {
 }
 
 fn pointwise_level(confidence: f64) -> Result<Level, Error> {
-    Level::confidence(confidence).map_err(|_| {
-        Error::Solver(format!(
-            "the pointwise confidence level {confidence} is not in (0, 1)"
-        ))
+    Level::confidence(confidence).map_err(|_| Error::CriticalValue {
+        what: "pointwise confidence level of the joint region",
     })
 }
 

@@ -5,6 +5,7 @@
 //! recover a feasible dual vertex from the binding set and then compute the
 //! truncated-normal acceptance region used by the conditional `HonestDiD` test.
 
+use crate::sensitivity::EngineError;
 use clarabel::algebra::CscMatrix;
 use clarabel::solver::SupportedConeT;
 
@@ -35,7 +36,7 @@ pub(in crate::sensitivity) fn dual_acceptance_region(
     sigma_gamma_scratch: &mut Vec<f64>,
     s_t_scratch: &mut Vec<f64>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<Option<DualAcceptanceRegion>, String> {
+) -> Result<Option<DualAcceptanceRegion>, EngineError> {
     sigma_gamma_scratch.resize(y_arp.len(), 0.0);
     for (row_idx, sigma_row) in sigma_arp.iter().enumerate() {
         sigma_gamma_scratch[row_idx] = dot(sigma_row, gamma_tilde);
@@ -45,7 +46,9 @@ pub(in crate::sensitivity) fn dual_acceptance_region(
         return Ok(None);
     }
     if sigma_b2 < 0.0 {
-        return Err("HonestDiD dual branch produced negative variance".to_string());
+        return Err(EngineError::Degenerate(
+            "a negative variance in the dual of the conditional test",
+        ));
     }
     let sigma_b = sigma_b2.sqrt();
     let maxstat = eta_star / sigma_b;
@@ -81,7 +84,7 @@ pub(in crate::sensitivity) fn dual_conditional_test(
     sigma_gamma_scratch: &mut Vec<f64>,
     s_t_scratch: &mut Vec<f64>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<bool, String> {
+) -> Result<bool, EngineError> {
     let Some(region) = dual_acceptance_region(
         y_arp,
         sigma_arp,
@@ -146,7 +149,7 @@ pub(in crate::sensitivity) fn recover_dual_vertex_from_binding(
     x_arp: &[Vec<f64>],
     y_arp: &[f64],
     eta_star: f64,
-) -> Result<Vec<f64>, String> {
+) -> Result<Vec<f64>, EngineError> {
     let k = x_arp.first().map_or(0, Vec::len);
     let target_size = k + 1;
     let candidate_rows: Vec<usize> = if binding.len() < target_size {
@@ -165,14 +168,9 @@ pub(in crate::sensitivity) fn recover_dual_vertex_from_binding(
         eta_star,
     };
     search_binding_vertex(&search, 0, &mut current, &mut result)?;
-    result.ok_or_else(|| {
-        format!(
-            "HonestDiD dual recovery could not find a feasible vertex (binding={}, rows={}, target={})",
-            binding.len(),
-            y_arp.len(),
-            target_size
-        )
-    })
+    result.ok_or(EngineError::Degenerate(
+        "no feasible vertex in the dual recovery of the conditional test",
+    ))
 }
 
 fn search_binding_vertex(
@@ -180,7 +178,7 @@ fn search_binding_vertex(
     start: usize,
     current: &mut Vec<usize>,
     result: &mut Option<Vec<f64>>,
-) -> Result<(), String> {
+) -> Result<(), EngineError> {
     if result.is_some() {
         return Ok(());
     }
@@ -266,7 +264,7 @@ fn compute_dual_vlo_vup(
     sigma_b2: f64,
     workspace: &mut DualMaxLpWorkspace,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<(f64, f64), String> {
+) -> Result<(f64, f64), EngineError> {
     let sigma_b = sigma_b2.max(0.0).sqrt();
     let low_initial = (-100.0_f64).min(20.0f64.mul_add(-sigma_b, eta));
     let high_initial = 100.0f64.max(20.0f64.mul_add(sigma_b, eta));
@@ -339,7 +337,7 @@ fn bisect_dual_boundary(
     sigma_b2: f64,
     workspace: &mut DualMaxLpWorkspace,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<f64, String> {
+) -> Result<f64, EngineError> {
     for _ in 0..10_000 {
         if (high - low).abs() <= DUAL_BOUNDARY_TOL {
             return Ok(f64::midpoint(high, low));
@@ -377,7 +375,7 @@ fn check_dual_solution(
     sigma_b2: f64,
     workspace: &mut DualMaxLpWorkspace,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<bool, String> {
+) -> Result<bool, EngineError> {
     let optimum = workspace.solve_for_c(s_t, sigma_gamma, sigma_b2, c, counter)?;
     Ok((c - optimum).abs() <= tol)
 }
@@ -386,7 +384,7 @@ pub(super) fn solve_dual_max_with_clarabel_fallback(
     w_t: &[Vec<f64>],
     f: &[f64],
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<f64, String> {
+) -> Result<f64, EngineError> {
     let dim = w_t.len();
     let width = w_t.first().map_or(0, Vec::len);
     let inequalities: Vec<Vec<f64>> = (0..dim)
@@ -420,5 +418,8 @@ pub(super) fn solve_dual_max_with_clarabel_fallback(
         counter,
     )?
     .map(|solution| dot(&solution, f))
-    .ok_or_else(|| "Clarabel dual max program is infeasible".to_string())
+    .ok_or(EngineError::Solver {
+        program: "dual of the conditional test",
+        status: crate::SolverStatus::Infeasible,
+    })
 }

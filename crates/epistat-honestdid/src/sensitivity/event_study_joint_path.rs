@@ -7,6 +7,7 @@ use super::super::super::{
     HonestJointPathRegion, HonestPostFunctional, HonestSensitivity,
     RelativeMagnitudeConfidenceSetConfig,
 };
+use crate::sensitivity::EngineError;
 use crate::util::InferenceConfig;
 use crate::util::usize_to_f64;
 use crate::util::validate_confidence_level;
@@ -31,7 +32,7 @@ pub fn assess_honest_event_study_joint_path_region(
     sensitivity: HonestSensitivity,
     inference: InferenceConfig,
     null_value: f64,
-) -> Result<HonestJointPathRegion, String> {
+) -> Result<HonestJointPathRegion, EngineError> {
     assess_honest_event_study_joint_path_region_counted(
         input,
         sensitivity,
@@ -48,13 +49,16 @@ pub(in crate::sensitivity) fn assess_honest_event_study_joint_path_region_counte
     inference: InferenceConfig,
     null_value: f64,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestJointPathRegion, String> {
+) -> Result<HonestJointPathRegion, EngineError> {
     assess_honest_event_study_joint_path_region_with_config_counted(
         input,
         sensitivity,
         inference,
         null_value,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
         HonestJointPathConfig::default_for_production(),
         counter,
     )
@@ -65,9 +69,9 @@ fn simulated_joint_pointwise_confidence_level(
     confidence_level: f64,
     simulation_draws: usize,
     simulation_seed: u64,
-) -> Result<f64, String> {
+) -> Result<f64, EngineError> {
     if simulation_draws == 0 {
-        return Err("joint path simulation_draws must be positive".to_string());
+        return Err(EngineError::domain("calibration draws", 0.0, "[1, inf)"));
     }
     let covariance = post_covariance_block(
         &input.covariance,
@@ -86,10 +90,10 @@ fn joint_pointwise_confidence_level(
     input: &HonestEventStudyInput,
     inference: InferenceConfig,
     joint_config: HonestJointPathConfig,
-) -> Result<(f64, f64), String> {
+) -> Result<(f64, f64), EngineError> {
     let num_post = input.num_post_periods();
     if num_post == 0 {
-        return Err("joint path region requires at least one post-treatment period".to_string());
+        return Err(EngineError::empty("post-treatment coefficients"));
     }
     if num_post == 1 {
         return Ok((
@@ -102,8 +106,10 @@ fn joint_pointwise_confidence_level(
         HonestJointPathMethod::Bonferroni => {
             let pointwise = 1.0 - alpha / usize_to_f64(num_post);
             if !validate_confidence_level(pointwise) {
-                return Err(format!(
-                    "invalid Bonferroni-adjusted confidence level {pointwise}"
+                return Err(EngineError::domain(
+                    "pointwise confidence level",
+                    pointwise,
+                    "(0, 1)",
                 ));
             }
             Ok((
@@ -131,14 +137,14 @@ fn joint_pointwise_confidence_level(
 /// Returns an error if the event-study input is inconsistent, the implied
 /// simultaneous pointwise confidence level is invalid, or any scalar period-level
 /// `HonestDiD` assessment fails.
-pub fn assess_honest_event_study_joint_path_region_with_config(
+pub(crate) fn assess_honest_event_study_joint_path_region_with_config(
     input: &HonestEventStudyInput,
     sensitivity: HonestSensitivity,
     inference: InferenceConfig,
     null_value: f64,
     relative_magnitude_config: RelativeMagnitudeConfidenceSetConfig,
     joint_config: HonestJointPathConfig,
-) -> Result<HonestJointPathRegion, String> {
+) -> Result<HonestJointPathRegion, EngineError> {
     assess_honest_event_study_joint_path_region_with_config_counted(
         input,
         sensitivity,
@@ -158,7 +164,7 @@ pub(in crate::sensitivity) fn assess_honest_event_study_joint_path_region_with_c
     relative_magnitude_config: RelativeMagnitudeConfidenceSetConfig,
     joint_config: HonestJointPathConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestJointPathRegion, String> {
+) -> Result<HonestJointPathRegion, EngineError> {
     assess_honest_event_study_joint_path_region_with_optional_prepared_relative_magnitude(
         input,
         sensitivity,
@@ -180,13 +186,15 @@ pub(in crate::sensitivity::event_study_assessment) fn assess_honest_event_study_
     joint_config: HonestJointPathConfig,
     prepared_relative_magnitude: Option<&super::super::PreparedRelativeMagnitudeBaseContext>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestJointPathRegion, String> {
+) -> Result<HonestJointPathRegion, EngineError> {
     input.validate()?;
     let (pointwise_confidence_level, calibrated_max_t_critical_value) =
         joint_pointwise_confidence_level(input, inference, joint_config)?;
     let pointwise_inference = InferenceConfig::new(pointwise_confidence_level);
-    let pointwise_relative_magnitude_config =
-        RelativeMagnitudeConfidenceSetConfig::from_inference(pointwise_inference);
+    let pointwise_relative_magnitude_config = RelativeMagnitudeConfidenceSetConfig::from_inference(
+        pointwise_inference,
+        relative_magnitude_config.simulation(),
+    );
     let owned_relative_magnitude = match (sensitivity, prepared_relative_magnitude) {
         (HonestSensitivity::RelativeMagnitude(mbar), None) => Some(
             super::super::prepare_relative_magnitude_base_context(input, mbar)?,
@@ -214,7 +222,7 @@ pub(in crate::sensitivity::event_study_assessment) fn assess_honest_event_study_
                             )
                         }
                     })
-                    .collect::<Result<Vec<_>, String>>()?,
+                    .collect::<Result<Vec<_>, EngineError>>()?,
             ),
             _ => None,
         };
@@ -262,7 +270,7 @@ pub(in crate::sensitivity::event_study_assessment) fn assess_honest_event_study_
                 assessment,
             })
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, EngineError>>()?;
 
     Ok(HonestJointPathRegion {
         confidence_level: inference.confidence_level,

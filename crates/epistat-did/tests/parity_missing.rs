@@ -28,7 +28,7 @@
 use std::collections::HashMap;
 
 use epistat_did::{
-    MissingAssumption, MissingAtt, MissingConfig, MissingFolds, MissingModels, MissingPreData,
+    MissingAssumption, MissingAtt, MissingFolds, MissingModels, MissingOptions, MissingPreData,
     MissingPredictions, NestedOutcome, att_missing_pre, att_missing_pre_from_predictions,
 };
 use epistat_linalg::Mat;
@@ -272,9 +272,9 @@ fn check(
     let n1 = treated.iter().filter(|&&a| a).count() as f64;
     let theta_bound = theta_bound + 2.0 * U * theta.abs();
     assert!(
-        (got.att - theta).abs() <= theta_bound,
+        (got.estimate.estimate - theta).abs() <= theta_bound,
         "{what}: att {} vs {theta}, bound {theta_bound:e}",
-        got.att
+        got.estimate.estimate
     );
     let mut squared = 0.0;
     for i in 0..phi.len() {
@@ -291,11 +291,12 @@ fn check(
         squared += bound * bound;
     }
     let uncentred = got.influence.iter().map(|v| v * v).sum::<f64>().sqrt() / n;
-    let se_bound = (got.se - uncentred).abs() + squared.sqrt() / n + 4.0 * n * U * se;
+    let se_bound =
+        (got.estimate.se.unwrap() - uncentred).abs() + squared.sqrt() / n + 4.0 * n * U * se;
     assert!(
-        (got.se - se).abs() <= se_bound,
+        (got.estimate.se.unwrap() - se).abs() <= se_bound,
         "{what}: se {} vs {se}, bound {se_bound:e}",
-        got.se
+        got.estimate.se.unwrap()
     );
 }
 
@@ -312,7 +313,7 @@ fn the_estimator_on_the_reference_predictions_is_the_reference_code() {
                 &case.data(),
                 case.assumption(),
                 &p,
-                &MissingConfig::default(),
+                &MissingOptions::default(),
             )
             .unwrap();
             let s = sensitivity(case, &p);
@@ -403,13 +404,13 @@ fn the_nuisance_fits_and_the_estimate_agree_with_the_reference() {
                 outcome: cols(spec.mu),
                 nested: cols(spec.eta),
             };
-            let config = MissingConfig {
+            let config = MissingOptions {
                 nested_outcome: if spec.augmentation {
                     NestedOutcome::Augmented
                 } else {
                     NestedOutcome::Plain
                 },
-                ..MissingConfig::default()
+                ..MissingOptions::default()
             };
             let got = att_missing_pre(
                 &case.data(),
@@ -522,9 +523,9 @@ fn the_nuisance_fits_and_the_estimate_agree_with_the_reference() {
                 check(
                     &what,
                     &got,
-                    on_reference.att,
+                    on_reference.estimate.estimate,
                     &on_reference.influence,
-                    on_reference.se,
+                    on_reference.estimate.se.unwrap(),
                     theta_bound,
                     &term_bounds,
                     &case.treated,
@@ -567,10 +568,10 @@ fn the_reference_code_and_the_paper_differ_in_the_nested_regression() {
             &case.data(),
             case.assumption(),
             &case.predictions(spec, "eta_controls"),
-            &MissingConfig::default(),
+            &MissingOptions::default(),
         )
         .unwrap();
-        largest = largest.max((paper.att - spec.estimate).abs());
+        largest = largest.max((paper.estimate.estimate - spec.estimate).abs());
     }
     assert!(largest > 0.1, "largest difference {largest}");
 }

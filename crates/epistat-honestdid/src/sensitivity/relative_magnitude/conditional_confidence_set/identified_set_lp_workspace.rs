@@ -4,6 +4,7 @@
 //! so identified-set computation only needs to swap the linear objective
 //! between maximization and minimization of the target functional.
 
+use crate::sensitivity::EngineError;
 use clarabel::algebra::CscMatrix;
 use clarabel::solver::SupportedConeT;
 
@@ -22,7 +23,7 @@ impl RelativeMagnitudeIdentifiedSetWorkspace {
         rhs: &[f64],
         cones: &[SupportedConeT<f64>],
         objective: &[f64],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, EngineError> {
         Ok(Self {
             program: ConicWorkspace::new(
                 "relative-magnitude LP",
@@ -40,7 +41,7 @@ impl RelativeMagnitudeIdentifiedSetWorkspace {
         &mut self,
         q: &[f64],
         counter: &SolverCounter,
-    ) -> Result<Option<f64>, String> {
+    ) -> Result<Option<f64>, EngineError> {
         Ok(self.program.solve_with_q(q, counter)?.map(|solution| {
             self.base_objective
                 .iter()

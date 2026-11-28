@@ -93,9 +93,9 @@
 //! leaves the fitted values unchanged and keeps the normal equations well
 //! conditioned. The logistic models are fitted by Newton's method with step
 //! halving, stopping after a step whose largest coefficient change (on the
-//! scaled covariates) is at most [`MissingConfig::tolerance`]; Newton's
+//! scaled covariates) is at most [`MissingOptions::tolerance`]; Newton's
 //! quadratic convergence leaves an error of the order of the square of that
-//! step. A fit that does not stop within [`MissingConfig::max_iterations`]
+//! step. A fit that does not stop within [`MissingOptions::max_iterations`]
 //! steps, typically because of separation, is an error, and so is a design
 //! whose Cholesky pivot leaves less than `1e-10` of a column's own squared
 //! norm, a column that is collinear with the others among the rows of the
@@ -180,13 +180,16 @@
 
 mod fit;
 
+use epistat_core::{Estimate, InputError, Level};
 use epistat_inference::Clusters;
 use epistat_linalg::MatRef;
 
+use crate::error::Error;
 use crate::inference::did_clusters::standard_error as clustered_standard_error;
-use crate::inference::{normal_interval, standard_error_from_influence, validate_confidence_level};
+use crate::inference::{estimate_from, normal_interval, standard_error_from_influence};
 
 /// The missing-at-random assumption for the pre-treatment outcome.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MissingAssumption {
     /// Whether `Y0` is observed depends on the covariates and the treatment.
@@ -228,6 +231,7 @@ pub struct MissingModels<'a> {
 }
 
 /// Whether and how the nuisance models are cross-fitted.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MissingFolds {
     /// Every model is fitted on all units.
@@ -243,6 +247,7 @@ pub enum MissingFolds {
 }
 
 /// The response of the nested regression under [`MissingAssumption::MarXY1`].
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NestedOutcome {
     /// The fitted `mu0(X, Y1, 0)`.
@@ -252,11 +257,12 @@ pub enum NestedOutcome {
     Augmented,
 }
 
-/// What the estimator does besides the data.
+/// What the estimator does besides the data, built with
+/// `..MissingOptions::default()`.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct MissingConfig {
-    /// The level of the confidence interval, default 0.95.
-    pub confidence_level: f64,
+pub struct MissingOptions {
+    /// The level of the confidence interval, default 95%.
+    pub level: Level,
     /// A `gamma` at or below this, for a unit whose `Y0` is observed, is an
     /// error. Default 0, any positive `gamma` is accepted.
     pub gamma_floor: f64,
@@ -271,10 +277,10 @@ pub struct MissingConfig {
     pub max_iterations: usize,
 }
 
-impl Default for MissingConfig {
+impl Default for MissingOptions {
     fn default() -> Self {
         Self {
-            confidence_level: 0.95,
+            level: Level::default(),
             gamma_floor: 0.0,
             propensity_ceiling: 1.0,
             nested_outcome: NestedOutcome::Augmented,
@@ -311,6 +317,7 @@ pub struct MissingPredictions<'a> {
 
 /// The nuisance predictions an estimate used, one per unit, out of fold when
 /// cross-fitted. The fields are those of [`MissingPredictions`].
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct MissingNuisance {
     /// `pi(X)`.
@@ -330,16 +337,13 @@ pub struct MissingNuisance {
 }
 
 /// The ATT with its influence function and the overlap of the nuisances.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct MissingAtt {
-    /// The ATT.
-    pub att: f64,
-    /// Its standard error, clustered when the data have clusters.
-    pub se: f64,
-    /// The lower end of the confidence interval.
-    pub ci_low: f64,
-    /// The upper end of the confidence interval.
-    pub ci_high: f64,
+    /// The ATT with its standard error, clustered when the data have
+    /// clusters, the normal interval at [`MissingOptions::level`] and the
+    /// normal p-value; a part that is not finite is `None`.
+    pub estimate: Estimate,
     /// `phi_i` of every unit; see the module documentation for the scale.
     pub influence: Vec<f64>,
     /// The number of treated units.
@@ -353,99 +357,19 @@ pub struct MissingAtt {
     /// The smallest and largest propensity among the controls.
     pub propensity_range: (f64, f64),
     /// The smallest and largest `gamma` among the treated with `Y0`
-    /// observed.
-    pub gamma_treated_range: (f64, f64),
+    /// observed, `None` when no treated unit has `Y0`.
+    pub gamma_treated_range: Option<(f64, f64)>,
     /// The smallest and largest `gamma` among the controls with `Y0`
-    /// observed.
-    pub gamma_control_range: (f64, f64),
+    /// observed, `None` when no control has `Y0`.
+    pub gamma_control_range: Option<(f64, f64)>,
     /// The number of cross-fitting folds, 1 without cross-fitting.
     pub folds: usize,
     /// The predictions the estimate used.
     pub nuisance: MissingNuisance,
 }
 
-/// Why an estimate could not be formed.
-#[derive(Debug, Clone, PartialEq, thiserror::Error)]
-pub enum MissingError {
-    /// No units.
-    #[error("no units")]
-    Empty,
-    /// An input has another length than the treatment indicator.
-    #[error("{what} has {found} entries where {expected} were expected")]
-    Length {
-        /// The input.
-        what: &'static str,
-        /// The number of units.
-        expected: usize,
-        /// Its length.
-        found: usize,
-    },
-    /// A value is NaN or infinite.
-    #[error("{what} of unit {unit} is not finite")]
-    NotFinite {
-        /// The input.
-        what: &'static str,
-        /// The unit.
-        unit: usize,
-    },
-    /// A covariate index is outside the covariate matrix.
-    #[error("covariate column {column} does not exist; there are {columns}")]
-    Column {
-        /// The index.
-        column: usize,
-        /// The number of columns.
-        columns: usize,
-    },
-    /// A covariate, or `Y1` where it is a covariate, has the same value for
-    /// every unit, which the intercept already is.
-    #[error("{what} is constant")]
-    Constant {
-        /// The covariate.
-        what: String,
-    },
-    /// No treated units, or no controls.
-    #[error("there are no {0}")]
-    EmptyArm(&'static str),
-    /// No unit of an arm has `Y0` observed.
-    #[error("no {0} has the pre-treatment outcome observed")]
-    NoObservedPre(&'static str),
-    /// A propensity is outside `(0, propensity_ceiling)` for a control.
-    #[error("the propensity of control {unit} is {value}, outside (0, {ceiling})")]
-    Propensity {
-        /// The unit.
-        unit: usize,
-        /// The propensity.
-        value: f64,
-        /// [`MissingConfig::propensity_ceiling`].
-        ceiling: f64,
-    },
-    /// A `gamma` is outside `(gamma_floor, 1]` for a unit with `Y0` observed.
-    #[error("gamma of unit {unit} is {value}, outside ({floor}, 1]")]
-    Gamma {
-        /// The unit.
-        unit: usize,
-        /// The probability.
-        value: f64,
-        /// [`MissingConfig::gamma_floor`].
-        floor: f64,
-    },
-    /// The nested regression is given under `MarX` or missing under `MarXY1`.
-    #[error("the nested regression is required under MarXY1 and not used under MarX")]
-    Nested,
-    /// A nuisance model could not be fitted.
-    #[error("the {model} model: {reason}")]
-    Fit {
-        /// The model.
-        model: &'static str,
-        /// What went wrong.
-        reason: &'static str,
-    },
-    /// The configuration or the folds are invalid.
-    #[error("invalid configuration: {0}")]
-    Config(&'static str),
-}
-
 /// The folds of cross-fitting, as [`missing_cross_fit_folds`] deals them.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrossFitFolds {
     /// The fold of each unit, from 0 to the number of folds less 1.
@@ -465,15 +389,14 @@ pub struct CrossFitFolds {
 ///
 /// # Errors
 ///
-/// [`MissingError::Config`] for fewer than 2 folds or more folds than units
-/// (or clusters), and [`MissingError::Length`] for clusters of another
-/// length.
+/// [`Error::Input`] for fewer than 2 folds or more folds than units (or
+/// clusters), and for clusters of another length.
 pub fn missing_cross_fit_folds(
     units: usize,
     clusters: Option<&Clusters>,
     folds: usize,
     seed: u64,
-) -> Result<CrossFitFolds, MissingError> {
+) -> Result<CrossFitFolds, Error> {
     let (fold, nested_half) = fit::fold_assignment(units, clusters, folds, seed)?;
     Ok(CrossFitFolds { fold, nested_half })
 }
@@ -488,27 +411,27 @@ pub fn missing_cross_fit_folds(
 ///
 /// # Errors
 ///
-/// [`MissingError`] for invalid input, a model that cannot be fitted, and
-/// predictions out of range.
+/// - [`Error::Input`] for data or options that are invalid, and a model
+///   column outside the covariates.
+/// - [`Error::NoTreated`] and [`Error::NoComparison`] for an arm without
+///   units, and [`Error::NoObservedPre`] for an arm without `Y0`.
+/// - [`Error::ConstantCovariate`] for a model covariate that does not vary.
+/// - [`Error::NuisanceFit`] for a nuisance model that cannot be fitted.
+/// - [`Error::PropensityRange`] and [`Error::MissingnessRange`] for fitted
+///   predictions out of range.
 pub fn att_missing_pre(
     data: &MissingPreData<'_>,
     covariates: MatRef<'_, f64>,
     assumption: MissingAssumption,
     models: &MissingModels<'_>,
     folds: MissingFolds,
-    config: &MissingConfig,
-) -> Result<MissingAtt, MissingError> {
-    validate_config(config)?;
+    options: &MissingOptions,
+) -> Result<MissingAtt, Error> {
+    validate_options(options)?;
     let n = validate_data(data)?;
-    if covariates.nrows() != n {
-        return Err(MissingError::Length {
-            what: "covariates",
-            expected: n,
-            found: covariates.nrows(),
-        });
-    }
+    epistat_core::check::same_length("covariates", n, covariates.nrows())?;
     let (nuisance, fold_count) =
-        fit::fit_nuisance(data, covariates, assumption, models, folds, config)?;
+        fit::fit_nuisance(data, covariates, assumption, models, folds, options)?;
     let predictions = MissingPredictions {
         propensity: &nuisance.propensity,
         gamma_treated: &nuisance.gamma_treated,
@@ -518,7 +441,7 @@ pub fn att_missing_pre(
         pre_control: &nuisance.pre_control,
         nested_control: nuisance.nested_control.as_deref(),
     };
-    let core = estimate(data, assumption, &predictions, config)?;
+    let core = estimate(data, assumption, &predictions, options)?;
     Ok(core.finish(fold_count, nuisance))
 }
 
@@ -554,16 +477,23 @@ pub fn att_missing_pre(
 ///
 /// # Errors
 ///
-/// [`MissingError`] for invalid input and predictions out of range.
+/// - [`Error::Input`] for data, predictions or options that are invalid.
+/// - [`Error::NoTreated`] and [`Error::NoComparison`] for an arm without
+///   units.
+/// - [`Error::NestedRegression`] for a nested regression given under
+///   [`MissingAssumption::MarX`] or missing under
+///   [`MissingAssumption::MarXY1`].
+/// - [`Error::PropensityRange`] and [`Error::MissingnessRange`] for
+///   predictions out of range.
 pub fn att_missing_pre_from_predictions(
     data: &MissingPreData<'_>,
     assumption: MissingAssumption,
     predictions: &MissingPredictions<'_>,
-    config: &MissingConfig,
-) -> Result<MissingAtt, MissingError> {
-    validate_config(config)?;
+    options: &MissingOptions,
+) -> Result<MissingAtt, Error> {
+    validate_options(options)?;
     validate_data(data)?;
-    let core = estimate(data, assumption, predictions, config)?;
+    let core = estimate(data, assumption, predictions, options)?;
     let nuisance = MissingNuisance {
         propensity: predictions.propensity.to_vec(),
         gamma_treated: predictions.gamma_treated.to_vec(),
@@ -576,86 +506,79 @@ pub fn att_missing_pre_from_predictions(
     Ok(core.finish(1, nuisance))
 }
 
-fn validate_config(config: &MissingConfig) -> Result<(), MissingError> {
-    if !validate_confidence_level(config.confidence_level) {
-        return Err(MissingError::Config("confidence_level must be in (0, 1)"));
+fn domain(what: &'static str, value: f64, domain: &'static str) -> Error {
+    InputError::Domain {
+        what,
+        value,
+        domain,
+        row: None,
     }
-    if !(config.gamma_floor.is_finite() && (0.0..1.0).contains(&config.gamma_floor)) {
-        return Err(MissingError::Config("gamma_floor must be in [0, 1)"));
+    .into()
+}
+
+fn validate_options(options: &MissingOptions) -> Result<(), Error> {
+    if !(options.gamma_floor.is_finite() && (0.0..1.0).contains(&options.gamma_floor)) {
+        return Err(domain("gamma_floor", options.gamma_floor, "[0, 1)"));
     }
-    if !(config.propensity_ceiling > 0.0 && config.propensity_ceiling <= 1.0) {
-        return Err(MissingError::Config("propensity_ceiling must be in (0, 1]"));
+    if !(options.propensity_ceiling > 0.0 && options.propensity_ceiling <= 1.0) {
+        return Err(domain(
+            "propensity_ceiling",
+            options.propensity_ceiling,
+            "(0, 1]",
+        ));
     }
-    if !(config.tolerance.is_finite() && config.tolerance > 0.0) {
-        return Err(MissingError::Config("tolerance must be positive"));
+    if !(options.tolerance.is_finite() && options.tolerance > 0.0) {
+        return Err(domain("tolerance", options.tolerance, "(0, inf)"));
     }
-    if config.max_iterations == 0 {
-        return Err(MissingError::Config("max_iterations must be positive"));
+    if options.max_iterations == 0 {
+        return Err(domain("max_iterations", 0.0, "[1, inf)"));
     }
     Ok(())
 }
 
 /// Checks lengths and values, and that both arms have units; returns `n`.
-fn validate_data(data: &MissingPreData<'_>) -> Result<usize, MissingError> {
+fn validate_data(data: &MissingPreData<'_>) -> Result<usize, Error> {
     let n = data.treated.len();
-    if n == 0 {
-        return Err(MissingError::Empty);
-    }
-    for (what, found) in [
-        ("outcome_pre", data.outcome_pre.len()),
-        ("outcome_post", data.outcome_post.len()),
-        ("clusters", data.clusters.map_or(n, Clusters::len)),
-    ] {
-        if found != n {
-            return Err(MissingError::Length {
-                what,
-                expected: n,
-                found,
-            });
+    epistat_core::check::non_empty("treated", n)?;
+    epistat_core::check::same_length("outcome_pre", n, data.outcome_pre.len())?;
+    epistat_core::check::same_length("outcome_post", n, data.outcome_post.len())?;
+    epistat_core::check::same_length("clusters", n, data.clusters.map_or(n, Clusters::len))?;
+    epistat_core::check::finite("outcome_post", data.outcome_post)?;
+    if let Some(row) = data
+        .outcome_pre
+        .iter()
+        .position(|v| v.is_some_and(|v| !v.is_finite()))
+    {
+        return Err(InputError::NotFinite {
+            what: "outcome_pre",
+            row,
+            column: None,
         }
-    }
-    for unit in 0..n {
-        if !data.outcome_post[unit].is_finite() {
-            return Err(MissingError::NotFinite {
-                what: "outcome_post",
-                unit,
-            });
-        }
-        if data.outcome_pre[unit].is_some_and(|v| !v.is_finite()) {
-            return Err(MissingError::NotFinite {
-                what: "outcome_pre",
-                unit,
-            });
-        }
+        .into());
     }
     let treated = data.treated.iter().filter(|&&a| a).count();
     if treated == 0 {
-        return Err(MissingError::EmptyArm("treated units"));
+        return Err(Error::NoTreated);
     }
     if treated == n {
-        return Err(MissingError::EmptyArm("controls"));
+        return Err(Error::NoComparison);
     }
     Ok(n)
 }
 
 /// The estimate before the fold count and the nuisance are attached.
 struct Core {
-    att: f64,
-    se: f64,
-    ci: (f64, f64),
+    estimate: Estimate,
     influence: Vec<f64>,
     counts: [usize; 4],
     propensity_range: (f64, f64),
-    gamma_ranges: [(f64, f64); 2],
+    gamma_ranges: [Option<(f64, f64)>; 2],
 }
 
 impl Core {
     fn finish(self, folds: usize, nuisance: MissingNuisance) -> MissingAtt {
         MissingAtt {
-            att: self.att,
-            se: self.se,
-            ci_low: self.ci.0,
-            ci_high: self.ci.1,
+            estimate: self.estimate,
             influence: self.influence,
             n_treated: self.counts[0],
             n_control: self.counts[1],
@@ -685,9 +608,10 @@ pub(super) fn compensated_sum(values: impl Iterator<Item = f64>) -> f64 {
     sum + carry
 }
 
-fn widen(range: &mut (f64, f64), value: f64) {
-    range.0 = range.0.min(value);
-    range.1 = range.1.max(value);
+fn widen(range: &mut Option<(f64, f64)>, value: f64) {
+    *range = Some(range.map_or((value, value), |(low, high)| {
+        (low.min(value), high.max(value))
+    }));
 }
 
 /// The estimator of equations 12 and 13 on given predictions, with the
@@ -696,13 +620,13 @@ fn estimate(
     data: &MissingPreData<'_>,
     assumption: MissingAssumption,
     p: &MissingPredictions<'_>,
-    config: &MissingConfig,
-) -> Result<Core, MissingError> {
+    options: &MissingOptions,
+) -> Result<Core, Error> {
     let n = data.treated.len();
     let nested = match (assumption, p.nested_control) {
         (MissingAssumption::MarX, None) => None,
         (MissingAssumption::MarXY1, Some(eta)) => Some(eta),
-        _ => return Err(MissingError::Nested),
+        _ => return Err(Error::NestedRegression),
     };
     let mut columns: Vec<(&'static str, &[f64])> = vec![
         ("propensity", p.propensity),
@@ -715,22 +639,13 @@ fn estimate(
     if let Some(eta) = nested {
         columns.push(("nested_control", eta));
     }
-    for (what, values) in &columns {
-        if values.len() != n {
-            return Err(MissingError::Length {
-                what,
-                expected: n,
-                found: values.len(),
-            });
-        }
-        if let Some(unit) = values.iter().position(|v| !v.is_finite()) {
-            return Err(MissingError::NotFinite { what, unit });
-        }
+    for &(what, values) in &columns {
+        epistat_core::check::same_length(what, n, values.len())?;
+        epistat_core::check::finite(what, values)?;
     }
 
-    let empty = (f64::INFINITY, f64::NEG_INFINITY);
-    let mut propensity_range = empty;
-    let mut gamma_ranges = [empty; 2];
+    let mut propensity_range = None;
+    let mut gamma_ranges = [None; 2];
     let mut counts = [0_usize; 4];
     let mut terms = Vec::with_capacity(n);
     for i in 0..n {
@@ -743,7 +658,7 @@ fn estimate(
                 Some(y0) => {
                     counts[2] += 1;
                     let gamma = p.gamma_treated[i];
-                    check_gamma(i, gamma, config)?;
+                    check_gamma(i, gamma, options)?;
                     widen(&mut gamma_ranges[0], gamma);
                     (y0 - m01) / gamma
                 }
@@ -754,11 +669,11 @@ fn estimate(
         } else {
             counts[1] += 1;
             let pi = p.propensity[i];
-            if !(pi > 0.0 && pi < config.propensity_ceiling) {
-                return Err(MissingError::Propensity {
+            if !(pi > 0.0 && pi < options.propensity_ceiling) {
+                return Err(Error::PropensityRange {
                     unit: i,
                     value: pi,
-                    ceiling: config.propensity_ceiling,
+                    ceiling: options.propensity_ceiling,
                 });
             }
             widen(&mut propensity_range, pi);
@@ -767,7 +682,7 @@ fn estimate(
                 Some(y0) => {
                     counts[3] += 1;
                     let gamma = p.gamma_control[i];
-                    check_gamma(i, gamma, config)?;
+                    check_gamma(i, gamma, options)?;
                     widen(&mut gamma_ranges[1], gamma);
                     (y0 - m00) / gamma
                 }
@@ -793,11 +708,12 @@ fn estimate(
         None => standard_error_from_influence(&influence),
         Some(clusters) => clustered_standard_error(&influence, clusters),
     };
-    let ci = normal_interval(att, se, config.confidence_level);
+    let ci = normal_interval(att, se, options.level.confidence_value());
+    let Some(propensity_range) = propensity_range else {
+        return Err(Error::NoComparison);
+    };
     Ok(Core {
-        att,
-        se,
-        ci,
+        estimate: estimate_from(att, se, ci, options.level),
         influence,
         counts,
         propensity_range,
@@ -805,14 +721,14 @@ fn estimate(
     })
 }
 
-fn check_gamma(unit: usize, gamma: f64, config: &MissingConfig) -> Result<(), MissingError> {
-    if gamma > config.gamma_floor && gamma > 0.0 && gamma <= 1.0 {
+fn check_gamma(unit: usize, gamma: f64, options: &MissingOptions) -> Result<(), Error> {
+    if gamma > options.gamma_floor && gamma > 0.0 && gamma <= 1.0 {
         Ok(())
     } else {
-        Err(MissingError::Gamma {
+        Err(Error::MissingnessRange {
             unit,
             value: gamma,
-            floor: config.gamma_floor,
+            floor: options.gamma_floor,
         })
     }
 }

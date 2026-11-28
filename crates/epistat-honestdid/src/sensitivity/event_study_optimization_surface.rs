@@ -1,3 +1,4 @@
+use crate::sensitivity::EngineError;
 use epistat_optim::nelder_mead::NelderMead;
 use epistat_rng::Stream;
 use rayon::prelude::*;
@@ -83,9 +84,10 @@ fn build_nelder_mead_simplex(seed: &[f64]) -> Vec<Vec<f64>> {
 fn refine_direction_with_argmin(
     seed_direction: &[f64],
     sigma_post: &[Vec<f64>],
-) -> Result<Option<Vec<f64>>, String> {
-    let seed = canonicalize_unit_direction(seed_direction)
-        .ok_or_else(|| "seed direction is degenerate and cannot be refined".to_string())?;
+) -> Result<Option<Vec<f64>>, EngineError> {
+    let seed = canonicalize_unit_direction(seed_direction).ok_or(EngineError::Degenerate(
+        "a direction of the optimisation surface",
+    ))?;
     if seed.len() <= 1 {
         return Ok(Some(seed));
     }
@@ -98,7 +100,7 @@ fn refine_direction_with_argmin(
     let problem = DirectionVarianceObjective { sigma_post };
     let minimum = solver
         .minimize(simplex, |param| problem.cost(param))
-        .map_err(|err| format!("Nelder-Mead refinement failed: {err}"))?;
+        .map_err(EngineError::Optim)?;
     Ok(canonicalize_unit_direction(&minimum.x))
 }
 
@@ -126,7 +128,7 @@ fn refine_optimization_surface_directions_with_argmin(
     input: &HonestEventStudyInput,
     directions: &mut [Vec<f64>],
     warm_starts_by_rank: Option<&[Vec<f64>]>,
-) -> Result<Vec<Vec<f64>>, String> {
+) -> Result<Vec<Vec<f64>>, EngineError> {
     if directions.is_empty() {
         return Ok(Vec::new());
     }
@@ -156,10 +158,12 @@ fn refine_optimization_surface_directions_with_argmin(
         .map(|(rank, index, seed)| {
             let candidate = refine_direction_with_argmin(seed, &sigma_post)?
                 .or_else(|| canonicalize_unit_direction(seed))
-                .ok_or_else(|| "refined direction is degenerate".to_string())?;
+                .ok_or(EngineError::Degenerate(
+                    "a direction of the optimisation surface",
+                ))?;
             Ok((*rank, *index, candidate))
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, EngineError>>()?;
     refined.sort_by_key(|(rank, _, _)| *rank);
 
     for (_, index, candidate) in &refined {
@@ -175,15 +179,15 @@ fn refine_optimization_surface_directions_with_argmin(
 fn generate_optimization_surface_directions(
     num_post: usize,
     config: HonestOptimizationSurfaceConfig,
-) -> Result<OptimizationSurfaceDirections, String> {
+) -> Result<OptimizationSurfaceDirections, EngineError> {
     if num_post == 0 {
-        return Err("optimization surface region requires at least one post period".to_string());
+        return Err(EngineError::empty("post-treatment coefficients"));
     }
     if !config.include_basis
         && !config.include_pairwise_contrasts
         && config.random_unit_directions == 0
     {
-        return Err("optimization surface direction set is empty; enable basis, pairwise, or random directions".to_string());
+        return Err(EngineError::empty("directions of the optimisation surface"));
     }
 
     let mut directions = Vec::new();
@@ -279,7 +283,7 @@ fn direction_dedup_key(direction: &[f64]) -> Vec<i64> {
 /// Returns an error if the event-study input is inconsistent, the implied
 /// direction set is empty, calibration fails, or any scalar directional
 /// assessment fails.
-pub fn assess_honest_event_study_optimization_surface_region_with_config(
+pub(crate) fn assess_honest_event_study_optimization_surface_region_with_config(
     input: &HonestEventStudyInput,
     sensitivity: HonestSensitivity,
     inference: InferenceConfig,
@@ -287,7 +291,7 @@ pub fn assess_honest_event_study_optimization_surface_region_with_config(
     relative_magnitude_config: RelativeMagnitudeConfidenceSetConfig,
     joint_config: HonestJointPathConfig,
     surface_config: HonestOptimizationSurfaceConfig,
-) -> Result<HonestDirectionalRegion, String> {
+) -> Result<HonestDirectionalRegion, EngineError> {
     assess_honest_event_study_optimization_surface_region_with_config_counted(
         input,
         sensitivity,
@@ -309,7 +313,7 @@ pub(in crate::sensitivity) fn assess_honest_event_study_optimization_surface_reg
     joint_config: HonestJointPathConfig,
     surface_config: HonestOptimizationSurfaceConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestDirectionalRegion, String> {
+) -> Result<HonestDirectionalRegion, EngineError> {
     let direction_set =
         generate_optimization_surface_directions(input.num_post_periods(), surface_config)?;
     let mut region = super::directional_region::assess_honest_event_study_directional_region_with_config_counted(
@@ -342,13 +346,13 @@ pub(in crate::sensitivity) fn assess_honest_event_study_optimization_surface_reg
 /// # Errors
 /// Returns an error if adaptive configuration validation, direction generation,
 /// calibration, or directional scalar assessment fails.
-pub fn assess_honest_event_study_optimization_surface_region_adaptive_with_config(
+pub(crate) fn assess_honest_event_study_optimization_surface_region_adaptive_with_config(
     input: &HonestEventStudyInput,
     sensitivity: HonestSensitivity,
     inference: InferenceConfig,
     null_value: f64,
     config: HonestOptimizationSurfaceAdaptiveRunConfig,
-) -> Result<HonestDirectionalRegion, String> {
+) -> Result<HonestDirectionalRegion, EngineError> {
     assess_honest_event_study_optimization_surface_region_adaptive_with_config_counted(
         input,
         sensitivity,
@@ -366,7 +370,7 @@ pub(in crate::sensitivity) fn assess_honest_event_study_optimization_surface_reg
     null_value: f64,
     config: HonestOptimizationSurfaceAdaptiveRunConfig,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestDirectionalRegion, String> {
+) -> Result<HonestDirectionalRegion, EngineError> {
     config.adaptive.validate()?;
 
     if config.surface.random_unit_directions == 0 {

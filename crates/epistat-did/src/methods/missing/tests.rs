@@ -25,7 +25,7 @@ fn a_hand_computed_example() {
         pre_control: &[1.0, 1.25, 1.5, 1.75],
         nested_control: None,
     };
-    let config = MissingConfig::default();
+    let config = MissingOptions::default();
     let got =
         att_missing_pre_from_predictions(&data, MissingAssumption::MarX, &p, &config).unwrap();
     // Treated: Y1 - mu01 - R (Y0 - mu01) / g1 - mu10 + mu00.
@@ -36,7 +36,7 @@ fn a_hand_computed_example() {
     let c3 = -(0.25 / 0.75) * (2.5 - 2.0);
     // c3 is the one inexact term: 1/3 times 0.5, then sums of four terms.
     let att = (t0 + t1 + c2 + c3) / 2.0;
-    assert!((got.att - att).abs() <= 8.0 * f64::EPSILON);
+    assert!((got.estimate.estimate - att).abs() <= 8.0 * f64::EPSILON);
     let phi = [2.0 * (t0 - att), 2.0 * (t1 - att), 2.0 * c2, 2.0 * c3];
     for (g, e) in got.influence.iter().zip(phi) {
         assert!((g - e).abs() <= 32.0 * f64::EPSILON);
@@ -44,8 +44,8 @@ fn a_hand_computed_example() {
     assert_eq!(got.observed_pre_treated, 1);
     assert_eq!(got.observed_pre_control, 1);
     assert_eq!(got.propensity_range, (0.25, 0.5));
-    assert_eq!(got.gamma_treated_range, (0.5, 0.5));
-    assert_eq!(got.gamma_control_range, (0.5, 0.5));
+    assert_eq!(got.gamma_treated_range, Some((0.5, 0.5)));
+    assert_eq!(got.gamma_control_range, Some((0.5, 0.5)));
 
     // Under MarXY1 the nested regression replaces mu00 in the treated term
     // and enters the controls' term with mu00.
@@ -61,7 +61,7 @@ fn a_hand_computed_example() {
     let c2 = -(0.5 / 0.5) * (3.0 - 1.5 - (2.0 - 1.5) / 0.5 - 2.5 + 1.0);
     let c3 = -(0.25 / 0.75) * (2.5 - 1.75 - 2.0 + 1.25);
     let att = (t0 + t1 + c2 + c3) / 2.0;
-    assert!((got.att - att).abs() <= 8.0 * f64::EPSILON);
+    assert!((got.estimate.estimate - att).abs() <= 8.0 * f64::EPSILON);
 }
 
 /// With a binary covariate the logistic models are saturated, so the fitted
@@ -99,7 +99,7 @@ fn saturated_logistic_fits_are_the_group_shares() {
             nested: &[],
         },
         MissingFolds::None,
-        &MissingConfig::default(),
+        &MissingOptions::default(),
     )
     .unwrap();
     let share = |rows: &dyn Fn(usize) -> bool, hit: &dyn Fn(usize) -> bool| {
@@ -115,4 +115,95 @@ fn saturated_logistic_fits_are_the_group_shares() {
         assert!((got.nuisance.gamma_treated[i] - g1).abs() <= 64.0 * f64::EPSILON);
         assert!((got.nuisance.gamma_control[i] - g0).abs() <= 64.0 * f64::EPSILON);
     }
+}
+
+/// Every column of the data and of the predictions is checked where it
+/// enters. An empty column is shorter than the treatment indicator, and the
+/// units have no order.
+#[test]
+fn bad_columns_are_input_errors() {
+    use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
+
+    let treated = [true, true, false, false, true, false];
+    let pre = [Some(1.0), None, Some(2.0), None, Some(0.5), Some(1.5)];
+    let post = [4.0, 5.0, 3.0, 2.5, 4.5, 2.0];
+    let half = [0.5; 6];
+    let level = [1.0, 1.5, 1.25, 1.75, 0.75, 1.0];
+    let data = MissingPreData {
+        treated: &treated,
+        outcome_pre: &pre,
+        outcome_post: &post,
+        clusters: None,
+    };
+    let p = MissingPredictions {
+        propensity: &half,
+        gamma_treated: &half,
+        gamma_control: &half,
+        pre_treated: &level,
+        post_control: &level,
+        pre_control: &level,
+        nested_control: None,
+    };
+    let options = MissingOptions::default();
+    let code = |bad: BadInput| match bad {
+        BadInput::Empty => "input.length",
+        other => other.code(),
+    };
+    let run = |data: &MissingPreData<'_>, p: &MissingPredictions<'_>| {
+        att_missing_pre_from_predictions(data, MissingAssumption::MarX, p, &options)
+            .map(|fit| fit.estimate.estimate)
+    };
+    assert!(run(&data, &p).is_ok());
+    assert_rejects_bad_input_with_codes("att_missing_pre outcome_post", code, |bad| {
+        (bad != BadInput::Unsorted).then(|| {
+            let post = bad.column(&post);
+            run(
+                &MissingPreData {
+                    outcome_post: &post,
+                    ..data
+                },
+                &p,
+            )
+        })
+    });
+    assert_rejects_bad_input_with_codes("att_missing_pre predictions", code, |bad| {
+        (bad != BadInput::Unsorted).then(|| {
+            let column = bad.column(&level);
+            run(
+                &data,
+                &MissingPredictions {
+                    post_control: &column,
+                    ..p
+                },
+            )
+        })
+    });
+    assert_rejects_bad_input_with_codes("att_missing_pre covariates", code, |bad| {
+        (bad != BadInput::Unsorted).then(|| {
+            let column = bad.column(&level);
+            let x = Mat::from_fn(column.len(), 1, |i, _| column[i]);
+            att_missing_pre(
+                &data,
+                x.as_ref(),
+                MissingAssumption::MarX,
+                &MissingModels {
+                    propensity: &[0],
+                    missingness: &[0],
+                    outcome: &[0],
+                    nested: &[],
+                },
+                MissingFolds::None,
+                &options,
+            )
+            .map(|fit| fit.estimate.estimate)
+        })
+    });
+    let invalid = MissingOptions {
+        gamma_floor: 1.0,
+        ..options
+    };
+    epistat_testkit::assert_input_error_code("gamma_floor", "input.domain", || {
+        att_missing_pre_from_predictions(&data, MissingAssumption::MarX, &p, &invalid)
+            .map(|fit| fit.estimate.estimate)
+    });
 }

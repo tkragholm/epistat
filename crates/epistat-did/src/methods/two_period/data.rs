@@ -42,9 +42,8 @@ pub enum Design<'a> {
 ///
 /// The covariates are given without an intercept: the estimators add it as
 /// the first column of their design, on a panel and on a repeated
-/// cross-section alike. [`TwoPeriodDataBuilder::design`] gives a finished
-/// panel design instead, used as it is. Cluster codes, when given, make the
-/// standard errors those of `did` with `clustervars`.
+/// cross-section alike. Cluster codes, when given, make the standard errors
+/// those of `did` with `clustervars`.
 ///
 /// ```
 /// use epistat_did::two_period::{self, TwoPeriodData, TwoPeriodOptions};
@@ -66,7 +65,6 @@ pub struct TwoPeriodData<'a> {
     design: Design<'a>,
     weights: Option<&'a [f64]>,
     covariates: Option<MatRef<'a, f64>>,
-    intercept: bool,
     clusters: Option<&'a [u32]>,
 }
 
@@ -78,7 +76,6 @@ pub struct TwoPeriodDataBuilder<'a> {
     design: Design<'a>,
     weights: Option<&'a [f64]>,
     covariates: Option<MatRef<'a, f64>>,
-    intercept: bool,
     clusters: Option<&'a [u32]>,
 }
 
@@ -117,18 +114,11 @@ impl<'a> TwoPeriodData<'a> {
         self.weights
     }
 
-    /// The covariates, or the finished design when
-    /// [`TwoPeriodData::adds_intercept`] is false; `None` without either.
+    /// The covariates, without the intercept the estimators add; `None`
+    /// without covariates.
     #[must_use]
     pub const fn covariates(&self) -> Option<MatRef<'a, f64>> {
         self.covariates
-    }
-
-    /// Whether the estimators add an intercept to [`TwoPeriodData::covariates`]:
-    /// true unless the data were built with [`TwoPeriodDataBuilder::design`].
-    #[must_use]
-    pub const fn adds_intercept(&self) -> bool {
-        self.intercept
     }
 
     /// The cluster code of each row, `None` when each row is its own cluster.
@@ -155,26 +145,14 @@ impl<'a> TwoPeriodData<'a> {
         matches!(self.design, Design::Panel { .. })
     }
 
-    /// The columns of the estimators' design: the intercept, when it is added,
-    /// then the covariates.
-    pub(crate) fn n_design_columns(&self) -> usize {
-        usize::from(self.intercept) + self.covariates.map_or(0, |x| x.ncols())
-    }
-
-    /// The estimators' design row-major: the intercept, when it is added,
-    /// then the covariates of each row. Without covariates and without an
-    /// added intercept it is the intercept alone.
+    /// The estimators' design row-major: the intercept, then the covariates
+    /// of each row.
     pub(crate) fn design_flat(&self) -> (Vec<f64>, usize) {
         let n = self.len();
-        let columns = self.n_design_columns();
-        if columns == 0 {
-            return (vec![1.0; n], 1);
-        }
+        let columns = 1 + self.covariates.map_or(0, |x| x.ncols());
         let mut flat = Vec::with_capacity(n * columns);
         for i in 0..n {
-            if self.intercept {
-                flat.push(1.0);
-            }
+            flat.push(1.0);
             if let Some(x) = self.covariates {
                 flat.extend((0..x.ncols()).map(|j| x[(i, j)]));
             }
@@ -207,7 +185,6 @@ impl<'a> TwoPeriodDataBuilder<'a> {
             design,
             weights: None,
             covariates: None,
-            intercept: true,
             clusters: None,
         }
     }
@@ -222,17 +199,6 @@ impl<'a> TwoPeriodDataBuilder<'a> {
     /// it.
     pub const fn covariates(mut self, covariates: MatRef<'a, f64>) -> Self {
         self.covariates = Some(covariates);
-        self.intercept = true;
-        self
-    }
-
-    /// A finished panel design, one row per unit, used as it is: the
-    /// estimators add no intercept, so the design holds whatever intercept the
-    /// caller wants. This reproduces a fit whose design the caller assembled,
-    /// such as one without an intercept. Refused on a repeated cross-section.
-    pub const fn design(mut self, design: MatRef<'a, f64>) -> Self {
-        self.covariates = Some(design);
-        self.intercept = false;
         self
     }
 
@@ -251,8 +217,7 @@ impl<'a> TwoPeriodDataBuilder<'a> {
     /// rows than `u32` numbers, [`InputError::Length`] for a column of the
     /// wrong length, [`InputError::NotFinite`] for an outcome, weight or
     /// covariate that is not finite and [`InputError::Domain`] for a weight
-    /// that is not positive; [`Error::Unsupported`] for a finished design on
-    /// a repeated cross-section.
+    /// that is not positive.
     pub fn build(self) -> Result<TwoPeriodData<'a>, Error> {
         let n = self.treated.len();
         if n == 0 {
@@ -272,11 +237,6 @@ impl<'a> TwoPeriodDataBuilder<'a> {
                 check::finite("change", change)?;
             }
             Design::RepeatedCrossSection { post, outcome } => {
-                if !self.intercept {
-                    return Err(Error::Unsupported {
-                        what: "a finished design on a repeated cross-section; give covariates",
-                    });
-                }
                 check::same_length("post", n, post.len())?;
                 check::same_length("outcome", n, outcome.len())?;
                 check::finite("outcome", outcome)?;
@@ -316,8 +276,63 @@ impl<'a> TwoPeriodDataBuilder<'a> {
             design: self.design,
             weights: self.weights,
             covariates: self.covariates,
-            intercept: self.intercept,
             clusters: self.clusters,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use epistat_linalg::MatRef;
+    use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
+
+    use super::TwoPeriodData;
+
+    const TREATED: [bool; 6] = [true, true, true, false, false, false];
+    const CHANGE: [f64; 6] = [3.1, 2.9, 3.4, 1.0, 1.2, 0.8];
+    const POST: [bool; 6] = [false, true, false, true, false, true];
+    const AGE: [f64; 6] = [41.0, 37.0, 45.0, 40.0, 38.0, 44.0];
+
+    /// An empty outcome column is shorter than the treatment column, and the
+    /// rows of a two-period sample have no order.
+    fn code(bad: BadInput) -> &'static str {
+        match bad {
+            BadInput::Empty => "input.length",
+            other => other.code(),
+        }
+    }
+
+    #[test]
+    fn bad_columns_are_input_errors() {
+        let len = |built: Result<TwoPeriodData<'_>, crate::Error>| built.map(|data| data.len());
+        assert_rejects_bad_input_with_codes("TwoPeriodData::panel", code, |bad| {
+            (bad != BadInput::Unsorted).then(|| {
+                let change = bad.column(&CHANGE);
+                len(TwoPeriodData::panel(&TREATED, &change).build())
+            })
+        });
+        assert_rejects_bad_input_with_codes("TwoPeriodData::repeated_cross_section", code, |bad| {
+            (bad != BadInput::Unsorted).then(|| {
+                let outcome = bad.column(&CHANGE);
+                len(TwoPeriodData::repeated_cross_section(&TREATED, &POST, &outcome).build())
+            })
+        });
+        assert_rejects_bad_input_with_codes("TwoPeriodData weights", code, |bad| {
+            (bad != BadInput::Unsorted).then(|| {
+                let weights = bad.column(&[1.0; 6]);
+                len(TwoPeriodData::panel(&TREATED, &CHANGE)
+                    .weights(&weights)
+                    .build())
+            })
+        });
+        assert_rejects_bad_input_with_codes("TwoPeriodData covariates", code, |bad| {
+            (bad != BadInput::Unsorted).then(|| {
+                let age = bad.column(&AGE);
+                let covariates = MatRef::from_column_major_slice(&age, age.len(), 1);
+                len(TwoPeriodData::panel(&TREATED, &CHANGE)
+                    .covariates(covariates)
+                    .build())
+            })
+        });
     }
 }

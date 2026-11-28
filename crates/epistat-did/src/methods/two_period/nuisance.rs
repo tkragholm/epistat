@@ -83,9 +83,8 @@ pub fn propensity(
 }
 
 /// One flag per column of the estimators' design of `data`, the intercept
-/// first when it is added, true where the column is kept under `rule` at
-/// `tolerance`. The intercept, or the first column of a finished design, is
-/// always kept. The weights of the Gram matrix are the data's prior weights.
+/// first, true where the column is kept under `rule` at `tolerance`. The
+/// intercept is always kept. The weights of the Gram matrix are the data's prior weights.
 ///
 /// # Errors
 ///

@@ -15,6 +15,7 @@
 //! solve is reported to the [`SolverCounter`], which counts the retries and the
 //! programs that end `AlmostSolved`.
 
+use crate::sensitivity::EngineError;
 use clarabel::algebra::CscMatrix;
 use clarabel::solver::{
     DefaultSettings, DefaultSettingsBuilder, DefaultSolver, IPSolver, SolverStatus, SupportedConeT,
@@ -22,16 +23,23 @@ use clarabel::solver::{
 
 use super::SolverCounter;
 
-fn default_settings() -> Result<DefaultSettings<f64>, String> {
+const fn setup(program: &'static str) -> EngineError {
+    EngineError::Solver {
+        program,
+        status: crate::SolverStatus::Setup,
+    }
+}
+
+fn default_settings() -> Result<DefaultSettings<f64>, EngineError> {
     DefaultSettingsBuilder::<f64>::default()
         .verbose(false)
         .presolve_enable(false)
         .input_sparse_dropzeros(false)
         .build()
-        .map_err(|err| format!("failed to build Clarabel settings: {err}"))
+        .map_err(|_| setup("the Clarabel settings"))
 }
 
-fn conservative_settings() -> Result<DefaultSettings<f64>, String> {
+fn conservative_settings() -> Result<DefaultSettings<f64>, EngineError> {
     DefaultSettingsBuilder::<f64>::default()
         .verbose(false)
         .presolve_enable(false)
@@ -43,7 +51,7 @@ fn conservative_settings() -> Result<DefaultSettings<f64>, String> {
         .tol_gap_rel(1e-6)
         .tol_feas(1e-6)
         .build()
-        .map_err(|err| format!("failed to build Clarabel retry settings: {err}"))
+        .map_err(|_| setup("the Clarabel retry settings"))
 }
 
 /// A program with fixed constraints whose objective can be replaced.
@@ -66,7 +74,7 @@ impl ConicWorkspace {
         rhs: &[f64],
         cones: &[SupportedConeT<f64>],
         q: &[f64],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, EngineError> {
         let solver = DefaultSolver::new(
             quadratic,
             q,
@@ -75,7 +83,7 @@ impl ConicWorkspace {
             cones,
             default_settings()?,
         )
-        .map_err(|err| format!("failed to initialize {what} solver: {err}"))?;
+        .map_err(|_| setup(what))?;
         Ok(Self {
             solver,
             quadratic: quadratic.clone(),
@@ -93,13 +101,11 @@ impl ConicWorkspace {
         &mut self,
         q: &[f64],
         counter: &SolverCounter,
-    ) -> Result<Option<&[f64]>, String> {
+    ) -> Result<Option<&[f64]>, EngineError> {
         self.q.clear();
         self.q.extend_from_slice(q);
         let what = self.what;
-        self.solver
-            .update_q(&self.q)
-            .map_err(|err| format!("failed to update {what} objective: {err}"))?;
+        self.solver.update_q(&self.q).map_err(|_| setup(what))?;
         self.solver.solve();
         let status = self.solver.solution.status;
         counter.note_status(status);
@@ -116,7 +122,7 @@ impl ConicWorkspace {
                 &self.cones,
                 conservative_settings()?,
             )
-            .map_err(|err| format!("failed to initialize {what} retry solver: {err}"))?;
+            .map_err(|_| setup(what))?;
             self.solver.solve();
             counter.note_status(self.solver.solution.status);
         }
@@ -128,7 +134,10 @@ impl ConicWorkspace {
             | SolverStatus::DualInfeasible
             | SolverStatus::AlmostPrimalInfeasible
             | SolverStatus::AlmostDualInfeasible => Ok(None),
-            status => Err(format!("Clarabel failed to solve {what}: {status:?}")),
+            _ => Err(EngineError::Solver {
+                program: what,
+                status: crate::SolverStatus::NotConverged,
+            }),
         }
     }
 }
@@ -142,7 +151,7 @@ pub(super) fn solve(
     rhs: &[f64],
     cones: &[SupportedConeT<f64>],
     counter: &SolverCounter,
-) -> Result<Option<Vec<f64>>, String> {
+) -> Result<Option<Vec<f64>>, EngineError> {
     let mut workspace = ConicWorkspace::new(what, quadratic, constraint_matrix, rhs, cones, q)?;
     Ok(workspace.solve_with_q(q, counter)?.map(<[f64]>::to_vec))
 }

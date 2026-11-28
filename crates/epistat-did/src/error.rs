@@ -187,13 +187,63 @@ pub enum Error {
     #[error(transparent)]
     Optim(#[from] epistat_optim::Error),
     /// A two-period sample has no treated row, or none the trim leaves with
-    /// weight.
+    /// weight; or MissingDiD has no treated unit.
     #[error("no treated row of positive weight")]
     NoTreated,
     /// A two-period sample has no comparison row, or none the trim leaves
-    /// with weight.
+    /// with weight; or MissingDiD has no control.
     #[error("no comparison row of positive weight")]
     NoComparison,
+    /// No unit of an arm of MissingDiD has the pre-treatment outcome
+    /// observed, so its missingness and outcome models cannot be fitted.
+    #[error("no {} has the pre-treatment outcome observed", arm(*treated))]
+    NoObservedPre {
+        /// Whether the arm is the treated one.
+        treated: bool,
+    },
+    /// A covariate of a MissingDiD model, or the post-treatment outcome
+    /// where it is a covariate, has the same value for every unit, which the
+    /// intercept already is.
+    #[error("{} is constant", covariate(*column))]
+    ConstantCovariate {
+        /// The covariate column, `None` for the post-treatment outcome.
+        column: Option<usize>,
+    },
+    /// The nested regression of MissingDiD is given under `MarX` or missing
+    /// under `MarXY1`.
+    #[error("the nested regression is required under MarXY1 and not used under MarX")]
+    NestedRegression,
+    /// A propensity of MissingDiD is outside `(0, propensity_ceiling)` for a
+    /// control.
+    #[error("the propensity of control {unit} is {value}, outside (0, {ceiling})")]
+    PropensityRange {
+        /// The unit.
+        unit: usize,
+        /// The propensity.
+        value: f64,
+        /// [`crate::MissingOptions::propensity_ceiling`].
+        ceiling: f64,
+    },
+    /// A probability `gamma` that the pre-treatment outcome is observed is
+    /// outside `(gamma_floor, 1]` for a unit of MissingDiD whose outcome is
+    /// observed.
+    #[error("gamma of unit {unit} is {value}, outside ({floor}, 1]")]
+    MissingnessRange {
+        /// The unit.
+        unit: usize,
+        /// The probability.
+        value: f64,
+        /// [`crate::MissingOptions::gamma_floor`].
+        floor: f64,
+    },
+    /// A nuisance model of MissingDiD could not be fitted.
+    #[error("the {model} model: {reason}")]
+    NuisanceFit {
+        /// The model.
+        model: &'static str,
+        /// What went wrong.
+        reason: &'static str,
+    },
     /// A repeated cross-section has no row in one arm and period.
     #[error("no row with treated = {treated} and post = {post}")]
     EmptyCell {
@@ -226,6 +276,17 @@ pub enum Error {
         /// fitted on every row.
         fold: Option<usize>,
     },
+}
+
+fn arm(treated: bool) -> &'static str {
+    if treated { "treated unit" } else { "control" }
+}
+
+fn covariate(column: Option<usize>) -> String {
+    column.map_or_else(
+        || "the post-treatment outcome".to_string(),
+        |column| format!("covariate column {column}"),
+    )
 }
 
 fn fold_suffix(fold: Option<usize>) -> String {
@@ -265,14 +326,20 @@ impl Classify for Error {
             | Self::NoTreated
             | Self::NoComparison
             | Self::EmptyCell { .. }
-            | Self::CrossFitCell { .. } => ErrorKind::Input,
+            | Self::CrossFitCell { .. }
+            | Self::NoObservedPre { .. }
+            | Self::ConstantCovariate { .. }
+            | Self::NestedRegression => ErrorKind::Input,
             Self::Unsupported { .. } | Self::NoInfluence => ErrorKind::Unsupported,
             Self::CellFailed { .. }
             | Self::Singular
             | Self::NotFinite
             | Self::Collinear { .. }
             | Self::DegenerateVariance
-            | Self::PropensityFit { .. } => ErrorKind::Numerical,
+            | Self::PropensityFit { .. }
+            | Self::PropensityRange { .. }
+            | Self::MissingnessRange { .. }
+            | Self::NuisanceFit { .. } => ErrorKind::Numerical,
         }
     }
 
@@ -317,6 +384,12 @@ impl Classify for Error {
             Self::CrossFitCell { .. } => "did.cross_fit_cell",
             Self::DegenerateVariance => "did.degenerate_variance",
             Self::PropensityFit { .. } => "did.propensity_fit",
+            Self::NoObservedPre { .. } => "did.no_observed_pre",
+            Self::ConstantCovariate { .. } => "did.constant_covariate",
+            Self::NestedRegression => "did.nested_regression",
+            Self::PropensityRange { .. } => "did.propensity_range",
+            Self::MissingnessRange { .. } => "did.missingness_range",
+            Self::NuisanceFit { .. } => "did.nuisance_fit",
         }
     }
 }
@@ -400,6 +473,23 @@ mod tests {
             },
             Error::DegenerateVariance,
             Error::PropensityFit { fold: Some(1) },
+            Error::NoObservedPre { treated: true },
+            Error::ConstantCovariate { column: None },
+            Error::NestedRegression,
+            Error::PropensityRange {
+                unit: 0,
+                value: 1.0,
+                ceiling: 1.0,
+            },
+            Error::MissingnessRange {
+                unit: 0,
+                value: 0.0,
+                floor: 0.0,
+            },
+            Error::NuisanceFit {
+                model: "propensity",
+                reason: "separation",
+            },
         ];
         epistat_testkit::assert_codes_unique("did", &errors);
         assert_eq!(Error::Bins.kind(), ErrorKind::Input);

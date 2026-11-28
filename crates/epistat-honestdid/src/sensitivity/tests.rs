@@ -404,7 +404,7 @@ fn delta_sd_least_favorable_simulation_size_is_honoured() {
             .expect("default lf conditional cs");
     assert_eq!(
         (default.ub - default.lb).to_bits(),
-        width(LeastFavorableSimulation::default()).to_bits()
+        width(crate::sensitivity::LeastFavorableSimulation::new(1_000, 0)).to_bits()
     );
 
     let draws: Vec<f64> = (0..10)
@@ -464,7 +464,7 @@ fn summaries_honour_the_least_favorable_simulation() {
         Some(&m_values),
         None,
         None,
-        LeastFavorableSimulation::default(),
+        crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
     )
     .expect("explicit default smoothness summary");
     let smoothness_few = summarize_smoothness_sensitivity_with_simulation(
@@ -549,7 +549,7 @@ fn delta_sd_adaptive_grid_matches_full_grid_interval() {
         0.5,
         inference,
         config,
-        LeastFavorableSimulation::default(),
+        crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
         &moments,
         &identified,
     )
@@ -697,7 +697,10 @@ fn create_honest_sensitivity_results_relative_magnitudes_rejects_flci_method() {
         None,
     )
     .expect_err("unsupported method should error");
-    assert!(err.contains("supports only Conditional and C-LF"));
+    assert_eq!(
+        err,
+        EngineError::Unsupported("the FLCI and C-F under the relative-magnitude restriction")
+    );
 }
 
 #[test]
@@ -969,7 +972,13 @@ fn linear_trend_relative_magnitude_requires_two_pre_periods() {
         None,
     )
     .expect_err("linear-trend bound should require two pre-periods");
-    assert!(err.contains("at least two pre-periods"));
+    assert!(matches!(
+        err,
+        EngineError::Input(epistat_core::InputError::Length {
+            what: "pre-treatment coefficients, at least",
+            ..
+        })
+    ));
 }
 
 #[test]
@@ -1000,6 +1009,7 @@ fn honest_workflow_relative_magnitude_populates_multi_flci() {
         &HonestWorkflowConfig {
             relative_magnitude: RelativeMagnitudeConfidenceSetConfig::from_inference(
                 InferenceConfig::new(0.95),
+                LeastFavorableSimulation::new(1_000, 0),
             ),
             joint: HonestJointPathConfig::default_for_production(),
             direction_mode: HonestWorkflowDirectionMode::Basis,
@@ -1055,6 +1065,7 @@ fn honest_workflow_smoothness_populates_multi_flci() {
         &HonestWorkflowConfig {
             relative_magnitude: RelativeMagnitudeConfidenceSetConfig::from_inference(
                 InferenceConfig::new(0.95),
+                LeastFavorableSimulation::new(1_000, 0),
             ),
             joint: HonestJointPathConfig::default_for_production(),
             direction_mode: HonestWorkflowDirectionMode::Basis,
@@ -1091,7 +1102,10 @@ fn honest_workflow_basis_matches_manual_components() {
         inference,
         0.0,
         &HonestWorkflowConfig {
-            relative_magnitude: RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+            relative_magnitude: RelativeMagnitudeConfidenceSetConfig::from_inference(
+                inference,
+                crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+            ),
             joint: HonestJointPathConfig::default_for_production(),
             direction_mode: HonestWorkflowDirectionMode::Basis,
         },
@@ -1203,7 +1217,10 @@ fn relative_magnitude_prepared_functional_branches_match_direct_conditional_conf
     };
     let post_weights = vec![0.2, 0.3, 0.5];
     let inference = InferenceConfig::new(0.95);
-    let config = RelativeMagnitudeConfidenceSetConfig::from_inference(inference);
+    let config = RelativeMagnitudeConfidenceSetConfig::from_inference(
+        inference,
+        crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+    );
     let original = compute_original_confidence_set(&input, &post_weights, inference)
         .expect("original confidence set");
     let identified = compute_relative_magnitude_identified_set(&input, &post_weights, 1.0)
@@ -1264,7 +1281,10 @@ fn relative_magnitude_adaptive_grid_matches_full_grid_interval() {
     };
     let post_weights = vec![0.2, 0.3, 0.5];
     let inference = InferenceConfig::new(0.95);
-    let config = RelativeMagnitudeConfidenceSetConfig::from_inference(inference);
+    let config = RelativeMagnitudeConfidenceSetConfig::from_inference(
+        inference,
+        crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+    );
     let original = compute_original_confidence_set(&input, &post_weights, inference)
         .expect("original confidence set");
     let identified = compute_relative_magnitude_identified_set(&input, &post_weights, 1.0)
@@ -1531,7 +1551,10 @@ fn a_near_tie_of_the_two_largest_pre_steps_solves_on_the_joint_path() {
             HonestSensitivity::RelativeMagnitude(mbar),
             inference,
             0.0,
-            RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+            RelativeMagnitudeConfidenceSetConfig::from_inference(
+                inference,
+                crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+            ),
             joint_config,
         )
         .unwrap_or_else(|error| panic!("Mbar {mbar}: {error}"));
@@ -1599,7 +1622,7 @@ mod near_tie_property {
             }
             let input = near_tie_input(betahat_pre);
             let identified = compute_relative_magnitude_identified_set(&input, &weights, mbar)
-                .map_err(TestCaseError::fail)?;
+                .map_err(|error| TestCaseError::fail(error.to_string()))?;
             let (lb, ub) = closed_form_identified_set(&input, &weights, mbar);
             let tolerance = 1e-6 * (1.0 + lb.abs().max(ub.abs()));
             prop_assert!((identified.lb - lb).abs() < tolerance, "lb {} vs {}", identified.lb, lb);
@@ -1627,7 +1650,10 @@ fn surface_counts(random_unit_directions: usize, random_seed: u64) -> SolverCoun
         HonestSensitivity::Smoothness(0.5),
         inference,
         0.0,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
         HonestJointPathConfig {
             method: HonestJointPathMethod::Bonferroni,
             simulation_draws: 1_000,

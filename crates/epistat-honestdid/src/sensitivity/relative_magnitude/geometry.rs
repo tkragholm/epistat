@@ -1,3 +1,4 @@
+use crate::sensitivity::EngineError;
 use clarabel::algebra::CscMatrix;
 use clarabel::solver::SupportedConeT;
 
@@ -28,9 +29,11 @@ pub(in crate::sensitivity) fn prepare_relative_magnitude_branches(
     num_pre: usize,
     num_post: usize,
     mbar: f64,
-) -> Result<Vec<RelativeMagnitudePreparedBranch>, String> {
+) -> Result<Vec<RelativeMagnitudePreparedBranch>, EngineError> {
     let equality_matrix = create_pre_period_equality_matrix(num_pre, num_post);
-    let min_s = -(isize::try_from(num_pre).map_err(|_| "too many pre-periods".to_string())? - 1);
+    let min_s = -(isize::try_from(num_pre)
+        .map_err(|_| EngineError::Internal("more periods than an isize holds"))?
+        - 1);
     (min_s..=0)
         .flat_map(|s| {
             [true, false]
@@ -87,11 +90,11 @@ pub(in crate::sensitivity) fn basis_vector_index(post_weights: &[f64]) -> Option
 
 pub(in crate::sensitivity) fn construct_gamma(
     post_weights: &[f64],
-) -> Result<Vec<Vec<f64>>, String> {
+) -> Result<Vec<Vec<f64>>, EngineError> {
     let bar_t = post_weights.len();
     let mut gamma = Vec::with_capacity(bar_t);
     let Some(pivot_idx) = post_weights.iter().position(|weight| weight.abs() > 1e-12) else {
-        return Err("failed to construct Gamma basis from zero post weights".to_string());
+        return Err(EngineError::all_zero("target weights"));
     };
     gamma.push(post_weights.to_vec());
     for basis_idx in 0..bar_t {
@@ -114,7 +117,7 @@ pub(in crate::sensitivity) enum RelativeMagnitudePreparedFunctionalTransform {
 
 pub(in crate::sensitivity) fn prepare_relative_magnitude_functional_transform(
     post_weights: &[f64],
-) -> Result<RelativeMagnitudePreparedFunctionalTransform, String> {
+) -> Result<RelativeMagnitudePreparedFunctionalTransform, EngineError> {
     if let Some(target_idx) = basis_vector_index(post_weights) {
         Ok(RelativeMagnitudePreparedFunctionalTransform::Basis { target_idx })
     } else {
@@ -166,7 +169,7 @@ pub(super) fn build_relative_magnitude_constraint_matrix(
     mbar: f64,
     s: isize,
     max_positive: bool,
-) -> Result<Vec<Vec<f64>>, String> {
+) -> Result<Vec<Vec<f64>>, EngineError> {
     let total_periods = num_pre + num_post;
     let full_cols = total_periods + 1;
     let mut a_tilde = vec![vec![0.0; full_cols]; total_periods];
@@ -175,16 +178,19 @@ pub(super) fn build_relative_magnitude_constraint_matrix(
         row[row_idx + 1] = 1.0;
     }
 
-    let start = isize::try_from(num_pre).map_err(|_| "too many pre-periods".to_string())? + s - 1;
+    let start = isize::try_from(num_pre)
+        .map_err(|_| EngineError::Internal("more periods than an isize holds"))?
+        + s
+        - 1;
     if start < 0
-        || start + 1 >= isize::try_from(full_cols).map_err(|_| "too many periods".to_string())?
+        || start + 1
+            >= isize::try_from(full_cols)
+                .map_err(|_| EngineError::Internal("more periods than an isize holds"))?
     {
-        return Err(format!(
-            "invalid relative-magnitude branch index s={s} for num_pre={num_pre}"
-        ));
+        return Err(EngineError::Internal("a branch index outside the periods"));
     }
     let start = usize::try_from(start)
-        .map_err(|_| "invalid relative-magnitude branch index".to_string())?;
+        .map_err(|_| EngineError::Internal("a branch index outside the periods"))?;
     let mut v_max = vec![0.0; full_cols];
     v_max[start] = -1.0;
     v_max[start + 1] = 1.0;
@@ -239,7 +245,7 @@ pub(super) fn build_relative_magnitude_constraint_matrix(
 pub(in crate::sensitivity) fn build_target_and_design(
     post_weights: &[f64],
     a_post: &[Vec<f64>],
-) -> Result<(Vec<f64>, Vec<Vec<f64>>), String> {
+) -> Result<(Vec<f64>, Vec<Vec<f64>>), EngineError> {
     let prepared = prepare_relative_magnitude_functional_transform(post_weights)?;
     Ok(build_target_and_design_from_transform(a_post, &prepared))
 }

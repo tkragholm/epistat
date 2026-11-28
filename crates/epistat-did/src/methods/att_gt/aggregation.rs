@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use epistat_inference::Clusters;
 
 use crate::inference::did_clusters::standard_error;
-use crate::inference::{normal_interval, standard_error_from_influence};
+use crate::inference::standard_error_from_influence;
 use crate::util::usize_to_f64;
 
 use super::AggteWeights;
@@ -71,17 +71,14 @@ pub(super) fn by_event_time(
             Some(clusters) => standard_error(&total_influence, clusters),
             None => standard_error_from_influence(&total_influence),
         };
-        let (ci_low, ci_high) = normal_interval(estimate, se, confidence_level);
-        points.push(Point {
+        points.push(Point::normal(
             key,
-            att: estimate,
+            (estimate, total_influence),
             se,
-            ci_low,
-            ci_high,
-            influence: total_influence,
-            n_cells: bucket.len(),
+            confidence_level,
+            bucket.len(),
             total_weight,
-        });
+        ));
     }
     points
 }
@@ -109,17 +106,14 @@ pub(super) fn by_key(
             let normalised = raw.iter().map(|w| w / raw_total).collect::<Vec<_>>();
             let (att, combined) = combine_fixed(&bucket, &normalised, cells, influence, n_units);
             let se = standard_error(&combined, clusters);
-            let (ci_low, ci_high) = normal_interval(att, se, confidence_level);
-            Point {
+            Point::normal(
                 key,
-                att,
+                (att, combined),
                 se,
-                ci_low,
-                ci_high,
-                influence: combined,
-                n_cells: bucket.len(),
-                total_weight: bucket.iter().map(|&c| cells[c].total_weight).sum(),
-            }
+                confidence_level,
+                bucket.len(),
+                bucket.iter().map(|&c| cells[c].total_weight).sum(),
+            )
         })
         .collect()
 }

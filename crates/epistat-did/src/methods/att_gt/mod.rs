@@ -509,6 +509,7 @@ pub struct AttGtSample {
 ///
 /// The fields are private so that the cells, the influence function and the
 /// sample stay consistent for the methods that read them together.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct AttGt {
     cells: Vec<AttGtCell>,

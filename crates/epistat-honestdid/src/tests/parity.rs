@@ -393,7 +393,10 @@ fn honest_delta_rm_conditional_default_wrapper_matches_explicit_lf_config() {
         &rm_ref.post_weights,
         0.5,
         inference,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
     )
     .expect("explicit LF conditional cs");
 
@@ -478,7 +481,10 @@ fn honest_assessment_default_wrapper_matches_explicit_lf_config() {
         HonestSensitivity::RelativeMagnitude(1.0),
         inference,
         0.0,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
     )
     .expect("explicit LF assessment");
 
@@ -597,7 +603,10 @@ fn honest_post_functional_with_config_matches_explicit_functional_config() {
         start_period: 0,
         end_period: 3,
     };
-    let config = RelativeMagnitudeConfidenceSetConfig::from_inference(inference);
+    let config = RelativeMagnitudeConfidenceSetConfig::from_inference(
+        inference,
+        crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+    );
 
     let direct = crate::sensitivity::assess_honest_event_study_functional_with_config(
         &input,
@@ -730,7 +739,10 @@ fn honest_delta_rm_flci_default_matches_explicit_lf_config() {
     let wrapped = compute_relative_magnitude_flci(&problem).expect("wrapped flci");
     let explicit = compute_relative_magnitude_flci_with_config(
         &problem,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
     )
     .expect("explicit LF flci");
 
@@ -822,7 +834,10 @@ fn honest_post_functional_flci_default_matches_explicit_lf_config() {
         2.0,
         inference,
         0.0,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
     )
     .expect("explicit LF flci");
 
@@ -892,7 +907,10 @@ fn honest_joint_path_region_default_matches_explicit_lf_config() {
         HonestSensitivity::RelativeMagnitude(1.0),
         inference,
         0.0,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
         HonestJointPathConfig::default_for_production(),
     )
     .expect("explicit joint region");
@@ -933,7 +951,10 @@ fn honest_joint_path_region_gaussian_is_no_wider_than_bonferroni() {
         0.0,
         RelativeMagnitudeConfidenceSetConfig {
             least_favorable_draws: HONEST_REGION_DRAWS,
-            ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+            ..RelativeMagnitudeConfidenceSetConfig::from_inference(
+                inference,
+                crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+            )
         },
         HonestJointPathConfig {
             method: HonestJointPathMethod::Bonferroni,
@@ -950,7 +971,10 @@ fn honest_joint_path_region_gaussian_is_no_wider_than_bonferroni() {
         0.0,
         RelativeMagnitudeConfidenceSetConfig {
             least_favorable_draws: HONEST_REGION_DRAWS,
-            ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+            ..RelativeMagnitudeConfidenceSetConfig::from_inference(
+                inference,
+                crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+            )
         },
         HonestJointPathConfig {
             method: HonestJointPathMethod::GaussianSimulated,
@@ -1003,7 +1027,10 @@ fn honest_delta_rm_supports_signed_linear_functionals() {
         &post_weights,
         1.0,
         inference,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
     )
     .expect("conditional cs for signed post_weights");
 
@@ -1042,7 +1069,10 @@ fn honest_directional_region_basis_matches_joint_path_points() {
         HonestSensitivity::RelativeMagnitude(1.0),
         inference,
         0.0,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
         joint_config,
     )
     .expect("joint path region");
@@ -1060,7 +1090,10 @@ fn honest_directional_region_basis_matches_joint_path_points() {
         HonestSensitivity::RelativeMagnitude(1.0),
         inference,
         0.0,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
         joint_config,
     )
     .expect("directional region");
@@ -1096,7 +1129,10 @@ fn honest_optimization_surface_pairwise_only_builds_expected_direction_count() {
         0.0,
         RelativeMagnitudeConfidenceSetConfig {
             least_favorable_draws: HONEST_REGION_DRAWS,
-            ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+            ..RelativeMagnitudeConfidenceSetConfig::from_inference(
+                inference,
+                crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+            )
         },
         HonestJointPathConfig {
             method: HonestJointPathMethod::Bonferroni,
@@ -1158,7 +1194,10 @@ fn check_adaptive_surface_matches_full_grid(random_seed: u64) {
         HonestSensitivity::Smoothness(0.5),
         inference,
         0.0,
-        RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+        RelativeMagnitudeConfidenceSetConfig::from_inference(
+            inference,
+            crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+        ),
         joint_config,
         surface_config,
     )
@@ -1170,7 +1209,10 @@ fn check_adaptive_surface_matches_full_grid(random_seed: u64) {
         inference,
         0.0,
         HonestOptimizationSurfaceAdaptiveRunConfig {
-            relative_magnitude: RelativeMagnitudeConfidenceSetConfig::from_inference(inference),
+            relative_magnitude: RelativeMagnitudeConfidenceSetConfig::from_inference(
+                inference,
+                crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+            ),
             joint: joint_config,
             surface: surface_config,
             adaptive: HonestOptimizationSurfaceAdaptiveConfig {
@@ -1263,7 +1305,10 @@ fn honest_delta_rm_multi_flci_gaussian_is_no_wider_than_bonferroni() {
         &problem,
         RelativeMagnitudeConfidenceSetConfig {
             least_favorable_draws: HONEST_REGION_DRAWS,
-            ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+            ..RelativeMagnitudeConfidenceSetConfig::from_inference(
+                inference,
+                crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+            )
         },
         HonestJointPathConfig {
             method: HonestJointPathMethod::Bonferroni,
@@ -1276,7 +1321,10 @@ fn honest_delta_rm_multi_flci_gaussian_is_no_wider_than_bonferroni() {
         &problem,
         RelativeMagnitudeConfidenceSetConfig {
             least_favorable_draws: HONEST_REGION_DRAWS,
-            ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+            ..RelativeMagnitudeConfidenceSetConfig::from_inference(
+                inference,
+                crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+            )
         },
         HonestJointPathConfig {
             method: HonestJointPathMethod::GaussianSimulated,
@@ -1319,7 +1367,10 @@ fn honest_post_functional_multi_flci_wrapper_matches_direct_problem_path() {
             end_period: 1,
         },
     ];
-    let config = RelativeMagnitudeConfidenceSetConfig::from_inference(inference);
+    let config = RelativeMagnitudeConfidenceSetConfig::from_inference(
+        inference,
+        crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+    );
     let joint = HonestJointPathConfig {
         method: HonestJointPathMethod::Bonferroni,
         simulation_draws: 1_000,
@@ -1476,7 +1527,10 @@ fn honest_joint_path_region_bonferroni_matches_r_fixture() {
             RelativeMagnitudeConfidenceSetConfig {
                 least_favorable_draws: HONEST_REGION_DRAWS,
                 least_favorable_seed: seed,
-                ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+                ..RelativeMagnitudeConfidenceSetConfig::from_inference(
+                    inference,
+                    crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+                )
             },
             HonestJointPathConfig {
                 method: HonestJointPathMethod::Bonferroni,
@@ -1542,7 +1596,10 @@ fn honest_directional_region_bonferroni_matches_r_fixture() {
             RelativeMagnitudeConfidenceSetConfig {
                 least_favorable_draws: HONEST_REGION_DRAWS,
                 least_favorable_seed: seed,
-                ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+                ..RelativeMagnitudeConfidenceSetConfig::from_inference(
+                    inference,
+                    crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+                )
             },
             HonestJointPathConfig {
                 method: HonestJointPathMethod::Bonferroni,
@@ -1647,7 +1704,10 @@ fn honest_joint_gaussian_calibration_matches_r_scaffold() {
         0.0,
         RelativeMagnitudeConfidenceSetConfig {
             least_favorable_draws: HONEST_REGION_DRAWS,
-            ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+            ..RelativeMagnitudeConfidenceSetConfig::from_inference(
+                inference,
+                crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+            )
         },
         HonestJointPathConfig {
             method: HonestJointPathMethod::GaussianSimulated,
@@ -1702,7 +1762,10 @@ fn honest_directional_gaussian_calibration_matches_r_scaffold() {
         0.0,
         RelativeMagnitudeConfidenceSetConfig {
             least_favorable_draws: HONEST_REGION_DRAWS,
-            ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+            ..RelativeMagnitudeConfidenceSetConfig::from_inference(
+                inference,
+                crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
+            )
         },
         HonestJointPathConfig {
             method: HonestJointPathMethod::GaussianSimulated,

@@ -1,3 +1,4 @@
+use crate::sensitivity::EngineError;
 use epistat_stats::dist::normal;
 
 use super::linear_algebra::{diag_sqrt, linear_grid, mat_vec_mul_into, sandwich_covariance};
@@ -76,12 +77,11 @@ pub struct SensitivitySummary {
 fn smoothness_variant_label(
     bias_direction: Option<HonestBiasDirection>,
     monotonicity_direction: Option<HonestMonotonicityDirection>,
-) -> Result<&'static str, String> {
+) -> Result<&'static str, EngineError> {
     match (bias_direction, monotonicity_direction) {
-        (Some(_), Some(_)) => Err(
-            "smoothness wrapper supports either a sign restriction or a monotonicity restriction, not both"
-                .to_string(),
-        ),
+        (Some(_), Some(_)) => Err(EngineError::Unsupported(
+            "a sign and a monotonicity restriction together",
+        )),
         (None, None) => Ok("DeltaSD"),
         (Some(HonestBiasDirection::Positive), None) => Ok("DeltaSDPB"),
         (Some(HonestBiasDirection::Negative), None) => Ok("DeltaSDNB"),
@@ -105,26 +105,25 @@ fn validate_api_inputs(
     input: &HonestEventStudyInput,
     post_weights: &[f64],
     inference: InferenceConfig,
-) -> Result<(), String> {
+) -> Result<(), EngineError> {
     input.validate()?;
     if !validate_confidence_level(inference.confidence_level) {
-        return Err(format!(
-            "invalid confidence level {}",
-            inference.confidence_level
+        return Err(EngineError::domain(
+            "confidence level",
+            inference.confidence_level,
+            "(0, 1)",
         ));
     }
     if post_weights.len() != input.num_post_periods() {
-        return Err(format!(
-            "post_weights length {} does not match number of post periods {}",
+        return Err(EngineError::length(
+            "target weights",
+            input.num_post_periods(),
             post_weights.len(),
-            input.num_post_periods()
         ));
     }
-    if post_weights.iter().any(|weight| !weight.is_finite()) {
-        return Err("post_weights weights must be finite".to_string());
-    }
+    EngineError::check_finite("target weights", post_weights)?;
     if post_weights.iter().all(|weight| weight.abs() <= 1e-12) {
-        return Err("post_weights must contain at least one non-zero weight".to_string());
+        return Err(EngineError::all_zero("target weights"));
     }
     Ok(())
 }
@@ -139,14 +138,18 @@ fn validate_api_inputs(
 pub fn estimate_smoothness_upper_bound_from_pretrends(
     input: &HonestEventStudyInput,
     alpha: f64,
-) -> Result<f64, String> {
+) -> Result<f64, EngineError> {
     input.validate()?;
     let num_pre = input.num_pre_periods();
     if num_pre <= 1 {
-        return Err("smoothness upper-bound M requires at least two pre periods".to_string());
+        return Err(EngineError::length(
+            "pre-treatment coefficients, at least",
+            2,
+            num_pre,
+        ));
     }
     if !(0.0..1.0).contains(&alpha) {
-        return Err(format!("alpha must lie in (0,1), got {alpha}"));
+        return Err(EngineError::domain("alpha", alpha, "(0, 1)"));
     }
     let constraint_matrix = build_smoothness_constraint_matrix(num_pre, 0, false);
     let pre_coef = &input.betahat[..num_pre];
@@ -168,10 +171,10 @@ pub fn estimate_smoothness_upper_bound_from_pretrends(
 
 pub(crate) fn default_smoothness_m_values(
     input: &HonestEventStudyInput,
-) -> Result<Vec<f64>, String> {
+) -> Result<Vec<f64>, EngineError> {
     let num_pre = input.num_pre_periods();
     if num_pre == 0 {
-        return Err("smoothness summary requires at least one pre period".to_string());
+        return Err(EngineError::empty("pre-treatment coefficients"));
     }
     let upper = if num_pre == 1 {
         input.covariance[0][0].max(0.0).sqrt()
@@ -200,28 +203,19 @@ impl RelativeMagnitudeApiVariant {
         bound: HonestRelativeMagnitudeBound,
         bias_direction: Option<HonestBiasDirection>,
         monotonicity_direction: Option<HonestMonotonicityDirection>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, EngineError> {
         match (bound, bias_direction, monotonicity_direction) {
-            (_, Some(_), Some(_)) => Err(
-                "relative-magnitude wrapper supports either a sign restriction or a monotonicity restriction, not both"
-                    .to_string(),
-            ),
-            (HonestRelativeMagnitudeBound::ParallelTrendsDeviation, None, None) => {
-                Ok(Self::Base)
+            (_, Some(_), Some(_)) => Err(EngineError::Unsupported(
+                "a sign and a monotonicity restriction together",
+            )),
+            (HonestRelativeMagnitudeBound::ParallelTrendsDeviation, None, None) => Ok(Self::Base),
+            (HonestRelativeMagnitudeBound::ParallelTrendsDeviation, Some(direction), None) => {
+                Ok(Self::SignedBase(direction))
             }
-            (
-                HonestRelativeMagnitudeBound::ParallelTrendsDeviation,
-                Some(direction),
-                None,
-            ) => Ok(Self::SignedBase(direction)),
-            (
-                HonestRelativeMagnitudeBound::ParallelTrendsDeviation,
-                None,
-                Some(direction),
-            ) => Ok(Self::MonotoneBase(direction)),
-            (HonestRelativeMagnitudeBound::LinearTrendDeviation, None, None) => {
-                Ok(Self::Linear)
+            (HonestRelativeMagnitudeBound::ParallelTrendsDeviation, None, Some(direction)) => {
+                Ok(Self::MonotoneBase(direction))
             }
+            (HonestRelativeMagnitudeBound::LinearTrendDeviation, None, None) => Ok(Self::Linear),
             (HonestRelativeMagnitudeBound::LinearTrendDeviation, Some(direction), None) => {
                 Ok(Self::SignedLinear(direction))
             }
@@ -302,7 +296,7 @@ pub fn summarize_smoothness_sensitivity(
     m_values: Option<&[f64]>,
     bias_direction: Option<HonestBiasDirection>,
     monotonicity_direction: Option<HonestMonotonicityDirection>,
-) -> Result<SensitivitySummary, String> {
+) -> Result<SensitivitySummary, EngineError> {
     summarize_smoothness_sensitivity_counted(
         input,
         inference,
@@ -311,7 +305,7 @@ pub fn summarize_smoothness_sensitivity(
         m_values,
         bias_direction,
         monotonicity_direction,
-        LeastFavorableSimulation::default(),
+        crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
         &crate::sensitivity::SolverCounter::new(),
     )
 }
@@ -321,7 +315,7 @@ pub fn summarize_smoothness_sensitivity(
 /// # Errors
 /// Returns an error under the conditions of [`summarize_smoothness_sensitivity`], or if `simulation` is
 /// invalid.
-pub fn summarize_smoothness_sensitivity_with_simulation(
+pub(crate) fn summarize_smoothness_sensitivity_with_simulation(
     input: &HonestEventStudyInput,
     inference: InferenceConfig,
     post_weights: &[f64],
@@ -330,7 +324,7 @@ pub fn summarize_smoothness_sensitivity_with_simulation(
     bias_direction: Option<HonestBiasDirection>,
     monotonicity_direction: Option<HonestMonotonicityDirection>,
     simulation: LeastFavorableSimulation,
-) -> Result<SensitivitySummary, String> {
+) -> Result<SensitivitySummary, EngineError> {
     simulation.validate()?;
     summarize_smoothness_sensitivity_counted(
         input,
@@ -355,7 +349,7 @@ pub(in crate::sensitivity) fn summarize_smoothness_sensitivity_counted(
     monotonicity_direction: Option<HonestMonotonicityDirection>,
     simulation: LeastFavorableSimulation,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<SensitivitySummary, String> {
+) -> Result<SensitivitySummary, EngineError> {
     validate_api_inputs(input, post_weights, inference)?;
     let delta = smoothness_variant_label(bias_direction, monotonicity_direction)?;
     let method =
@@ -368,9 +362,7 @@ pub(in crate::sensitivity) fn summarize_smoothness_sensitivity_counted(
         .into_iter()
         .map(|m| {
             if !m.is_finite() || m < 0.0 {
-                return Err(format!(
-                    "smoothness sensitivity requires finite non-negative M, got {m}"
-                ));
+                return Err(EngineError::domain("M", m, "finite and non-negative"));
             }
             let row = match method {
                 SensitivitySummaryMethod::Flci => {
@@ -439,7 +431,7 @@ pub(in crate::sensitivity) fn summarize_smoothness_sensitivity_counted(
             };
             Ok(row)
         })
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, EngineError>>()?;
     Ok(SensitivitySummary {
         rows,
         solver: counter.counts(),
@@ -470,7 +462,7 @@ pub fn summarize_relative_magnitude_sensitivity(
     bound: Option<HonestRelativeMagnitudeBound>,
     bias_direction: Option<HonestBiasDirection>,
     monotonicity_direction: Option<HonestMonotonicityDirection>,
-) -> Result<SensitivitySummary, String> {
+) -> Result<SensitivitySummary, EngineError> {
     summarize_relative_magnitude_sensitivity_counted(
         input,
         inference,
@@ -480,7 +472,7 @@ pub fn summarize_relative_magnitude_sensitivity(
         bound,
         bias_direction,
         monotonicity_direction,
-        LeastFavorableSimulation::default(),
+        crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
         &crate::sensitivity::SolverCounter::new(),
     )
 }
@@ -491,7 +483,7 @@ pub fn summarize_relative_magnitude_sensitivity(
 /// Returns an error under the conditions of [`summarize_relative_magnitude_sensitivity`], or if `simulation` is
 /// invalid.
 #[cfg(test)]
-pub fn summarize_relative_magnitude_sensitivity_with_simulation(
+pub(crate) fn summarize_relative_magnitude_sensitivity_with_simulation(
     input: &HonestEventStudyInput,
     inference: InferenceConfig,
     post_weights: &[f64],
@@ -501,7 +493,7 @@ pub fn summarize_relative_magnitude_sensitivity_with_simulation(
     bias_direction: Option<HonestBiasDirection>,
     monotonicity_direction: Option<HonestMonotonicityDirection>,
     simulation: LeastFavorableSimulation,
-) -> Result<SensitivitySummary, String> {
+) -> Result<SensitivitySummary, EngineError> {
     simulation.validate()?;
     summarize_relative_magnitude_sensitivity_counted(
         input,
@@ -529,7 +521,7 @@ pub(in crate::sensitivity) fn summarize_relative_magnitude_sensitivity_counted(
     monotonicity_direction: Option<HonestMonotonicityDirection>,
     simulation: LeastFavorableSimulation,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<SensitivitySummary, String> {
+) -> Result<SensitivitySummary, EngineError> {
     let mut summaries = summarize_relative_magnitude_sensitivity_many_counted(
         input,
         inference,
@@ -569,7 +561,7 @@ pub fn summarize_relative_magnitude_sensitivity_many(
     bound: Option<HonestRelativeMagnitudeBound>,
     bias_direction: Option<HonestBiasDirection>,
     monotonicity_direction: Option<HonestMonotonicityDirection>,
-) -> Result<Vec<SensitivitySummary>, String> {
+) -> Result<Vec<SensitivitySummary>, EngineError> {
     summarize_relative_magnitude_sensitivity_many_counted(
         input,
         inference,
@@ -579,7 +571,7 @@ pub fn summarize_relative_magnitude_sensitivity_many(
         bound,
         bias_direction,
         monotonicity_direction,
-        LeastFavorableSimulation::default(),
+        crate::sensitivity::LeastFavorableSimulation::new(1_000, 0),
         &crate::sensitivity::SolverCounter::new(),
     )
 }
@@ -589,7 +581,7 @@ pub fn summarize_relative_magnitude_sensitivity_many(
 /// # Errors
 /// Returns an error under the conditions of [`summarize_relative_magnitude_sensitivity_many`], or if `simulation` is
 /// invalid.
-pub fn summarize_relative_magnitude_sensitivity_many_with_simulation(
+pub(crate) fn summarize_relative_magnitude_sensitivity_many_with_simulation(
     input: &HonestEventStudyInput,
     inference: InferenceConfig,
     functionals: &[&[f64]],
@@ -599,7 +591,7 @@ pub fn summarize_relative_magnitude_sensitivity_many_with_simulation(
     bias_direction: Option<HonestBiasDirection>,
     monotonicity_direction: Option<HonestMonotonicityDirection>,
     simulation: LeastFavorableSimulation,
-) -> Result<Vec<SensitivitySummary>, String> {
+) -> Result<Vec<SensitivitySummary>, EngineError> {
     simulation.validate()?;
     summarize_relative_magnitude_sensitivity_many_counted(
         input,
@@ -626,7 +618,7 @@ pub(in crate::sensitivity) fn summarize_relative_magnitude_sensitivity_many_coun
     monotonicity_direction: Option<HonestMonotonicityDirection>,
     simulation: LeastFavorableSimulation,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<Vec<SensitivitySummary>, String> {
+) -> Result<Vec<SensitivitySummary>, EngineError> {
     for post_weights in functionals {
         validate_api_inputs(input, post_weights, inference)?;
     }
@@ -642,10 +634,9 @@ pub(in crate::sensitivity) fn summarize_relative_magnitude_sensitivity_many_coun
         method,
         SensitivitySummaryMethod::Flci | SensitivitySummaryMethod::ConditionalFlci
     ) {
-        return Err(
-            "relative-magnitude wrapper currently supports only Conditional and C-LF methods"
-                .to_string(),
-        );
+        return Err(EngineError::Unsupported(
+            "the FLCI and C-F under the relative-magnitude restriction",
+        ));
     }
     let mbar_values = mbar_values.map_or_else(default_relative_magnitude_mbar_values, |values| {
         values.to_vec()
@@ -660,9 +651,7 @@ pub(in crate::sensitivity) fn summarize_relative_magnitude_sensitivity_many_coun
                 unreachable!()
             }
         },
-        least_favorable_draws: simulation.draws,
-        least_favorable_seed: simulation.seed,
-        ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference)
+        ..RelativeMagnitudeConfidenceSetConfig::from_inference(inference, simulation)
     };
     config.validate(inference)?;
     let family = variant.family();
@@ -670,16 +659,14 @@ pub(in crate::sensitivity) fn summarize_relative_magnitude_sensitivity_many_coun
     let originals = functionals
         .iter()
         .map(|post_weights| compute_original_confidence_set(input, post_weights, inference))
-        .collect::<Result<Vec<_>, String>>()?;
+        .collect::<Result<Vec<_>, EngineError>>()?;
     let mut rows: Vec<Vec<SensitivitySummaryRow>> = functionals
         .iter()
         .map(|_| Vec::with_capacity(mbar_values.len()))
         .collect();
     for mbar in mbar_values {
         if !mbar.is_finite() || mbar < 0.0 {
-            return Err(format!(
-                "relative-magnitude sensitivity requires finite non-negative Mbar, got {mbar}"
-            ));
+            return Err(EngineError::domain("Mbar", mbar, "finite and non-negative"));
         }
         let shared_draws = match config.hybrid {
             RelativeMagnitudeHybrid::LeastFavorable => {
@@ -743,7 +730,7 @@ pub(in crate::sensitivity) fn summarize_relative_magnitude_sensitivity_many_coun
                     ))
                 }
             })
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Result<Vec<_>, EngineError>>()?;
         for (target, row) in rows.iter_mut().zip(at_this_mbar) {
             target.push(row);
         }
@@ -767,7 +754,7 @@ pub(crate) fn smoothness_identified_set(
     bias_direction: Option<HonestBiasDirection>,
     monotonicity_direction: Option<HonestMonotonicityDirection>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     use crate::sensitivity::smoothness::{
         compute_monotone_smoothness_identified_set_counted,
         compute_signed_smoothness_identified_set_counted,
@@ -804,7 +791,7 @@ pub(crate) fn relative_magnitude_identified_set(
     bias_direction: Option<HonestBiasDirection>,
     monotonicity_direction: Option<HonestMonotonicityDirection>,
     counter: &crate::sensitivity::SolverCounter,
-) -> Result<HonestIdentifiedSet, String> {
+) -> Result<HonestIdentifiedSet, EngineError> {
     let variant = RelativeMagnitudeApiVariant::from_wrapper_options(
         bound,
         bias_direction,

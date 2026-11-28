@@ -10,10 +10,13 @@ use epistat_linalg::{MatRef, weighted_gram, xtv};
 use epistat_rng::Stream;
 use rayon::prelude::*;
 
+use epistat_core::InputError;
+
 use super::{
-    MissingAssumption, MissingConfig, MissingError, MissingFolds, MissingModels, MissingNuisance,
+    MissingAssumption, MissingFolds, MissingModels, MissingNuisance, MissingOptions,
     MissingPreData, NestedOutcome, compensated_sum,
 };
+use crate::error::Error;
 
 /// A Cholesky pivot that leaves at most this share of a column's squared norm
 /// marks the column as collinear with those before it.
@@ -94,11 +97,16 @@ fn design(
     covariates: MatRef<'_, f64>,
     columns: &[usize],
     y1: Option<&[f64]>,
-) -> Result<Design, MissingError> {
+) -> Result<Design, Error> {
     let n = covariates.nrows();
     let k = covariates.ncols();
     if let Some(&column) = columns.iter().find(|&&c| c >= k) {
-        return Err(MissingError::Column { column, columns: k });
+        return Err(InputError::NotBelow {
+            what: "covariate column",
+            value: crate::util::usize_to_f64(column),
+            limit: crate::util::usize_to_f64(k),
+        }
+        .into());
     }
     let q = columns.len() + usize::from(y1.is_some());
     let cols = q + 1;
@@ -111,10 +119,12 @@ fn design(
     let mut scale = vec![0.0; q];
     for j in 0..q {
         if let Some(unit) = (0..n).find(|&i| !value(i, j).is_finite()) {
-            return Err(MissingError::NotFinite {
+            return Err(InputError::NotFinite {
                 what: "covariates",
-                unit,
-            });
+                row: unit,
+                column: Some(j),
+            }
+            .into());
         }
         let mean = block_sum(n, |i| value(i, j)) / n as f64;
         let var = block_sum(n, |i| {
@@ -122,12 +132,8 @@ fn design(
             d * d
         }) / n as f64;
         if var <= 0.0 || !var.is_finite() {
-            return Err(MissingError::Constant {
-                what: if j < columns.len() {
-                    format!("covariate column {}", columns[j])
-                } else {
-                    "the post-treatment outcome".to_string()
-                },
+            return Err(Error::ConstantCovariate {
+                column: (j < columns.len()).then(|| columns[j]),
             });
         }
         centre[j] = mean;
@@ -154,7 +160,7 @@ fn solve(
     gram: &epistat_linalg::Mat<f64>,
     b: &[f64],
     model: &'static str,
-) -> Result<Vec<f64>, MissingError> {
+) -> Result<Vec<f64>, Error> {
     let p = b.len();
     let mut flat = vec![0.0; p * p];
     for r in 0..p {
@@ -162,7 +168,7 @@ fn solve(
             flat[r * p + c] = gram[(r, c)];
         }
     }
-    let singular = MissingError::Fit {
+    let singular = Error::NuisanceFit {
         model,
         reason: "a covariate is collinear with the others among the units of the fit",
     };
@@ -198,13 +204,13 @@ fn least_squares(
     y: &[f64],
     fit_rows: &[bool],
     model: &'static str,
-) -> Result<Vec<f64>, MissingError> {
+) -> Result<Vec<f64>, Error> {
     let mut weights = vec![0.0; y.len()];
     fill(&mut weights, |i| f64::from(u8::from(fit_rows[i])));
     let mut weighted = vec![0.0; y.len()];
     fill(&mut weighted, |i| if fit_rows[i] { y[i] } else { 0.0 });
     let x = design.view();
-    let gram = weighted_gram(x, &weights).map_err(|_| MissingError::Fit {
+    let gram = weighted_gram(x, &weights).map_err(|_| Error::NuisanceFit {
         model,
         reason: "the design could not be formed",
     })?;
@@ -267,9 +273,9 @@ fn logistic(
     design: &Design,
     y: &[f64],
     fit_rows: &[bool],
-    config: &MissingConfig,
+    options: &MissingOptions,
     model: &'static str,
-) -> Result<Vec<f64>, MissingError> {
+) -> Result<Vec<f64>, Error> {
     let n = y.len();
     let p = design.cols;
     let x = design.view();
@@ -279,7 +285,7 @@ fn logistic(
     let mut ll = evaluate(design, y, fit_rows, &beta, &mut eta, &mut damped);
     let mut weights = vec![0.0; n];
     let mut residual = vec![0.0; n];
-    for _ in 0..config.max_iterations {
+    for _ in 0..options.max_iterations {
         // The fitted probability from `exp(-|eta|)`, without another
         // exponential: `1 / (1 + d)` for `eta >= 0`, `d / (1 + d)` below.
         weights
@@ -303,7 +309,7 @@ fn logistic(
                     }
                 }
             });
-        let gram = weighted_gram(x, &weights).map_err(|_| MissingError::Fit {
+        let gram = weighted_gram(x, &weights).map_err(|_| Error::NuisanceFit {
             model,
             reason: "the design could not be formed",
         })?;
@@ -312,7 +318,7 @@ fn logistic(
         let step = solve(&gram, &b, model)?;
         let largest = step.iter().fold(0.0_f64, |m, s| m.max(s.abs()));
         if !largest.is_finite() {
-            return Err(MissingError::Fit {
+            return Err(Error::NuisanceFit {
                 model,
                 reason: "the Newton step is not finite",
             });
@@ -346,16 +352,16 @@ fn logistic(
             factor *= 0.5;
         }
         if !accepted {
-            return Err(MissingError::Fit {
+            return Err(Error::NuisanceFit {
                 model,
                 reason: "step halving did not raise the likelihood",
             });
         }
-        if largest <= config.tolerance {
+        if largest <= options.tolerance {
             return Ok(beta);
         }
     }
-    Err(MissingError::Fit {
+    Err(Error::NuisanceFit {
         model,
         reason: "Newton's method did not converge, possibly because of separation",
     })
@@ -387,11 +393,11 @@ impl Designs {
         covariates: MatRef<'_, f64>,
         assumption: MissingAssumption,
         models: &MissingModels<'_>,
-    ) -> Result<Self, MissingError> {
+    ) -> Result<Self, Error> {
         let y1 = (assumption == MissingAssumption::MarXY1).then_some(data.outcome_post);
         let mut built: HashMap<(Vec<usize>, bool), usize> = HashMap::new();
         let mut store: Vec<Design> = Vec::new();
-        let mut get = |columns: &[usize], with_y1: bool| -> Result<usize, MissingError> {
+        let mut get = |columns: &[usize], with_y1: bool| -> Result<usize, Error> {
             let key = (columns.to_vec(), with_y1);
             if let Some(&index) = built.get(&key) {
                 return Ok(index);
@@ -452,19 +458,19 @@ pub(super) fn fold_assignment(
     clusters: Option<&epistat_inference::Clusters>,
     folds: usize,
     seed: u64,
-) -> Result<(Vec<usize>, Vec<bool>), MissingError> {
-    if clusters.is_some_and(|c| c.len() != n) {
-        return Err(MissingError::Length {
-            what: "clusters",
-            expected: n,
-            found: clusters.map_or(0, epistat_inference::Clusters::len),
-        });
+) -> Result<(Vec<usize>, Vec<bool>), Error> {
+    if let Some(clusters) = clusters {
+        epistat_core::check::same_length("clusters", n, clusters.len())?;
     }
     let groups = clusters.map_or(n, epistat_inference::Clusters::count);
     if folds < 2 || folds > groups {
-        return Err(MissingError::Config(
-            "the number of folds must be at least 2 and at most the number of units or clusters",
-        ));
+        return Err(InputError::Domain {
+            what: "folds",
+            value: crate::util::usize_to_f64(folds),
+            domain: "[2, the number of units or clusters]",
+            row: None,
+        }
+        .into());
     }
     let mut order: Vec<usize> = (0..groups).collect();
     Stream::seeded(seed).shuffle(&mut order);
@@ -488,8 +494,8 @@ pub(super) fn fit_nuisance(
     assumption: MissingAssumption,
     models: &MissingModels<'_>,
     folds: MissingFolds,
-    config: &MissingConfig,
-) -> Result<(MissingNuisance, usize), MissingError> {
+    options: &MissingOptions,
+) -> Result<(MissingNuisance, usize), Error> {
     let n = data.treated.len();
     let roles = Roles {
         treated: data.treated.to_vec(),
@@ -507,9 +513,9 @@ pub(super) fn fit_nuisance(
             .map(|v| f64::from(u8::from(v.is_some())))
             .collect(),
     };
-    for (arm, name) in [(true, "treated unit"), (false, "control")] {
+    for arm in [true, false] {
         if !(0..n).any(|i| roles.treated[i] == arm && roles.observed[i]) {
-            return Err(MissingError::NoObservedPre(name));
+            return Err(Error::NoObservedPre { treated: arm });
         }
     }
     let designs = Designs::new(data, covariates, assumption, models)?;
@@ -525,7 +531,7 @@ pub(super) fn fit_nuisance(
     match folds {
         MissingFolds::None => {
             let all = vec![true; n];
-            fit_fold(&roles, &designs, &all, None, &all, config, &mut out)?;
+            fit_fold(&roles, &designs, &all, None, &all, options, &mut out)?;
             Ok((out, 1))
         }
         MissingFolds::CrossFit { folds, seed } => {
@@ -539,7 +545,7 @@ pub(super) fn fit_nuisance(
                     &train,
                     Some(&half),
                     &eval,
-                    config,
+                    options,
                     &mut out,
                 )?;
             }
@@ -559,12 +565,12 @@ fn missingness(
     design: &Design,
     train: &[bool],
     arm: bool,
-    config: &MissingConfig,
+    options: &MissingOptions,
     model: &'static str,
-) -> Result<Option<Vec<f64>>, MissingError> {
+) -> Result<Option<Vec<f64>>, Error> {
     let rows = and(train, |i| roles.treated[i] == arm);
     if !(0..rows.len()).any(|i| rows[i] && roles.observed[i]) {
-        return Err(MissingError::Fit {
+        return Err(Error::NuisanceFit {
             model,
             reason: "no unit of the arm among the training units has the pre-treatment outcome",
         });
@@ -572,7 +578,7 @@ fn missingness(
     if (0..rows.len()).all(|i| !rows[i] || roles.observed[i]) {
         return Ok(None);
     }
-    logistic(design, &roles.r, &rows, config, model).map(Some)
+    logistic(design, &roles.r, &rows, options, model).map(Some)
 }
 
 /// Fits every model on `train` and writes the predictions for `eval`. Under
@@ -585,17 +591,17 @@ fn fit_fold(
     train: &[bool],
     half: Option<&[bool]>,
     eval: &[bool],
-    config: &MissingConfig,
+    options: &MissingOptions,
     out: &mut MissingNuisance,
-) -> Result<(), MissingError> {
+) -> Result<(), Error> {
     let n = train.len();
-    let propensity = logistic(designs.propensity(), &roles.a, train, config, "propensity")?;
+    let propensity = logistic(designs.propensity(), &roles.a, train, options, "propensity")?;
     let gamma1 = missingness(
         roles,
         designs.missingness(),
         train,
         true,
-        config,
+        options,
         "missingness among the treated",
     )?;
     let gamma0 = missingness(
@@ -603,7 +609,7 @@ fn fit_fold(
         designs.missingness(),
         train,
         false,
-        config,
+        options,
         "missingness among the controls",
     )?;
     let pre1 = least_squares(
@@ -663,14 +669,14 @@ fn fit_fold(
                 designs.missingness(),
                 &first,
                 false,
-                config,
+                options,
                 "missingness among the controls of the nested split",
             )?;
             (pre0, gamma0, and(train, |i| half[i] && !roles.treated[i]))
         }
     };
     if !nested_rows.iter().any(|&r| r) {
-        return Err(MissingError::Fit {
+        return Err(Error::NuisanceFit {
             model: "nested regression",
             reason: "no controls among its training units",
         });
@@ -678,9 +684,9 @@ fn fit_fold(
     let mut pseudo = vec![0.0; n];
     for i in (0..n).filter(|&i| nested_rows[i]) {
         let m = designs.pre().predict(i, &pseudo_pre0);
-        pseudo[i] = if config.nested_outcome == NestedOutcome::Augmented && roles.observed[i] {
+        pseudo[i] = if options.nested_outcome == NestedOutcome::Augmented && roles.observed[i] {
             let gamma = gamma_at(&pseudo_gamma0, i);
-            super::check_gamma(i, gamma, config)?;
+            super::check_gamma(i, gamma, options)?;
             m + (roles.y0[i] - m) / gamma
         } else {
             m

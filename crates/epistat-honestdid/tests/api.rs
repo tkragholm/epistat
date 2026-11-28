@@ -26,7 +26,7 @@ use epistat_honestdid::honest::{
     Restriction, RmBound, Target,
 };
 use epistat_honestdid::pretrends::{self, PretrendOptions, Violation};
-use epistat_testkit::load_json;
+use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes, load_json};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -355,8 +355,9 @@ fn joint_regions_cover_every_period_and_calibrate_below_bonferroni() {
     assert_eq!(bonferroni.critical_value, None);
     assert!(gaussian.critical_value.is_some());
     // Two intervals at 1 - 0.05 / 2 each; the simulated level is lower.
-    assert!((bonferroni.pointwise_level - 0.975).abs() < 1e-12);
-    assert!(gaussian.pointwise_level <= bonferroni.pointwise_level);
+    let pointwise = |region: &honest::JointPathRegion| region.pointwise_level.confidence_value();
+    assert!((pointwise(&bonferroni) - 0.975).abs() < 1e-12);
+    assert!(pointwise(&gaussian) <= pointwise(&bonferroni));
 
     let flci = honest::joint_path(
         &study,
@@ -507,4 +508,53 @@ fn unusable_input_is_refused_with_a_code() {
         honest::smoothness_bound_from_pretrends(&one_pre, Level::alpha(0.05).expect("level"))
             .unwrap_err();
     assert_eq!(error.code(), "input.length");
+}
+
+/// The columns the entry points take besides the event study, which
+/// `EventStudy::new` checks, refused through the testkit's bad inputs. An
+/// empty column is one of the wrong length; an empty list of values asks for
+/// the default grid, and the values have no order, so those kinds are not
+/// tried there; a value that is not finite is outside `[0, inf)`.
+#[test]
+fn bad_columns_are_input_errors() {
+    let study = small_study();
+    let options = HonestOptions {
+        method: Some(Method::IdentifiedSet),
+        ..HonestOptions::new(Bootstrap::new(1_000, 0))
+    };
+    let rm = |mbar: Vec<f64>| Restriction::RelativeMagnitude {
+        mbar,
+        bound: RmBound::ParallelTrends,
+    };
+    let length_if_empty = |bad: BadInput| match bad {
+        BadInput::Empty => "input.length",
+        other => other.code(),
+    };
+    let rows = |summary: honest::SensitivitySummary| summary.rows.len();
+    assert_rejects_bad_input_with_codes("summarize target weights", length_if_empty, |bad| {
+        (bad != BadInput::Unsorted).then(|| {
+            let weights = Target::Weights(bad.column(&[0.5, 0.5]));
+            honest::summarize(&study, &weights, &rm(vec![1.0]), &options).map(rows)
+        })
+    });
+    assert_rejects_bad_input_with_codes(
+        "summarize Mbar",
+        |_| "input.domain",
+        |bad| {
+            matches!(bad, BadInput::Nan | BadInput::Infinite).then(|| {
+                let values = rm(bad.column(&[0.0, 0.5, 1.0]));
+                honest::summarize(&study, &Target::Period(0), &values, &options).map(rows)
+            })
+        },
+    );
+    assert_rejects_bad_input_with_codes("pretrends violation", length_if_empty, |bad| {
+        (bad != BadInput::Unsorted).then(|| {
+            let violation = Violation::Delta(bad.column(&[0.0, 0.0, 0.0, 0.1, 0.2]));
+            pretrends::power(
+                &study,
+                &PretrendOptions::new(violation, Bootstrap::new(12, 3)),
+            )
+            .map(|analysis| analysis.power.value)
+        })
+    });
 }

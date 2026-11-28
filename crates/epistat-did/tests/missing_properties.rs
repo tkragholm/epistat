@@ -2,9 +2,10 @@
 //! the complete-data case against the panel DR-DiD estimator, clusters,
 //! cross-fitting, the simulation design of the paper, and the errors.
 
+use epistat_core::InputError;
 use epistat_did::two_period::{self, Estimator, NuisanceOptions, TwoPeriodOptions, nuisance};
 use epistat_did::{
-    MissingAssumption, MissingConfig, MissingError, MissingFolds, MissingModels, MissingPreData,
+    Error, MissingAssumption, MissingFolds, MissingModels, MissingOptions, MissingPreData,
     MissingPredictions, TwoPeriodData, att_missing_pre, att_missing_pre_from_predictions,
     missing_cross_fit_folds,
 };
@@ -207,7 +208,7 @@ fn complete_data_with_a_saturated_covariate_is_the_panel_dr_estimate() {
             nested: &[],
         },
         MissingFolds::None,
-        &MissingConfig::default(),
+        &MissingOptions::default(),
     )
     .unwrap();
     assert_eq!(mine.nuisance.gamma_treated, vec![1.0; n]);
@@ -225,9 +226,9 @@ fn complete_data_with_a_saturated_covariate_is_the_panel_dr_estimate() {
     let dm_max = dm.iter().map(|v| v.abs()).fold(0.0, f64::max);
     let theta_bound = 2.0 * dm_max + rounding;
     assert!(
-        (mine.att - theta).abs() <= theta_bound,
+        (mine.estimate.estimate - theta).abs() <= theta_bound,
         "{} vs {theta}",
-        mine.att
+        mine.estimate.estimate
     );
     for i in 0..n {
         let r = delta[i] - mean0[d.stratum[i]];
@@ -242,16 +243,16 @@ fn complete_data_with_a_saturated_covariate_is_the_panel_dr_estimate() {
     }
 
     // The panel DR-DiD estimator of the same data, without its ridge.
-    let mut design = Vec::with_capacity(3 * n);
+    let mut covariates = Vec::with_capacity(2 * n);
     for i in 0..n {
-        design.extend_from_slice(&[1.0, d.dummies[(i, 0)], d.dummies[(i, 1)]]);
+        covariates.extend_from_slice(&[d.dummies[(i, 0)], d.dummies[(i, 1)]]);
     }
     let nuisance_options = NuisanceOptions {
         ridge: 0.0,
         ..NuisanceOptions::default()
     };
     let data = TwoPeriodData::panel(&d.treated, &delta)
-        .design(MatRef::from_row_major_slice(&design, n, 3))
+        .covariates(MatRef::from_row_major_slice(&covariates, n, 2))
         .build()
         .unwrap();
     let (dr, dr_influence) = dr_panel(&data, nuisance_options);
@@ -334,13 +335,12 @@ fn complete_data_is_the_panel_dr_estimate_with_unnormalised_control_weights() {
         })
         .collect();
     let delta: Vec<f64> = (0..n).map(|i| sim.y1[i] - complete[i].unwrap()).collect();
-    let mut design = Vec::with_capacity(5 * n);
+    let mut covariates = Vec::with_capacity(4 * n);
     for i in 0..n {
-        design.push(1.0);
-        design.extend((0..4).map(|j| sim.z[(i, j)]));
+        covariates.extend((0..4).map(|j| sim.z[(i, j)]));
     }
     let data = TwoPeriodData::panel(&sim.treated, &delta)
-        .design(MatRef::from_row_major_slice(&design, n, 5))
+        .covariates(MatRef::from_row_major_slice(&covariates, n, 4))
         .build()
         .unwrap();
     let fit = nuisance::fit(&data, &NuisanceOptions::default()).unwrap();
@@ -370,7 +370,7 @@ fn complete_data_is_the_panel_dr_estimate_with_unnormalised_control_weights() {
             pre_control: &zeros,
             nested_control: None,
         },
-        &MissingConfig::default(),
+        &MissingOptions::default(),
     )
     .unwrap();
     // DRDID gives T - C, with C the control residuals weighted by w / sum w;
@@ -393,13 +393,13 @@ fn complete_data_is_the_panel_dr_estimate_with_unnormalised_control_weights() {
     let bound = 16.0 * n as f64 * U * size * n as f64 / n1;
     let expected = dr + c * (1.0 - w_sum / n1);
     assert!(
-        (mine.att - dr).abs() > 1e3 * bound,
+        (mine.estimate.estimate - dr).abs() > 1e3 * bound,
         "the weightings differ here"
     );
     assert!(
-        (mine.att - expected).abs() <= bound,
+        (mine.estimate.estimate - expected).abs() <= bound,
         "{} vs {expected}",
-        mine.att
+        mine.estimate.estimate
     );
 }
 
@@ -412,7 +412,7 @@ fn singleton_clusters_give_the_unclustered_standard_error() {
         MissingAssumption::MarX,
         &MODELS,
         MissingFolds::None,
-        &MissingConfig::default(),
+        &MissingOptions::default(),
     )
     .unwrap();
     let clusters = Clusters::singletons(sim.treated.len());
@@ -425,15 +425,18 @@ fn singleton_clusters_give_the_unclustered_standard_error() {
         MissingAssumption::MarX,
         &MODELS,
         MissingFolds::None,
-        &MissingConfig::default(),
+        &MissingOptions::default(),
     )
     .unwrap();
-    assert_eq!(plain.att.to_bits(), clustered.att.to_bits());
+    assert_eq!(
+        plain.estimate.estimate.to_bits(),
+        clustered.estimate.estimate.to_bits()
+    );
     assert_eq!(plain.influence, clustered.influence);
     // The same centred sum of squares formed in two ways, each erring by at
     // most `2 n u` relative.
-    let bound = 4.0 * 2000.0 * U * plain.se;
-    assert!((plain.se - clustered.se).abs() <= bound);
+    let bound = 4.0 * 2000.0 * U * plain.estimate.se.unwrap();
+    assert!((plain.estimate.se.unwrap() - clustered.estimate.se.unwrap()).abs() <= bound);
 }
 
 /// Each unit appears twice, the copies forming a cluster. Cross-fitting
@@ -461,7 +464,7 @@ fn cross_fitting_keeps_a_cluster_in_one_fold() {
         MissingAssumption::MarXY1,
         &MODELS,
         MissingFolds::CrossFit { folds: 4, seed: 4 },
-        &MissingConfig::default(),
+        &MissingOptions::default(),
     )
     .unwrap();
     assert_eq!(est.folds, 4);
@@ -493,7 +496,7 @@ fn cross_fitting_keeps_a_cluster_in_one_fold() {
         MissingAssumption::MarXY1,
         &MODELS,
         MissingFolds::None,
-        &MissingConfig::default(),
+        &MissingOptions::default(),
     )
     .unwrap();
     assert_ne!(all.nuisance.propensity, nu.propensity);
@@ -545,10 +548,10 @@ fn cross_fitting_does_not_depend_on_the_number_of_threads() {
             MissingAssumption::MarXY1,
             &MODELS,
             MissingFolds::CrossFit { folds: 5, seed: 9 },
-            &MissingConfig::default(),
+            &MissingOptions::default(),
         )
         .unwrap();
-        let mut out = vec![est.att, est.se];
+        let mut out = vec![est.estimate.estimate, est.estimate.se.unwrap()];
         out.extend(est.influence);
         out.extend(est.nuisance.nested_control.unwrap());
         out
@@ -575,16 +578,19 @@ fn the_estimate_recovers_the_att_of_the_paper_design() {
                 assumption,
                 &MODELS,
                 folds,
-                &MissingConfig::default(),
+                &MissingOptions::default(),
             )
             .unwrap();
             assert!(
-                (est.att - 5.0).abs() < 4.0 * est.se,
+                (est.estimate.estimate - 5.0).abs() < 4.0 * est.estimate.se.unwrap(),
                 "{assumption:?} {folds:?}: {} se {}",
-                est.att,
-                est.se
+                est.estimate.estimate,
+                est.estimate.se.unwrap()
             );
-            assert!(est.ci_low < est.att && est.att < est.ci_high);
+            assert!(
+                est.estimate.lower().unwrap() < est.estimate.estimate
+                    && est.estimate.estimate < est.estimate.upper().unwrap()
+            );
             let total = neumaier(est.influence.iter().copied());
             let size: f64 = est.influence.iter().map(|v| v.abs()).sum();
             assert!(total.abs() <= 4.0 * 20_000.0 * U * size);
@@ -606,14 +612,14 @@ fn invalid_input_is_an_error() {
         pre_control: &sim.y1,
         nested_control: None,
     };
-    let config = MissingConfig::default();
-    let run = |p: &MissingPredictions<'_>, a, config: &MissingConfig| {
+    let config = MissingOptions::default();
+    let run = |p: &MissingPredictions<'_>, a, config: &MissingOptions| {
         att_missing_pre_from_predictions(&sim.data(), a, p, config)
     };
     assert!(run(&p, MissingAssumption::MarX, &config).is_ok());
     assert_eq!(
         run(&p, MissingAssumption::MarXY1, &config).unwrap_err(),
-        MissingError::Nested
+        Error::NestedRegression
     );
     let with_nested = MissingPredictions {
         nested_control: Some(&sim.y1),
@@ -621,25 +627,25 @@ fn invalid_input_is_an_error() {
     };
     assert_eq!(
         run(&with_nested, MissingAssumption::MarX, &config).unwrap_err(),
-        MissingError::Nested
+        Error::NestedRegression
     );
     // A gamma at the caller's floor, for a unit whose Y0 is observed.
-    let floor = MissingConfig {
+    let floor = MissingOptions {
         gamma_floor: 0.5,
         ..config
     };
     assert!(matches!(
         run(&p, MissingAssumption::MarX, &floor),
-        Err(MissingError::Gamma { .. })
+        Err(Error::MissingnessRange { .. })
     ));
     // A propensity at the ceiling, for a control.
-    let ceiling = MissingConfig {
+    let ceiling = MissingOptions {
         propensity_ceiling: 0.5,
         ..config
     };
     assert!(matches!(
         run(&p, MissingAssumption::MarX, &ceiling),
-        Err(MissingError::Propensity { .. })
+        Err(Error::PropensityRange { .. })
     ));
     // A value that is not finite.
     let mut bad = sim.y1.clone();
@@ -650,7 +656,7 @@ fn invalid_input_is_an_error() {
     };
     assert!(matches!(
         run(&nan, MissingAssumption::MarX, &config),
-        Err(MissingError::NotFinite { unit: 3, .. })
+        Err(Error::Input(InputError::NotFinite { row: 3, .. }))
     ));
 
     let fit = |data: &MissingPreData<'_>, x: &Mat<f64>, models: &MissingModels<'_>, folds| {
@@ -673,7 +679,7 @@ fn invalid_input_is_an_error() {
     };
     assert_eq!(
         fit(&data, &sim.z, &MODELS, MissingFolds::None).unwrap_err(),
-        MissingError::NoObservedPre("control")
+        Error::NoObservedPre { treated: false }
     );
     // A constant covariate, two that are proportional, and one that does
     // not exist.
@@ -688,7 +694,7 @@ fn invalid_input_is_an_error() {
             },
             MissingFolds::None
         ),
-        Err(MissingError::Constant { .. })
+        Err(Error::ConstantCovariate { column: Some(4) })
     ));
     for i in 0..n {
         x[(i, 4)] = 2.0 * sim.z[(i, 0)];
@@ -703,7 +709,7 @@ fn invalid_input_is_an_error() {
             },
             MissingFolds::None
         ),
-        Err(MissingError::Fit { .. })
+        Err(Error::NuisanceFit { .. })
     ));
     assert!(matches!(
         fit(
@@ -715,10 +721,10 @@ fn invalid_input_is_an_error() {
             },
             MissingFolds::None
         ),
-        Err(MissingError::Column {
-            column: 9,
-            columns: 5
-        })
+        Err(Error::Input(InputError::NotBelow {
+            what: "covariate column",
+            ..
+        }))
     ));
     assert!(matches!(
         fit(
@@ -727,6 +733,6 @@ fn invalid_input_is_an_error() {
             &MODELS,
             MissingFolds::CrossFit { folds: 1, seed: 0 }
         ),
-        Err(MissingError::Config(_))
+        Err(Error::Input(InputError::Domain { what: "folds", .. }))
     ));
 }
