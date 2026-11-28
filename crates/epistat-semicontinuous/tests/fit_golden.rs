@@ -11,11 +11,12 @@
 //! set, appends them to that file. Regenerate with
 //! `GOLDEN_PRINT=1 cargo test --test fit_golden -- --nocapture` after a change
 //! that is meant to alter results.
+use epistat_core::{CaseWeights, Covariance};
 use epistat_linalg::Mat;
 use epistat_semicontinuous::lognormal::LogNormalOptions;
 use epistat_semicontinuous::tweedie::TweedieOptions;
 use epistat_semicontinuous::two_part::{TwoPartOptions, TwoPartWarmStart};
-use epistat_semicontinuous::{CostData, Model, lognormal, tweedie, two_part};
+use epistat_semicontinuous::{CostData, Model, Variance, lognormal, tweedie, two_part};
 use epistat_testkit::Fingerprint;
 
 const N_ROWS: usize = 10_000;
@@ -49,7 +50,7 @@ impl Fixture {
     fn data(&self) -> CostData<'_> {
         let mut data = CostData::builder(self.x.as_ref(), &self.y);
         if let Some(weights) = &self.weights {
-            data = data.weights(weights);
+            data = data.weights(CaseWeights::new(weights).expect("weights"));
         }
         if let Some(clusters) = &self.clusters {
             data = data.clusters(clusters);
@@ -137,11 +138,40 @@ impl Hasher {
         }
     }
 
-    fn opt(&mut self, m: Option<&Mat<f64>>) {
-        match m {
-            Some(m) => self.mat(m),
-            None => self.word(u64::MAX),
+    /// A vector, hashed as the `n x 1` matrix it was.
+    fn vec(&mut self, v: &[f64]) {
+        self.word(v.len() as u64);
+        self.word(1);
+        for &value in v {
+            self.word(value.to_bits());
         }
+    }
+
+    /// A covariance, hashed as the matrix it was, column by column; `None`
+    /// as a missing matrix.
+    fn cov(&mut self, c: Option<&Covariance>) {
+        let Some(c) = c else {
+            self.word(u64::MAX);
+            return;
+        };
+        self.word(c.dim() as u64);
+        self.word(c.dim() as u64);
+        for j in 0..c.dim() {
+            for i in 0..c.dim() {
+                self.word(c.get(i, j).unwrap_or(f64::NAN).to_bits());
+            }
+        }
+    }
+
+    /// Standard errors, hashed as the `n x 1` matrix they were, or as a
+    /// missing matrix when the fit computed no covariance.
+    fn se(&mut self, se: &[Option<f64>], covariance: Option<&Covariance>) {
+        if covariance.is_none() {
+            self.word(u64::MAX);
+            return;
+        }
+        let se: Vec<f64> = se.iter().map(|v| v.unwrap_or(f64::NAN)).collect();
+        self.vec(&se);
     }
 }
 
@@ -155,26 +185,23 @@ fn two_part(
     warm: Option<&TwoPartWarmStart>,
 ) -> TwoPartWarmStart {
     let model = two_part::fit(&input.data(), &options, warm).expect(name);
-    let report = &model.report;
+    let (logit, gamma) = (&model.logit, &model.gamma);
     let mut h = Hasher::new();
-    h.mat(&model.beta_logit);
-    h.mat(&model.beta_gamma);
-    h.opt(report.se_logit.as_ref());
-    h.opt(report.se_gamma.as_ref());
-    h.opt(report.cov_logit.as_ref());
-    h.opt(report.cov_gamma.as_ref());
-    h.word(report.iterations_logit as u64);
-    h.word(report.iterations_gamma as u64);
-    h.word(report.meta.fallback_attempts as u64);
+    h.vec(&logit.coefficients);
+    h.vec(&gamma.coefficients);
+    h.se(&logit.se, logit.covariance.as_ref());
+    h.se(&gamma.se, gamma.covariance.as_ref());
+    h.cov(logit.covariance.as_ref());
+    h.cov(gamma.covariance.as_ref());
+    h.word(logit.meta.iterations as u64);
+    h.word(gamma.meta.iterations as u64);
+    h.word(model.report.meta.fallback_attempts as u64);
     let prediction = model.predict(input.x.as_ref()).expect("predict");
-    h.mat(&prediction.prob_positive);
-    h.mat(&prediction.mean_positive);
-    h.mat(&prediction.expected_outcome);
+    h.vec(&prediction.prob_positive);
+    h.vec(&prediction.mean_positive);
+    h.vec(&prediction.mean);
     out.push((name, h.finish()));
-    TwoPartWarmStart {
-        beta_logit: model.beta_logit,
-        beta_gamma: model.beta_gamma,
-    }
+    TwoPartWarmStart::from(&model)
 }
 
 fn tweedie(
@@ -183,19 +210,19 @@ fn tweedie(
     input: &Fixture,
     power: f64,
     options: TweedieOptions,
-    warm: Option<&Mat<f64>>,
-) -> Mat<f64> {
+    warm: Option<&[f64]>,
+) -> Vec<f64> {
     let model = tweedie::fit(&input.data(), power, &options, warm, None).expect(name);
     let report = &model.report;
     let mut h = Hasher::new();
-    h.mat(&model.beta);
-    h.opt(report.se.as_ref());
-    h.opt(report.cov.as_ref());
+    h.vec(&model.coefficients);
+    h.se(&model.se, model.covariance.as_ref());
+    h.cov(model.covariance.as_ref());
     h.word(report.meta.iterations as u64);
     h.word(report.meta.fallback_attempts as u64);
-    h.mat(&model.predict(input.x.as_ref()).expect("predict").mean);
+    h.vec(&model.predict(input.x.as_ref()).expect("predict").mean);
     out.push((name, h.finish()));
-    model.beta
+    model.coefficients
 }
 
 fn collect() -> Golden {
@@ -206,12 +233,16 @@ fn collect() -> Golden {
     let zeros_unweighted = fixture(true, false, true);
     let zeros_weighted = fixture(true, true, true);
     let zeros_plain = fixture(true, true, false);
+    let model_based = TwoPartOptions {
+        variance: Variance::ModelBased,
+        ..TwoPartOptions::default()
+    };
     two_part(
         &mut out,
         "two_part/unweighted/robust/clustered",
         &zeros_unweighted,
         TwoPartOptions {
-            robust_se: true,
+            variance: Variance::Sandwich,
             ..TwoPartOptions::default()
         },
         None,
@@ -220,14 +251,14 @@ fn collect() -> Golden {
         &mut out,
         "two_part/unweighted/model_se",
         &fixture(true, false, false),
-        TwoPartOptions::default(),
+        model_based,
         None,
     );
     two_part(
         &mut out,
         "two_part/weighted/model_se",
         &zeros_plain,
-        TwoPartOptions::default(),
+        model_based,
         None,
     );
     let warm = two_part(
@@ -235,12 +266,15 @@ fn collect() -> Golden {
         "two_part/weighted/robust/clustered",
         &zeros_weighted,
         TwoPartOptions {
-            robust_se: true,
+            variance: Variance::Sandwich,
             ..TwoPartOptions::default()
         },
         None,
     );
-    let stable = TwoPartOptions::stable_defaults();
+    let stable = TwoPartOptions {
+        variance: Variance::ModelBased,
+        ..TwoPartOptions::stable_defaults()
+    };
     two_part(
         &mut out,
         "two_part/weighted/stable",
@@ -249,7 +283,7 @@ fn collect() -> Golden {
         None,
     );
     let replicate_options = TwoPartOptions {
-        compute_covariance: false,
+        variance: Variance::None,
         ..stable
     };
     two_part(
@@ -263,7 +297,7 @@ fn collect() -> Golden {
         &mut out,
         "two_part/weighted/warm/model_se",
         &zeros_plain,
-        TwoPartOptions::default(),
+        model_based,
         Some(&warm),
     );
 
@@ -272,7 +306,11 @@ fn collect() -> Golden {
     let positive_weighted = fixture(false, true, true);
     let positive_plain = fixture(false, false, false);
     let robust = TweedieOptions {
-        robust_se: true,
+        variance: Variance::Sandwich,
+        ..TweedieOptions::default()
+    };
+    let plain = TweedieOptions {
+        variance: Variance::None,
         ..TweedieOptions::default()
     };
     let cold = tweedie(
@@ -288,7 +326,7 @@ fn collect() -> Golden {
         "tweedie2/unweighted/plain",
         &positive_plain,
         2.0,
-        TweedieOptions::default(),
+        plain,
         None,
     );
     tweedie(
@@ -296,8 +334,8 @@ fn collect() -> Golden {
         "tweedie2/weighted/warm",
         &positive_weighted,
         2.0,
-        TweedieOptions::default(),
-        Some(&cold),
+        plain,
+        Some(cold.as_slice()),
     );
     tweedie(
         &mut out,
@@ -306,10 +344,10 @@ fn collect() -> Golden {
         2.0,
         TweedieOptions {
             l2_penalty: 1e-4,
-            robust_se: true,
+            variance: Variance::Sandwich,
             ..TweedieOptions::default()
         },
-        Some(&cold),
+        Some(cold.as_slice()),
     );
     tweedie(
         &mut out,
@@ -324,7 +362,7 @@ fn collect() -> Golden {
         "tweedie1.5/unweighted/plain",
         &fixture(true, false, false),
         1.5,
-        TweedieOptions::default(),
+        plain,
         None,
     );
 
@@ -333,24 +371,23 @@ fn collect() -> Golden {
     let model = lognormal::fit(
         &fixture(true, true, true).data().without_weights(),
         &LogNormalOptions {
-            robust_se: true,
+            variance: Variance::Sandwich,
             ..LogNormalOptions::default()
         },
     )
     .expect("lognormal");
-    let report = &model.report;
     let mut h = Hasher::new();
-    h.mat(&model.beta);
-    h.opt(report.se.as_ref());
-    h.opt(report.cov.as_ref());
+    h.vec(&model.coefficients);
+    h.se(&model.se, model.covariance.as_ref());
+    h.cov(model.covariance.as_ref());
     out.push(("lognormal/weighted/robust/clustered", h.finish()));
 
     // The plain-API wrappers used elsewhere.
     let model =
         two_part::fit(&zeros_plain.data(), &TwoPartOptions::default(), None).expect("two-part");
     let mut h = Hasher::new();
-    h.mat(&model.beta_logit);
-    h.mat(&model.beta_gamma);
+    h.vec(&model.logit.coefficients);
+    h.vec(&model.gamma.coefficients);
     out.push(("two_part/input/default", h.finish()));
     let model = tweedie::fit(
         &positive_plain.data(),
@@ -361,7 +398,7 @@ fn collect() -> Golden {
     )
     .expect("tweedie");
     let mut h = Hasher::new();
-    h.mat(&model.beta);
+    h.vec(&model.coefficients);
     out.push(("tweedie2/input/default", h.finish()));
 
     out

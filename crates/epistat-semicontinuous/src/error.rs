@@ -13,7 +13,7 @@
 //! [`Error::NotFinite`] is
 //! retried with a stronger ridge; every other error ends the fit at once.
 
-use epistat_core::{Classify, ErrorKind, InputError};
+use epistat_core::{Classify, ErrorKind, InputError, VarianceKind};
 
 /// Why a model could not be fitted or a summary could not be formed.
 #[non_exhaustive]
@@ -81,9 +81,29 @@ pub enum Error {
         /// The fewest draws any chain kept.
         found: usize,
     },
+    /// The logit part of a two-part model has no finite maximum-likelihood
+    /// estimate, for the reason given, and the options do not ask for the
+    /// intercept-only fallback
+    /// ([`Separation::InterceptOnly`](crate::two_part::Separation::InterceptOnly)).
+    #[error("the logit part has no finite estimate: {reason:?}")]
+    Separation {
+        /// Why the logit cannot be fitted.
+        reason: crate::two_part::InterceptOnly,
+    },
+    /// A coefficient table asked for a covariance the fit did not compute,
+    /// such as the sandwich from a fit with a model-based covariance or any
+    /// covariance from a fit with [`Variance::None`](crate::Variance::None).
+    #[error("the fit has no {asked} covariance")]
+    NoCovariance {
+        /// The covariance asked for.
+        asked: VarianceKind,
+    },
     /// A weighted product of the design was refused.
     #[error(transparent)]
     Linalg(#[from] epistat_linalg::Error),
+    /// A coefficient table could not be formed.
+    #[error(transparent)]
+    Stats(#[from] epistat_stats::Error),
 }
 
 impl Error {
@@ -102,10 +122,12 @@ impl Classify for Error {
         match self {
             Self::Input(error) => error.kind(),
             Self::Linalg(error) => error.kind(),
+            Self::Stats(error) => error.kind(),
             Self::Invalid { .. } | Self::NoPositiveOutcome | Self::MissingFamilies => {
                 ErrorKind::Input
             }
-            Self::Unsupported { .. } => ErrorKind::Unsupported,
+            Self::Unsupported { .. } | Self::NoCovariance { .. } => ErrorKind::Unsupported,
+            Self::Separation { .. } => ErrorKind::Numerical,
             Self::NotConverged { .. }
             | Self::Saturated
             | Self::Singular
@@ -120,6 +142,7 @@ impl Classify for Error {
         match self {
             Self::Input(error) => error.code(),
             Self::Linalg(error) => error.code(),
+            Self::Stats(error) => error.code(),
             Self::Invalid { .. } => "semicontinuous.invalid",
             Self::NoPositiveOutcome => "semicontinuous.no_positive_outcome",
             Self::MissingFamilies => "semicontinuous.missing_families",
@@ -131,6 +154,8 @@ impl Classify for Error {
             Self::NotFinite => "semicontinuous.not_finite",
             Self::TooManyFailures { .. } => "semicontinuous.too_many_failures",
             Self::TooFewDraws { .. } => "semicontinuous.too_few_draws",
+            Self::Separation { .. } => "semicontinuous.separation",
+            Self::NoCovariance { .. } => "semicontinuous.no_covariance",
         }
     }
 }
@@ -170,15 +195,22 @@ mod tests {
                 minimum: 4,
                 found: 2,
             },
+            Error::Separation {
+                reason: crate::two_part::InterceptOnly::AllPositive,
+            },
+            Error::NoCovariance {
+                asked: VarianceKind::Robust,
+            },
         ];
         epistat_testkit::assert_codes_unique("semicontinuous", &own);
         for error in &own[..3] {
             assert_eq!(error.kind(), ErrorKind::Input, "{error:?}");
         }
         assert_eq!(own[3].kind(), ErrorKind::Unsupported);
-        for error in &own[4..] {
+        for error in &own[4..12] {
             assert_eq!(error.kind(), ErrorKind::Numerical, "{error:?}");
         }
+        assert_eq!(own[12].kind(), ErrorKind::Unsupported);
         assert_eq!(
             Error::from(InputError::Empty { what: "y" }).code(),
             "input.empty"

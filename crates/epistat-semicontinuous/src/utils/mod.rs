@@ -153,48 +153,6 @@ pub fn mean_column_ref(vector: MatRef<'_, f64>) -> f64 {
     sum / f64::from(u32::try_from(vector.nrows()).unwrap_or(u32::MAX))
 }
 
-#[must_use]
-/// # Panics
-///
-/// Panics if `betas` is empty.
-pub fn mean_vector(betas: &[Mat<f64>]) -> Mat<f64> {
-    assert!(
-        !betas.is_empty(),
-        "mean_vector requires at least one sample"
-    );
-    let mut mean = Mat::<f64>::zeros(betas[0].nrows(), 1);
-    for beta in betas {
-        for i in 0..beta.nrows() {
-            mean[(i, 0)] += beta[(i, 0)];
-        }
-    }
-    for i in 0..mean.nrows() {
-        mean[(i, 0)] /= f64::from(u32::try_from(betas.len()).unwrap_or(u32::MAX));
-    }
-    mean
-}
-
-#[must_use]
-pub fn std_vector(betas: &[Mat<f64>], mean: &Mat<f64>) -> Mat<f64> {
-    let mut variance = Mat::<f64>::zeros(mean.nrows(), 1);
-    for beta in betas {
-        for i in 0..beta.nrows() {
-            let diff = beta[(i, 0)] - mean[(i, 0)];
-            variance[(i, 0)] = diff.mul_add(diff, variance[(i, 0)]);
-        }
-    }
-    if betas.len() > 1 {
-        let denom = f64::from(u32::try_from(betas.len()).unwrap_or(u32::MAX)) - 1.0;
-        for i in 0..variance.nrows() {
-            variance[(i, 0)] /= denom;
-        }
-    }
-    for i in 0..variance.nrows() {
-        variance[(i, 0)] = variance[(i, 0)].max(0.0).sqrt();
-    }
-    variance
-}
-
 /// The contiguous slice behind column `j` of a column-major view.
 ///
 /// # Panics
@@ -358,6 +316,16 @@ pub(crate) fn mean_of_row_values<const K: usize>(
 
 /// The linear predictor `x * beta`, computed as in [`matvec_into`].
 #[must_use]
+/// `values` as an `n x 1` matrix.
+pub(crate) fn column_mat(values: &[f64]) -> Mat<f64> {
+    Mat::from_fn(values.len(), 1, |i, _| values[i])
+}
+
+/// The first column of `m`.
+pub(crate) fn column_values(m: &Mat<f64>) -> Vec<f64> {
+    m.col_as_slice(0).to_vec()
+}
+
 pub(crate) fn linear_predictor(x: MatRef<'_, f64>, beta: &Mat<f64>) -> Mat<f64> {
     let mut eta = Mat::<f64>::zeros(x.nrows(), 1);
     matvec_into(&mut eta, x, beta);
@@ -526,21 +494,6 @@ mod tests {
         let b = Mat::from_fn(2, 1, |i, _| if i == 0 { f64::NAN } else { 1.0 });
         let err = solve_linear_system(&a, &b).expect_err("non-finite rhs should fail");
         assert!(matches!(err, Error::Singular));
-    }
-
-    #[test]
-    #[should_panic(expected = "mean_vector requires at least one sample")]
-    fn mean_vector_panics_on_empty_input() {
-        let _ = mean_vector(&[]);
-    }
-
-    #[test]
-    fn std_vector_is_zero_for_single_sample() {
-        let beta = Mat::from_fn(2, 1, |i, _| if i == 0 { 1.0 } else { -1.0 });
-        let mean = mean_vector(std::slice::from_ref(&beta));
-        let std = std_vector(&[beta], &mean);
-        assert_relative_eq!(std[(0, 0)], 0.0);
-        assert_relative_eq!(std[(1, 0)], 0.0);
     }
 
     #[test]

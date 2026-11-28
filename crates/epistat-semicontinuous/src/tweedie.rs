@@ -30,11 +30,15 @@
 //!
 //! # Standard errors
 //!
-//! The reported covariance is the sandwich with bread `(X' diag(w mu^(2-p)) X)^-1`
-//! and meat from the quasi-score residual `w_i (y_i - mu_i) mu_i^(1-p)`, summed
-//! within clusters first when cluster labels are given \[3\]. The fit agrees
-//! with R's `glm` with `statmod::tweedie(var.power = p, link.power = 0)` and
-//! with that sandwich computed in R (`tests/tweedie_reference.rs`).
+//! The model-based covariance is `phi (X' diag(w mu^(2-p)) X)^-1` with the
+//! Pearson dispersion `phi = sum w_i (y_i - mu_i)^2 / mu_i^p / (n - k)`, as R's
+//! `summary.glm` reports it. The sandwich has that inverse at `phi = 1` as
+//! its bread and meat from the quasi-score residual
+//! `w_i (y_i - mu_i) mu_i^(1-p)`, summed within clusters first when cluster
+//! labels are given \[3\]; [`Variance`] chooses, the sandwich by default for
+//! clustered data. The fit agrees with R's `glm` with
+//! `statmod::tweedie(var.power = p, link.power = 0)` and with that sandwich
+//! computed in R (`tests/tweedie_reference.rs`).
 //!
 //! # References
 //!
@@ -47,7 +51,7 @@
 
 use epistat_linalg::{Mat, MatRef};
 
-use crate::covariance::{diag_sqrt, sandwich, score_meat};
+use crate::covariance::{sandwich, score_meat};
 use crate::data::CostData;
 use crate::fit::{
     AttemptDiagnostics, FitMetadata, FitStrategy, Model, SolverKind, run_with_retries,
@@ -61,7 +65,13 @@ use crate::utils::{
     matvec_into, max_abs_diff, solve_linear_system_ref, weighted_xtx_ref,
     weighted_xtz_ref_with_buffer,
 };
+use crate::tidy::{TableParts, table};
+use crate::utils::{column_mat, column_values, solve_linear_system};
+use crate::variance::{
+    Inference, Variance, pearson_dispersion, residual_df, standard_errors, to_covariance,
+};
 use crate::{Error, check_columns};
+use epistat_core::{Coefficients, Covariance, EffectScale, Glance, Level, Tidy, VarianceKind};
 
 pub(crate) const LINEAR_PREDICTOR_CLIP: f64 = 30.0;
 pub(crate) const BACKTRACKING_STEPS: usize = 12;
@@ -85,9 +95,9 @@ pub struct TweedieOptions {
     pub l2_penalty: f64,
     /// Whether the first column (the intercept) is left unpenalised.
     pub l2_penalty_exclude_intercept: bool,
-    /// Whether to compute the sandwich covariance, cluster-robust when the
-    /// data have clusters. Without it the fit has no standard errors.
-    pub robust_se: bool,
+    /// The covariance; by default the sandwich for clustered data or
+    /// sampling weights and the model-based covariance otherwise.
+    pub variance: Variance,
     /// What a fit that fails does.
     pub strategy: FitStrategy,
 }
@@ -100,7 +110,7 @@ impl Default for TweedieOptions {
             min_weight: 1e-6,
             l2_penalty: 0.0,
             l2_penalty_exclude_intercept: true,
-            robust_se: false,
+            variance: Variance::Auto,
             strategy: FitStrategy::Strict,
         }
     }
@@ -167,47 +177,93 @@ impl TweedieScratch {
 }
 
 /// A fitted Tweedie model.
+///
+/// [`Tidy`] gives its coefficient table of log mean ratios; the model-based
+/// table refers the Wald statistics to Student's t on the residual degrees
+/// of freedom, as R's `summary.glm` does, the sandwich table to the normal.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TweedieModel {
-    /// Coefficient vector.
-    pub beta: Mat<f64>,
-    /// Tweedie power parameter (p).
+    /// The coefficients, one per column of the design.
+    pub coefficients: Vec<f64>,
+    /// The Tweedie power `p`.
     pub power: f64,
+    /// The covariance of the coefficients, `None` when the options asked for
+    /// none ([`Variance::None`]).
+    pub covariance: Option<Covariance>,
+    /// The standard errors, the roots of the covariance's diagonal; `None`
+    /// where the variance is undefined or negative, and for every coefficient
+    /// without a covariance.
+    pub se: Vec<Option<f64>>,
+    /// The Pearson dispersion `sum w_i (y_i - mu_i)^2 / mu_i^p / (n - k)`,
+    /// `None` without residual degrees of freedom or when no covariance was
+    /// computed.
+    pub dispersion: Option<f64>,
+    /// The residual degrees of freedom, the rows with a positive weight (or
+    /// the sum of frequency weights) less the coefficients; `None` when not
+    /// positive.
+    pub df_residual: Option<f64>,
+    /// The rows of the data.
+    pub n: usize,
+    /// The rows with a positive weight, which entered the fit.
+    pub n_used: usize,
     /// Fit diagnostics.
     pub report: TweedieReport,
 }
 
-/// The diagnostics and covariance of a Tweedie fit.
+/// The diagnostics of a Tweedie fit.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TweedieReport {
     /// Standardized fit metadata.
     pub meta: FitMetadata,
-    /// Standard errors for coefficients.
-    pub se: Option<Mat<f64>>,
-    /// Covariance matrix for coefficients.
-    pub cov: Option<Mat<f64>>,
-    /// True if robust (sandwich) covariance was used.
-    pub robust: bool,
-    /// True if cluster-robust covariance was used.
-    pub clustered: bool,
-    /// Number of clusters used for cluster-robust covariance.
+    /// The covariance computed, `None` for none.
+    pub variance: Option<VarianceKind>,
+    /// The number of clusters of a clustered sandwich, `None` otherwise.
     pub cluster_count: Option<usize>,
     /// The failed attempts before the one that succeeded, under
     /// [`FitStrategy::Relaxed`].
     pub attempts: Vec<AttemptDiagnostics>,
 }
 
-/// Tweedie predictions, one row per row of the design.
+/// Tweedie predictions, one entry per row of the design.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TweediePrediction {
-    /// The predicted mean.
-    pub mean: Mat<f64>,
+    /// The predicted mean, `E[y | x]`.
+    pub mean: Vec<f64>,
 }
 
-type RobustCovarianceResult = (Option<Mat<f64>>, bool, Option<usize>);
+impl Tidy for TweedieModel {
+    type Error = Error;
+
+    fn coefficients(&self, level: Level, variance: VarianceKind) -> Result<Coefficients, Error> {
+        table(
+            &TableParts {
+                coefficients: &self.coefficients,
+                covariance: self.covariance.as_ref(),
+                computed: self.report.variance,
+                effect: EffectScale::LogMeanRatio,
+                t_df: (variance == VarianceKind::ModelBased)
+                    .then_some(self.df_residual)
+                    .flatten(),
+            },
+            level,
+            variance,
+        )
+    }
+
+    /// The covariance the fit computed, model-based when it computed none.
+    fn default_variance(&self) -> VarianceKind {
+        self.report.variance.unwrap_or(VarianceKind::ModelBased)
+    }
+
+    fn glance(&self) -> Glance {
+        Glance::new(self.n, self.n_used, self.report.meta.converged)
+            .with_iterations(Some(self.report.meta.iterations))
+            .with_deviance(None, self.df_residual)
+    }
+}
 
 impl TweedieModel {
     /// The mean of the predicted outcome over the rows of `x`, without forming the
@@ -223,10 +279,10 @@ impl TweedieModel {
     /// [`Error::Input`] when `x` does not have one column per coefficient or
     /// `weights` is not one value per row.
     pub fn predict_mean(&self, x: MatRef<'_, f64>, weights: Option<&[f64]>) -> Result<f64, Error> {
-        check_columns(x, self.beta.nrows(), weights)?;
+        check_columns(x, self.coefficients.len(), weights)?;
         Ok(crate::utils::mean_of_row_values(
             x,
-            [&self.beta],
+            [&column_mat(&self.coefficients)],
             weights,
             |[eta]| exp_clamped(eta),
         ))
@@ -241,7 +297,7 @@ impl TweedieModel {
     /// [`Error::Input`] when the design of `data` does not have one column
     /// per coefficient.
     pub fn deviance(&self, data: &CostData<'_>) -> Result<f64, Error> {
-        let mu = self.predict(data.x())?.mean;
+        let mu = column_mat(&self.predict(data.x())?.mean);
         Ok(weighted_deviance(
             data.y_column(),
             &mu,
@@ -258,7 +314,7 @@ impl TweedieModel {
     ///
     /// As [`deviance`](Self::deviance).
     pub fn quasi_log_likelihood(&self, data: &CostData<'_>) -> Result<f64, Error> {
-        let mu = self.predict(data.x())?.mean;
+        let mu = column_mat(&self.predict(data.x())?.mean);
         Ok(quasi_log_likelihood(data.y_column(), &mu, self.power))
     }
 }
@@ -268,10 +324,10 @@ impl Model for TweedieModel {
     type Report = TweedieReport;
 
     fn predict(&self, x: MatRef<'_, f64>) -> Result<Self::Prediction, Error> {
-        check_columns(x, self.beta.nrows(), None)?;
-        let eta = linear_predictor(x, &self.beta);
+        check_columns(x, self.coefficients.len(), None)?;
+        let eta = linear_predictor(x, &column_mat(&self.coefficients));
         Ok(TweediePrediction {
-            mean: Mat::from_fn(x.nrows(), 1, |i, _| exp_clamped(eta[(i, 0)])),
+            mean: (0..x.nrows()).map(|i| exp_clamped(eta[(i, 0)])).collect(),
         })
     }
 
@@ -280,16 +336,27 @@ impl Model for TweedieModel {
     }
 }
 
-/// The Tweedie fit of `x` and `y` with the given clusters, without weights.
+/// The Tweedie fit of `x` and `y` without weights or clusters, with the
+/// covariance `inference` asks for.
 pub(crate) fn fit_tweedie(
     x: MatRef<'_, f64>,
     y: MatRef<'_, f64>,
-    clusters: Option<&[u32]>,
     power: f64,
     options: TweedieOptions,
+    inference: Inference,
 ) -> Result<TweedieModel, Error> {
     let mut scratch = TweedieScratch::default();
-    fit_tweedie_weighted(x, y, None, clusters, power, options, None, &mut scratch)
+    fit_tweedie_weighted(
+        x,
+        y,
+        None,
+        None,
+        power,
+        options,
+        inference,
+        None,
+        &mut scratch,
+    )
 }
 
 /// The Tweedie fit of checked columns, under the strategy of `options`.
@@ -304,6 +371,7 @@ fn fit_tweedie_weighted(
     clusters: Option<&[u32]>,
     power: f64,
     options: TweedieOptions,
+    inference: Inference,
     // Warm-start coefficients for the IRLS. A bootstrap replicate is a perturbation of
     // the full sample, so seeding from the full-sample fit converges in far fewer
     // iterations to the same optimum. `None` cold-starts from the intercept-only model.
@@ -330,6 +398,7 @@ fn fit_tweedie_weighted(
                     clusters,
                     power,
                     options: current_options,
+                    inference,
                     lambda: current_options.l2_penalty,
                     initial_beta_override: initial_beta,
                 },
@@ -352,6 +421,7 @@ struct TweedieFitRequest<'a> {
     clusters: Option<&'a [u32]>,
     power: f64,
     options: TweedieOptions,
+    inference: Inference,
     lambda: f64,
     initial_beta_override: Option<&'a Mat<f64>>,
 }
@@ -367,6 +437,7 @@ fn fit_tweedie_with_lambda(
         clusters,
         power,
         options,
+        inference,
         lambda,
         initial_beta_override,
     } = request;
@@ -523,13 +594,16 @@ fn fit_tweedie_with_lambda(
                     .fold(0.0_f64, |acc, value| acc.max(value.abs()))
             });
             return finalize_fit(
-                x,
-                y,
-                sample_weights,
-                clusters,
-                power,
-                options,
-                lambda,
+                FinalFit {
+                    x,
+                    y,
+                    sample_weights,
+                    clusters,
+                    power,
+                    options,
+                    inference,
+                    lambda,
+                },
                 beta_raw,
                 iteration + 1,
                 known_max_eta,
@@ -572,18 +646,34 @@ fn sample_weight_at(sample_weights: Option<MatRef<'_, f64>>, row: usize) -> f64 
     sample_weights.map_or(1.0, |weights| weights[(row, 0)])
 }
 
-fn finalize_fit(
-    x: MatRef<'_, f64>,
-    y: MatRef<'_, f64>,
-    sample_weights: Option<MatRef<'_, f64>>,
-    clusters: Option<&[u32]>,
+/// The data and choices a converged fit is finished with.
+struct FinalFit<'a> {
+    x: MatRef<'a, f64>,
+    y: MatRef<'a, f64>,
+    sample_weights: Option<MatRef<'a, f64>>,
+    clusters: Option<&'a [u32]>,
     power: f64,
     options: TweedieOptions,
+    inference: Inference,
     lambda: f64,
+}
+
+fn finalize_fit(
+    request: FinalFit<'_>,
     beta_final: Mat<f64>,
     iterations: usize,
     known_max_eta: Option<f64>,
 ) -> Result<TweedieModel, Error> {
+    let FinalFit {
+        x,
+        y,
+        sample_weights,
+        clusters,
+        power,
+        options,
+        inference,
+        lambda,
+    } = request;
     // Saturation guard: a converged fit whose linear predictor still reaches the
     // `exp_clamped` ceiling has distorted, non-multiplicative predictions (the marginal
     // ratio collapses toward 1 and the counterfactual means blow up). Report it as
@@ -595,26 +685,43 @@ fn finalize_fit(
     if max_eta >= LINEAR_PREDICTOR_CLIP {
         return Err(Error::Saturated);
     }
-    // The information matrix and fitted means feed only the sandwich covariance, so a
-    // fit that does not ask for standard errors skips both.
-    let (cov, se, clustered, cluster_count) = if options.robust_se {
-        let eta = linear_predictor(x, &beta_final);
-        let mu = map_mat(&eta, exp_clamped);
-        let weights = Mat::from_fn(mu.nrows(), 1, |i, _| {
-            let base_weight = sample_weight_at(sample_weights, i);
-            let w = mu[(i, 0)].powf(2.0 - power).max(options.min_weight);
-            base_weight * w
-        });
-        let mut xtwx = weighted_xtx_ref(x, weights.as_ref())?;
-        if lambda > 0.0 {
-            add_ridge_to_diagonal(&mut xtwx, lambda, options.l2_penalty_exclude_intercept);
+    let p = x.ncols();
+    let ones = Mat::from_fn(x.nrows(), 1, |_, _| 1.0);
+    let prior = sample_weights.unwrap_or(ones.as_ref());
+    let (n_used, df_residual) = residual_df(prior, inference.frequency, p);
+    // The information matrix and fitted means feed only the covariance, so a
+    // fit that does not ask for one skips both.
+    let (covariance, dispersion, cluster_count) = match inference.variance {
+        Some(kind) => {
+            let eta = linear_predictor(x, &beta_final);
+            let mu = map_mat(&eta, exp_clamped);
+            let weights = Mat::from_fn(mu.nrows(), 1, |i, _| {
+                let base_weight = sample_weight_at(sample_weights, i);
+                let w = mu[(i, 0)].powf(2.0 - power).max(options.min_weight);
+                base_weight * w
+            });
+            let mut xtwx = weighted_xtx_ref(x, weights.as_ref())?;
+            if lambda > 0.0 {
+                add_ridge_to_diagonal(&mut xtwx, lambda, options.l2_penalty_exclude_intercept);
+            }
+            let dispersion = pearson_dispersion(
+                prior,
+                |i| (y[(i, 0)] - mu[(i, 0)]) / mu[(i, 0)].powf(0.5 * power),
+                df_residual,
+            );
+            if kind == VarianceKind::Robust {
+                let (cov, cluster_count) =
+                    robust_covariance(x, y, &mu, sample_weights, power, clusters, &xtwx)?;
+                (Some(to_covariance(&cov, 1.0)), dispersion, cluster_count)
+            } else {
+                let identity = Mat::<f64>::identity(p, p);
+                let inverse =
+                    solve_linear_system(&xtwx, &identity).map_err(|_| Error::Singular)?;
+                let covariance = dispersion.map(|phi| to_covariance(&inverse, phi));
+                (covariance, dispersion, None)
+            }
         }
-        let (cov, clustered, cluster_count) =
-            robust_covariance(x, y, &mu, sample_weights, power, clusters, &xtwx)?;
-        let se = cov.as_ref().map(diag_sqrt);
-        (cov, se, clustered, cluster_count)
-    } else {
-        (None, None, false, None)
+        None => (None, None, None),
     };
     let meta = FitMetadata {
         iterations,
@@ -624,16 +731,19 @@ fn finalize_fit(
     };
     let report = TweedieReport {
         meta,
-        se,
-        cov,
-        robust: options.robust_se,
-        clustered,
+        variance: inference.variance,
         cluster_count,
         attempts: Vec::new(),
     };
     Ok(TweedieModel {
-        beta: beta_final,
+        coefficients: column_values(&beta_final),
         power,
+        se: standard_errors(covariance.as_ref(), p),
+        covariance,
+        dispersion,
+        df_residual,
+        n: x.nrows(),
+        n_used,
         report,
     })
 }
@@ -641,28 +751,32 @@ fn finalize_fit(
 /// Fit the Tweedie GLM with log link and power `power` by quasi-likelihood,
 /// from the coefficients `warm` when given.
 ///
-/// The weights of `data` are prior weights; the clusters give cluster-robust
-/// standard errors when `options.robust_se` is set. `scratch` lends the column
+/// The weights of `data` are case weights, a row with weight 0 leaving the
+/// fit; the covariance is the one `options.variance` chooses, clustered when
+/// `data` has clusters and the sandwich is chosen. `scratch` lends the column
 /// buffers of the fit, so that a thread fitting many replicates of one sample
 /// allocates them once; the result does not depend on it.
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for a power outside `[1, 2]`; [`Error::NotConverged`],
+/// [`Error::Input`] for a power outside `[1, 2]`; [`Error::Unsupported`] for a
+/// model-based covariance with sampling weights; [`Error::NotConverged`],
 /// [`Error::Saturated`] or [`Error::Singular`] when the fit fails and the
 /// strategy does not recover it.
 pub fn fit(
     data: &CostData<'_>,
     power: f64,
     options: &TweedieOptions,
-    warm: Option<&Mat<f64>>,
+    warm: Option<&[f64]>,
     scratch: Option<&mut TweedieScratch>,
 ) -> Result<TweedieModel, Error> {
+    let inference = options.variance.resolve(data)?;
     let mut own = None;
     let scratch = match scratch {
         Some(scratch) => scratch,
         None => own.insert(TweedieScratch::default()),
     };
+    let warm = warm.map(column_mat);
     fit_tweedie_weighted(
         data.x(),
         data.y_column(),
@@ -670,7 +784,8 @@ pub fn fit(
         data.clusters(),
         power,
         *options,
-        warm,
+        inference,
+        warm.as_ref(),
         scratch,
     )
 }
@@ -759,7 +874,7 @@ fn robust_covariance(
     power: f64,
     clusters: Option<&[u32]>,
     xtwx: &Mat<f64>,
-) -> Result<RobustCovarianceResult, Error> {
+) -> Result<(Mat<f64>, Option<usize>), Error> {
     let score_residual = |i: usize| {
         sample_weight_at(sample_weights, i)
             * (y[(i, 0)] - mu[(i, 0)])
@@ -767,7 +882,7 @@ fn robust_covariance(
     };
     let (meat, cluster_count) = score_meat(x, score_residual, clusters)?;
     let cov = stabilized_sandwich(xtwx, &meat)?;
-    Ok((Some(cov), cluster_count.is_some(), cluster_count))
+    Ok((cov, cluster_count))
 }
 
 /// Returns the accepted step's `(beta, deviance, scratch_holds_beta)`. The last is true

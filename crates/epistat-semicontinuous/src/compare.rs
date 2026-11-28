@@ -7,6 +7,21 @@
 //! [`select`] fits a grid of Tweedie powers and the log-normal model, with the
 //! classic Park test. Each names the models by [`Candidate`].
 //!
+//! # What is compared with what
+//!
+//! The two-part and Tweedie models predict the mean of the outcome over every
+//! row, `E[y | x]`; the log-normal model is fitted to the positive outcomes
+//! and predicts their mean, `E[y | y > 0, x]`. Its metrics are those of the
+//! positive rows, reported apart ([`ModelComparison::lognormal`],
+//! [`CrossValidation::lognormal_metrics`]), and it is not ranked with the
+//! models of `E[y | x]`: scoring it against every row, zeros included, would
+//! penalise it for a quantity it does not predict.
+//!
+//! An information criterion compares models of one likelihood only
+//! ([`Likelihood`]): the two-part likelihood, the Tweedie quasi-likelihood
+//! and the log-normal likelihood of the positive rows are not on one scale.
+//! [`select`] recommends a Tweedie power by them.
+//!
 //! # Metrics
 //!
 //! For outcomes `y_i` and predicted means `m_i` on `n` rows: the RMSE and MAE,
@@ -31,14 +46,18 @@
 //! of the positive outcomes, and the two-part one is the binomial plus the
 //! gamma log-likelihood at the moment estimate of the dispersion.
 //!
+//! # Folds
+//!
+//! The folds are cut from a shuffle of the rows, or, when the data carry
+//! clusters and the options keep [`FoldRule::Clusters`], of the clusters, so
+//! that the rows of one cluster are never both fitted and scored in one fold;
+//! splitting a cluster would make the cross-validated metrics optimistic.
+//!
 //! # Weights
 //!
-//! The two-part and Tweedie fits use the weights and clusters of the data.
-//! The log-normal model has no prior weights, so [`compare`] and
-//! [`cross_validate`] fit it to the data without their weights. [`select`]
-//! fits unweighted models and refuses weighted data.
+//! Every fit uses the weights and clusters of the data.
 
-use epistat_core::check;
+use epistat_core::{CaseWeights, WeightKind, check};
 use epistat_linalg::{Mat, MatRef};
 use epistat_rng::Stream;
 use epistat_stats::likelihood;
@@ -47,13 +66,17 @@ use rayon::prelude::*;
 use crate::data::{CostData, column};
 use crate::fit::Model;
 use crate::lognormal::{
-    LogNormalModel, LogNormalOptions, fit_lognormal, log_likelihood as lognormal_log_likelihood,
+    LogNormalModel, LogNormalOptions, log_likelihood as lognormal_log_likelihood,
 };
 use crate::matrix_ops::{select_rows_ref, select_values_ref};
 use crate::tweedie::{
     TweedieModel, TweedieOptions, deviance as tweedie_deviance, fit_tweedie,
     quasi_log_likelihood as tweedie_quasi_log_likelihood,
 };
+use crate::utils::column_mat;
+use crate::variance::Variance;
+use epistat_core::Seed;
+use std::collections::BTreeSet;
 use crate::two_part::{TwoPartModel, TwoPartOptions, log_likelihood as two_part_log_likelihood};
 use crate::{Error, lognormal, tweedie, two_part};
 
@@ -128,12 +151,40 @@ pub struct ModelScore {
     pub metrics: ModelFitMetrics,
 }
 
+/// The likelihood an information criterion is formed from. Criteria of
+/// different likelihoods are not comparable.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Likelihood {
+    /// The binomial likelihood of the logit part plus the gamma likelihood of
+    /// the positive outcomes, on every row.
+    TwoPart,
+    /// The Tweedie quasi-likelihood `-D / 2`, on every row.
+    TweedieQuasi,
+    /// The normal likelihood of `ln y` with its Jacobian, on the positive
+    /// rows only.
+    LogNormalPositive,
+}
+
+/// How [`cross_validate`] cuts its folds.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FoldRule {
+    /// Whole clusters to folds when the data carry clusters, rows otherwise.
+    #[default]
+    Clusters,
+    /// Rows to folds, a cluster's rows split between folds.
+    Rows,
+}
+
 /// The information criteria of one model.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelInformationCriteria {
     /// The model.
     pub candidate: Candidate,
+    /// The likelihood of the criteria; only rows of one likelihood compare.
+    pub likelihood: Likelihood,
     /// The log-likelihood, a quasi-likelihood for Tweedie.
     pub loglik: f64,
     /// Akaike's information criterion.
@@ -177,8 +228,8 @@ pub struct TweedieCandidate {
 pub struct LogNormalCandidate {
     /// The fitted model.
     pub model: LogNormalModel,
-    /// In-sample metrics.
-    pub metrics: ModelFitMetrics,
+    /// In-sample metrics on the positive outcomes, `None` without one.
+    pub metrics: Option<ModelFitMetrics>,
     /// Information criteria on the positive outcomes.
     pub information_criteria: InformationCriteria,
 }
@@ -226,8 +277,10 @@ pub struct CompareOptions {
     pub lognormal: LogNormalOptions,
     /// The number of folds of the cross-validation.
     pub folds: usize,
+    /// How the folds are cut.
+    pub fold_rule: FoldRule,
     /// The seed of the fold assignment.
-    pub seed: u64,
+    pub seed: Seed,
     /// Whether to fit the two-part model.
     pub include_two_part: bool,
     /// Whether to fit the Tweedie model.
@@ -237,10 +290,10 @@ pub struct CompareOptions {
 }
 
 impl CompareOptions {
-    /// Powers 1.2, 1.5 and 1.8, default fits, five folds assigned from `seed`,
-    /// every model included.
+    /// Powers 1.2, 1.5 and 1.8, default fits, five folds of whole clusters
+    /// assigned from `seed`, every model included.
     #[must_use]
-    pub fn new(seed: u64) -> Self {
+    pub fn new(seed: Seed) -> Self {
         Self {
             tweedie_powers: vec![1.2, 1.5, 1.8],
             two_part: TwoPartOptions::default(),
@@ -248,6 +301,7 @@ impl CompareOptions {
             tweedie: TweedieOptions::default(),
             lognormal: LogNormalOptions::default(),
             folds: 5,
+            fold_rule: FoldRule::Clusters,
             seed,
             include_two_part: true,
             include_tweedie: true,
@@ -256,18 +310,36 @@ impl CompareOptions {
     }
 }
 
+/// The metrics of the log-normal model on the positive outcomes.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PositiveScore {
+    /// In-sample metrics on the positive outcomes.
+    pub in_sample: ModelFitMetrics,
+    /// Cross-validated metrics on the held-out positive outcomes, `None` when
+    /// no fold held one.
+    pub cross_validated: Option<ModelFitMetrics>,
+}
+
 /// The result of [`compare`].
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct ModelComparison {
-    /// Metrics of each model in the full sample.
+    /// Metrics of each model of `E[y | x]` in the full sample.
     pub in_sample: Vec<ModelScore>,
-    /// Information criteria of each model in the full sample.
+    /// Information criteria of each model in the full sample; compare only
+    /// rows of one [`Likelihood`].
     pub information_criteria: Vec<ModelInformationCriteria>,
-    /// Cross-validated metrics of each model.
+    /// Cross-validated metrics of each model of `E[y | x]`.
     pub cv_summary: Vec<ModelScore>,
-    /// The cross-validated metrics ordered from best to worst.
+    /// The cross-validated metrics of the models of `E[y | x]` ordered from
+    /// best to worst.
     pub cv_ranking: Vec<ModelScore>,
+    /// The log-normal model's metrics on the positive outcomes, when it was
+    /// included; it predicts `E[y | y > 0, x]` and is not in the rankings.
+    pub lognormal: Option<PositiveScore>,
+    /// How the folds were cut: [`FoldRule::Rows`] for data without clusters.
+    pub fold_rule: FoldRule,
     /// Information criteria of each Tweedie power.
     pub tweedie_ic: Vec<ModelInformationCriteria>,
     /// The Tweedie powers ordered by their cross-validated metrics.
@@ -284,10 +356,13 @@ pub struct ModelComparison {
 /// No default: the seed of the fold assignment is the caller's.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CrossValidationOptions {
-    /// The number of folds, at least 2 and at most the number of rows.
+    /// The number of folds, at least 2 and at most the number of rows, or of
+    /// clusters when whole clusters go to folds.
     pub folds: usize,
+    /// How the folds are cut.
+    pub fold_rule: FoldRule,
     /// The seed of the fold assignment.
-    pub seed: u64,
+    pub seed: Seed,
     /// Options of the two-part fits.
     pub two_part: TwoPartOptions,
     /// Options of the Tweedie fits.
@@ -301,11 +376,13 @@ pub struct CrossValidationOptions {
 }
 
 impl CrossValidationOptions {
-    /// Five folds assigned from `seed`, default fits, every model included.
+    /// Five folds of whole clusters assigned from `seed`, default fits, every
+    /// model included.
     #[must_use]
-    pub fn new(seed: u64) -> Self {
+    pub fn new(seed: Seed) -> Self {
         Self {
             folds: 5,
+            fold_rule: FoldRule::Clusters,
             seed,
             two_part: TwoPartOptions::default(),
             tweedie: TweedieOptions::default(),
@@ -322,6 +399,8 @@ impl CrossValidationOptions {
 pub struct CrossValidation {
     /// The number of folds.
     pub folds_used: usize,
+    /// How the folds were cut: [`FoldRule::Rows`] for data without clusters.
+    pub fold_rule: FoldRule,
     /// The number of folds whose held-out outcome is constant, which have no
     /// `r2` and are left out of its mean.
     pub constant_folds: usize,
@@ -329,14 +408,16 @@ pub struct CrossValidation {
     pub two_part_metrics: Option<ModelFitMetrics>,
     /// Cross-validated metrics of each Tweedie power.
     pub tweedie_candidates: Vec<TweedieCvCandidate>,
-    /// Cross-validated metrics of the log-normal model, when included.
+    /// Cross-validated metrics of the log-normal model on the held-out
+    /// positive outcomes, when included and some fold held one.
     pub lognormal_metrics: Option<ModelFitMetrics>,
 }
 
 impl CrossValidation {
-    /// The model with the smallest cross-validated RMSE, the first in the
-    /// order two-part, Tweedie powers, log-normal on a tie; `None` when no
-    /// RMSE is below infinity.
+    /// The model of `E[y | x]` with the smallest cross-validated RMSE, the
+    /// first in the order two-part, Tweedie powers on a tie; `None` when no
+    /// RMSE is below infinity. The log-normal model, which predicts
+    /// `E[y | y > 0, x]`, is not a candidate.
     #[must_use]
     pub fn best(&self) -> Option<Candidate> {
         let mut best: Option<Candidate> = None;
@@ -354,11 +435,6 @@ impl CrossValidation {
                     power: candidate.power,
                 });
             }
-        }
-        if let Some(metrics) = &self.lognormal_metrics
-            && metrics.rmse < best_rmse
-        {
-            best = Some(Candidate::LogNormal);
         }
         best
     }
@@ -386,9 +462,11 @@ pub struct Selection {
     pub tweedie_candidates: Vec<TweedieCandidate>,
     /// The log-normal fit, if it succeeded.
     pub lognormal_candidate: Option<LogNormalCandidate>,
-    /// The candidate with the smallest AIC, the first on a tie.
+    /// The Tweedie power with the smallest AIC, the first on a tie. The
+    /// log-normal model's criteria are of another likelihood and are not
+    /// compared.
     pub recommended_by_aic: Option<Candidate>,
-    /// The candidate with the smallest BIC, the first on a tie.
+    /// The Tweedie power with the smallest BIC, as `recommended_by_aic`.
     pub recommended_by_bic: Option<Candidate>,
 }
 
@@ -425,7 +503,7 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
         .transpose()?;
     let lognormal_model = options
         .include_lognormal
-        .then(|| lognormal::fit(&data.without_weights(), &options.lognormal))
+        .then(|| lognormal::fit(data, &options.lognormal))
         .transpose()?;
 
     let tweedie_candidates = tweedie_candidates(data, &options.tweedie_powers)?;
@@ -446,6 +524,7 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
     let information_criteria = build_information_criteria(
         x,
         y,
+        data.weights_column(),
         &predictions,
         tweedie_model.as_ref(),
         lognormal_model.as_ref(),
@@ -456,6 +535,7 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
             candidate: Candidate::Tweedie {
                 power: candidate.power,
             },
+            likelihood: Likelihood::TweedieQuasi,
             loglik: candidate.information_criteria.loglik,
             aic: candidate.information_criteria.aic,
             bic: candidate.information_criteria.bic,
@@ -467,6 +547,7 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
         &options.tweedie_powers,
         &CrossValidationOptions {
             folds: options.folds,
+            fold_rule: options.fold_rule,
             seed: options.seed,
             two_part: options.two_part,
             tweedie: options.tweedie,
@@ -483,12 +564,13 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
                 &[],
                 &CrossValidationOptions {
                     folds: options.folds,
+                    fold_rule: options.fold_rule,
                     seed: options.seed,
                     two_part: elastic_net_options,
                     tweedie: options.tweedie,
                     lognormal: options.lognormal,
                     include_two_part: true,
-                    include_lognormal: options.include_lognormal,
+                    include_lognormal: false,
                 },
             )
         })
@@ -496,12 +578,24 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
     let cv_summary = build_cv_summary(&cv_default, cv_elastic_net.as_ref());
     let cv_ranking = build_cv_ranking(&cv_summary);
     let tweedie_cv_ranking = build_tweedie_cv_ranking(&cv_default, &tweedie_candidates);
+    let lognormal = predictions
+        .lognormal
+        .as_ref()
+        .map(|pred| positive_metrics(data.y(), &pred.mean_positive))
+        .transpose()?
+        .flatten()
+        .map(|in_sample| PositiveScore {
+            in_sample,
+            cross_validated: cv_default.lognormal_metrics,
+        });
 
     Ok(ModelComparison {
         in_sample,
         information_criteria,
         cv_summary,
         cv_ranking,
+        lognormal,
+        fold_rule: cv_default.fold_rule,
         tweedie_ic,
         tweedie_cv_ranking,
         models: ComparisonModels {
@@ -519,15 +613,19 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
 ///
 /// The rows are shuffled by an [`epistat_rng::Stream`] seeded with
 /// `options.seed` and cut into `folds` consecutive folds of
-/// `ceil(n / folds)` rows, the last shorter. Each model is fitted to the
-/// other folds and scored on the fold; the folds run in parallel and are
-/// averaged in fold order. A fold whose held-out outcome is constant has no
-/// `r2`; the cross-validated `r2` is the mean over the other folds.
+/// `ceil(n / folds)` rows, the last shorter. Under [`FoldRule::Clusters`],
+/// for data with clusters, the distinct cluster codes in increasing order are
+/// shuffled and cut the same way, and a fold holds every row of its clusters.
+/// Each model is fitted to the other folds and scored on the fold, the
+/// log-normal model on the fold's positive outcomes; the folds run in
+/// parallel and are averaged in fold order. A fold whose held-out outcome is
+/// constant has no `r2`; the cross-validated `r2` is the mean over the other
+/// folds.
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for fewer than 2 folds or more folds than rows, or a power
-/// that is not finite; the error of a fold's fit.
+/// [`Error::Input`] for fewer than 2 folds or more folds than rows (or
+/// clusters), or a power that is not finite; the error of a fold's fit.
 pub fn cross_validate(
     data: &CostData<'_>,
     powers: &[f64],
@@ -535,46 +633,27 @@ pub fn cross_validate(
 ) -> Result<CrossValidation, Error> {
     check::finite("powers", powers)?;
     let n = data.n_rows();
-    if options.folds < 2 || options.folds > n {
-        return Err(crate::error::domain(
-            "folds",
-            options.folds as f64,
-            "from 2 to the number of rows",
-        ));
-    }
     let options = *options;
+    let (fold_rule, test_sets) = fold_rows(data, options.folds, options.fold_rule, options.seed)?;
 
-    let mut indices = (0..n).collect::<Vec<_>>();
-    let mut rng = Stream::seeded(options.seed);
-    rng.shuffle(&mut indices);
-
-    let fold_size = n.div_ceil(options.folds);
-    let fold_bounds = (0..options.folds)
-        .filter_map(|fold| {
-            let start = fold * fold_size;
-            let end = (start + fold_size).min(n);
-            (start < end).then_some((start, end))
-        })
-        .collect::<Vec<_>>();
-
-    let fold_metrics = fold_bounds
+    let fold_metrics = test_sets
         .par_iter()
-        .map(|&(start, end)| -> Result<FoldMetrics, Error> {
-            let test_idx = &indices[start..end];
+        .map(|test_idx| -> Result<FoldMetrics, Error> {
+            let test_idx = test_idx.as_slice();
             let train_idx = complement_indices(n, test_idx);
             let train = Subset::new(data, &train_idx);
             let test = Subset::new(data, test_idx);
-            let train_data = train.data();
+            let train_data = train.data()?;
 
             let mut two_part = zero_metrics();
-            let mut lognormal = zero_metrics();
+            let mut lognormal = None;
             let mut tweedie = powers.iter().map(|_| zero_metrics()).collect::<Vec<_>>();
             let constant = is_constant(test.y());
 
             if options.include_two_part {
                 let fitted = two_part::fit(&train_data, &options.two_part, None)?;
                 let prediction = fitted.predict(test.x.as_ref())?;
-                two_part = compute_model_fit_metrics(test.y(), &prediction.expected_outcome, None)?;
+                two_part = compute_model_fit_metrics(test.y(), &prediction.mean, None)?;
             }
 
             for (pos, power) in powers.iter().copied().enumerate() {
@@ -584,9 +663,9 @@ pub fn cross_validate(
             }
 
             if options.include_lognormal {
-                let model = lognormal::fit(&train_data.without_weights(), &options.lognormal)?;
+                let model = lognormal::fit(&train_data, &options.lognormal)?;
                 let prediction = model.predict(test.x.as_ref())?;
-                lognormal = compute_model_fit_metrics(test.y(), &prediction.mean, None)?;
+                lognormal = positive_metrics(&test.y, &prediction.mean_positive)?;
             }
 
             Ok(FoldMetrics {
@@ -607,7 +686,14 @@ pub fn cross_validate(
         .then(|| average_folds(fold_metrics.iter().map(|fold| &fold.two_part)));
     let lognormal_metrics = options
         .include_lognormal
-        .then(|| average_folds(fold_metrics.iter().map(|fold| &fold.lognormal)));
+        .then(|| {
+            let mut folds = fold_metrics
+                .iter()
+                .filter_map(|fold| fold.lognormal.as_ref())
+                .peekable();
+            folds.peek().is_some().then(|| average_folds(folds))
+        })
+        .flatten();
     let tweedie_candidates = powers
         .iter()
         .copied()
@@ -620,6 +706,7 @@ pub fn cross_validate(
 
     Ok(CrossValidation {
         folds_used,
+        fold_rule,
         constant_folds,
         two_part_metrics,
         tweedie_candidates,
@@ -627,9 +714,11 @@ pub fn cross_validate(
     })
 }
 
-/// Fit the Tweedie model at each of `powers` and the log-normal model, all
-/// unweighted with default options, and recommend one by AIC and one by BIC.
-/// A power whose fit fails is left out.
+/// Fit the Tweedie model at each of `powers` and the log-normal model, with
+/// the weights of `data` and default options, and recommend a Tweedie power
+/// by AIC and one by BIC. A power whose fit fails is left out. The
+/// log-normal model's criteria are of the positive rows' likelihood and are
+/// reported, not compared.
 ///
 /// ```
 /// use epistat_linalg::Mat;
@@ -646,40 +735,20 @@ pub fn cross_validate(
 ///
 /// # Errors
 ///
-/// [`Error::Unsupported`] for data with weights, and [`Error::Input`] for a
-/// power that is not finite.
+/// [`Error::Input`] for a power that is not finite.
 pub fn select(data: &CostData<'_>, powers: &[f64]) -> Result<Selection, Error> {
     check::finite("powers", powers)?;
-    if data.weights().is_some() {
-        return Err(Error::Unsupported {
-            what: "weights in the selection, whose fits are unweighted",
-        });
-    }
     let x = data.x();
     let y = data.y_column();
     let park_test = classic_park_test(x, y);
 
-    let mut tweedie_candidates = Vec::new();
-    for &power in powers {
-        if let Ok(model) = fit_tweedie(x, y, None, power, TweedieOptions::default()) {
-            let pred = model.predict(x)?;
-            let metrics = compute_model_fit_metrics(y, &pred.mean, Some(power))?;
-            let ll = tweedie_quasi_log_likelihood(y, &pred.mean, power);
-            let ic = compute_information_criteria(ll, x.ncols(), y.nrows())?;
-            tweedie_candidates.push(TweedieCandidate {
-                power,
-                model,
-                metrics,
-                information_criteria: ic,
-            });
-        }
-    }
+    let tweedie_candidates = tweedie_candidates(data, powers)?;
 
-    let lognormal_candidate = match fit_lognormal(x, y, None, LogNormalOptions::default()) {
+    let lognormal_candidate = match lognormal::fit(data, &LogNormalOptions::default()) {
         Ok(model) => {
             let pred = model.predict(x)?;
-            let metrics = compute_model_fit_metrics(y, &pred.mean, None)?;
-            let ll = lognormal_log_likelihood(x, y, &model);
+            let metrics = positive_metrics(data.y(), &pred.mean_positive)?;
+            let ll = lognormal_log_likelihood(x, y, data.weights_column(), &model);
             let ic = compute_information_criteria(ll, x.ncols(), y.nrows())?;
             Some(LogNormalCandidate {
                 model,
@@ -690,7 +759,7 @@ pub fn select(data: &CostData<'_>, powers: &[f64]) -> Result<Selection, Error> {
         Err(_) => None,
     };
 
-    let recommended = recommend_by_ic(&tweedie_candidates, lognormal_candidate.as_ref());
+    let recommended = recommend_by_ic(&tweedie_candidates);
 
     Ok(Selection {
         park_test,
@@ -714,16 +783,16 @@ fn classic_park_test(x: MatRef<'_, f64>, y: MatRef<'_, f64>) -> Option<ParkTest>
     let x_pos = select_rows_ref(x, &positive_indices);
     let y_pos = select_values_ref(y, &positive_indices);
 
-    let gamma = fit_tweedie(
-        x_pos.as_ref(),
-        y_pos.as_ref(),
-        None,
-        2.0,
-        TweedieOptions::default(),
-    )
-    .ok()?;
-    let mu = gamma.predict(x_pos.as_ref()).ok()?.mean;
-    let fitted: Vec<f64> = (0..mu.nrows()).map(|i| mu[(i, 0)]).collect();
+    let options = TweedieOptions {
+        variance: Variance::None,
+        ..TweedieOptions::default()
+    };
+    let none = crate::variance::Inference {
+        variance: None,
+        frequency: false,
+    };
+    let gamma = fit_tweedie(x_pos.as_ref(), y_pos.as_ref(), 2.0, options, none).ok()?;
+    let fitted = gamma.predict(x_pos.as_ref()).ok()?.mean;
     let outcome: Vec<f64> = (0..y_pos.nrows()).map(|i| y_pos[(i, 0)]).collect();
     let test = epistat_glm::park::classic_park_test(&fitted, &outcome).ok()??;
 
@@ -746,7 +815,7 @@ fn tweedie_candidates(data: &CostData<'_>, powers: &[f64]) -> Result<Vec<Tweedie
         };
         let pred = model.predict(x)?;
         let metrics = compute_model_fit_metrics(y, &pred.mean, Some(power))?;
-        let ll = tweedie_quasi_log_likelihood(y, &pred.mean, power);
+        let ll = tweedie_quasi_log_likelihood(y, &column_mat(&pred.mean), power);
         let information_criteria = compute_information_criteria(ll, x.ncols(), y.nrows())?;
         candidates.push(TweedieCandidate {
             power,
@@ -766,10 +835,10 @@ fn tweedie_candidates(data: &CostData<'_>, powers: &[f64]) -> Result<Vec<Tweedie
 /// predictions of another length, where the metrics are undefined.
 fn compute_model_fit_metrics(
     y: MatRef<'_, f64>,
-    mu: &Mat<f64>,
+    mu: &[f64],
     tweedie_power: Option<f64>,
 ) -> Result<ModelFitMetrics, Error> {
-    check::same_length("predictions", y.nrows(), mu.nrows())?;
+    check::same_length("predictions", y.nrows(), mu.len())?;
     check::non_empty("outcome", y.nrows())?;
     let mut mse = 0.0;
     let mut mae = 0.0;
@@ -784,7 +853,7 @@ fn compute_model_fit_metrics(
 
     for i in 0..y.nrows() {
         let yi = y[(i, 0)];
-        let mui = mu[(i, 0)];
+        let mui = mu[i];
         let diff = yi - mui;
         mse = diff.mul_add(diff, mse);
         mae += diff.abs();
@@ -797,7 +866,9 @@ fn compute_model_fit_metrics(
     let mae = mae / denom;
     let rms_log_error = (log_error_sq_sum / denom).sqrt();
     let r2 = (!is_constant(y) && sst > 0.0).then(|| 1.0 - (mse / sst));
-    let deviance = tweedie_power.map_or(rmse * rmse, |power| tweedie_deviance(y, mu, power));
+    let deviance = tweedie_power.map_or(rmse * rmse, |power| {
+        tweedie_deviance(y, &column_mat(mu), power)
+    });
 
     Ok(ModelFitMetrics {
         rmse,
@@ -806,6 +877,87 @@ fn compute_model_fit_metrics(
         r2,
         deviance,
     })
+}
+
+/// The metrics of the positive outcomes of `y` against the predictions `mu`
+/// of their mean, `None` when no outcome is positive.
+fn positive_metrics(y: &[f64], mu: &[f64]) -> Result<Option<ModelFitMetrics>, Error> {
+    check::same_length("predictions", y.len(), mu.len())?;
+    let (y_pos, mu_pos): (Vec<f64>, Vec<f64>) = y
+        .iter()
+        .zip(mu)
+        .filter(|&(&yi, _)| yi > 0.0)
+        .map(|(&yi, &mi)| (yi, mi))
+        .unzip();
+    if y_pos.is_empty() {
+        return Ok(None);
+    }
+    compute_model_fit_metrics(column(&y_pos), &mu_pos, None).map(Some)
+}
+
+/// The test rows of each fold: a shuffle of the rows, or of the distinct
+/// clusters under [`FoldRule::Clusters`] for data with clusters, cut into
+/// `folds` consecutive pieces of `ceil(units / folds)`. Returns the rule
+/// applied with the folds.
+fn fold_rows(
+    data: &CostData<'_>,
+    folds: usize,
+    rule: FoldRule,
+    seed: Seed,
+) -> Result<(FoldRule, Vec<Vec<usize>>), Error> {
+    let n = data.n_rows();
+    let clusters = data.clusters().filter(|_| rule == FoldRule::Clusters);
+    let (rule, units) = match clusters {
+        Some(clusters) => (
+            FoldRule::Clusters,
+            clusters.iter().copied().collect::<BTreeSet<u32>>().len(),
+        ),
+        None => (FoldRule::Rows, n),
+    };
+    if folds < 2 || folds > units {
+        return Err(crate::error::domain(
+            "folds",
+            folds as f64,
+            match rule {
+                FoldRule::Clusters => "from 2 to the number of clusters",
+                FoldRule::Rows => "from 2 to the number of rows",
+            },
+        ));
+    }
+    let mut rng = Stream::seeded(seed.value());
+    let fold_size = units.div_ceil(folds);
+    let bounds = (0..folds).filter_map(|fold| {
+        let start = fold * fold_size;
+        let end = (start + fold_size).min(units);
+        (start < end).then_some((start, end))
+    });
+    let sets = match clusters {
+        None => {
+            let mut indices = (0..n).collect::<Vec<_>>();
+            rng.shuffle(&mut indices);
+            bounds
+                .map(|(start, end)| indices[start..end].to_vec())
+                .collect()
+        }
+        Some(clusters) => {
+            let mut codes: Vec<u32> = clusters
+                .iter()
+                .copied()
+                .collect::<BTreeSet<u32>>()
+                .into_iter()
+                .collect();
+            rng.shuffle(&mut codes);
+            bounds
+                .map(|(start, end)| {
+                    let members: BTreeSet<u32> = codes[start..end].iter().copied().collect();
+                    (0..n)
+                        .filter(|&i| members.contains(&clusters[i]))
+                        .collect()
+                })
+                .collect()
+        }
+    };
+    Ok((rule, sets))
 }
 
 /// AIC and BIC for a log-likelihood, parameter count and sample size.
@@ -843,13 +995,13 @@ fn build_in_sample(
     if let Some(pred) = predictions.two_part.as_ref() {
         scores.push(ModelScore {
             candidate: Candidate::TwoPart,
-            metrics: compute_model_fit_metrics(y, &pred.expected_outcome, None)?,
+            metrics: compute_model_fit_metrics(y, &pred.mean, None)?,
         });
     }
     if let Some(pred) = predictions.two_part_elastic_net.as_ref() {
         scores.push(ModelScore {
             candidate: Candidate::TwoPartElasticNet,
-            metrics: compute_model_fit_metrics(y, &pred.expected_outcome, None)?,
+            metrics: compute_model_fit_metrics(y, &pred.mean, None)?,
         });
     }
     if let (Some(tweedie), Some(pred)) = (tweedie, predictions.tweedie.as_ref()) {
@@ -860,24 +1012,20 @@ fn build_in_sample(
             metrics: compute_model_fit_metrics(y, &pred.mean, Some(tweedie.power))?,
         });
     }
-    if let Some(pred) = predictions.lognormal.as_ref() {
-        scores.push(ModelScore {
-            candidate: Candidate::LogNormal,
-            metrics: compute_model_fit_metrics(y, &pred.mean, None)?,
-        });
-    }
     Ok(scores)
 }
 
 fn build_information_criteria(
     x: MatRef<'_, f64>,
     y: MatRef<'_, f64>,
+    weights: Option<MatRef<'_, f64>>,
     predictions: &InSamplePredictions,
     tweedie: Option<&TweedieModel>,
     lognormal: Option<&LogNormalModel>,
 ) -> Result<Vec<ModelInformationCriteria>, Error> {
-    let row = |candidate, ic: InformationCriteria| ModelInformationCriteria {
+    let row = |candidate, likelihood, ic: InformationCriteria| ModelInformationCriteria {
         candidate,
+        likelihood,
         loglik: ic.loglik,
         aic: ic.aic,
         bic: ic.bic,
@@ -891,26 +1039,31 @@ fn build_information_criteria(
         ),
     ] {
         if let Some(pred) = pred {
-            let ll = two_part_log_likelihood(y, &pred.prob_positive, &pred.mean_positive);
+            let ll = two_part_log_likelihood(
+                crate::utils::col_slice(y, 0),
+                &pred.prob_positive,
+                &pred.mean_positive,
+            );
             let ic = compute_information_criteria(ll, 2 * x.ncols(), y.nrows())?;
-            rows.push(row(candidate, ic));
+            rows.push(row(candidate, Likelihood::TwoPart, ic));
         }
     }
     if let (Some(tweedie), Some(pred)) = (tweedie, predictions.tweedie.as_ref()) {
-        let ll = tweedie_quasi_log_likelihood(y, &pred.mean, tweedie.power);
+        let ll = tweedie_quasi_log_likelihood(y, &column_mat(&pred.mean), tweedie.power);
         let ic = compute_information_criteria(ll, x.ncols(), y.nrows())?;
         rows.push(row(
             Candidate::Tweedie {
                 power: tweedie.power,
             },
+            Likelihood::TweedieQuasi,
             ic,
         ));
     }
     if let Some(lognormal) = lognormal {
-        let ll = lognormal_log_likelihood(x, y, lognormal);
+        let ll = lognormal_log_likelihood(x, y, weights, lognormal);
         if ll.is_finite() {
             let ic = compute_information_criteria(ll, x.ncols(), y.nrows())?;
-            rows.push(row(Candidate::LogNormal, ic));
+            rows.push(row(Candidate::LogNormal, Likelihood::LogNormalPositive, ic));
         }
     }
     Ok(rows)
@@ -939,12 +1092,6 @@ fn build_cv_summary(
                 power: candidate.power,
             },
             metrics: candidate.metrics,
-        });
-    }
-    if let Some(metrics) = cv_default.lognormal_metrics {
-        rows.push(ModelScore {
-            candidate: Candidate::LogNormal,
-            metrics,
         });
     }
     rows
@@ -1023,7 +1170,8 @@ fn build_tweedie_cv_ranking(
 #[derive(Clone)]
 struct FoldMetrics {
     two_part: ModelFitMetrics,
-    lognormal: ModelFitMetrics,
+    /// On the held-out positive outcomes, `None` when there are none.
+    lognormal: Option<ModelFitMetrics>,
     tweedie: Vec<ModelFitMetrics>,
     /// Whether the held-out outcome is constant.
     constant: bool,
@@ -1033,7 +1181,7 @@ struct FoldMetrics {
 struct Subset {
     x: Mat<f64>,
     y: Vec<f64>,
-    weights: Option<Vec<f64>>,
+    weights: Option<(Vec<f64>, WeightKind)>,
     clusters: Option<Vec<u32>>,
 }
 
@@ -1045,7 +1193,7 @@ impl Subset {
             y: indices.iter().map(|&i| y[i]).collect(),
             weights: data
                 .weights()
-                .map(|w| indices.iter().map(|&i| w[i]).collect()),
+                .map(|w| (indices.iter().map(|&i| w[i]).collect(), w.kind())),
             clusters: data
                 .clusters()
                 .map(|c| indices.iter().map(|&i| c[i]).collect()),
@@ -1056,14 +1204,21 @@ impl Subset {
         column(&self.y)
     }
 
-    /// The rows as data. Rows of checked data are checked, so no check runs.
-    fn data(&self) -> CostData<'_> {
-        CostData::from_checked(
+    /// The rows as data. Rows of checked data are checked, so only the
+    /// weights are checked again, which refuse a subset whose weights are
+    /// all zero.
+    fn data(&self) -> Result<CostData<'_>, Error> {
+        let weights = self
+            .weights
+            .as_ref()
+            .map(|(w, kind)| CaseWeights::of_kind(w, *kind))
+            .transpose()?;
+        Ok(CostData::from_checked(
             self.x.as_ref(),
             &self.y,
-            self.weights.as_deref(),
+            weights,
             self.clusters.as_deref(),
-        )
+        ))
     }
 }
 
@@ -1123,10 +1278,7 @@ fn complement_indices(n: usize, test_idx: &[usize]) -> Vec<usize> {
     (0..n).filter(|&idx| !mask[idx]).collect()
 }
 
-fn recommend_by_ic(
-    tweedie_candidates: &[TweedieCandidate],
-    lognormal: Option<&LogNormalCandidate>,
-) -> (Option<Candidate>, Option<Candidate>) {
+fn recommend_by_ic(tweedie_candidates: &[TweedieCandidate]) -> (Option<Candidate>, Option<Candidate>) {
     let mut by_akaike: Option<(f64, Candidate)> = None;
     let mut by_bayes: Option<(f64, Candidate)> = None;
     let mut consider = |aic: f64, bic: f64, candidate: Candidate| {
@@ -1140,13 +1292,6 @@ fn recommend_by_ic(
             Candidate::Tweedie {
                 power: candidate.power,
             },
-        );
-    }
-    if let Some(lognormal) = lognormal {
-        consider(
-            lognormal.information_criteria.aic,
-            lognormal.information_criteria.bic,
-            Candidate::LogNormal,
         );
     }
     (

@@ -1,8 +1,8 @@
 //! Counterfactual effect helpers derived from MTP posterior draws.
 
-use epistat_linalg::Mat;
+use epistat_linalg::MatRef;
 
-use crate::utils::{EffectIntervalSummary, dot_row, summarize_draws_in_place, usize_to_f64};
+use crate::utils::{EffectIntervalSummary, summarize_draws_in_place, usize_to_f64};
 
 use super::likelihood::logistic_stable;
 use super::posterior::MtpPosteriorSamples;
@@ -10,17 +10,18 @@ use super::types::validate_draw_dimensions;
 use crate::Error;
 use epistat_core::InputError;
 
-/// Exposed/unexposed design scenarios for posterior contrast calculations.
-#[derive(Debug, Clone)]
-pub struct CounterfactualScenario {
+/// Exposed/unexposed design scenarios for posterior contrast calculations,
+/// one row per period.
+#[derive(Debug, Clone, Copy)]
+pub struct CounterfactualScenario<'a> {
     /// The binary-part design with every row exposed.
-    pub binary_design_exposed: Mat<f64>,
+    pub binary_design_exposed: MatRef<'a, f64>,
     /// The mean design with every row exposed.
-    pub mean_design_exposed: Mat<f64>,
+    pub mean_design_exposed: MatRef<'a, f64>,
     /// The binary-part design with every row unexposed.
-    pub binary_design_unexposed: Mat<f64>,
+    pub binary_design_unexposed: MatRef<'a, f64>,
     /// The mean design with every row unexposed.
-    pub mean_design_unexposed: Mat<f64>,
+    pub mean_design_unexposed: MatRef<'a, f64>,
 }
 
 /// Per-period effect estimates.
@@ -35,10 +36,12 @@ pub struct PeriodEffect {
     pub mean_unexposed: f64,
     /// The difference of the exposed and unexposed means.
     pub additive_effect: f64,
-    /// The ratio of the exposed to the unexposed mean.
-    pub multiplicative_effect: f64,
-    /// The odds ratio of a positive outcome, exposed against unexposed.
-    pub odds_ratio_positive: f64,
+    /// The ratio of the exposed to the unexposed mean, `None` when the
+    /// unexposed mean is 0.
+    pub multiplicative_effect: Option<f64>,
+    /// The odds ratio of a positive outcome, exposed against unexposed,
+    /// `None` when an odds is undefined or the unexposed odds is 0.
+    pub odds_ratio_positive: Option<f64>,
 }
 
 /// Counterfactual effects across all periods in a scenario.
@@ -107,17 +110,16 @@ pub fn counterfactual_effects(
     let mut cumulative_additive = 0.0;
 
     for row in 0..periods {
-        let p_exposed = logistic_stable(dot_row(&scenario.binary_design_exposed, row, &alpha));
-        let p_unexposed = logistic_stable(dot_row(&scenario.binary_design_unexposed, row, &alpha));
+        let p_exposed = logistic_stable(dot_row(scenario.binary_design_exposed, row, &alpha));
+        let p_unexposed = logistic_stable(dot_row(scenario.binary_design_unexposed, row, &alpha));
 
         // MTP beta parameterizes the marginal mean directly on log-scale.
-        let mean_exposed = dot_row(&scenario.mean_design_exposed, row, &beta).exp();
-        let mean_unexposed = dot_row(&scenario.mean_design_unexposed, row, &beta).exp();
+        let mean_exposed = dot_row(scenario.mean_design_exposed, row, &beta).exp();
+        let mean_unexposed = dot_row(scenario.mean_design_unexposed, row, &beta).exp();
 
         let additive_effect = mean_exposed - mean_unexposed;
-        let multiplicative_effect = mean_exposed / mean_unexposed.max(1.0e-12);
-        let odds_exposed = p_exposed / (1.0 - p_exposed).max(1.0e-12);
-        let odds_unexposed = p_unexposed / (1.0 - p_unexposed).max(1.0e-12);
+        let multiplicative_effect = ratio(mean_exposed, mean_unexposed);
+        let odds_ratio_positive = odds_ratio(p_exposed, p_unexposed);
 
         cumulative_additive += additive_effect;
         per_period.push(PeriodEffect {
@@ -126,7 +128,7 @@ pub fn counterfactual_effects(
             mean_unexposed,
             additive_effect,
             multiplicative_effect,
-            odds_ratio_positive: odds_exposed / odds_unexposed.max(1.0e-12),
+            odds_ratio_positive,
         });
     }
 
@@ -175,17 +177,17 @@ pub fn counterfactual_effects_summary(
         let mut cumulative_additive = 0.0;
         for row in 0..periods {
             let p_exposed =
-                logistic_stable(dot_row(&scenario.binary_design_exposed, row, &draw.alpha));
+                logistic_stable(dot_row(scenario.binary_design_exposed, row, &draw.alpha));
             let p_unexposed =
-                logistic_stable(dot_row(&scenario.binary_design_unexposed, row, &draw.alpha));
+                logistic_stable(dot_row(scenario.binary_design_unexposed, row, &draw.alpha));
 
-            let mean_exposed = dot_row(&scenario.mean_design_exposed, row, &draw.beta).exp();
-            let mean_unexposed = dot_row(&scenario.mean_design_unexposed, row, &draw.beta).exp();
+            let mean_exposed = dot_row(scenario.mean_design_exposed, row, &draw.beta).exp();
+            let mean_unexposed = dot_row(scenario.mean_design_unexposed, row, &draw.beta).exp();
             let additive_effect = mean_exposed - mean_unexposed;
-            let multiplicative_effect = mean_exposed / mean_unexposed.max(1.0e-12);
-            let odds_exposed = p_exposed / (1.0 - p_exposed).max(1.0e-12);
-            let odds_unexposed = p_unexposed / (1.0 - p_unexposed).max(1.0e-12);
-            let odds_ratio_positive = odds_exposed / odds_unexposed.max(1.0e-12);
+            // An undefined ratio enters the draws as NaN, so that its summary is
+            // undefined rather than formed from a floored denominator.
+            let multiplicative_effect = ratio(mean_exposed, mean_unexposed).unwrap_or(f64::NAN);
+            let odds_ratio_positive = odds_ratio(p_exposed, p_unexposed).unwrap_or(f64::NAN);
 
             mean_exposed_draws[row].push(mean_exposed);
             mean_unexposed_draws[row].push(mean_unexposed);
@@ -214,6 +216,25 @@ pub fn counterfactual_effects_summary(
         per_period,
         cumulative_additive_effect: summarize_draws_in_place(&mut cumulative_additive_draws),
     })
+}
+
+/// Row `row` of `matrix` times the coefficients.
+fn dot_row(matrix: MatRef<'_, f64>, row: usize, coefficients: &[f64]) -> f64 {
+    (0..matrix.ncols())
+        .map(|col| matrix[(row, col)] * coefficients[col])
+        .sum()
+}
+
+/// `a / b`, `None` when `b` is 0 or the ratio is not finite.
+fn ratio(a: f64, b: f64) -> Option<f64> {
+    let r = a / b;
+    (b != 0.0 && r.is_finite()).then_some(r)
+}
+
+/// The odds ratio of the probabilities `p1` and `p0`, `None` when an odds or
+/// the ratio is undefined.
+fn odds_ratio(p1: f64, p0: f64) -> Option<f64> {
+    ratio(ratio(p1, 1.0 - p1)?, ratio(p0, 1.0 - p0)?)
 }
 
 fn validate_counterfactual_design(scenario: &CounterfactualScenario) -> Result<(), Error> {

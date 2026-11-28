@@ -23,10 +23,12 @@
 //!   first such entry, columns read in order),
 //! - a negative outcome ([`InputError::Domain`]).
 //!
-//! [`CostData`] also refuses a weight that is not finite
-//! ([`InputError::NotFinite`]) or not positive ([`InputError::Domain`]): a
-//! weight of 0 would leave its row in the fit's sums with no influence on the
-//! coefficients and is not allowed, as in the fits since their first version.
+//! The weights of [`CostData`] are a [`CaseWeights`] column, which refuses a
+//! weight that is negative or not finite when it is built; the view refuses
+//! weights whose length is not the number of rows ([`InputError::Length`]).
+//! A weight of 0 is allowed and takes its row out of the fit: it adds nothing
+//! to the fit's sums and is not counted among the rows that enter it, so a
+//! resample-count bootstrap can pass the count of each row as its weight.
 //!
 //! Clusters and subjects are `u32` codes, as
 //! [`Codes::from_labels`](epistat_core::Codes::from_labels) gives them. The
@@ -36,7 +38,7 @@
 
 #[cfg(doc)]
 use epistat_core::InputError;
-use epistat_core::{InputError as Refusal, check};
+use epistat_core::{CaseWeights, InputError as Refusal, check};
 use epistat_linalg::{Mat, MatRef};
 
 use crate::Error;
@@ -85,21 +87,9 @@ fn columns(what: &'static str, x: MatRef<'_, f64>) -> Result<(), Error> {
     Ok(())
 }
 
-pub(crate) fn check_weights(n: usize, weights: &[f64]) -> Result<(), Error> {
+pub(crate) fn check_weights(n: usize, weights: &CaseWeights<'_>) -> Result<(), Error> {
     check::same_length("weights", n, weights.len())?;
-    check::finite("weights", weights)?;
-    weights
-        .iter()
-        .find(|&&w| w <= 0.0)
-        .map_or(Ok(()), |&value| {
-            Err(Refusal::Domain {
-                what: "weights",
-                value,
-                domain: "(0, inf)",
-                row: None,
-            }
-            .into())
-        })
+    Ok(())
 }
 
 /// `x` has `p` columns and `weights`, when given, one value per row of `x`:
@@ -122,11 +112,12 @@ pub(crate) fn column(values: &[f64]) -> MatRef<'_, f64> {
 }
 
 /// The data of a cost model: a design, a non-negative outcome, and optional
-/// prior weights and cluster codes.
+/// case weights and cluster codes.
 ///
 /// The design holds the intercept column if the model is to have one. The
-/// weights are R's prior `weights`; the clusters, one code per row, give
-/// cluster-robust standard errors when the options ask for robust ones.
+/// weights are R's prior `weights` unless their [`CaseWeights`] kind says
+/// otherwise; the clusters, one code per row, make the sandwich the default
+/// covariance and give its clustered form.
 ///
 /// ```
 /// use epistat_linalg::Mat;
@@ -144,7 +135,7 @@ pub(crate) fn column(values: &[f64]) -> MatRef<'_, f64> {
 pub struct CostData<'a> {
     x: MatRef<'a, f64>,
     y: &'a [f64],
-    weights: Option<&'a [f64]>,
+    weights: Option<CaseWeights<'a>>,
     clusters: Option<&'a [u32]>,
 }
 
@@ -180,10 +171,15 @@ impl<'a> CostData<'a> {
         self.y
     }
 
-    /// The prior weights, 1 for every row when `None`.
+    /// The case weights, 1 for every row when `None`.
     #[must_use]
-    pub const fn weights(&self) -> Option<&'a [f64]> {
+    pub const fn weights(&self) -> Option<CaseWeights<'a>> {
         self.weights
+    }
+
+    /// The values of the case weights.
+    pub(crate) fn weight_values(&self) -> Option<&'a [f64]> {
+        self.weights.map(|w| w.as_slice())
     }
 
     /// The cluster code of each row.
@@ -204,19 +200,18 @@ impl<'a> CostData<'a> {
         self.x.ncols()
     }
 
-    /// The view with other prior weights, checked as `build` checks them. The
+    /// The view with other case weights, checked as `build` checks them. The
     /// design and the outcome are not scanned again, so a bootstrap refits
     /// one sample under many weight columns at the cost of one scan of each.
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] for weights of the wrong length, or a weight that is
-    /// not finite or not positive.
-    pub fn with_weights<'b>(&self, weights: &'b [f64]) -> Result<CostData<'b>, Error>
+    /// [`Error::Input`] for weights of the wrong length.
+    pub fn with_weights<'b>(&self, weights: CaseWeights<'b>) -> Result<CostData<'b>, Error>
     where
         'a: 'b,
     {
-        check_weights(self.n_rows(), weights)?;
+        check_weights(self.n_rows(), &weights)?;
         Ok(CostData {
             x: self.x,
             y: self.y,
@@ -247,7 +242,7 @@ impl<'a> CostData<'a> {
     pub(crate) const fn from_checked(
         x: MatRef<'a, f64>,
         y: &'a [f64],
-        weights: Option<&'a [f64]>,
+        weights: Option<CaseWeights<'a>>,
         clusters: Option<&'a [u32]>,
     ) -> Self {
         Self {
@@ -265,13 +260,14 @@ impl<'a> CostData<'a> {
 
     /// The weights as an `n x 1` view.
     pub(crate) fn weights_column(&self) -> Option<MatRef<'a, f64>> {
-        self.weights.map(column)
+        self.weight_values().map(column)
     }
 }
 
 impl<'a> CostDataBuilder<'a> {
-    /// Prior weights, as R's `weights`: 1 for every row when not given.
-    pub const fn weights(mut self, weights: &'a [f64]) -> Self {
+    /// Case weights, R's `weights` for prior weights: 1 for every row when
+    /// not given.
+    pub const fn weights(mut self, weights: CaseWeights<'a>) -> Self {
         self.data.weights = Some(weights);
         self
     }
@@ -295,7 +291,7 @@ impl<'a> CostDataBuilder<'a> {
         check::same_length("y", n, data.y.len())?;
         finite_matrix("x", data.x)?;
         non_negative("y", data.y)?;
-        if let Some(weights) = data.weights {
+        if let Some(weights) = &data.weights {
             check_weights(n, weights)?;
         }
         if let Some(clusters) = data.clusters {
@@ -498,29 +494,20 @@ mod tests {
                 column: None
             }
         );
+        let zero = [1.0, 0.0, 1.0];
+        let zero = CaseWeights::new(&zero).expect("a zero weight is allowed");
+        assert!(CostData::builder(x.as_ref(), &y).weights(zero).build().is_ok());
+        let short = [1.0, 1.0];
         assert_eq!(
             refused(
                 CostData::builder(x.as_ref(), &y)
-                    .weights(&[1.0, 0.0, 1.0])
+                    .weights(CaseWeights::new(&short).expect("weights"))
                     .build()
             ),
-            Refusal::Domain {
+            Refusal::Length {
                 what: "weights",
-                value: 0.0,
-                domain: "(0, inf)",
-                row: None
-            }
-        );
-        assert_eq!(
-            refused(
-                CostData::builder(x.as_ref(), &y)
-                    .weights(&[1.0, f64::NAN, 1.0])
-                    .build()
-            ),
-            Refusal::NotFinite {
-                what: "weights",
-                row: 1,
-                column: None
+                expected: 3,
+                found: 2
             }
         );
         assert_eq!(
@@ -539,9 +526,15 @@ mod tests {
         let y = [0.0, 1.0, 2.0];
         let data = CostData::builder(x.as_ref(), &y).build().expect("data");
         let w = [1.0, 2.0, 0.5];
-        let weighted = data.with_weights(&w).expect("weights");
-        assert_eq!(weighted.weights(), Some(&w[..]));
-        assert!(data.with_weights(&[1.0, 2.0]).is_err());
+        let weighted = data
+            .with_weights(CaseWeights::new(&w).expect("weights"))
+            .expect("weights");
+        assert_eq!(weighted.weight_values(), Some(&w[..]));
+        let short = [1.0, 2.0];
+        assert!(
+            data.with_weights(CaseWeights::new(&short).expect("weights"))
+                .is_err()
+        );
         assert!(weighted.without_weights().weights().is_none());
     }
 

@@ -1,5 +1,6 @@
 //! Core public types for the MTP module.
 
+use epistat_core::Seed;
 use super::posterior::MtpPosteriorSummary;
 use super::priors::MtpPriors;
 use crate::Error;
@@ -201,7 +202,7 @@ pub struct MtpOptions {
     /// The root seed. A single chain draws from it; chain `i` of several
     /// draws from `epistat_rng::replicate_seed(seed, i)`, so a chain does
     /// not depend on the other chains or on the thread that runs it.
-    pub seed: u64,
+    pub seed: Seed,
     /// The subject random effects.
     pub random_effects: RandomEffectsStructure,
     /// Whether the proposal scales adapt during burn-in.
@@ -223,7 +224,7 @@ pub struct MtpOptions {
 impl MtpOptions {
     /// The options described on [`MtpOptions`], with root seed `seed`.
     #[must_use]
-    pub fn new(seed: u64) -> Self {
+    pub fn new(seed: Seed) -> Self {
         Self {
             iterations: 4_000,
             burn_in: 1_000,
@@ -252,7 +253,7 @@ impl MtpOptions {
                 iterations: self.iterations,
                 burn_in: self.burn_in,
                 thin: self.thin,
-                seed: self.seed,
+                seed: self.seed.value(),
                 random_effects: self.random_effects,
                 adapt_during_burn_in: self.adapt_during_burn_in,
             },
@@ -274,7 +275,7 @@ pub(crate) fn test_fit_options() -> MtpFitOptions {
 /// of the sampler.
 #[cfg(test)]
 pub(crate) fn test_config() -> MtpSamplerConfig {
-    MtpOptions::new(42).sampler_config()
+    MtpOptions::new(Seed(42)).sampler_config()
 }
 
 /// The sampler's options.
@@ -410,7 +411,7 @@ mod tests {
         let options = MtpOptions {
             iterations: 100,
             burn_in: 20,
-            ..MtpOptions::new(1)
+            ..MtpOptions::new(Seed(1))
         };
         assert!(options.sampler_config().validate().is_ok());
         assert_eq!(options.retained_draws(), 20);
@@ -448,7 +449,7 @@ mod tests {
                 alpha_variance: 0.0,
                 ..MtpPriors::default()
             },
-            ..MtpOptions::new(1)
+            ..MtpOptions::new(Seed(1))
         };
         assert!(matches!(
             priors.sampler_config().validate(),
@@ -459,7 +460,7 @@ mod tests {
                 adaptation_interval: 0,
                 ..MtpProposalTuning::default()
             },
-            ..MtpOptions::new(1)
+            ..MtpOptions::new(Seed(1))
         };
         assert!(matches!(
             tuning.sampler_config().validate(),

@@ -34,7 +34,7 @@
 //! appends them to that file. Print them with
 //! `STUDY_PATH_PRINT=1 cargo test --test study_path -- --nocapture`.
 
-use epistat_core::{Interval, Level};
+use epistat_core::{CaseWeights, Covariance, Interval, Level, Matrix, Seed};
 use epistat_linalg::Mat;
 use epistat_rng::{dirichlet_weights, replicate_seed};
 use epistat_semicontinuous::compare::{CompareOptions, ModelComparison, ModelFitMetrics};
@@ -46,7 +46,7 @@ use epistat_semicontinuous::prepared::{
 use epistat_semicontinuous::tweedie::{TweedieOptions, TweedieScratch};
 use epistat_semicontinuous::two_part::{TwoPartModel, TwoPartOptions, TwoPartWarmStart};
 use epistat_semicontinuous::{
-    CostData, FitStrategy, LongitudinalData, compare, lognormal, mtp, tweedie, two_part,
+    CostData, FitStrategy, LongitudinalData, Variance, compare, lognormal, mtp, tweedie, two_part,
 };
 use epistat_testkit::{Fingerprint, SplitMix64};
 
@@ -91,10 +91,33 @@ impl Hash {
         }
     }
 
-    fn opt(&mut self, m: Option<&Mat<f64>>) {
-        match m {
-            Some(m) => self.mat(m),
-            None => self.o(None),
+    /// A vector, hashed as the `n x 1` matrix it was.
+    fn vec(&mut self, v: &[f64]) {
+        self.n(v.len());
+        self.n(1);
+        for &value in v {
+            self.f(value);
+        }
+    }
+
+    /// Standard errors, hashed as the `n x 1` matrix they were, or as a
+    /// missing matrix when the fit computed no covariance.
+    fn se(&mut self, se: &[Option<f64>], covariance: Option<&Covariance>) {
+        if covariance.is_none() {
+            self.o(None);
+            return;
+        }
+        self.n(se.len());
+        self.n(1);
+        for &value in se {
+            self.o(value);
+        }
+    }
+
+    /// Draws, one row per replicate, each hashed as the `n x 1` matrix it was.
+    fn draws(&mut self, draws: &Matrix) {
+        for row in draws.rows() {
+            self.vec(row);
         }
     }
 
@@ -115,14 +138,15 @@ impl Hash {
     }
 
     fn two_part(&mut self, model: &TwoPartModel) {
+        let (logit, gamma) = (&model.logit, &model.gamma);
+        self.vec(&logit.coefficients);
+        self.vec(&gamma.coefficients);
+        self.se(&logit.se, logit.covariance.as_ref());
+        self.se(&gamma.se, gamma.covariance.as_ref());
+        self.n(logit.meta.iterations);
+        self.n(gamma.meta.iterations);
         let report = &model.report;
-        self.mat(&model.beta_logit);
-        self.mat(&model.beta_gamma);
-        self.opt(report.se_logit.as_ref());
-        self.opt(report.se_gamma.as_ref());
-        self.n(report.iterations_logit);
-        self.n(report.iterations_gamma);
-        self.word(u64::from(report.clustered));
+        self.word(u64::from(report.cluster_count.is_some()));
         self.o(report.cluster_count.map(|count| count as f64));
     }
 
@@ -178,7 +202,7 @@ impl Slice {
     /// The weighted, clustered data of the slice.
     fn data(&self) -> CostData<'_> {
         CostData::builder(self.x.as_ref(), &self.y)
-            .weights(&self.weights)
+            .weights(CaseWeights::new(&self.weights).expect("weights"))
             .clusters(&self.clusters)
             .build()
             .expect("data")
@@ -280,18 +304,18 @@ fn tweedie(out: &mut Vec<(&'static str, u64)>, slice: &Slice, gamma: bool) {
     };
     {
         let options = TweedieOptions {
-            robust_se: true,
+            variance: Variance::Sandwich,
             strategy: relaxed(),
             ..TweedieOptions::default()
         };
         let model = tweedie::fit(&data, power, &options, None, None).expect("fit");
         let report = &model.report;
         let mut h = Hash::new();
-        h.mat(&model.beta);
+        h.vec(&model.coefficients);
         h.f(model.power);
-        h.opt(report.se.as_ref());
+        h.se(&model.se, model.covariance.as_ref());
         h.n(report.meta.iterations);
-        h.word(u64::from(report.clustered));
+        h.word(u64::from(report.cluster_count.is_some()));
         h.o(report.cluster_count.map(|count| count as f64));
         let predict = |m: &tweedie::TweedieModel, x: &Mat<f64>| {
             m.predict_mean(x.as_ref(), None).expect("mean")
@@ -299,21 +323,26 @@ fn tweedie(out: &mut Vec<(&'static str, u64)>, slice: &Slice, gamma: bool) {
         h.f(predict(&model, &treated));
         h.f(predict(&model, &control));
         if gamma {
-            let replicate_options = TweedieOptions::default();
+            let replicate_options = TweedieOptions {
+                variance: Variance::None,
+                ..TweedieOptions::default()
+            };
             let mut scratch = TweedieScratch::default();
             let unclustered = data.without_clusters();
             for replicate in 0..REPLICATES {
                 let (_, weights) = replicate_weights(slice, replicate);
-                let input = unclustered.with_weights(&weights).expect("weights");
+                let input = unclustered
+                    .with_weights(CaseWeights::new(&weights).expect("weights"))
+                    .expect("weights");
                 let boot = tweedie::fit(
                     &input,
                     2.0,
                     &replicate_options,
-                    Some(&model.beta),
+                    Some(&model.coefficients),
                     Some(&mut scratch),
                 )
                 .expect("replicate");
-                h.mat(&boot.beta);
+                h.vec(&boot.coefficients);
                 h.f(predict(&boot, &treated) - predict(&boot, &control));
             }
         }
@@ -323,15 +352,15 @@ fn tweedie(out: &mut Vec<(&'static str, u64)>, slice: &Slice, gamma: bool) {
 
 fn lognormal(out: &mut Vec<(&'static str, u64)>, slice: &Slice) {
     let options = LogNormalOptions {
-        robust_se: true,
+        variance: Variance::Sandwich,
         ..LogNormalOptions::default()
     };
     let model = lognormal::fit(&slice.data().without_weights(), &options).expect("fit");
     let report = &model.report;
     let mut h = Hash::new();
-    h.mat(&model.beta);
+    h.vec(&model.coefficients);
     h.f(model.smearing_factor);
-    h.opt(report.se.as_ref());
+    h.se(&model.se, model.covariance.as_ref());
     h.n(report.meta.iterations);
     for value in [1.0, 0.0] {
         let x = counterfactual(&slice.x, value);
@@ -345,7 +374,10 @@ fn two_part(out: &mut Vec<(&'static str, u64)>, slice: &Slice) {
     let control = counterfactual(&slice.x, 0.0);
     let predict = |m: &TwoPartModel, x: &Mat<f64>| m.predict_mean(x.as_ref(), None).expect("mean");
     let data = slice.data();
-    let fit_options = TwoPartOptions::stable_defaults();
+    let fit_options = TwoPartOptions {
+        variance: Variance::ModelBased,
+        ..TwoPartOptions::stable_defaults()
+    };
     let model = two_part::fit(&data, &fit_options, None).expect("fit");
     let mut h = Hash::new();
     h.two_part(&model);
@@ -353,34 +385,35 @@ fn two_part(out: &mut Vec<(&'static str, u64)>, slice: &Slice) {
     h.f(predict(&model, &control));
     out.push(("two_part", h.finish()));
 
-    let warm = TwoPartWarmStart {
-        beta_logit: model.beta_logit.clone(),
-        beta_gamma: model.beta_gamma.clone(),
-    };
+    let warm = TwoPartWarmStart::from(&model);
     let replicate_options = TwoPartOptions {
-        compute_covariance: false,
+        variance: Variance::None,
         ..fit_options
     };
     let unclustered = data.without_clusters();
     let mut h = Hash::new();
     let (mut betas_logit, mut betas_gamma) = (Vec::new(), Vec::new());
+    let p = slice.x.ncols();
     for replicate in 0..REPLICATES {
         let (_, weights) = replicate_weights(slice, replicate);
-        let input = unclustered.with_weights(&weights).expect("weights");
+        let input = unclustered
+            .with_weights(CaseWeights::new(&weights).expect("weights"))
+            .expect("weights");
         let boot = two_part::fit(&input, &replicate_options, Some(&warm)).expect("replicate");
         h.f(predict(&boot, &treated) - predict(&boot, &control));
-        betas_logit.push(boot.beta_logit);
-        betas_gamma.push(boot.beta_gamma);
+        betas_logit.extend_from_slice(&boot.logit.coefficients);
+        betas_gamma.extend_from_slice(&boot.gamma.coefficients);
     }
-    for betas in [&betas_logit, &betas_gamma] {
-        for beta in betas {
-            h.mat(beta);
-        }
+    let rows = usize::try_from(REPLICATES).expect("small");
+    for betas in [betas_logit, betas_gamma] {
+        let betas = Matrix::new(rows, p, betas).expect("draws");
+        h.draws(&betas);
         let level = Level::alpha(0.05).expect("level");
-        h.intervals(&two_part::percentile_intervals(betas, level));
-        let summary = two_part::summary(betas, level);
-        h.mat(&summary.mean);
-        h.mat(&summary.se);
+        h.intervals(&two_part::percentile_intervals(&betas, level));
+        let summary = two_part::summary(&betas, level);
+        h.vec(&summary.mean);
+        let se: Vec<f64> = summary.se.iter().map(|se| se.expect("draws")).collect();
+        h.vec(&se);
     }
     out.push(("two_part/replicates", h.finish()));
 }
@@ -405,7 +438,10 @@ fn compact(out: &mut Vec<(&'static str, u64)>, slice: &Slice) {
     let prediction = PreparedPredictionDesign::new(exposed_design.as_ref()).expect("prediction");
     let mut scratch = PreparedScratch::default();
 
-    let gamma_options = TweedieOptions::default();
+    let gamma_options = TweedieOptions {
+        variance: Variance::None,
+        ..TweedieOptions::default()
+    };
     let positive: Vec<f64> = fit_outcome.iter().map(|&y| y.max(1.0)).collect();
     let full = CostData::builder(fit_design.as_ref(), &positive)
         .build()
@@ -421,16 +457,16 @@ fn compact(out: &mut Vec<(&'static str, u64)>, slice: &Slice) {
             .clusters(&comparator_clusters)
             .build()
             .expect("data"),
-        &TwoPartOptions::stable_defaults(),
+        &TwoPartOptions {
+            variance: Variance::ModelBased,
+            ..TwoPartOptions::stable_defaults()
+        },
         None,
     )
     .expect("two-part");
-    let warm = TwoPartWarmStart {
-        beta_logit: two_part.beta_logit.clone(),
-        beta_gamma: two_part.beta_gamma.clone(),
-    };
+    let warm = TwoPartWarmStart::from(&two_part);
     let two_part_options = TwoPartOptions {
-        compute_covariance: false,
+        variance: Variance::None,
         ..TwoPartOptions::stable_defaults()
     };
 
@@ -439,29 +475,30 @@ fn compact(out: &mut Vec<(&'static str, u64)>, slice: &Slice) {
         let (row, combined) = replicate_weights(slice, replicate);
         let comparator_weights: Vec<f64> = comparators.iter().map(|&i| combined[i]).collect();
         let exposed_weights: Vec<f64> = exposed.iter().map(|&i| row[i]).collect();
+        let comparator_weights = CaseWeights::new(&comparator_weights).expect("weights");
         let fit = gamma_design
             .fit(
-                &comparator_weights,
-                &gamma.beta,
+                comparator_weights,
+                &gamma.coefficients,
                 &gamma_options,
                 &mut scratch,
             )
             .expect("compact gamma");
-        h.mat(&fit.beta);
+        h.vec(&fit.coefficients);
         h.n(fit.iterations);
-        h.f(prediction.mean_gamma(&fit.beta, &exposed_weights));
+        h.f(prediction.mean_gamma(&fit.coefficients, &exposed_weights));
         let fit = two_part_design
-            .fit(&comparator_weights, &warm, &two_part_options, &mut scratch)
+            .fit(comparator_weights, &warm, &two_part_options, &mut scratch)
             .expect("compact two-part");
-        h.mat(&fit.beta_logit);
-        h.mat(&fit.beta_gamma);
-        h.f(prediction.mean_two_part(&fit.beta_logit, &fit.beta_gamma, &exposed_weights));
+        h.vec(&fit.logit);
+        h.vec(&fit.gamma);
+        h.f(prediction.mean_two_part(&fit.logit, &fit.gamma, &exposed_weights));
     }
     out.push(("compact", h.finish()));
 }
 
 fn comparison(out: &mut Vec<(&'static str, u64)>, slice: &Slice) {
-    let comparison = compare::compare(&slice.data(), &CompareOptions::new(42)).expect("compare");
+    let comparison = compare::compare(&slice.data(), &CompareOptions::new(Seed(42))).expect("compare");
     let mut h = Hash::new();
     h.comparison(&comparison);
     out.push(("model_comparison", h.finish()));
@@ -511,7 +548,7 @@ fn mtp(out: &mut Vec<(&'static str, u64)>) {
     let options = MtpOptions {
         family_random_effects: FamilyRandomEffects::Disabled,
         chains: 4,
-        ..MtpOptions::new(SEED)
+        ..MtpOptions::new(Seed(SEED))
     };
     let model = mtp::fit(&input, &options).expect("mtp");
     let mut h = Hash::new();

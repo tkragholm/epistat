@@ -44,9 +44,3 @@ pub(crate) fn score_meat(
 pub(crate) fn sandwich(information: MatRef<'_, f64>, meat: MatRef<'_, f64>) -> Option<Mat<f64>> {
     epistat_sandwich::sandwich(information, meat, &Attempt::SYMMETRIC).ok()
 }
-
-/// Standard errors from a covariance matrix, with negative variances read as zero.
-pub(crate) fn diag_sqrt(cov: &Mat<f64>) -> Mat<f64> {
-    let errors = epistat_sandwich::standard_errors(cov.as_ref());
-    Mat::from_fn(errors.len(), 1, |i, _| errors[i])
-}

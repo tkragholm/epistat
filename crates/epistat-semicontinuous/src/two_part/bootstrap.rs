@@ -1,6 +1,6 @@
 //! Row-resampling bootstrap and its percentile summaries.
 
-use epistat_core::{Bootstrap, Interval, Level};
+use epistat_core::{Bootstrap, Interval, Level, Matrix};
 use epistat_inference::interval::{Percentile, percentile};
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
@@ -9,16 +9,18 @@ use super::{TwoPartOptions, fit_two_part_weighted};
 use crate::Error;
 use crate::data::CostData;
 use crate::matrix_ops::{select_rows_ref, select_values_ref};
-use crate::utils::{mean_vector, std_vector};
+use crate::utils::usize_to_f64;
+use crate::variance::Variance;
 
 /// The coefficients of the replicates of [`bootstrap`].
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct BootstrapDraws {
-    /// The logit coefficients of each replicate that converged.
-    pub betas_logit: Vec<Mat<f64>>,
-    /// The gamma coefficients of each replicate that converged.
-    pub betas_gamma: Vec<Mat<f64>>,
+    /// The logit coefficients, one row per replicate that converged and one
+    /// column per coefficient.
+    pub logit: Matrix,
+    /// The gamma coefficients, as `logit`.
+    pub gamma: Matrix,
     /// The replicates that did not converge and were skipped.
     pub failures: usize,
 }
@@ -29,9 +31,10 @@ pub struct BootstrapDraws {
 #[derive(Debug, Clone)]
 pub struct BootstrapSummary {
     /// The mean of each coefficient.
-    pub mean: Mat<f64>,
-    /// The standard deviation of each coefficient, with the `n - 1` divisor.
-    pub se: Mat<f64>,
+    pub mean: Vec<f64>,
+    /// The standard deviation of each coefficient over the draws, with the
+    /// `n - 1` divisor; `None` with fewer than two draws.
+    pub se: Vec<Option<f64>>,
     /// The percentile interval of each coefficient.
     pub intervals: Vec<Interval>,
 }
@@ -41,10 +44,11 @@ pub struct BootstrapSummary {
 /// Replicate `r` draws `n` rows with replacement from one
 /// [`Stream`](epistat_rng::Stream) seeded with `draws.seed`, the replicates
 /// drawn in turn, and fits them with `options` and the weights of the drawn
-/// rows, without the strategy's retries. A replicate that does not converge,
-/// saturates or gives values that are not finite is skipped when
-/// `max_failures` is given, and the bootstrap fails once more than
-/// `max_failures` were skipped; with `None` the first such replicate fails it.
+/// rows, without the strategy's retries and without covariances. A replicate
+/// that does not converge, saturates or gives values that are not finite is
+/// skipped when `max_failures` is given, and the bootstrap fails once more
+/// than `max_failures` were skipped; with `None` the first such replicate
+/// fails it.
 ///
 /// # Errors
 ///
@@ -66,14 +70,16 @@ pub fn bootstrap(
         });
     }
     let options = *options;
+    let inference = Variance::None.resolve(data)?;
     let (x, y) = (data.x(), data.y_column());
     let n = data.n_rows();
+    let p = data.n_columns();
     let ones = Mat::from_fn(n, 1, |_, _| 1.0);
     let weights = data.weights_column().unwrap_or(ones.as_ref());
 
     let mut rng = Stream::seeded(draws.seed.value());
-    let mut betas_logit = Vec::with_capacity(draws.replicates);
-    let mut betas_gamma = Vec::with_capacity(draws.replicates);
+    let mut logit = Vec::with_capacity(draws.replicates * p);
+    let mut gamma = Vec::with_capacity(draws.replicates * p);
     let mut failures = 0;
 
     for _ in 0..draws.replicates {
@@ -85,12 +91,14 @@ pub fn bootstrap(
             x_sample.as_ref(),
             y_sample.as_ref(),
             w_sample.as_ref(),
+            None,
             options,
+            inference,
             None,
         ) {
             Ok(model) => {
-                betas_logit.push(model.beta_logit);
-                betas_gamma.push(model.beta_gamma);
+                logit.extend_from_slice(&model.logit.coefficients);
+                gamma.extend_from_slice(&model.gamma.coefficients);
             }
             Err(Error::NotConverged { .. } | Error::Saturated | Error::NotFinite)
                 if max_failures.is_some() =>
@@ -105,55 +113,72 @@ pub fn bootstrap(
         }
     }
 
+    let rows = logit.len() / p.max(1);
     Ok(BootstrapDraws {
-        betas_logit,
-        betas_gamma,
+        logit: Matrix::new(rows, p, logit).map_err(|_| Error::NotFinite)?,
+        gamma: Matrix::new(rows, p, gamma).map_err(|_| Error::NotFinite)?,
         failures,
     })
 }
 
-/// Percentile intervals of bootstrap coefficients, one per coefficient.
+/// Percentile intervals of bootstrap coefficients, one per column of
+/// `draws` (one row per replicate).
 ///
 /// The limits are R's type 7 quantiles
 /// (`quantile(x, c(alpha / 2, 1 - alpha / 2), type = 7)`) of the draws, so they
-/// can fall between two draws. A coefficient whose draws hold a NaN has
-/// limits of `None`.
+/// can fall between two draws. Without draws the list is empty.
 #[must_use]
-pub fn percentile_intervals(betas: &[Mat<f64>], level: Level) -> Vec<Interval> {
-    if betas.is_empty() {
+pub fn percentile_intervals(draws: &Matrix, level: Level) -> Vec<Interval> {
+    if draws.n_rows() == 0 {
         return Vec::new();
     }
-    let n = betas[0].nrows();
-    let mut intervals = Vec::with_capacity(n);
-    let mut values: Vec<f64> = Vec::with_capacity(betas.len());
-    for col in 0..n {
-        values.clear();
-        values.extend(betas.iter().map(|b| b[(col, 0)]));
-        intervals.push(
+    let mut values: Vec<f64> = Vec::with_capacity(draws.n_rows());
+    draws
+        .columns()
+        .map(|column| {
+            values.clear();
+            values.extend(column);
             percentile(&mut values, level, Percentile::Type7)
-                .unwrap_or_else(|_| Interval::new(None, None, level)),
-        );
-    }
-    intervals
+                .unwrap_or_else(|_| Interval::new(None, None, level))
+        })
+        .collect()
 }
 
 /// The mean, standard deviation and percentile intervals of bootstrap
-/// coefficients; empty for no draws.
+/// coefficients, one row of `draws` per replicate; empty for no draws.
 #[must_use]
-pub fn summary(betas: &[Mat<f64>], level: Level) -> BootstrapSummary {
-    if betas.is_empty() {
+pub fn summary(draws: &Matrix, level: Level) -> BootstrapSummary {
+    let r = draws.n_rows();
+    if r == 0 {
         return BootstrapSummary {
-            mean: Mat::zeros(0, 1),
-            se: Mat::zeros(0, 1),
+            mean: Vec::new(),
+            se: Vec::new(),
             intervals: Vec::new(),
         };
     }
-    let mean = mean_vector(betas);
-    let se = std_vector(betas, &mean);
-    let intervals = percentile_intervals(betas, level);
+    let count = usize_to_f64(r);
+    let mut mean = Vec::with_capacity(draws.n_columns());
+    let mut se = Vec::with_capacity(draws.n_columns());
+    for column in draws.columns() {
+        let values: Vec<f64> = column.collect();
+        let mut sum = 0.0;
+        for &value in &values {
+            sum += value;
+        }
+        let m = sum / count;
+        let mut squares = 0.0_f64;
+        for &value in &values {
+            let diff = value - m;
+            squares = diff.mul_add(diff, squares);
+        }
+        mean.push(m);
+        se.push((r > 1).then(|| (squares / (count - 1.0)).sqrt()));
+    }
+    let intervals = percentile_intervals(draws, level);
     BootstrapSummary {
         mean,
         se,
         intervals,
     }
 }
+

@@ -36,7 +36,7 @@ pub(super) fn elastic_net_wls(
             lambda,
             alpha,
             exclude_intercept,
-        } => (lambda.max(0.0), alpha.clamp(0.0, 1.0), exclude_intercept),
+        } => (lambda, alpha, exclude_intercept),
         _ => return Err(Error::Singular),
     };
 

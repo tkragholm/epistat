@@ -24,7 +24,8 @@
 //! `|D_new - D| / (|D_new| + 0.1)`, falls below `deviance_tolerance`, as R's
 //! `glm.fit` does \[3\], or when no coefficient moves by more than `tolerance`.
 //! A logit whose smaller class has no more rows than the design has columns is
-//! separable, and it is replaced by the intercept-only prevalence model.
+//! separable, and so is a constant indicator; the fit refuses both unless
+//! [`Separation::InterceptOnly`] asks for the intercept-only prevalence model.
 //!
 //! The gamma part has working weights `w_i`, so that without an elastic net
 //! `X' W X` is factorised once, and working response `eta_i + (y_i - mu_i) / mu_i`. It is fitted on a
@@ -43,11 +44,14 @@
 //! # Standard errors
 //!
 //! The model-based covariance of each part is the inverse of its information
-//! `X' W X` at the final coefficients, at unit dispersion for the gamma part. With
-//! `robust_se` it is the sandwich `B M B`, `B` that inverse and `M` the sum of
-//! the outer products of the score contributions `x_i w_i (y_i - p_i)` and
-//! `x_i w_i (y_i - mu_i) / mu_i`, summed within clusters first when cluster
-//! labels are given (HC0 without and CR0 with clusters) \[4\].
+//! `X' W X` at the final coefficients, scaled for the gamma part by the
+//! Pearson dispersion `sum w_i ((y_i - mu_i) / mu_i)^2 / (n - p)`, as R's
+//! `summary.glm` does. The sandwich is `B M B`, `B` the inverse information at
+//! unit dispersion and `M` the sum of the outer products of the score
+//! contributions `x_i w_i (y_i - p_i)` and `x_i w_i (y_i - mu_i) / mu_i`,
+//! summed within clusters first when cluster labels are given (HC0 without
+//! and CR0 with clusters) \[4\]. [`Variance`] chooses between them; by default
+//! clustered data get the sandwich.
 //!
 //! # References
 //!
@@ -71,22 +75,30 @@ pub use bootstrap::{BootstrapDraws, BootstrapSummary, bootstrap, percentile_inte
 use covariance::{covariance_gamma, covariance_logit};
 use irls::{GAMMA_LOG_LINK_ETA_CLAMP, fit_gamma_log_link_weighted, fit_logit_weighted};
 
-use crate::covariance::diag_sqrt;
 use crate::data::CostData;
 use crate::fit::{
     AttemptDiagnostics, FitMetadata, FitStrategy, Model, SolverKind, run_with_retries,
 };
 use crate::matrix_ops::{select_rows_ref, select_values_ref};
-use crate::utils::linear_predictor;
+use crate::tidy::{TableParts, table};
 #[cfg(feature = "bench-internals")]
 use crate::utils::weighted_xtz;
+use crate::utils::{column_mat, column_values, linear_predictor};
+use crate::variance::{
+    Inference, Variance, pearson_dispersion, residual_df, standard_errors, to_covariance,
+};
 use crate::{Error, check_columns};
-use epistat_core::{Interval, Level};
+use epistat_core::{
+    Coefficients, Covariance, EffectScale, Glance, Level, Tidy, VarianceKind, check,
+};
 use epistat_linalg::{Mat, MatRef};
 use epistat_stats::dist::gamma::ln_gamma;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 
 /// The penalty of the two parts.
+///
+/// [`fit`] refuses a penalty that is negative or not finite, an elastic-net
+/// mixing share outside `[0, 1]` and a prior scale that is not positive.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Regularization {
@@ -118,6 +130,53 @@ pub enum Regularization {
     },
 }
 
+impl Regularization {
+    /// The penalty's parameters checked.
+    fn check(self) -> Result<(), Error> {
+        let non_negative = |lambda: f64| {
+            if lambda.is_finite() && lambda >= 0.0 {
+                Ok(())
+            } else {
+                Err(crate::error::domain("lambda", lambda, "[0, inf)"))
+            }
+        };
+        match self {
+            Self::None => Ok(()),
+            Self::Ridge { lambda, .. } => non_negative(lambda),
+            Self::ElasticNet { lambda, alpha, .. } => {
+                non_negative(lambda)?;
+                if !(0.0..=1.0).contains(&alpha) {
+                    return Err(crate::error::domain("alpha", alpha, "[0, 1]"));
+                }
+                Ok(())
+            }
+            Self::BayesianRidge { prior_scale, .. } => {
+                check::positive("prior_scale", prior_scale).map_err(Into::into)
+            }
+        }
+    }
+}
+
+/// What [`fit`] does with a logit part that has no finite estimate.
+///
+/// A constant indicator has no logit to fit, and neither has one whose
+/// smaller class has no more rows than the design has columns: a separating
+/// hyperplane then always exists and the maximum-likelihood estimate is at
+/// infinity ([`InterceptOnly`]).
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Separation {
+    /// Refuse the fit with [`Error::Separation`].
+    #[default]
+    Refuse,
+    /// Replace the logit by the intercept-only prevalence model: the
+    /// intercept `logit(p)` of the weighted share `p` of positive outcomes,
+    /// clamped to `[min_weight, 1 - min_weight]`, and zero slopes. The fit
+    /// reports the replacement in
+    /// [`TwoPartReport::logit_intercept_only`].
+    InterceptOnly,
+}
+
 /// The options of [`fit`].
 ///
 /// The defaults are those of R's `glm.control` where it has the control
@@ -146,13 +205,12 @@ pub struct TwoPartOptions {
     pub min_weight: f64,
     /// The penalty.
     pub regularization: Regularization,
-    /// Whether the covariance is the sandwich, cluster-robust when the data
-    /// have clusters, rather than the model-based one.
-    pub robust_se: bool,
-    /// Whether to compute the model-based covariance. A bootstrap that reads
-    /// only the coefficients of its replicates turns it off; the coefficients
-    /// do not change.
-    pub compute_covariance: bool,
+    /// The covariance of each part; by default the sandwich for clustered
+    /// data or sampling weights and the model-based covariance otherwise.
+    pub variance: Variance,
+    /// What a logit without a finite estimate does; refused by default, as
+    /// R's `glm` warns that fitted probabilities of 0 or 1 occurred.
+    pub separation: Separation,
     /// What a fit that fails does.
     pub strategy: FitStrategy,
 }
@@ -166,8 +224,8 @@ impl Default for TwoPartOptions {
             max_step_halvings: 25,
             min_weight: 1e-6,
             regularization: Regularization::None,
-            robust_se: false,
-            compute_covariance: true,
+            variance: Variance::Auto,
+            separation: Separation::Refuse,
             strategy: FitStrategy::Strict,
         }
     }
@@ -192,14 +250,12 @@ impl TwoPartOptions {
     }
 }
 
-/// Why the logit part is the intercept-only prevalence model.
+/// Why the logit part has no finite estimate.
 ///
 /// A constant indicator has no logit to fit, and neither has one whose
 /// smaller class has no more rows than the design has columns: a separating
 /// hyperplane then always exists and the maximum-likelihood estimate is at
-/// infinity. The fit then reports the intercept `logit(p)` of the weighted
-/// share `p` of positive outcomes, clamped to `[min_weight, 1 - min_weight]`,
-/// and zero slopes.
+/// infinity. Rows with a weight of 0 are not counted.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterceptOnly {
@@ -217,60 +273,128 @@ pub enum InterceptOnly {
     },
 }
 
+/// Which part of a two-part model a [`PartFit`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Part {
+    Logit,
+    Gamma,
+}
+
+/// One part of a two-part model: its coefficients and covariance.
+///
+/// [`Tidy`] gives its coefficient table: log odds ratios for the logit part,
+/// log mean ratios for the gamma part. The model-based table of the gamma
+/// part refers its Wald statistics to Student's t on the residual degrees of
+/// freedom, as R's `summary.glm` does for a family with an estimated
+/// dispersion; the sandwich tables and the logit part use the normal.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct PartFit {
+    /// The coefficients, one per column of the design.
+    pub coefficients: Vec<f64>,
+    /// The covariance of the coefficients, `None` when the options asked for
+    /// none ([`Variance::None`]).
+    pub covariance: Option<Covariance>,
+    /// The standard errors, the roots of the covariance's diagonal; `None`
+    /// where the variance is undefined or negative, and for every coefficient
+    /// without a covariance.
+    pub se: Vec<Option<f64>>,
+    /// The dispersion: 1 for the logit part, and for the gamma part R's
+    /// Pearson estimate `sum w_i ((y_i - mu_i) / mu_i)^2 / (n - p)` on the
+    /// positive rows, `None` without residual degrees of freedom. The
+    /// model-based covariance of the gamma part is scaled by it.
+    pub dispersion: Option<f64>,
+    /// The residual degrees of freedom, the rows that entered the part (or
+    /// the sum of frequency weights) less the coefficients; `None` when not
+    /// positive.
+    pub df_residual: Option<f64>,
+    /// The rows the part was fitted to: every row for the logit part, the
+    /// positive outcomes for the gamma part.
+    pub n: usize,
+    /// The rows among them with a positive weight, which entered the fit.
+    pub n_used: usize,
+    /// Fit metadata of the part.
+    pub meta: FitMetadata,
+    part: Part,
+    variance: Option<VarianceKind>,
+}
+
+impl Tidy for PartFit {
+    type Error = Error;
+
+    fn coefficients(&self, level: Level, variance: VarianceKind) -> Result<Coefficients, Error> {
+        let (effect, t_df) = match self.part {
+            Part::Logit => (EffectScale::LogOddsRatio, None),
+            Part::Gamma => (
+                EffectScale::LogMeanRatio,
+                if variance == VarianceKind::ModelBased {
+                    self.df_residual
+                } else {
+                    None
+                },
+            ),
+        };
+        table(
+            &TableParts {
+                coefficients: &self.coefficients,
+                covariance: self.covariance.as_ref(),
+                computed: self.variance,
+                effect,
+                t_df,
+            },
+            level,
+            variance,
+        )
+    }
+
+    /// The covariance the fit computed, model-based when it computed none.
+    fn default_variance(&self) -> VarianceKind {
+        self.variance.unwrap_or(VarianceKind::ModelBased)
+    }
+
+    fn glance(&self) -> Glance {
+        Glance::new(self.n, self.n_used, self.meta.converged)
+            .with_iterations(Some(self.meta.iterations))
+            .with_deviance(None, self.df_residual)
+    }
+}
+
 /// A fitted two-part model.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TwoPartModel {
-    /// Logistic regression coefficients for Pr(y > 0).
-    pub beta_logit: Mat<f64>,
-    /// Gamma-log regression coefficients for E[y | y > 0].
-    pub beta_gamma: Mat<f64>,
+    /// The logit part, `Pr(y > 0)`.
+    pub logit: PartFit,
+    /// The gamma part with log link, `E[y | y > 0]`.
+    pub gamma: PartFit,
     /// Fit diagnostics.
     pub report: TwoPartReport,
 }
 
-/// Two-part model predictions, one row per row of the design.
+/// Two-part model predictions, one entry per row of the design.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TwoPartPrediction {
-    /// Predicted probability of any positive outcome.
-    pub prob_positive: Mat<f64>,
-    /// Predicted mean of positive outcomes.
-    pub mean_positive: Mat<f64>,
-    /// Predicted expected outcome (probability * `mean_positive`).
-    pub expected_outcome: Mat<f64>,
+    /// The probability of a positive outcome.
+    pub prob_positive: Vec<f64>,
+    /// The mean of a positive outcome, `E[y | y > 0, x]`.
+    pub mean_positive: Vec<f64>,
+    /// The mean of the outcome, `E[y | x]`, the product of the two.
+    pub mean: Vec<f64>,
 }
 
-/// The diagnostics and covariances of a two-part fit.
+/// The diagnostics of a two-part fit.
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct TwoPartReport {
     /// Fit metadata of the two parts together.
     pub meta: FitMetadata,
-    /// Fit metadata of the logit part.
-    pub logit_meta: FitMetadata,
-    /// Fit metadata of the gamma part.
-    pub gamma_meta: FitMetadata,
-    /// Iterations of the logit part, 0 when it is intercept-only.
-    pub iterations_logit: usize,
-    /// Iterations of the gamma part.
-    pub iterations_gamma: usize,
     /// Why the logit part is the intercept-only prevalence model, `None` when
-    /// it was fitted.
+    /// it was fitted. Only [`Separation::InterceptOnly`] gives one.
     pub logit_intercept_only: Option<InterceptOnly>,
-    /// Standard errors for the logistic coefficients.
-    pub se_logit: Option<Mat<f64>>,
-    /// Standard errors for the gamma-log coefficients.
-    pub se_gamma: Option<Mat<f64>>,
-    /// Covariance matrix for the logistic coefficients.
-    pub cov_logit: Option<Mat<f64>>,
-    /// Covariance matrix for the gamma-log coefficients.
-    pub cov_gamma: Option<Mat<f64>>,
-    /// True if robust (sandwich) covariance was used.
-    pub robust: bool,
-    /// True if cluster-robust covariance was used.
-    pub clustered: bool,
-    /// Number of clusters used for cluster-robust covariance.
+    /// The covariance of both parts, `None` when none was computed.
+    pub variance: Option<VarianceKind>,
+    /// The number of clusters of a clustered sandwich, `None` otherwise.
     pub cluster_count: Option<usize>,
     /// The failed attempts before the one that succeeded, under
     /// [`FitStrategy::Relaxed`].
@@ -291,10 +415,14 @@ impl TwoPartModel {
     /// [`Error::Input`] when `x` does not have one column per coefficient or
     /// `weights` is not one value per row.
     pub fn predict_mean(&self, x: MatRef<'_, f64>, weights: Option<&[f64]>) -> Result<f64, Error> {
-        check_columns(x, self.beta_logit.nrows(), weights)?;
+        check_columns(x, self.logit.coefficients.len(), weights)?;
+        let (logit, gamma) = (
+            column_mat(&self.logit.coefficients),
+            column_mat(&self.gamma.coefficients),
+        );
         Ok(crate::utils::mean_of_row_values(
             x,
-            [&self.beta_logit, &self.beta_gamma],
+            [&logit, &gamma],
             weights,
             |[eta_logit, eta_gamma]| {
                 let prob = 1.0 / (1.0 + (-eta_logit).exp());
@@ -318,7 +446,7 @@ impl TwoPartModel {
     pub fn log_likelihood(&self, data: &CostData<'_>) -> Result<f64, Error> {
         let prediction = self.predict(data.x())?;
         Ok(log_likelihood(
-            data.y_column(),
+            data.y(),
             &prediction.prob_positive,
             &prediction.mean_positive,
         ))
@@ -330,23 +458,23 @@ impl Model for TwoPartModel {
     type Report = TwoPartReport;
 
     fn predict(&self, x: MatRef<'_, f64>) -> Result<Self::Prediction, Error> {
-        check_columns(x, self.beta_logit.nrows(), None)?;
-        let eta_logit = linear_predictor(x, &self.beta_logit);
-        let eta_gamma = linear_predictor(x, &self.beta_gamma);
+        check_columns(x, self.logit.coefficients.len(), None)?;
+        let eta_logit = linear_predictor(x, &column_mat(&self.logit.coefficients));
+        let eta_gamma = linear_predictor(x, &column_mat(&self.gamma.coefficients));
         let n = x.nrows();
         let mut out = TwoPartPrediction {
-            prob_positive: Mat::zeros(n, 1),
-            mean_positive: Mat::zeros(n, 1),
-            expected_outcome: Mat::zeros(n, 1),
+            prob_positive: Vec::with_capacity(n),
+            mean_positive: Vec::with_capacity(n),
+            mean: Vec::with_capacity(n),
         };
         for i in 0..n {
             let prob = 1.0 / (1.0 + (-eta_logit[(i, 0)]).exp());
             let mean = eta_gamma[(i, 0)]
                 .clamp(-GAMMA_LOG_LINK_ETA_CLAMP, GAMMA_LOG_LINK_ETA_CLAMP)
                 .exp();
-            out.prob_positive[(i, 0)] = prob;
-            out.mean_positive[(i, 0)] = mean;
-            out.expected_outcome[(i, 0)] = prob * mean;
+            out.prob_positive.push(prob);
+            out.mean_positive.push(mean);
+            out.mean.push(prob * mean);
         }
         Ok(out)
     }
@@ -363,31 +491,48 @@ impl Model for TwoPartModel {
 #[derive(Clone, Debug)]
 pub struct TwoPartWarmStart {
     /// Logit coefficients.
-    pub beta_logit: Mat<f64>,
+    pub logit: Vec<f64>,
     /// Gamma coefficients.
-    pub beta_gamma: Mat<f64>,
+    pub gamma: Vec<f64>,
+}
+
+impl From<&TwoPartModel> for TwoPartWarmStart {
+    fn from(model: &TwoPartModel) -> Self {
+        Self {
+            logit: model.logit.coefficients.clone(),
+            gamma: model.gamma.coefficients.clone(),
+        }
+    }
 }
 
 /// Fit the two-part model: a logit for `y > 0` on every row and a gamma
 /// regression with log link on the positive rows, from `warm` when given.
 ///
-/// The weights of `data` are prior weights of both parts. With
-/// `robust_se` the covariances are sandwiches, cluster-robust when `data`
-/// has clusters.
+/// The weights of `data` are case weights of both parts; a row with weight 0
+/// leaves the fit. The covariances are those `options.variance` chooses,
+/// clustered sandwiches when `data` has clusters and the sandwich is chosen.
 ///
 /// # Errors
 ///
-/// [`Error::NoPositiveOutcome`] when no outcome is positive;
-/// [`Error::NotConverged`], [`Error::Saturated`], [`Error::NotFinite`] or
-/// [`Error::Singular`] when a part fails and the strategy does not recover it.
+/// [`Error::Input`] for a penalty outside its domain ([`Regularization`]);
+/// [`Error::Unsupported`] for a model-based covariance with sampling weights;
+/// [`Error::NoPositiveOutcome`] when no outcome with a positive weight is
+/// positive; [`Error::Separation`] for a logit without a finite estimate
+/// under [`Separation::Refuse`]; [`Error::NotConverged`], [`Error::Saturated`],
+/// [`Error::NotFinite`] or [`Error::Singular`] when a part fails and the
+/// strategy does not recover it.
 pub fn fit(
     data: &CostData<'_>,
     options: &TwoPartOptions,
     warm: Option<&TwoPartWarmStart>,
 ) -> Result<TwoPartModel, Error> {
     let options = *options;
+    options.regularization.check()?;
+    let inference = options.variance.resolve(data)?;
     let x = data.x();
     let y = data.y_column();
+    let ones = Mat::from_fn(y.nrows(), 1, |_, _| 1.0);
+    let weights = data.weights_column().unwrap_or(ones.as_ref());
     let retried = run_with_retries(
         options,
         options.strategy,
@@ -405,13 +550,16 @@ pub fn fit(
             Regularization::BayesianRidge { prior_scale, .. } => 1.0 / (prior_scale * prior_scale),
             Regularization::None => 0.0,
         },
-        |current_options| match (data.weights_column(), data.clusters()) {
-            (Some(weights), Some(clusters)) => {
-                fit_two_part_clustered_weighted(x, y, weights, clusters, current_options, warm)
-            }
-            (Some(weights), None) => fit_two_part_weighted(x, y, weights, current_options, warm),
-            (None, Some(clusters)) => fit_two_part_clustered(x, y, clusters, current_options),
-            (None, None) => fit_two_part_unweighted(x, y, current_options),
+        |current_options| {
+            fit_two_part_weighted(
+                x,
+                y,
+                weights,
+                data.clusters(),
+                current_options,
+                inference,
+                warm,
+            )
         },
     )?;
 
@@ -421,34 +569,38 @@ pub fn fit(
     Ok(model)
 }
 
-/// The unweighted fit, with every prior weight 1.
-pub(crate) fn fit_two_part_unweighted(
-    x: MatRef<'_, f64>,
-    y: MatRef<'_, f64>,
-    options: TwoPartOptions,
-) -> Result<TwoPartModel, Error> {
-    let weights = Mat::from_fn(y.nrows(), 1, |_, _| 1.0);
-    fit_two_part_weighted(x, y, weights.as_ref(), options, None)
-}
-
-/// The weighted fit with model-based covariances.
+/// The weighted fit of checked columns, with the covariance `inference`
+/// asks for, clustered when `clusters` is given and the sandwich is asked for.
 pub(crate) fn fit_two_part_weighted(
     x: MatRef<'_, f64>,
     y: MatRef<'_, f64>,
     weights: MatRef<'_, f64>,
+    clusters: Option<&[u32]>,
     options: TwoPartOptions,
+    inference: Inference,
     warm: Option<&TwoPartWarmStart>,
 ) -> Result<TwoPartModel, Error> {
     let is_positive = Mat::from_fn(y.nrows(), 1, |i, _| if y[(i, 0)] > 0.0 { 1.0 } else { 0.0 });
+    let warm_logit = warm.map(|w| column_mat(&w.logit));
     let (beta_logit, iterations_logit, logit_intercept_only) = fit_logit_weighted(
         x,
         is_positive.as_ref(),
         weights,
         options,
-        warm.map(|w| &w.beta_logit),
+        warm_logit.as_ref(),
     )?;
+    match logit_intercept_only {
+        Some(InterceptOnly::AllZero) => return Err(Error::NoPositiveOutcome),
+        Some(reason) if options.separation == Separation::Refuse => {
+            return Err(Error::Separation { reason });
+        }
+        _ => {}
+    }
 
-    let positive_indices: Vec<usize> = (0..y.nrows()).filter(|&idx| y[(idx, 0)] > 0.0).collect();
+    // A positive row with weight 0 leaves the gamma part.
+    let positive_indices: Vec<usize> = (0..y.nrows())
+        .filter(|&idx| y[(idx, 0)] > 0.0 && weights[(idx, 0)] > 0.0)
+        .collect();
     if positive_indices.is_empty() {
         return Err(Error::NoPositiveOutcome);
     }
@@ -457,40 +609,64 @@ pub(crate) fn fit_two_part_weighted(
     let y_pos = select_values_ref(y, &positive_indices);
     let w_pos = select_values_ref(weights, &positive_indices);
 
+    let warm_gamma = warm.map(|w| column_mat(&w.gamma));
     let (beta_gamma, iterations_gamma) = fit_gamma_log_link_weighted(
         x_pos.as_ref(),
         y_pos.as_ref(),
         w_pos.as_ref(),
         options,
-        warm.map(|w| &w.beta_gamma),
+        warm_gamma.as_ref(),
     )?;
 
-    // The cluster-robust path replaces these with sandwiches, and a bootstrap
-    // replicate reads only the coefficients, so both turn them off.
-    let (cov_logit, cov_gamma) = if options.compute_covariance {
-        (
-            Some(covariance_logit(
+    let p = x.ncols();
+    let (n_used_logit, df_logit) = residual_df(weights, inference.frequency, p);
+    let (n_used_gamma, df_gamma) = residual_df(w_pos.as_ref(), inference.frequency, p);
+    let eta_gamma = linear_predictor(x_pos.as_ref(), &beta_gamma);
+    let dispersion_gamma = pearson_dispersion(
+        w_pos.as_ref(),
+        |i| {
+            let mu = eta_gamma[(i, 0)].exp();
+            (y_pos[(i, 0)] - mu) / mu
+        },
+        df_gamma,
+    );
+
+    let robust = inference.robust();
+    let clusters = clusters.filter(|_| robust);
+    let clusters_pos: Option<Vec<u32>> =
+        clusters.map(|labels| positive_indices.iter().map(|&i| labels[i]).collect());
+    let (cov_logit, cov_gamma) = match inference.variance {
+        Some(_) => {
+            let logit = covariance_logit(
                 x,
                 is_positive.as_ref(),
                 weights,
                 &beta_logit,
-                None,
+                clusters,
                 options,
-            )?),
-            Some(covariance_gamma(
+                robust,
+            )?;
+            let gamma = covariance_gamma(
                 x_pos.as_ref(),
                 y_pos.as_ref(),
                 w_pos.as_ref(),
                 &beta_gamma,
-                None,
+                clusters_pos.as_deref(),
                 options,
-            )?),
-        )
-    } else {
-        (None, None)
+                robust,
+            )?;
+            // The model-based gamma covariance is the inverse information at unit
+            // dispersion scaled by the Pearson dispersion; the sandwich does not
+            // involve the dispersion.
+            let gamma = if robust {
+                Some(to_covariance(&gamma, 1.0))
+            } else {
+                dispersion_gamma.map(|phi| to_covariance(&gamma, phi))
+            };
+            (Some(to_covariance(&logit, 1.0)), gamma)
+        }
+        None => (None, None),
     };
-    let se_logit = cov_logit.as_ref().map(diag_sqrt);
-    let se_gamma = cov_gamma.as_ref().map(diag_sqrt);
 
     let meta = |iterations| FitMetadata {
         iterations,
@@ -498,101 +674,54 @@ pub(crate) fn fit_two_part_weighted(
         solver: SolverKind::Irls,
         ..FitMetadata::default()
     };
+    let part = |part, beta: &Mat<f64>, covariance: Option<Covariance>, rows| {
+        let (n, n_used, df, dispersion, iterations) = match part {
+            Part::Logit => (rows, n_used_logit, df_logit, Some(1.0), iterations_logit),
+            Part::Gamma => (rows, n_used_gamma, df_gamma, dispersion_gamma, iterations_gamma),
+        };
+        PartFit {
+            coefficients: column_values(beta),
+            se: standard_errors(covariance.as_ref(), p),
+            covariance,
+            dispersion,
+            df_residual: df,
+            n,
+            n_used,
+            meta: meta(iterations),
+            part,
+            variance: inference.variance,
+        }
+    };
+    let cluster_count =
+        clusters.map(|labels| labels.iter().copied().collect::<BTreeSet<_>>().len());
     let report = TwoPartReport {
         meta: meta(iterations_logit + iterations_gamma),
-        logit_meta: meta(iterations_logit),
-        gamma_meta: meta(iterations_gamma),
-        iterations_logit,
-        iterations_gamma,
         logit_intercept_only,
-        se_logit,
-        se_gamma,
-        cov_logit,
-        cov_gamma,
-        robust: options.robust_se,
-        clustered: false,
-        cluster_count: None,
+        variance: inference.variance,
+        cluster_count,
         attempts: Vec::new(),
     };
 
     Ok(TwoPartModel {
-        beta_logit,
-        beta_gamma,
+        logit: part(Part::Logit, &beta_logit, cov_logit, y.nrows()),
+        gamma: part(Part::Gamma, &beta_gamma, cov_gamma, positive_indices.len()),
         report,
     })
-}
-
-fn fit_two_part_clustered(
-    x: MatRef<'_, f64>,
-    y: MatRef<'_, f64>,
-    clusters: &[u32],
-    options: TwoPartOptions,
-) -> Result<TwoPartModel, Error> {
-    let weights = Mat::from_fn(y.nrows(), 1, |_, _| 1.0);
-    fit_two_part_clustered_weighted(x, y, weights.as_ref(), clusters, options, None)
-}
-
-fn fit_two_part_clustered_weighted(
-    x: MatRef<'_, f64>,
-    y: MatRef<'_, f64>,
-    weights: MatRef<'_, f64>,
-    clusters: &[u32],
-    options: TwoPartOptions,
-    warm: Option<&TwoPartWarmStart>,
-) -> Result<TwoPartModel, Error> {
-    let mut model = fit_two_part_weighted(x, y, weights, options, warm)?;
-    if !options.robust_se {
-        return Ok(model);
-    }
-
-    let is_positive = Mat::from_fn(y.nrows(), 1, |i, _| if y[(i, 0)] > 0.0 { 1.0 } else { 0.0 });
-    let positive_indices: Vec<usize> = (0..y.nrows()).filter(|&idx| y[(idx, 0)] > 0.0).collect();
-    let x_pos = select_rows_ref(x, &positive_indices);
-    let y_pos = select_values_ref(y, &positive_indices);
-    let w_pos = select_values_ref(weights, &positive_indices);
-    let clusters_pos: Vec<u32> = positive_indices.iter().map(|&i| clusters[i]).collect();
-
-    let cov_logit = covariance_logit(
-        x,
-        is_positive.as_ref(),
-        weights,
-        &model.beta_logit,
-        Some(clusters),
-        options,
-    )?;
-    let cov_gamma = covariance_gamma(
-        x_pos.as_ref(),
-        y_pos.as_ref(),
-        w_pos.as_ref(),
-        &model.beta_gamma,
-        Some(&clusters_pos),
-        options,
-    )?;
-
-    let report = &mut model.report;
-    report.se_logit = Some(diag_sqrt(&cov_logit));
-    report.se_gamma = Some(diag_sqrt(&cov_gamma));
-    report.cov_logit = Some(cov_logit);
-    report.cov_gamma = Some(cov_gamma);
-    report.robust = true;
-    report.clustered = true;
-    report.cluster_count = Some(clusters.iter().collect::<HashSet<_>>().len());
-    Ok(model)
 }
 
 /// The two-part log-likelihood of `y` at the predicted probabilities and
 /// positive means, with the gamma dispersion from the Pearson residuals of
 /// the positive outcomes.
-pub(crate) fn log_likelihood(y: MatRef<'_, f64>, prob: &Mat<f64>, mean_pos: &Mat<f64>) -> f64 {
+pub(crate) fn log_likelihood(y: &[f64], prob: &[f64], mean_pos: &[f64]) -> f64 {
     let mut loglik = 0.0;
     let mut phi_sum = 0.0;
     let mut n_pos = 0.0;
-    for i in 0..y.nrows() {
-        let yi = y[(i, 0)];
-        let pi = prob[(i, 0)].clamp(1e-12, 1.0 - 1e-12);
+    for i in 0..y.len() {
+        let yi = y[i];
+        let pi = prob[i].clamp(1e-12, 1.0 - 1e-12);
         if yi > 0.0 {
             loglik += pi.ln();
-            let mu = mean_pos[(i, 0)].max(1e-12);
+            let mu = mean_pos[i].max(1e-12);
             phi_sum += (yi - mu).powi(2) / (mu * mu);
             n_pos += 1.0;
         } else {
@@ -606,10 +735,10 @@ pub(crate) fn log_likelihood(y: MatRef<'_, f64>, prob: &Mat<f64>, mean_pos: &Mat
 
     let phi = (phi_sum / n_pos).max(1e-8);
     let shape = 1.0 / phi;
-    for i in 0..y.nrows() {
-        let yi = y[(i, 0)];
+    for i in 0..y.len() {
+        let yi = y[i];
         if yi > 0.0 {
-            let mu = mean_pos[(i, 0)].max(1e-12);
+            let mu = mean_pos[i].max(1e-12);
             let scale = mu * phi;
             loglik += (shape - 1.0).mul_add(yi.ln(), -(yi / scale))
                 - ln_gamma(shape)
@@ -617,34 +746,6 @@ pub(crate) fn log_likelihood(y: MatRef<'_, f64>, prob: &Mat<f64>, mean_pos: &Mat
         }
     }
     loglik
-}
-
-/// Wald intervals `beta_j ± z se_j` from a covariance, with `z` the normal
-/// quantile at the level's upper probability and `se_j` the root of the
-/// diagonal, a negative variance read as 0.
-///
-/// # Errors
-///
-/// [`Error::Input`] when `cov` is not square with one row per coefficient.
-pub fn wald_intervals(
-    beta: &Mat<f64>,
-    cov: &Mat<f64>,
-    level: Level,
-) -> Result<Vec<Interval>, Error> {
-    let p = beta.nrows();
-    epistat_core::check::same_length("rows of cov", p, cov.nrows())?;
-    epistat_core::check::same_length("columns of cov", p, cov.ncols())?;
-    let z = epistat_stats::dist::normal::quantile(level.upper_probability());
-    Ok((0..p)
-        .map(|i| {
-            let se = cov[(i, i)].max(0.0).sqrt();
-            Interval::new(
-                Some(beta[(i, 0)] - z * se),
-                Some(beta[(i, 0)] + z * se),
-                level,
-            )
-        })
-        .collect())
 }
 
 #[cfg(feature = "bench-internals")]

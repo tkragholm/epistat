@@ -8,7 +8,7 @@
 //! gives, and the test asserts them only on that target. Elsewhere it computes them
 //! and, when `EPISTAT_HASH_OUT` is set, appends them to that file. Print them with
 //! `GOLDEN_PRINT=1 cargo test --test estimator_fingerprints -- --nocapture`.
-use epistat_core::{Bootstrap, Interval, Level, Seed};
+use epistat_core::{Bootstrap, CaseWeights, Covariance, Interval, Level, Matrix, Seed, Tidy, VarianceKind};
 use epistat_linalg::Mat;
 use epistat_rng::Stream as Draws;
 use epistat_semicontinuous::compare::{CompareOptions, ModelComparison, ModelFitMetrics};
@@ -25,7 +25,7 @@ use epistat_semicontinuous::two_part::{
     Regularization, TwoPartModel, TwoPartOptions, TwoPartWarmStart,
 };
 use epistat_semicontinuous::{
-    CostData, LongitudinalData, compare, lognormal, mtp, tweedie, two_part,
+    CostData, LongitudinalData, Variance, compare, lognormal, mtp, tweedie, two_part,
 };
 use epistat_testkit::Fingerprint;
 
@@ -61,7 +61,7 @@ impl Fixture {
     fn data(&self) -> CostData<'_> {
         let mut data = CostData::builder(self.x.as_ref(), &self.y);
         if let Some(weights) = &self.weights {
-            data = data.weights(weights);
+            data = data.weights(CaseWeights::new(weights).expect("weights"));
         }
         if let Some(clusters) = &self.clusters {
             data = data.clusters(clusters);
@@ -221,10 +221,49 @@ impl Hasher {
         }
     }
 
-    fn opt(&mut self, m: Option<&Mat<f64>>) {
-        match m {
-            Some(m) => self.mat(m),
-            None => self.word(u64::MAX),
+    /// A vector, hashed as the `n x 1` matrix it was.
+    fn vec(&mut self, v: &[f64]) {
+        self.n(v.len());
+        self.n(1);
+        for &value in v {
+            self.f(value);
+        }
+    }
+
+    /// A covariance, hashed as the matrix it was, column by column; `None`
+    /// as a missing matrix.
+    fn cov(&mut self, c: Option<&Covariance>) {
+        let Some(c) = c else {
+            self.word(u64::MAX);
+            return;
+        };
+        self.n(c.dim());
+        self.n(c.dim());
+        for j in 0..c.dim() {
+            for i in 0..c.dim() {
+                self.f(c.get(i, j).unwrap_or(f64::NAN));
+            }
+        }
+    }
+
+    /// Standard errors, hashed as the `n x 1` matrix they were, or as a
+    /// missing matrix when the fit computed no covariance.
+    fn se(&mut self, se: &[Option<f64>], covariance: Option<&Covariance>) {
+        if covariance.is_none() {
+            self.word(u64::MAX);
+            return;
+        }
+        self.n(se.len());
+        self.n(1);
+        for value in se {
+            self.f(value.unwrap_or(f64::NAN));
+        }
+    }
+
+    /// Draws, one row per replicate, each hashed as the `n x 1` matrix it was.
+    fn draws(&mut self, draws: &Matrix) {
+        for row in draws.rows() {
+            self.vec(row);
         }
     }
 
@@ -246,16 +285,16 @@ impl Hasher {
     }
 
     fn two_part(&mut self, model: &TwoPartModel) {
-        let report = &model.report;
-        self.mat(&model.beta_logit);
-        self.mat(&model.beta_gamma);
-        self.opt(report.se_logit.as_ref());
-        self.opt(report.se_gamma.as_ref());
-        self.opt(report.cov_logit.as_ref());
-        self.opt(report.cov_gamma.as_ref());
-        self.n(report.iterations_logit);
-        self.n(report.iterations_gamma);
-        self.n(report.meta.fallback_attempts);
+        let (logit, gamma) = (&model.logit, &model.gamma);
+        self.vec(&logit.coefficients);
+        self.vec(&gamma.coefficients);
+        self.se(&logit.se, logit.covariance.as_ref());
+        self.se(&gamma.se, gamma.covariance.as_ref());
+        self.cov(logit.covariance.as_ref());
+        self.cov(gamma.covariance.as_ref());
+        self.n(logit.meta.iterations);
+        self.n(gamma.meta.iterations);
+        self.n(model.report.meta.fallback_attempts);
     }
 
     fn comparison(&mut self, comparison: &ModelComparison) {
@@ -283,6 +322,12 @@ impl Hasher {
             self.metrics(&row.metrics);
             self.f(row.aic.unwrap_or(f64::NAN));
             self.f(row.bic.unwrap_or(f64::NAN));
+        }
+        if let Some(lognormal) = &comparison.lognormal {
+            self.metrics(&lognormal.in_sample);
+            if let Some(cv) = &lognormal.cross_validated {
+                self.metrics(cv);
+            }
         }
     }
 
@@ -332,17 +377,17 @@ fn bootstrap(out: &mut Golden, input: &Fixture) {
     )
     .expect("bootstrap");
     let mut h = Hasher::new();
-    for beta in result.betas_logit.iter().chain(&result.betas_gamma) {
-        h.mat(beta);
-    }
+    h.draws(&result.logit);
+    h.draws(&result.gamma);
     h.n(result.failures);
     out.push(("bootstrap/draws", h.finish()));
 
     let mut h = Hasher::new();
-    for betas in [&result.betas_logit, &result.betas_gamma] {
+    for betas in [&result.logit, &result.gamma] {
         let summary = two_part::summary(betas, Level::alpha(0.05).expect("level"));
-        h.mat(&summary.mean);
-        h.mat(&summary.se);
+        h.vec(&summary.mean);
+        let se: Vec<f64> = summary.se.iter().map(|se| se.expect("draws")).collect();
+        h.vec(&se);
         h.intervals(&summary.intervals);
         h.intervals(&two_part::percentile_intervals(
             betas,
@@ -355,17 +400,22 @@ fn bootstrap(out: &mut Golden, input: &Fixture) {
 fn two_part_variants(out: &mut Golden, input: &Fixture) -> TwoPartWarmStart {
     let data = input.data();
     let robust = TwoPartOptions {
-        robust_se: true,
+        variance: Variance::Sandwich,
         ..TwoPartOptions::default()
     };
     let model = two_part::fit(&data, &robust, None).expect("clustered");
     let mut h = Hasher::new();
     h.two_part(&model);
-    let cov = model.report.cov_gamma.as_ref().expect("covariance");
-    h.intervals(
-        &two_part::wald_intervals(&model.beta_gamma, cov, Level::alpha(0.05).expect("level"))
-            .expect("intervals"),
-    );
+    let table = model
+        .gamma
+        .coefficients(Level::alpha(0.05).expect("level"), VarianceKind::Robust)
+        .expect("table");
+    let intervals: Vec<Interval> = table
+        .terms()
+        .iter()
+        .map(|term| term.estimate.and_then(|e| e.interval).expect("interval"))
+        .collect();
+    h.intervals(&intervals);
     out.push(("two_part/clustered/robust", h.finish()));
 
     let elastic = TwoPartOptions {
@@ -374,6 +424,7 @@ fn two_part_variants(out: &mut Golden, input: &Fixture) -> TwoPartWarmStart {
             alpha: 0.5,
             exclude_intercept: true,
         },
+        variance: Variance::ModelBased,
         ..TwoPartOptions::default()
     };
     let model = two_part::fit(&unweighted(input).data(), &elastic, None).expect("elastic net");
@@ -383,13 +434,10 @@ fn two_part_variants(out: &mut Golden, input: &Fixture) -> TwoPartWarmStart {
 
     let stable = TwoPartOptions::stable_defaults();
     let model = two_part::fit(&data, &stable, None).expect("stable");
-    let iterations_logit = model.report.iterations_logit;
-    let warm = TwoPartWarmStart {
-        beta_logit: model.beta_logit.clone(),
-        beta_gamma: model.beta_gamma.clone(),
-    };
+    let iterations_logit = model.logit.meta.iterations;
+    let warm = TwoPartWarmStart::from(&model);
     let replicate = TwoPartOptions {
-        compute_covariance: false,
+        variance: Variance::None,
         ..stable
     };
     let model = two_part::fit(&data, &replicate, Some(&warm)).expect("prevalidated");
@@ -410,54 +458,61 @@ fn compact(out: &mut Golden, input: &Fixture, warm: &TwoPartWarmStart) {
     let mut scratch = PreparedScratch::default();
 
     let positive = positive_rows(input);
-    let gamma_options = TweedieOptions::default();
+    let gamma_options = TweedieOptions {
+        variance: Variance::None,
+        ..TweedieOptions::default()
+    };
     let positive_data = positive.data();
     let gamma = tweedie::fit(&positive_data, 2.0, &gamma_options, None, None).expect("gamma");
     let design = PreparedGammaDesign::new(positive.x.as_ref(), &positive.y).expect("gamma design");
     let positive_weights = &weights[..positive.y.len()];
+    let case_weights = CaseWeights::new(positive_weights).expect("weights");
     let fit = design
-        .fit(positive_weights, &gamma.beta, &gamma_options, &mut scratch)
+        .fit(case_weights, &gamma.coefficients, &gamma_options, &mut scratch)
         .expect("compact gamma");
     let mut h = Hasher::new();
-    h.mat(&fit.beta);
+    h.vec(&fit.coefficients);
     h.n(fit.iterations);
     let mut tweedie_scratch = TweedieScratch::default();
-    let weighted = positive_data
-        .with_weights(positive_weights)
-        .expect("weights");
+    let weighted = positive_data.with_weights(case_weights).expect("weights");
     let dense = tweedie::fit(
         &weighted,
         2.0,
         &gamma_options,
-        Some(&gamma.beta),
+        Some(&gamma.coefficients),
         Some(&mut tweedie_scratch),
     )
     .expect("dense gamma");
-    h.mat(&dense.beta);
+    h.vec(&dense.coefficients);
     let prediction = PreparedPredictionDesign::new(positive.x.as_ref()).expect("prediction design");
-    h.f(prediction.mean_gamma(&fit.beta, positive_weights));
+    h.f(prediction.mean_gamma(&fit.coefficients, positive_weights));
     out.push(("compact/gamma", h.finish()));
 
     let options = TwoPartOptions {
-        compute_covariance: false,
+        variance: Variance::None,
         ..TwoPartOptions::default()
     };
     let design = PreparedTwoPartDesign::new(x.as_ref(), y).expect("two-part design");
     let fit = design
-        .fit(&weights, warm, &options, &mut scratch)
+        .fit(
+            CaseWeights::new(&weights).expect("weights"),
+            warm,
+            &options,
+            &mut scratch,
+        )
         .expect("compact two-part");
     let mut h = Hasher::new();
-    h.mat(&fit.beta_logit);
-    h.mat(&fit.beta_gamma);
+    h.vec(&fit.logit);
+    h.vec(&fit.gamma);
     let prediction = PreparedPredictionDesign::new(x.as_ref()).expect("prediction design");
-    h.f(prediction.mean_two_part(&fit.beta_logit, &fit.beta_gamma, &weights));
+    h.f(prediction.mean_two_part(&fit.logit, &fit.gamma, &weights));
     out.push(("compact/two_part", h.finish()));
 }
 
 fn selection(out: &mut Golden, input: &Fixture) {
     let plain = unweighted(input);
     let plain = plain.data();
-    let comparison = compare::compare(&plain, &CompareOptions::new(42)).expect("comparison");
+    let comparison = compare::compare(&plain, &CompareOptions::new(Seed(42))).expect("comparison");
     let mut h = Hasher::new();
     h.comparison(&comparison);
     out.push(("comparison/default", h.finish()));
@@ -471,7 +526,7 @@ fn selection(out: &mut Golden, input: &Fixture) {
             },
             ..TwoPartOptions::default()
         }),
-        ..CompareOptions::new(42)
+        ..CompareOptions::new(Seed(42))
     };
     let comparison = compare::compare(&plain, &options).expect("comparison");
     let mut h = Hasher::new();
@@ -485,29 +540,28 @@ fn selection(out: &mut Golden, input: &Fixture) {
     h.f(selected.park_test.map_or(0.0, |park| park.intercept));
     h.f(selected.park_test.map_or(2.0, |park| park.slope));
     for candidate in &selected.tweedie_candidates {
-        h.mat(&candidate.model.beta);
+        h.vec(&candidate.model.coefficients);
         h.metrics(&candidate.metrics);
         h.f(candidate.information_criteria.loglik);
         h.f(candidate.information_criteria.aic);
         h.f(candidate.information_criteria.bic);
     }
     if let Some(candidate) = &selected.lognormal_candidate {
-        h.mat(&candidate.model.beta);
+        h.vec(&candidate.model.coefficients);
         h.f(candidate.model.smearing_factor);
-        h.metrics(&candidate.metrics);
+        h.metrics(candidate.metrics.as_ref().expect("positive outcomes"));
     }
     out.push(("selection", h.finish()));
 
-    let model = lognormal::fit(
-        &input.data().without_weights(),
-        &LogNormalOptions::default(),
-    )
-    .expect("ln");
-    let report = &model.report;
+    let options = LogNormalOptions {
+        variance: Variance::None,
+        ..LogNormalOptions::default()
+    };
+    let model = lognormal::fit(&input.data().without_weights(), &options).expect("ln");
     let mut h = Hasher::new();
-    h.mat(&model.beta);
+    h.vec(&model.coefficients);
     h.f(model.smearing_factor);
-    h.opt(report.se.as_ref());
+    h.se(&model.se, model.covariance.as_ref());
     out.push(("lognormal/weighted", h.finish()));
 }
 
@@ -521,7 +575,7 @@ fn mtp(out: &mut Golden) {
         family_random_effects: FamilyRandomEffects::Disabled,
         chains: 3,
         keep_draws: true,
-        ..MtpOptions::new(11)
+        ..MtpOptions::new(Seed(11))
     };
     let model = mtp::fit(&input, &options).expect("mtp");
     let chains = model.draws.as_ref().expect("draws");

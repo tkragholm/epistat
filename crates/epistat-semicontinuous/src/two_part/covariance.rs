@@ -11,7 +11,7 @@ use crate::utils::{
     add_ridge_to_diagonal, linear_predictor, solve_linear_system, weighted_xtx_ref,
 };
 
-/// Logit-part covariance: model-based, or the sandwich when `robust_se` is set, with
+/// Logit-part covariance: model-based, or the sandwich when `robust` is set, with
 /// cluster-robust meat when `clusters` is given.
 pub(super) fn covariance_logit(
     x: MatRef<'_, f64>,
@@ -20,6 +20,7 @@ pub(super) fn covariance_logit(
     beta: &Mat<f64>,
     clusters: Option<&[u32]>,
     options: TwoPartOptions,
+    robust: bool,
 ) -> Result<Mat<f64>, Error> {
     let eta = linear_predictor(x, beta);
     let p = logistic(&eta);
@@ -34,7 +35,7 @@ pub(super) fn covariance_logit(
     {
         add_ridge_to_diagonal(&mut xtwx, lambda, exclude_intercept);
     }
-    if !options.robust_se {
+    if !robust {
         return covariance_from_information(&xtwx);
     }
 
@@ -47,8 +48,9 @@ pub(super) fn covariance_logit(
     sandwich(xtwx.as_ref(), meat.as_ref()).ok_or(Error::Singular)
 }
 
-/// Gamma-part covariance: model-based, or the sandwich when `robust_se` is set, with
-/// cluster-robust meat when `clusters` is given.
+/// Gamma-part covariance: the inverse information at unit dispersion, or the
+/// sandwich when `robust` is set, with cluster-robust meat when `clusters` is
+/// given.
 pub(super) fn covariance_gamma(
     x: MatRef<'_, f64>,
     y: MatRef<'_, f64>,
@@ -56,6 +58,7 @@ pub(super) fn covariance_gamma(
     beta: &Mat<f64>,
     clusters: Option<&[u32]>,
     options: TwoPartOptions,
+    robust: bool,
 ) -> Result<Mat<f64>, Error> {
     let eta = linear_predictor(x, beta);
     let mu = map_mat(&eta, f64::exp);
@@ -66,7 +69,7 @@ pub(super) fn covariance_gamma(
     {
         add_ridge_to_diagonal(&mut xtx, lambda, exclude_intercept);
     }
-    if !options.robust_se {
+    if !robust {
         return covariance_from_information(&xtx);
     }
 

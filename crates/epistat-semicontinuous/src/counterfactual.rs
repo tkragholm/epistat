@@ -1,8 +1,8 @@
 //! A design and outcome built from the caller's rows, with the exposure set to 1
 //! and to 0 for counterfactual contrasts.
 
-use epistat_core::InputError;
-use epistat_linalg::Mat;
+use epistat_core::{InputError, Matrix};
+use epistat_linalg::{Mat, MatRef};
 
 use crate::Error;
 use crate::data::CostData;
@@ -17,15 +17,18 @@ pub const TWO_PART_NOT_APPLICABLE_POSITIVE_SHARE: f64 = 0.995;
 #[derive(Debug, Clone)]
 pub struct CounterfactualDesign {
     /// The design, without its constant columns other than the intercept.
-    pub x: Mat<f64>,
-    /// The outcome, negative values clamped to 0.
+    pub x: Matrix,
+    /// The outcome.
     pub y: Vec<f64>,
     /// The design with the exposure set to 1.
-    pub x_treated: Mat<f64>,
+    pub x_treated: Matrix,
     /// The design with the exposure set to 0.
-    pub x_control: Mat<f64>,
+    pub x_control: Matrix,
     /// The column of the exposure in `x`.
     pub exposure_column: usize,
+    /// The column of the caller's design that each column of `x` is, so that
+    /// a coefficient can be mapped back to the caller's column.
+    pub kept_columns: Vec<usize>,
     /// The number of rows.
     pub n_rows: usize,
     /// The number of positive outcomes.
@@ -39,14 +42,30 @@ impl CounterfactualDesign {
     ///
     /// [`Error::Input`] when the design holds a value that is not finite.
     pub fn data(&self) -> Result<CostData<'_>, Error> {
-        CostData::builder(self.x.as_ref(), &self.y).build()
+        CostData::builder(view(&self.x), &self.y).build()
+    }
+
+    /// The design with the exposure set to 1, as a view a model predicts on.
+    #[must_use]
+    pub fn treated(&self) -> MatRef<'_, f64> {
+        view(&self.x_treated)
+    }
+
+    /// The design with the exposure set to 0, as a view a model predicts on.
+    #[must_use]
+    pub fn control(&self) -> MatRef<'_, f64> {
+        view(&self.x_control)
     }
 }
 
-/// Clamp finite outcomes to non-negative values for semi-continuous modeling.
-#[must_use]
-pub const fn sanitize_model_outcome(raw: f64) -> f64 {
-    if raw.is_finite() { raw.max(0.0) } else { raw }
+/// A row-major matrix as a faer view, without a copy.
+fn view(m: &Matrix) -> MatRef<'_, f64> {
+    MatRef::from_row_major_slice(m.as_slice(), m.n_rows(), m.n_columns())
+}
+
+/// A faer matrix as a [`Matrix`]; its entries are finite.
+fn to_matrix(m: &Mat<f64>) -> Matrix {
+    Matrix::from_fn(m.nrows(), m.ncols(), |i, j| m[(i, j)]).expect("a finite design")
 }
 
 /// Return whether two-part models are applicable for a positive outcome share.
@@ -62,11 +81,17 @@ pub fn two_part_applicability(positive_share: f64) -> bool {
 /// The `exposure_column` values are toggled to 1/0 in the returned counterfactual
 /// matrices after constant-column dropping.
 ///
+/// Only the exposure column changes between the two designs, so a design
+/// with a term that involves the exposure, such as an interaction, gives
+/// designs that do not set that term; build the two designs by hand for such
+/// a model.
+///
 /// # Errors
 ///
-/// [`Error::Input`] for no rows, an exposure column outside the design or an
-/// outcome that is not finite; [`Error::Invalid`] when the exposure does not
-/// vary or was dropped as constant.
+/// [`Error::Input`] for no rows, an exposure column outside the design, an
+/// outcome that is not finite or negative, or a design value that is not
+/// finite; [`Error::Invalid`] when the exposure does not vary or was dropped
+/// as constant.
 pub fn build_counterfactual_input<'a, R: 'a, FRow, FOutcome, FDesign>(
     n_rows: usize,
     mut row_at: FRow,
@@ -94,12 +119,21 @@ where
     let mut n_positive = 0_usize;
     for row_idx in 0..n_rows {
         let row = row_at(row_idx);
-        let y = sanitize_model_outcome(outcome(row));
+        let y = outcome(row);
         if !y.is_finite() {
             return Err(InputError::NotFinite {
                 what: "outcome",
                 row: row_idx,
                 column: None,
+            }
+            .into());
+        }
+        if y < 0.0 {
+            return Err(InputError::Domain {
+                what: "outcome",
+                value: y,
+                domain: "[0, inf)",
+                row: Some(row_idx),
             }
             .into());
         }
@@ -113,6 +147,16 @@ where
         let row = row_at(row_idx);
         design_value(row, col_idx)
     });
+    for j in 0..design_columns {
+        if let Some(row) = (0..n_rows).find(|&i| !x_full[(i, j)].is_finite()) {
+            return Err(InputError::NotFinite {
+                what: "design",
+                row,
+                column: Some(j),
+            }
+            .into());
+        }
+    }
 
     if !column_has_variation(x_full.as_ref(), exposure_column, constant_column_tolerance) {
         return Err(Error::Invalid {
@@ -142,11 +186,12 @@ where
     }
 
     Ok(CounterfactualDesign {
-        x,
+        x: to_matrix(&x),
         y: y_values,
-        x_treated,
-        x_control,
+        x_treated: to_matrix(&x_treated),
+        x_control: to_matrix(&x_control),
         exposure_column: exposure_col_reindexed,
+        kept_columns,
         n_rows,
         n_positive,
     })
@@ -245,10 +290,35 @@ mod tests {
         .expect("valid prepared input");
         assert_eq!(prepared.n_rows, 2);
         assert_eq!(prepared.n_positive, 1);
-        assert!((prepared.x_treated[(0, 1)] - 1.0).abs() < 1e-12);
-        assert!((prepared.x_control[(0, 1)] - 0.0).abs() < 1e-12);
+        assert_eq!(prepared.x_treated.get(0, 1), Some(1.0));
+        assert_eq!(prepared.x_control.get(0, 1), Some(0.0));
+        assert_eq!(prepared.kept_columns, [0, 1, 2, 3]);
+        assert_eq!(prepared.treated().ncols(), 4);
         assert_eq!(prepared.exposure_column, 1);
         assert!(prepared.data().is_ok());
+    }
+
+    #[test]
+    fn build_counterfactual_input_refuses_a_negative_outcome() {
+        let rows = [Row {
+            outcome: -1.0,
+            exposed: true,
+            followup: 0,
+            male: false,
+        }];
+        let result = build_counterfactual_input(
+            rows.len(),
+            |idx| &rows[idx],
+            |row| row.outcome,
+            4,
+            1,
+            design_value,
+            1e-12,
+        );
+        assert!(matches!(
+            result,
+            Err(Error::Input(InputError::Domain { row: Some(0), .. }))
+        ));
     }
 
     #[test]

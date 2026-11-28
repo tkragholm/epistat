@@ -20,6 +20,29 @@
 //! for bootstraps that refit one design many times. Every function returns
 //! the one [`Error`].
 //!
+//! # Results
+//!
+//! Coefficients are `Vec<f64>`, covariances
+//! [`Covariance`](epistat_core::Covariance) and tables of draws
+//! [`Matrix`](epistat_core::Matrix), so no result depends on the version of
+//! faer. Every fit implements [`Tidy`](epistat_core::Tidy) for its coefficient
+//! table: the two parts of a two-part model each
+//! ([`two_part::PartFit`]), the logit part on the log odds ratio scale and
+//! the gamma part on the log mean ratio scale, the Tweedie and log-normal
+//! models on the log mean ratio scale. [`Variance`] chooses the covariance of
+//! each fit; clustered data get the sandwich unless the model-based
+//! covariance is chosen.
+//!
+//! | field | meaning |
+//! |---|---|
+//! | `coefficients` | the estimates, one per column of the design |
+//! | `covariance` | their covariance, `None` when none was asked for |
+//! | `se` | the roots of its diagonal, `None` where undefined |
+//! | `dispersion` | the Pearson dispersion of a GLM part |
+//! | `df_residual` | the rows that entered less the coefficients |
+//! | `n`, `n_used` | the rows fitted to, and those with a positive weight |
+//! | `mean`, `mean_positive`, `prob_positive` | predictions of `E[y]`, `E[y \| y > 0]` and `Pr(y > 0)` |
+//!
 //! The fits use their own IRLS with fused multiply-add, so results are the same
 //! on any number of threads but can differ between platforms in the last bits.
 
@@ -32,8 +55,10 @@ pub mod lognormal;
 pub mod mtp;
 pub mod prepared;
 pub mod preprocess;
+mod tidy;
 pub mod tweedie;
 pub mod two_part;
+mod variance;
 
 mod covariance;
 mod matrix_ops;
@@ -43,3 +68,4 @@ pub(crate) use data::check_columns;
 pub use data::{CostData, CostDataBuilder, LongitudinalData, LongitudinalDataBuilder};
 pub use error::Error;
 pub use fit::{AttemptDiagnostics, AttemptOutcome, FitMetadata, FitStrategy, Model, SolverKind};
+pub use variance::Variance;

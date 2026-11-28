@@ -30,20 +30,25 @@ pub(super) fn fit_logit_weighted(
     let mut saw_positive = false;
     let mut saw_zero = false;
     let mut count_positive = 0usize;
+    let mut count_used = 0usize;
     for i in 0..y.nrows() {
         let yi = y[(i, 0)];
-        if yi > 0.0 {
-            saw_positive = true;
-            count_positive += 1;
-        } else {
-            saw_zero = true;
-        }
         let wi = weights[(i, 0)];
+        // A row with weight 0 leaves the fit, and so does not count in a class.
+        if wi > 0.0 {
+            count_used += 1;
+            if yi > 0.0 {
+                saw_positive = true;
+                count_positive += 1;
+            } else {
+                saw_zero = true;
+            }
+        }
         weighted_sum += wi;
         weighted_positive = yi.mul_add(wi, weighted_positive);
     }
     // Minority-class count, which decides whether a logit is identified at all.
-    let minority = count_positive.min(y.nrows() - count_positive);
+    let minority = count_positive.min(count_used - count_positive);
 
     // A constant outcome has no logit to fit, and neither has one whose minority class
     // is no larger than the parameter count: with p parameters and m <= p observations

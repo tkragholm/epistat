@@ -46,6 +46,7 @@
 //! # Example
 //!
 //! ```
+//! use epistat_core::CaseWeights;
 //! use epistat_linalg::Mat;
 //! use epistat_semicontinuous::prepared::{PreparedGammaDesign, PreparedScratch};
 //! use epistat_semicontinuous::{CostData, tweedie};
@@ -64,19 +65,26 @@
 //! let design = PreparedGammaDesign::new(x.as_ref(), &y).expect("representable");
 //! let mut scratch = PreparedScratch::default();
 //! let weights: Vec<f64> = (0..n).map(|i| 0.5 + (i % 7) as f64 / 7.0).collect();
-//! let beta = match design.fit(&weights, &point.beta, &options, &mut scratch) {
-//!     Ok(fit) => fit.beta,
+//! let weights = CaseWeights::new(&weights)?;
+//! let replicate_options = tweedie::TweedieOptions {
+//!     variance: epistat_semicontinuous::Variance::None,
+//!     ..options
+//! };
+//! let beta = match design.fit(weights, &point.coefficients, &options, &mut scratch) {
+//!     Ok(fit) => fit.coefficients,
 //!     Err(_) => {
-//!         let replicate = data.with_weights(&weights)?;
-//!         tweedie::fit(&replicate, 2.0, &options, Some(&point.beta), None)?.beta
+//!         let replicate = data.with_weights(weights)?;
+//!         let warm = Some(point.coefficients.as_slice());
+//!         tweedie::fit(&replicate, 2.0, &replicate_options, warm, None)?.coefficients
 //!     }
 //! };
-//! assert_eq!(beta.nrows(), 3);
+//! assert_eq!(beta.len(), 3);
 //! # Ok::<(), epistat_semicontinuous::Error>(())
 //! ```
 //!
 //! [`FitStrategy::Relaxed`]: crate::FitStrategy::Relaxed
 
+use epistat_core::CaseWeights;
 use epistat_linalg::{Mat, MatRef};
 
 use crate::Error;
@@ -86,7 +94,7 @@ use crate::tweedie::{
     relative_change,
 };
 use crate::two_part::irls::{GAMMA_LOG_LINK_ETA_CLAMP, LOGIT_ETA_CLAMP, ridge_from_regularization};
-use crate::two_part::{InterceptOnly, Regularization, TwoPartOptions, TwoPartWarmStart};
+use crate::two_part::{InterceptOnly, Regularization, Separation, TwoPartOptions, TwoPartWarmStart};
 use crate::utils::add_ridge_to_diagonal;
 use epistat_linalg::{Attempt, Factor, Method};
 
@@ -421,15 +429,15 @@ fn solve_checked(factor: &Factor, rhs: &Mat<f64>) -> Result<Mat<f64>, Error> {
     factor.solve(rhs.as_ref()).map_err(|_| Error::NotFinite)
 }
 
-fn check_weights(weights: &[f64], n: usize) -> Result<(), Error> {
-    crate::data::check_weights(n, weights)
+fn check_weights(weights: CaseWeights<'_>, n: usize) -> Result<&[f64], Error> {
+    crate::data::check_weights(n, &weights)?;
+    Ok(weights.as_slice())
 }
 
-fn warm_values(warm: &Mat<f64>, p: usize, out: &mut Vec<f64>) -> Result<(), Error> {
-    epistat_core::check::same_length("warm", p, warm.nrows())?;
-    epistat_core::check::same_length("columns of warm", 1, warm.ncols())?;
+fn warm_values(warm: &[f64], p: usize, out: &mut Vec<f64>) -> Result<(), Error> {
+    epistat_core::check::same_length("warm", p, warm.len())?;
     out.clear();
-    out.extend_from_slice(warm.col_as_slice(0));
+    out.extend_from_slice(warm);
     Ok(())
 }
 
@@ -474,7 +482,7 @@ pub struct PreparedScratch {
 #[derive(Debug, Clone)]
 pub struct PreparedGammaFit {
     /// Coefficients on the raw design, as the dense fit returns them.
-    pub beta: Mat<f64>,
+    pub coefficients: Vec<f64>,
     /// Iterations taken.
     pub iterations: usize,
 }
@@ -484,9 +492,9 @@ pub struct PreparedGammaFit {
 #[derive(Debug, Clone)]
 pub struct PreparedTwoPartFit {
     /// Logit coefficients on the raw design.
-    pub beta_logit: Mat<f64>,
+    pub logit: Vec<f64>,
     /// Gamma coefficients on the raw design.
-    pub beta_gamma: Mat<f64>,
+    pub gamma: Vec<f64>,
     /// Iterations of the logit part, 0 when it is an intercept-only prevalence model.
     pub iterations_logit: usize,
     /// Iterations of the gamma part.
@@ -545,15 +553,15 @@ impl PreparedGammaDesign {
     /// runs the dense fit for them.
     pub fn fit(
         &self,
-        weights: &[f64],
-        warm: &Mat<f64>,
+        weights: CaseWeights<'_>,
+        warm: &[f64],
         options: &TweedieOptions,
         scratch: &mut PreparedScratch,
     ) -> Result<PreparedGammaFit, Error> {
         let options = *options;
         let rows = &self.rows;
         let (n, p) = (rows.n, rows.p);
-        check_weights(weights, n)?;
+        let weights = check_weights(weights, n)?;
         let PreparedScratch {
             products,
             means,
@@ -701,7 +709,7 @@ impl PreparedGammaDesign {
                 proposal[0] =
                     rows.raw_from_shifted(shifted_intercept(proposal[0], proposal), proposal);
                 return Ok(PreparedGammaFit {
-                    beta: column_vector(proposal),
+                    coefficients: proposal.to_vec(),
                     iterations: iteration + 1,
                 });
             }
@@ -785,7 +793,7 @@ impl PreparedTwoPartDesign {
     /// caller runs the dense fit for them.
     pub fn fit(
         &self,
-        weights: &[f64],
+        weights: CaseWeights<'_>,
         warm: &TwoPartWarmStart,
         options: &TwoPartOptions,
         scratch: &mut PreparedScratch,
@@ -807,14 +815,21 @@ impl PreparedTwoPartDesign {
         }
         let ridge = ridge.map_or(0.0, |(lambda, _)| lambda);
 
-        check_weights(weights, self.all.n)?;
+        let weights = check_weights(weights, self.all.n)?;
         let (beta_logit, iterations_logit, logit_intercept_only) =
-            self.fit_logit(weights, &warm.beta_logit, ridge, options, scratch)?;
+            self.fit_logit(weights, &warm.logit, ridge, options, scratch)?;
+        match logit_intercept_only {
+            Some(InterceptOnly::AllZero) => return Err(Error::NoPositiveOutcome),
+            Some(reason) if options.separation == Separation::Refuse => {
+                return Err(Error::Separation { reason });
+            }
+            _ => {}
+        }
         let (beta_gamma, iterations_gamma) =
-            self.fit_gamma_part(weights, &warm.beta_gamma, ridge, options, scratch)?;
+            self.fit_gamma_part(weights, &warm.gamma, ridge, options, scratch)?;
         Ok(PreparedTwoPartFit {
-            beta_logit,
-            beta_gamma,
+            logit: beta_logit.col_as_slice(0).to_vec(),
+            gamma: beta_gamma.col_as_slice(0).to_vec(),
             iterations_logit,
             iterations_gamma,
             logit_intercept_only,
@@ -824,7 +839,7 @@ impl PreparedTwoPartDesign {
     fn fit_logit(
         &self,
         weights: &[f64],
-        warm: &Mat<f64>,
+        warm: &[f64],
         ridge: f64,
         options: TwoPartOptions,
         scratch: &mut PreparedScratch,
@@ -835,12 +850,19 @@ impl PreparedTwoPartDesign {
 
         // The minority class decides whether a slope is identified at all, as in the
         // dense fit: without enough of it the model is the intercept-only prevalence.
-        let count_positive = self.positive.n;
-        let minority = count_positive.min(n - count_positive);
+        // A row with weight 0 leaves the fit and is not counted in a class.
+        let (count_positive, count_used) = y
+            .iter()
+            .zip(weights)
+            .filter(|&(_, &w)| w > 0.0)
+            .fold((0_usize, 0_usize), |(positive, used), (&yi, _)| {
+                (positive + usize::from(yi > 0.0), used + 1)
+            });
+        let minority = count_positive.min(count_used - count_positive);
         if minority <= p {
             let reason = if count_positive == 0 {
                 InterceptOnly::AllZero
-            } else if count_positive == n {
+            } else if count_positive == count_used {
                 InterceptOnly::AllPositive
             } else {
                 InterceptOnly::Separable {
@@ -972,7 +994,7 @@ impl PreparedTwoPartDesign {
     fn fit_gamma_part(
         &self,
         weights: &[f64],
-        warm: &Mat<f64>,
+        warm: &[f64],
         ridge: f64,
         options: TwoPartOptions,
         scratch: &mut PreparedScratch,
@@ -1105,9 +1127,9 @@ impl PreparedPredictionDesign {
     /// Panics if `weights` is not as long as the design has rows, or `beta` is shorter
     /// than the design has columns.
     #[must_use]
-    pub fn mean_gamma(&self, beta: &Mat<f64>, weights: &[f64]) -> f64 {
+    pub fn mean_gamma(&self, coefficients: &[f64], weights: &[f64]) -> f64 {
         assert_eq!(weights.len(), self.rows.n, "one weight per row");
-        let slopes = beta.col_as_slice(0);
+        let slopes = coefficients;
         let intercept = self.rows.shifted_from_raw(slopes);
         let mut dense_slopes = Vec::new();
         self.rows.select_dense(slopes, &mut dense_slopes);
@@ -1133,12 +1155,11 @@ impl PreparedPredictionDesign {
     #[must_use]
     pub fn mean_two_part(
         &self,
-        beta_logit: &Mat<f64>,
-        beta_gamma: &Mat<f64>,
+        logit: &[f64],
+        gamma: &[f64],
         weights: &[f64],
     ) -> f64 {
         assert_eq!(weights.len(), self.rows.n, "one weight per row");
-        let (logit, gamma) = (beta_logit.col_as_slice(0), beta_gamma.col_as_slice(0));
         let (intercept_logit, intercept_gamma) = (
             self.rows.shifted_from_raw(logit),
             self.rows.shifted_from_raw(gamma),
