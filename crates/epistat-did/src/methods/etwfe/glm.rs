@@ -241,7 +241,7 @@ pub(super) fn fit(
 ) -> Result<EtwfeFit, Error> {
     let layout = Layout::new(panel, options.control)?;
     let n = layout.n();
-    let way = panel.clusters().unwrap_or(panel.unit());
+    let way = panel.clusters().unwrap_or(panel.panel_unit()?);
     let columns = Columns::new(&layout);
     let k_all = columns.total;
     let rows: Vec<usize> = (0..n)
@@ -404,7 +404,7 @@ pub(super) fn fit(
         .collect();
 
     // Influence by unit.
-    let (units, codes) = unit_codes(panel.unit(), &design.rows);
+    let (units, codes) = unit_codes(panel.panel_unit()?, &design.rows);
     let n_units = units.len();
     let unit_sums = group_sums(&codes, n_units);
     let mut influence = vec![None; k_all];

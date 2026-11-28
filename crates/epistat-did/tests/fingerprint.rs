@@ -349,7 +349,7 @@ struct Repeated {
 impl Repeated {
     fn data(&self) -> TwoPeriodData<'_> {
         TwoPeriodData::repeated_cross_section(&self.treated, &self.post, &self.outcome)
-            .weights(&self.weight)
+            .weights(epistat_core::CaseWeights::new(&self.weight).expect("weights"))
             .covariates(MatRef::from_column_major_slice(
                 &self.covariates,
                 self.treated.len(),
@@ -420,6 +420,7 @@ fn weight(county: i64) -> f64 {
 /// row numbers on a repeated cross-section, the county weights, log
 /// population as the covariate, and county number modulo 37 as the cluster.
 struct Columns {
+    design: Design,
     unit: Vec<u32>,
     period: Vec<i64>,
     cohort: Vec<Option<i64>>,
@@ -432,6 +433,7 @@ struct Columns {
 fn columns(rows: &[MpdtaRow], design: Design) -> Columns {
     let code = |county: i64| u32::try_from(county).expect("a county number");
     Columns {
+        design,
         unit: match design {
             Design::RepeatedCrossSection => (0..rows.len())
                 .map(|i| u32::try_from(i).expect("rows"))
@@ -463,12 +465,19 @@ enum With {
 
 fn fit(data: &Columns, with: With, options: AttGtOptions) -> AttGt {
     let lpop = MatRef::from_column_major_slice(&data.lpop, data.unit.len(), 1);
-    let builder = StaggeredPanel::builder(&data.unit, &data.period, &data.cohort, &data.outcome);
+    let builder = match data.design {
+        Design::RepeatedCrossSection => {
+            StaggeredPanel::cross_sections(&data.period, &data.cohort, &data.outcome)
+        }
+        _ => StaggeredPanel::builder(&data.unit, &data.period, &data.cohort, &data.outcome),
+    };
     let builder = match with {
         With::Plain => builder,
-        With::Covariates => builder.weights(&data.weight).covariates(lpop),
+        With::Covariates => builder
+            .weights(epistat_core::CaseWeights::new(&data.weight).expect("weights"))
+            .covariates(lpop),
         With::Clusters => builder
-            .weights(&data.weight)
+            .weights(epistat_core::CaseWeights::new(&data.weight).expect("weights"))
             .covariates(lpop)
             .clusters(&data.cluster),
     };
@@ -613,7 +622,7 @@ struct Panel {
 impl Panel {
     fn data(&self) -> TwoPeriodData<'_> {
         TwoPeriodData::panel(&self.treated, &self.change)
-            .weights(&self.weight)
+            .weights(epistat_core::CaseWeights::new(&self.weight).expect("weights"))
             .covariates(MatRef::from_column_major_slice(
                 &self.lpop,
                 self.treated.len(),
@@ -772,8 +781,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
         aggte_digest(&aggregate(
             &clustered,
             AggteOptions {
-                bootstrap: Some(Bootstrap::new(999, Seed(20_261_124))),
-                band: att_gt::Band::Uniform,
+                inference: att_gt::Inference::UniformBand(Bootstrap::new(999, Seed(20_261_124))),
                 ..dynamic
             },
         )),
@@ -812,10 +820,10 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
                 int(band.group),
                 int(band.time),
                 int(band.event_time),
-                band.estimate,
-                nan(band.se),
-                nan(band.lower),
-                nan(band.upper),
+                band.estimate.estimate,
+                nan(band.estimate.se),
+                nan(band.estimate.lower()),
+                nan(band.estimate.upper()),
             ]);
         }
         out.push((name, hash_numbers(&numbers)));
@@ -829,7 +837,6 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     // The repeated cross-section route and the other pair estimators.
     let rc_options = |estimator| AttGtOptions {
         estimator,
-        design: Design::RepeatedCrossSection,
         ..att_gt_options(ComparisonGroup::NotYetTreated, BasePeriod::Varying)
     };
     for (name, estimator) in [
@@ -850,7 +857,6 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
         With::Covariates,
         AttGtOptions {
             estimator: Estimator::Efficient,
-            design: Design::RepeatedCrossSection,
             ..att_gt_options(ComparisonGroup::NeverTreated, BasePeriod::Varying)
         },
     );
@@ -908,7 +914,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     ));
     let plain =
         TwoPeriodData::repeated_cross_section(&rc_cell.treated, &rc_cell.post, &rc_cell.outcome)
-            .weights(&rc_cell.weight)
+            .weights(epistat_core::CaseWeights::new(&rc_cell.weight).expect("weights"))
             .build()
             .expect("2x2");
     let two_by_two =
@@ -929,7 +935,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
         .chain(panel_cell.lpop.iter().map(|x| x * 2.0))
         .collect();
     let doubled = TwoPeriodData::panel(&panel_cell.treated, &panel_cell.change)
-        .weights(&panel_cell.weight)
+        .weights(epistat_core::CaseWeights::new(&panel_cell.weight).expect("weights"))
         .covariates(MatRef::from_column_major_slice(
             &doubled,
             panel_cell.treated.len(),

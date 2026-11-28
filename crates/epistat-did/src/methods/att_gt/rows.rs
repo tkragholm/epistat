@@ -18,9 +18,11 @@ pub(super) struct Rows<'a> {
 }
 
 impl<'a> Rows<'a> {
-    pub(super) const fn new(panel: &StaggeredPanel<'a>) -> Self {
+    /// The rows of `panel`; repeated cross-sections have no unit codes, and
+    /// their routes do not read them.
+    pub(super) fn new(panel: &StaggeredPanel<'a>) -> Self {
         Self {
-            unit: panel.unit(),
+            unit: panel.unit().unwrap_or_default(),
             period: panel.period(),
             cohort: panel.first_treated(),
             outcome: panel.outcome(),

@@ -87,7 +87,7 @@ fn load() -> Reference {
 
 fn fit(dose: &[f64], change: &[f64], weight: &[f64], basis: &BasisSpec) -> Result<Acrt, Error> {
     let data = ContinuousData::builder(dose, change)
-        .weights(weight)
+        .weights(epistat_core::CaseWeights::new(weight)?)
         .build()?;
     continuous::estimate(
         &data,

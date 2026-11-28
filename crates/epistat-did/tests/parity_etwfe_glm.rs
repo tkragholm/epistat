@@ -153,7 +153,7 @@ fn columns<'a>(
 ) -> StaggeredPanelBuilder<'a> {
     let mut panel = StaggeredPanel::builder(&case.unit, &case.time, &case.first_treated, outcome);
     if let Some(w) = weights {
-        panel = panel.weights(w);
+        panel = panel.weights(epistat_core::CaseWeights::new(w).expect("weights"));
     }
     if let Some(x) = x {
         panel = panel.covariates(x.as_ref());
@@ -625,15 +625,13 @@ fn unusable_inputs_are_errors() {
     let mut weights = case.weights.clone().unwrap();
     weights[7] = -1.0;
     assert_eq!(
-        columns(case, &case.outcome, Some(&weights), x.as_ref())
-            .build()
-            .unwrap_err(),
-        epistat_did::Error::Input(InputError::Domain {
+        epistat_core::CaseWeights::new(&weights).unwrap_err(),
+        InputError::Domain {
             what: "weights",
             value: -1.0,
             domain: "[0, inf)",
-            row: None
-        })
+            row: Some(7)
+        }
     );
     // A response outside the family's support names its input row; the row
     // must be one of the fit.

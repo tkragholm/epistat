@@ -856,7 +856,7 @@ fn fit_linear(panel: &StaggeredPanel<'_>, options: &EtwfeOptions) -> Result<Etwf
     let fit_weights = layout.fit_weights();
     let cohort_code: Vec<u32>;
     let first_factor: &[u32] = match options.effects {
-        EtwfeEffects::Unit => panel.unit(),
+        EtwfeEffects::Unit => panel.panel_unit()?,
         EtwfeEffects::Cohort => {
             cohort_code = layout
                 .row_key
@@ -875,7 +875,7 @@ fn fit_linear(panel: &StaggeredPanel<'_>, options: &EtwfeOptions) -> Result<Etwf
         absorb: options.absorb,
     }
     .fit_owned(x, panel.outcome(), &fe)?;
-    let ways = [panel.clusters().unwrap_or(panel.unit())];
+    let ways = [panel.clusters().unwrap_or(panel.panel_unit()?)];
     let cov = fit.vcov(&fe, vcov(options.vcov, &ways), options.ssc)?;
     let reference = Reference::fixest_linear(&cov, fe.n_rows());
     let coefficients: Vec<EtwfeCoefficient> = terms
@@ -891,7 +891,7 @@ fn fit_linear(panel: &StaggeredPanel<'_>, options: &EtwfeOptions) -> Result<Etwf
         .collect();
 
     // Influence by unit: the units are the panel's units in either case.
-    let (units, unit_codes) = unit_codes(panel.unit(), fe.rows());
+    let (units, unit_codes) = unit_codes(panel.panel_unit()?, fe.rows());
     let n_units = units.len();
     let sums = fit.influence_sums(&fe, &unit_codes, n_units)?;
     let mut influence = vec![None; q];

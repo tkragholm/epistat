@@ -1,6 +1,6 @@
 //! The data view of the two-period estimators.
 
-use epistat_core::{InputError, check};
+use epistat_core::{CaseWeights, InputError, check};
 use epistat_linalg::MatRef;
 
 use crate::error::Error;
@@ -190,8 +190,8 @@ impl<'a> TwoPeriodDataBuilder<'a> {
     }
 
     /// Prior weights, one per row.
-    pub const fn weights(mut self, weights: &'a [f64]) -> Self {
-        self.weights = Some(weights);
+    pub const fn weights(mut self, weights: CaseWeights<'a>) -> Self {
+        self.weights = Some(weights.as_slice());
         self
     }
 
@@ -317,12 +317,14 @@ mod tests {
                 len(TwoPeriodData::repeated_cross_section(&TREATED, &POST, &outcome).build())
             })
         });
-        assert_rejects_bad_input_with_codes("TwoPeriodData weights", code, |bad| {
+        // Empty weights are refused by `CaseWeights` itself, before their
+        // length is compared with the rows.
+        assert_rejects_bad_input_with_codes("TwoPeriodData weights", BadInput::code, |bad| {
             (bad != BadInput::Unsorted).then(|| {
                 let weights = bad.column(&[1.0; 6]);
-                len(TwoPeriodData::panel(&TREATED, &CHANGE)
-                    .weights(&weights)
-                    .build())
+                len(epistat_core::CaseWeights::new(&weights)
+                    .map_err(crate::Error::from)
+                    .and_then(|w| TwoPeriodData::panel(&TREATED, &CHANGE).weights(w).build()))
             })
         });
         assert_rejects_bad_input_with_codes("TwoPeriodData covariates", code, |bad| {

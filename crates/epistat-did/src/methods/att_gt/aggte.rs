@@ -48,18 +48,23 @@
 //! `sqrt(mean((psi_i - mean(psi))^2) / n)`, the same quantity up to the order
 //! of the sums.
 //!
-//! With [`AggteOptions::bootstrap`] the standard errors come from the
+//! With [`Inference::Bootstrap`] or [`Inference::UniformBand`] in
+//! [`AggteOptions::inference`] the standard errors come from the
 //! multiplier bootstrap of `did::mboot`. Replicate `b` draws a Rademacher
 //! weight `w_gb` per cluster (per unit without clusters) and forms
 //! `T_b = sqrt(G) * mean_g(w_gb * S_g)` with `S_g` the uncentred cluster sum
 //! of the influence function. For each point of a path, `sigma` is the
 //! interquartile range of its `T_b` divided by `qnorm(.75) - qnorm(.25)`, and
-//! its standard error is `sigma * sqrt(G) / n`. With [`Band::Uniform`] the
+//! its standard error is `sigma * sqrt(G) / n`. With [`Inference::UniformBand`] the
 //! critical value is the type 1 quantile at `1 - alpha` of
 //! `max_j |T_bj| / sigma_j` over the points of the path, so the band
 //! `att_j +- crit * se_j` covers the whole path with probability about
-//! `1 - alpha`. The overall effect has its own bootstrap on its influence
-//! function, from the same seed.
+//! `1 - alpha`. Those intervals are
+//! [simultaneous](epistat_core::Coverage::Simultaneous), with the critical
+//! value, and their points have no p-value, since a pointwise p-value would
+//! contradict a band that holds for the whole path. The overall effect has
+//! its own bootstrap on its influence function, from the same seed, and a
+//! pointwise interval.
 //!
 //! The analytic and the bootstrap standard errors differ when the draws are
 //! not normal, since the interquartile range ignores the tails: for a cell
@@ -81,7 +86,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use epistat_core::{Bootstrap, Covariance, Estimate, EventStudy, InputError, Level};
+use epistat_core::{Bootstrap, Covariance, Estimate, EventStudy, InputError, Interval, Level};
 use epistat_inference::simultaneous::multiplier_bands;
 use epistat_inference::{ClusterRule, Clusters, Influence};
 
@@ -127,6 +132,8 @@ pub enum AggteWeights {
 }
 
 /// Pointwise intervals or a band over the whole path, `aggte(cband = )`.
+/// Read only beside the deprecated [`AggteOptions::bootstrap`];
+/// [`Inference`] holds both choices.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Band {
@@ -134,16 +141,47 @@ pub enum Band {
     #[default]
     Pointwise,
     /// The uniform critical value of the path from the multiplier bootstrap,
-    /// `cband = TRUE`; needs [`AggteOptions::bootstrap`]. It is never below
-    /// the pointwise normal value. When no finite critical value exists the
-    /// intervals stay pointwise and [`Aggte::uniform_band`] is `false`.
+    /// `cband = TRUE`, as [`Inference::UniformBand`].
     Uniform,
 }
 
+/// How the standard errors and intervals of a summary are formed, `aggte`'s
+/// `bstrap` and `cband`.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Inference {
+    /// Analytic standard errors from the influence function and pointwise
+    /// normal intervals, `bstrap = FALSE`.
+    #[default]
+    Analytic,
+    /// Standard errors from the multiplier bootstrap with `biters`
+    /// replicates and pointwise intervals, `bstrap = TRUE, cband = FALSE`.
+    Bootstrap(Bootstrap),
+    /// The bootstrap standard errors and the uniform band over the path,
+    /// `bstrap = TRUE, cband = TRUE`, R's default and what it prints. The
+    /// critical value is never below the pointwise normal value. When no
+    /// finite critical value exists the intervals stay pointwise and
+    /// [`Aggte::uniform_band`] is `false`.
+    UniformBand(Bootstrap),
+}
+
+impl Inference {
+    /// The bootstrap of the two bootstrap variants.
+    #[must_use]
+    pub const fn bootstrap(self) -> Option<Bootstrap> {
+        match self {
+            Self::Analytic => None,
+            Self::Bootstrap(bootstrap) | Self::UniformBand(bootstrap) => Some(bootstrap),
+        }
+    }
+}
+
 /// The options of [`AttGt::aggregate`], with `did::aggte`'s defaults except
-/// that the bootstrap is off: it needs a seed, and none is chosen for the
-/// caller.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+/// that the inference is analytic and pointwise: R bootstraps and prints a
+/// uniform band, which needs a seed, and none is chosen for the caller. Set
+/// `inference: Inference::UniformBand(Bootstrap::new(1_000, seed))` for R's
+/// printed table.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AggteOptions {
     /// Which summary to produce, `type`.
     pub aggregation: AggteType,
@@ -173,11 +211,103 @@ pub struct AggteOptions {
     pub max_e: Option<i64>,
     /// The confidence level of the intervals, `1 - alp`.
     pub level: Level,
-    /// The multiplier bootstrap for the standard errors, `bstrap = TRUE`,
-    /// with `biters` replicates; `None` gives analytic standard errors.
+    /// Analytic or bootstrap standard errors, and pointwise intervals or a
+    /// uniform band, `bstrap` and `cband`.
+    pub inference: Inference,
+    /// The multiplier bootstrap for the standard errors.
+    #[deprecated(
+        since = "0.1.0",
+        note = "use `inference: Inference::Bootstrap(..)` or `Inference::UniformBand(..)`; \
+                this field is removed in the next release"
+    )]
     pub bootstrap: Option<Bootstrap>,
-    /// Pointwise intervals or a uniform band, `cband`.
+    /// Pointwise intervals or a uniform band.
+    #[deprecated(
+        since = "0.1.0",
+        note = "use `inference: Inference::UniformBand(..)`; this field is removed in the \
+                next release"
+    )]
     pub band: Band,
+}
+
+impl Default for AggteOptions {
+    #[expect(
+        deprecated,
+        reason = "the deprecated fields keep their defaults for one release"
+    )]
+    fn default() -> Self {
+        Self {
+            aggregation: AggteType::default(),
+            weights: AggteWeights::default(),
+            balance_e: None,
+            min_e: None,
+            max_e: None,
+            level: Level::default(),
+            inference: Inference::Analytic,
+            bootstrap: None,
+            band: Band::Pointwise,
+        }
+    }
+}
+
+impl AggteOptions {
+    /// The inference these options ask for, from [`inference`](Self::inference)
+    /// or the deprecated `bootstrap` and `band`.
+    fn resolved_inference(&self) -> Result<Inference, Error> {
+        #[expect(
+            deprecated,
+            reason = "the deprecated fields are honoured for one release"
+        )]
+        let (bootstrap, band) = (self.bootstrap, self.band);
+        let inference = match (self.inference, bootstrap, band) {
+            (inference, None, Band::Pointwise) => inference,
+            (Inference::Analytic, Some(bootstrap), Band::Pointwise) => {
+                Inference::Bootstrap(bootstrap)
+            }
+            (Inference::Analytic, Some(bootstrap), _) => Inference::UniformBand(bootstrap),
+            (Inference::Analytic, None, _) => {
+                return Err(Error::Unsupported {
+                    what: "a uniform band without a bootstrap; set `inference: \
+                           Inference::UniformBand(Bootstrap::new(1_000, seed))`",
+                });
+            }
+            _ => {
+                return Err(Error::Unsupported {
+                    what: "both `inference` and the deprecated `bootstrap` or `band`; set \
+                           `inference` alone",
+                });
+            }
+        };
+        if let Some(bootstrap) = inference.bootstrap()
+            && bootstrap.replicates == 0
+        {
+            return Err(InputError::Domain {
+                what: "bootstrap replicates",
+                value: 0.0,
+                domain: "[1, inf)",
+                row: None,
+            }
+            .into());
+        }
+        Ok(inference)
+    }
+}
+
+/// The options of [`AttGt::event_study`]: the restrictions of the event-time
+/// path and the weights of its cells, `aggte(type = "dynamic")`'s
+/// `balance_e`, `min_e` and `max_e`. The event study carries the
+/// coefficients and their analytic covariance, so it has no level and no
+/// bootstrap.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EventStudyOptions {
+    /// As [`AggteOptions::balance_e`].
+    pub balance_e: Option<i64>,
+    /// As [`AggteOptions::min_e`].
+    pub min_e: Option<i64>,
+    /// As [`AggteOptions::max_e`].
+    pub max_e: Option<i64>,
+    /// How the cells are weighted within an event time.
+    pub weights: AggteWeights,
 }
 
 /// One point of a summary's path.
@@ -186,7 +316,9 @@ pub struct AggteOptions {
 pub struct AggtePoint {
     /// The event time, cohort or period, as the summary has it.
     pub key: i64,
-    /// The estimate with its standard error and interval.
+    /// The estimate with its standard error and interval. Under a uniform
+    /// band ([`Aggte::uniform_band`]) the interval is simultaneous, with the
+    /// band's critical value, and there is no p-value.
     pub estimate: Estimate,
     /// The number of cells that entered it.
     pub n_cells: usize,
@@ -218,14 +350,15 @@ pub struct Aggte {
     /// The path by event time, cohort or period; empty for
     /// [`AggteType::Simple`].
     pub points: Vec<AggtePoint>,
-    /// The overall effect. Under fixed weights only the simple summary has
-    /// one.
+    /// The overall effect, with a pointwise interval. Under fixed weights
+    /// only the simple summary has one.
     pub overall: Option<AggteOverall>,
     /// The multiplier of a point's standard error in its interval: the
     /// pointwise normal quantile, or the uniform critical value when
     /// [`Aggte::uniform_band`] is set.
     pub critical_value: f64,
-    /// Whether the intervals of the path use a uniform critical value.
+    /// Whether the intervals of the path use a uniform critical value, in
+    /// which case they are simultaneous and the points have no p-value.
     pub uniform_band: bool,
     influence: Influence,
     clusters: Option<Vec<u32>>,
@@ -302,13 +435,12 @@ impl Aggte {
     pub fn event_study(&self) -> Result<EventStudy, Error> {
         if self.aggregation != AggteType::Dynamic {
             return Err(Error::Unsupported {
-                what: "an event study of a summary other than the dynamic one",
+                what: "an event study of a summary other than the dynamic one; aggregate with \
+                       `aggregation: AggteType::Dynamic`",
             });
         }
         if self.base_period != BasePeriod::Universal {
-            return Err(Error::Unsupported {
-                what: "an event study under a varying base period",
-            });
+            return Err(VARYING_BASE);
         }
         let k = self.points.len();
         let columns: Vec<&[f64]> = (0..k).map(|j| self.influence.column(j)).collect();
@@ -332,6 +464,13 @@ impl Aggte {
         })
     }
 }
+
+/// The refusal of an event study under a varying base period, whose
+/// pre-treatment cells are not measured against one reference.
+pub(super) const VARYING_BASE: Error = Error::Unsupported {
+    what: "an event study under a varying base period, `did`'s default; set `base_period: \
+           BasePeriod::Universal` in the AttGtOptions of att_gt::estimate",
+};
 
 /// A fitted cell as the aggregations read it.
 #[derive(Debug, Clone, Copy)]
@@ -930,22 +1069,7 @@ fn apply_bootstrap(
 /// [`AttGt::aggregate`].
 pub(super) fn aggregate(fit: &AttGt, options: &AggteOptions) -> Result<Aggte, Error> {
     let influence = fit.kept_influence()?;
-    if let Some(bootstrap) = options.bootstrap
-        && bootstrap.replicates == 0
-    {
-        return Err(InputError::Domain {
-            what: "bootstrap replicates",
-            value: 0.0,
-            domain: "[1, inf)",
-            row: None,
-        }
-        .into());
-    }
-    if options.band == Band::Uniform && options.bootstrap.is_none() {
-        return Err(Error::Unsupported {
-            what: "a uniform band without a bootstrap",
-        });
-    }
+    let inference = options.resolved_inference()?;
     let cells: Vec<Cell> = fit
         .estimated()
         .map(|(cell, estimate)| Cell {
@@ -975,7 +1099,7 @@ pub(super) fn aggregate(fit: &AttGt, options: &AggteOptions) -> Result<Aggte, Er
         _ => by_fixed_weights(&cells, &columns, &clusters, codes.is_some(), options)?,
     };
     let confidence_level = options.level.confidence_value();
-    let summary = match options.bootstrap {
+    let summary = match inference.bootstrap() {
         None => summary,
         Some(bootstrap) => {
             let bootstrap_clusters = codes.map(Clusters::from_codes);
@@ -983,7 +1107,7 @@ pub(super) fn aggregate(fit: &AttGt, options: &AggteOptions) -> Result<Aggte, Er
                 summary,
                 bootstrap_clusters.as_ref(),
                 bootstrap,
-                options.band == Band::Uniform,
+                matches!(inference, Inference::UniformBand(_)),
                 confidence_level,
             )?
         }
@@ -1001,16 +1125,33 @@ fn into_aggte(
 ) -> Result<Aggte, Error> {
     let level = options.level;
     let estimate = |point: &Point| estimate_from_parts(point.att, point.se, point.interval, level);
+    // A uniform band covers the whole path, so its intervals are simultaneous
+    // and a pointwise p-value would contradict them.
+    let path_estimate = |point: &Point| -> Result<Estimate, Error> {
+        let pointwise = estimate(point);
+        if !summary.uniform_band {
+            return Ok(pointwise);
+        }
+        let interval = Interval::simultaneous(
+            pointwise.lower(),
+            pointwise.upper(),
+            level,
+            summary.critical_value,
+        )?;
+        Ok(pointwise.with_interval(Some(interval)).with_p_value(None))
+    };
     let points: Vec<AggtePoint> = summary
         .points
         .iter()
-        .map(|point| AggtePoint {
-            key: point.key,
-            estimate: estimate(point),
-            n_cells: point.n_cells,
-            total_weight: point.total_weight,
+        .map(|point| {
+            Ok(AggtePoint {
+                key: point.key,
+                estimate: path_estimate(point)?,
+                n_cells: point.n_cells,
+                total_weight: point.total_weight,
+            })
         })
-        .collect();
+        .collect::<Result<_, Error>>()?;
     let overall = summary.overall.as_ref().map(|point| AggteOverall {
         estimate: estimate(point),
         n_cells: point.n_cells,

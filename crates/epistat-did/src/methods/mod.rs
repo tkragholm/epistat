@@ -1,5 +1,6 @@
 pub mod att_gt;
 pub mod bacon;
+pub mod cohort;
 pub mod continuous;
 pub mod dcdh;
 pub mod did_cc;

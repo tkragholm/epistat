@@ -39,15 +39,25 @@ impl Obs {
     }
 }
 
-/// The fit of `rows`: on a panel the rows sorted by unit and period, on a
-/// repeated cross-section each row its own unit in the order given.
+/// The fit of `rows` as a panel, the rows sorted by unit and period.
+///
+/// # Panics
+///
+/// On a row without a unit, or a unit that is not a `u32`.
+pub fn fit(rows: &[Obs], options: &AttGtOptions) -> Result<AttGt, Error> {
+    fit_design(rows, Design::Panel, options)
+}
+
+/// The fit of `rows` under `design`: on a panel the rows sorted by unit and
+/// period, on repeated cross-sections each row its own observation in the
+/// order given.
 ///
 /// # Panics
 ///
 /// On a panel row without a unit, or a unit that is not a `u32`.
-pub fn fit(rows: &[Obs], options: &AttGtOptions) -> Result<AttGt, Error> {
+pub fn fit_design(rows: &[Obs], design: Design, options: &AttGtOptions) -> Result<AttGt, Error> {
     let mut order: Vec<usize> = (0..rows.len()).collect();
-    let panel = options.design == Design::Panel;
+    let panel = design == Design::Panel;
     if panel {
         order.sort_by_key(|&i| (rows[i].unit.expect("a panel unit"), rows[i].time));
     }
@@ -83,7 +93,12 @@ pub fn fit(rows: &[Obs], options: &AttGtOptions) -> Result<AttGt, Error> {
         .map(|&i| rows[i].cluster.unwrap_or(0))
         .collect();
 
-    let builder = StaggeredPanel::builder(&unit, &period, &cohort, &outcome).weights(&weight);
+    let builder = if panel {
+        StaggeredPanel::builder(&unit, &period, &cohort, &outcome)
+    } else {
+        StaggeredPanel::cross_sections(&period, &cohort, &outcome)
+    };
+    let builder = builder.weights(epistat_core::CaseWeights::new(&weight).expect("weights"));
     let builder = if k > 0 {
         builder.covariates(MatRef::from_column_major_slice(&covariates, rows.len(), k))
     } else {

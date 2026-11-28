@@ -25,7 +25,7 @@
 //! Callaway B, Sant'Anna PHC. Difference-in-differences with multiple time
 //! periods. J Econom 2021;225(2):200-30. R package `did` 2.5.1, `mboot`.
 
-use epistat_core::{Bootstrap, Level};
+use epistat_core::{Bootstrap, Estimate, Interval, Level, Scale};
 use epistat_inference::Clusters;
 use epistat_inference::simultaneous::multiplier_bands;
 use epistat_linalg::Mat;
@@ -43,15 +43,11 @@ pub struct AttGtBand {
     pub time: i64,
     /// `time - group`.
     pub event_time: i64,
-    /// The cell's estimate.
-    pub estimate: f64,
-    /// The bootstrap standard error, `None` where the cell's draws are
-    /// degenerate.
-    pub se: Option<f64>,
-    /// `estimate - critical_value * se`.
-    pub lower: Option<f64>,
-    /// `estimate + critical_value * se`.
-    pub upper: Option<f64>,
+    /// The cell's estimate, its bootstrap standard error (`None` where the
+    /// cell's draws are degenerate) and the simultaneous interval
+    /// `estimate -+ critical_value * se`, with no p-value, since the band
+    /// holds for all cells at once.
+    pub estimate: Estimate,
 }
 
 /// Simultaneous bands over the estimated cells.
@@ -94,17 +90,26 @@ pub(super) fn bands(fit: &AttGt, level: Level, bootstrap: Bootstrap) -> Result<A
         .zip(&bands.se)
         .map(|((cell, estimate), &se)| {
             let margin = se.map(|se| bands.critical * se);
-            AttGtBand {
+            let interval = Interval::simultaneous(
+                margin.map(|margin| estimate.estimate - margin),
+                margin.map(|margin| estimate.estimate + margin),
+                level,
+                bands.critical,
+            )?;
+            Ok(AttGtBand {
                 group: cell.group,
                 time: cell.time,
                 event_time: cell.event_time,
-                estimate: estimate.estimate,
-                se,
-                lower: margin.map(|margin| estimate.estimate - margin),
-                upper: margin.map(|margin| estimate.estimate + margin),
-            }
+                estimate: Estimate::new(
+                    estimate.estimate,
+                    se,
+                    Some(interval),
+                    None,
+                    Scale::Identity,
+                ),
+            })
         })
-        .collect();
+        .collect::<Result<_, Error>>()?;
     Ok(AttGtBands {
         critical_value: bands.critical,
         cells,

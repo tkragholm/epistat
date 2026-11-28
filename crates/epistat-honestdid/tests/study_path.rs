@@ -223,7 +223,7 @@ fn study_att_gt(
 ) -> AttGt {
     let covariates = MatRef::from_column_major_slice(&data.covariates, data.unit.len(), 3);
     let builder = StaggeredPanel::builder(&data.unit, &data.period, &data.cohort, &data.outcome)
-        .weights(&data.weight)
+        .weights(epistat_core::CaseWeights::new(&data.weight).expect("weights"))
         .covariates(covariates)
         .comparison_cohort(&data.matched);
     let builder = if clustered {

@@ -129,7 +129,7 @@ impl Columns {
         let mut b =
             SwitchingPanel::builder(&self.unit, &self.period, &self.outcome, &self.treatment);
         if let Some(w) = &self.weights {
-            b = b.weights(w);
+            b = b.weights(epistat_core::CaseWeights::new(w).expect("weights"));
         }
         if let Some(x) = &self.controls {
             b = b.controls(x.as_ref());

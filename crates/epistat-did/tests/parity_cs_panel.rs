@@ -90,7 +90,11 @@ struct Out {
 }
 
 fn fit(rows: &[Obs], options: &AttGtOptions) -> Out {
-    let fit = rows::fit(rows, options).expect("ATT(g,t)");
+    fit_design(rows, Design::Panel, options)
+}
+
+fn fit_design(rows: &[Obs], design: Design, options: &AttGtOptions) -> Out {
+    let fit = rows::fit_design(rows, design, options).expect("ATT(g,t)");
     Out {
         estimates: rows::cells(&fit),
         influence_functions: rows::influence(&fit),
@@ -495,7 +499,8 @@ fn mboot_bands_agree_with_did_within_simulation_error() {
         .cells;
 
     // The implied critical value, recovered from any band: (high - att) / se.
-    let implied = (bands[0].upper.unwrap() - bands[0].estimate) / bands[0].se.unwrap();
+    let implied = (bands[0].estimate.upper().unwrap() - bands[0].estimate.estimate)
+        / bands[0].estimate.se.unwrap();
     assert!(
         (implied - fixture.crit_val).abs() < 0.05,
         "critical value {implied} vs did {}",
@@ -517,7 +522,7 @@ fn mboot_bands_agree_with_did_within_simulation_error() {
         .collect::<Vec<_>>();
     assert_eq!(bands.len(), expected.len());
     for (band, want) in bands.iter().zip(&expected) {
-        let se = band.se.expect("se");
+        let se = band.estimate.se.expect("se");
         let relative = (se - want).abs() / want;
         assert!(
             relative < 0.05,
@@ -627,7 +632,8 @@ fn clustered_mboot_bands_agree_with_did() {
         .expect("clustered mboot bands")
         .cells;
 
-    let implied = (bands[0].upper.unwrap() - bands[0].estimate) / bands[0].se.unwrap();
+    let implied = (bands[0].estimate.upper().unwrap() - bands[0].estimate.estimate)
+        / bands[0].estimate.se.unwrap();
     // Looser than the unclustered case on purpose: the bootstrap now draws 29
     // weights per replication rather than 500, so the Monte Carlo error of a
     // maximum over twelve statistics is correspondingly larger.
@@ -644,7 +650,7 @@ fn clustered_mboot_bands_agree_with_did() {
         .collect::<Vec<_>>();
     assert_eq!(bands.len(), expected.len());
     for (band, want) in bands.iter().zip(&expected) {
-        let se = band.se.expect("se");
+        let se = band.estimate.se.expect("se");
         let relative = (se - want).abs() / want;
         assert!(
             relative < 0.10,
@@ -665,7 +671,9 @@ fn clustered_mboot_bands_agree_with_did() {
     let moved = bands
         .iter()
         .zip(&unclustered)
-        .filter(|(a, b)| (a.se.unwrap() - b.se.unwrap()).abs() / b.se.unwrap() > 0.1)
+        .filter(|(a, b)| {
+            (a.estimate.se.unwrap() - b.estimate.se.unwrap()).abs() / b.estimate.se.unwrap() > 0.1
+        })
         .count();
     assert!(
         moved >= bands.len() / 2,
@@ -732,7 +740,7 @@ fn clustering_by_unit_reproduces_the_unclustered_standard_error() {
         .bands(Level::default(), draws)
         .expect("singleton");
     for (a, b) in plain_bands.cells.iter().zip(&singleton_bands.cells) {
-        let (a, b) = (a.se.unwrap(), b.se.unwrap());
+        let (a, b) = (a.estimate.se.unwrap(), b.estimate.se.unwrap());
         assert!((a - b).abs() < 1e-12, "{a} vs {b}");
     }
 }
@@ -995,11 +1003,11 @@ fn rc_route_matches_the_traditional_estimator_and_aggregates() {
 
     let rows = observations(&base.data_subset);
     assert_eq!(rows.len(), did_rc.n_rows);
-    let out = fit(
+    let out = fit_design(
         &rows,
+        Design::RepeatedCrossSection,
         &AttGtOptions {
             estimator: Estimator::TraditionalDoublyRobust,
-            design: Design::RepeatedCrossSection,
             ..universal_config(ComparisonGroup::NeverTreated)
         },
     );
@@ -1134,10 +1142,10 @@ fn efficient_rc_route_matches_did_panel_false() {
     // 1e-8 default moves the influence function by about 2e-7 while cancelling
     // in the point estimate, which is enough to matter at this tolerance and not
     // enough to matter in use.
-    let out = fit(
+    let out = fit_design(
         &rows,
+        Design::RepeatedCrossSection,
         &AttGtOptions {
-            design: Design::RepeatedCrossSection,
             nuisance: NuisanceOptions {
                 ridge: 0.0,
                 ..NuisanceOptions::default()

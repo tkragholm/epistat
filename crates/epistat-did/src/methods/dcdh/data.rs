@@ -1,7 +1,7 @@
 //! The panel of a treatment that may switch on and off, the data view of the
 //! dCDH estimator.
 
-use epistat_core::{InputError, Panel, check};
+use epistat_core::{CaseWeights, InputError, Panel, check};
 use epistat_linalg::{Mat, MatRef};
 
 use crate::error::Error;
@@ -244,7 +244,7 @@ impl Columns {
         let mut builder =
             SwitchingPanel::builder(&self.unit, &self.period, &self.outcome, &self.treatment);
         if let Some(w) = &self.weights {
-            builder = builder.weights(w);
+            builder = builder.row_weights(w);
         }
         if let Some(x) = &self.controls {
             builder = builder.controls(x.as_ref());
@@ -261,7 +261,14 @@ impl Columns {
 
 impl<'a> SwitchingPanelBuilder<'a> {
     /// Sampling weights, one per row (`weight`).
-    pub const fn weights(mut self, weights: &'a [f64]) -> Self {
+    pub const fn weights(mut self, weights: CaseWeights<'a>) -> Self {
+        self.weights = Some(weights.as_slice());
+        self
+    }
+
+    /// The weights of a subset of a panel's rows, already checked as case
+    /// weights over the whole panel; a subset may weigh 0 throughout.
+    pub(super) const fn row_weights(mut self, weights: &'a [f64]) -> Self {
         self.weights = Some(weights);
         self
     }
@@ -427,7 +434,7 @@ mod tests {
         let h = Mat::from_fn(6, 1, |i, _| if i < 3 { 1.0 } else { 2.0 });
         let codes = [7, 7, 7, 3, 3, 3];
         let panel = SwitchingPanel::builder(&UNIT, &PERIOD, &Y, &D)
-            .weights(&w)
+            .weights(epistat_core::CaseWeights::new(&w).expect("weights"))
             .controls(x.as_ref())
             .strata(&codes)
             .clusters(&codes)
@@ -475,11 +482,7 @@ mod tests {
             }
         );
         let w = [1.0, -1.0, 1.0, 1.0, 1.0, 1.0];
-        let error = input(
-            SwitchingPanel::builder(&UNIT, &PERIOD, &Y, &D)
-                .weights(&w)
-                .build(),
-        );
+        let error = epistat_core::CaseWeights::new(&w).unwrap_err();
         assert_eq!(error.code(), "input.domain");
         let x = Mat::from_fn(6, 1, |i, _| if i == 2 { f64::INFINITY } else { 0.0 });
         let error = input(
@@ -537,9 +540,13 @@ mod tests {
             let built = match bad {
                 BadInput::Unsorted => SwitchingPanel::builder(&UNIT, &reversed, &Y, &D).build(),
                 BadInput::Empty => SwitchingPanel::builder(&[], &[], &[], &[]).build(),
-                _ => SwitchingPanel::builder(&UNIT, &PERIOD, &Y, &D)
-                    .weights(&weights)
-                    .build(),
+                _ => epistat_core::CaseWeights::new(&weights)
+                    .map_err(Error::from)
+                    .and_then(|w| {
+                        SwitchingPanel::builder(&UNIT, &PERIOD, &Y, &D)
+                            .weights(w)
+                            .build()
+                    }),
             };
             Some(built.map(|panel| panel.len()))
         });

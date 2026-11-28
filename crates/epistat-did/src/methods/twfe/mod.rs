@@ -289,12 +289,16 @@ pub fn fit(panel: &StaggeredPanel<'_>, options: &TwfeOptions) -> Result<TwfeFit,
         }
     }
 
-    let fe = FixedEffects::new(&[panel.unit(), &time], panel.weights(), Singletons::Remove)?;
+    let fe = FixedEffects::new(
+        &[panel.panel_unit()?, &time],
+        panel.weights(),
+        Singletons::Remove,
+    )?;
     let fit = Feols {
         absorb: options.absorb,
     }
     .fit(x.as_ref(), panel.outcome(), &fe)?;
-    let clusters = panel.clusters().unwrap_or(panel.unit());
+    let clusters = panel.clusters().unwrap_or(panel.panel_unit()?);
     let ways = [clusters];
     let cov = fit.vcov(&fe, Vcov::Cluster(&ways), options.ssc)?;
     let p = k_terms + p_cov;

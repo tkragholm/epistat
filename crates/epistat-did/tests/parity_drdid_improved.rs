@@ -94,7 +94,7 @@ fn improved_rc_matches_drdid_imp_rc() {
         let post: Vec<bool> = d.post.iter().map(|&v| v > 0.5).collect();
         let (x, k) = column_major(&d.x);
         let data = TwoPeriodData::repeated_cross_section(&treated, &post, &d.y)
-            .weights(&d.weights)
+            .weights(epistat_core::CaseWeights::new(&d.weights).expect("weights"))
             .covariates(MatRef::from_column_major_slice(&x, d.y.len(), k))
             .build()
             .expect("data");
@@ -120,7 +120,7 @@ fn improved_panel_matches_drdid_imp_panel() {
         let change: Vec<f64> = d.y1.iter().zip(&d.y0).map(|(a, b)| a - b).collect();
         let (x, k) = column_major(&d.x);
         let data = TwoPeriodData::panel(&treated, &change)
-            .weights(&d.weights)
+            .weights(epistat_core::CaseWeights::new(&d.weights).expect("weights"))
             .covariates(MatRef::from_column_major_slice(&x, change.len(), k))
             .build()
             .expect("data");
@@ -165,7 +165,7 @@ fn improved_interval_follows_the_level() {
     let clusters: Vec<u32> = (0..n).map(|i| u32::try_from(i % 7).unwrap()).collect();
     for clustered in [false, true] {
         let builder = TwoPeriodData::repeated_cross_section(&treated, &post, &d.y)
-            .weights(&d.weights)
+            .weights(epistat_core::CaseWeights::new(&d.weights).expect("weights"))
             .covariates(MatRef::from_column_major_slice(&x, n, k));
         let builder = if clustered {
             builder.clusters(&clusters)
@@ -179,7 +179,7 @@ fn improved_interval_follows_the_level() {
     let change: Vec<f64> = d.y1.iter().zip(&d.y0).map(|(a, b)| a - b).collect();
     let (x, k) = column_major(&d.x);
     let data = TwoPeriodData::panel(&treated, &change)
-        .weights(&d.weights)
+        .weights(epistat_core::CaseWeights::new(&d.weights).expect("weights"))
         .covariates(MatRef::from_column_major_slice(&x, change.len(), k))
         .build()
         .unwrap();

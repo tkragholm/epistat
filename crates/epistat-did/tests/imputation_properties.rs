@@ -64,7 +64,7 @@ fn simulate(units: u32, periods: i64, seed: u64) -> Sim {
 impl Sim {
     fn columns(&self) -> StaggeredPanelBuilder<'_> {
         StaggeredPanel::builder(&self.unit, &self.time, &self.g, &self.y)
-            .weights(&self.w)
+            .weights(epistat_core::CaseWeights::new(&self.w).expect("weights"))
             .covariates(self.x.as_ref())
     }
 

@@ -501,7 +501,7 @@ pub fn fit(panel: &StaggeredPanel<'_>, options: &SunabOptions) -> Result<SunabFi
         });
 
     let fe = FixedEffects::new(
-        &[panel.unit(), &time],
+        &[panel.panel_unit()?, &time],
         fit_weights.as_deref(),
         Singletons::Remove,
     )?;
@@ -509,7 +509,7 @@ pub fn fit(panel: &StaggeredPanel<'_>, options: &SunabOptions) -> Result<SunabFi
         absorb: options.absorb,
     }
     .fit_owned(x, panel.outcome(), &fe)?;
-    let clusters = panel.clusters().unwrap_or(panel.unit());
+    let clusters = panel.clusters().unwrap_or(panel.panel_unit()?);
     let ways = [clusters];
     let cov = fit.vcov(&fe, Vcov::Cluster(&ways), options.ssc)?;
     let p = k_cells + p_cov;

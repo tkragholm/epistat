@@ -151,7 +151,7 @@ fn panel<'a>(case: &'a Case, x: Option<&'a Mat<f64>>) -> StaggeredPanel<'a> {
     let mut panel =
         StaggeredPanel::builder(&case.unit, &case.time, &case.first_treated, &case.outcome);
     if let Some(w) = &case.weights {
-        panel = panel.weights(w);
+        panel = panel.weights(epistat_core::CaseWeights::new(w).expect("weights"));
     }
     if let Some(x) = x {
         panel = panel.covariates(x.as_ref());
@@ -609,7 +609,7 @@ fn always_treated_rows_are_removed() {
         .collect();
     let mut changed = StaggeredPanel::builder(&case.unit, &case.time, &first, &case.outcome);
     if let Some(w) = &case.weights {
-        changed = changed.weights(w);
+        changed = changed.weights(epistat_core::CaseWeights::new(w).expect("weights"));
     }
     let changed = changed.build().unwrap();
     let result = sunab::fit(&changed, &config(case, &s)).unwrap();

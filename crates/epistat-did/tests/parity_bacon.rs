@@ -200,7 +200,7 @@ fn an_unbalanced_panel_a_varying_cohort_or_weights_are_errors() {
     );
     let w = vec![1.0; case.unit.len()];
     let weighted = StaggeredPanel::builder(&case.unit, &case.time, &g, &case.outcome)
-        .weights(&w)
+        .weights(epistat_core::CaseWeights::new(&w).expect("weights"))
         .build()
         .unwrap();
     assert_eq!(

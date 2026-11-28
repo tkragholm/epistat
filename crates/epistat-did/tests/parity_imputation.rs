@@ -317,7 +317,7 @@ fn panel<'a>(case: &'a Case, weighted: bool, x: Option<&'a Mat<f64>>) -> Stagger
     let mut panel =
         StaggeredPanel::builder(&case.unit, &case.time, &case.g, &case.y).clusters(&case.cl);
     if weighted {
-        panel = panel.weights(&case.w);
+        panel = panel.weights(epistat_core::CaseWeights::new(&case.w).expect("weights"));
     }
     if let Some(x) = x {
         panel = panel.covariates(x.as_ref());

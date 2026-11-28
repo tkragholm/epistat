@@ -1005,7 +1005,7 @@ fn refuses_what_it_cannot_estimate() {
         &columns.first_treated,
         &columns.outcome,
     )
-    .weights(&weights)
+    .weights(epistat_core::CaseWeights::new(&weights).expect("weights"))
     .build()
     .unwrap();
     assert!(matches!(

@@ -23,7 +23,7 @@ fn two_by_two(
 ) -> Result<epistat_core::Estimate, Error> {
     let builder = TwoPeriodData::repeated_cross_section(treated, post, y);
     let builder = match w {
-        Some(w) => builder.weights(w),
+        Some(w) => builder.weights(epistat_core::CaseWeights::new(w).expect("weights")),
         None => builder,
     };
     two_period::two_by_two(&builder.build()?, Level::default())
@@ -162,7 +162,7 @@ fn drdid_rejects_invalid_options_and_values() {
         })
     ));
     let err = TwoPeriodData::panel(&[true, false], &[9.0, 6.0])
-        .weights(&[1.0, 0.0])
+        .weights(epistat_core::CaseWeights::new(&[1.0, 0.0]).expect("weights"))
         .build()
         .expect_err("fail");
     assert!(matches!(

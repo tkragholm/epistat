@@ -36,11 +36,26 @@ impl Data {
     /// The fit of the panel, with the covariates, the clusters and the
     /// matched cohorts as asked.
     fn fit(&self, clusters: bool, options: &AttGtOptions) -> Result<AttGt, Error> {
+        self.fit_design(Design::Panel, clusters, options)
+    }
+
+    /// The fit of the rows as a panel or as repeated cross-sections.
+    fn fit_design(
+        &self,
+        design: Design,
+        clusters: bool,
+        options: &AttGtOptions,
+    ) -> Result<AttGt, Error> {
         let flat: Vec<f64> = self.covariates.concat();
         let n = self.unit.len();
+        let builder = match design {
+            Design::Panel => {
+                StaggeredPanel::builder(&self.unit, &self.period, &self.cohort, &self.outcome)
+            }
+            _ => StaggeredPanel::cross_sections(&self.period, &self.cohort, &self.outcome),
+        };
         let builder =
-            StaggeredPanel::builder(&self.unit, &self.period, &self.cohort, &self.outcome)
-                .weights(&self.weight);
+            builder.weights(epistat_core::CaseWeights::new(&self.weight).expect("weights"));
         let builder = if self.covariates.is_empty() {
             builder
         } else {
@@ -253,7 +268,7 @@ fn a_combination_of_points_has_the_standard_error_of_its_influence() {
     }
     let varying = staggered(0.3).fit(true, &AttGtOptions::default()).unwrap();
     assert!(matches!(
-        varying.event_study(&AggteOptions::default()),
+        varying.event_study(&EventStudyOptions::default()),
         Err(Error::Unsupported { .. })
     ));
 }
@@ -288,7 +303,11 @@ fn the_bands_and_the_pretest_read_the_estimated_cells() {
     assert_eq!(bands.cells.len(), 6);
     assert!(bands.critical_value.is_finite() && bands.critical_value > 0.0);
     for band in &bands.cells {
-        assert!(band.lower.unwrap() <= band.estimate && band.estimate <= band.upper.unwrap());
+        let estimate = band.estimate;
+        assert!(estimate.lower().unwrap() <= estimate.estimate);
+        assert!(estimate.estimate <= estimate.upper().unwrap());
+        assert!(estimate.interval.unwrap().coverage.is_simultaneous());
+        assert_eq!(estimate.p_value, None);
     }
     let test = fit.pretest().unwrap();
     assert_eq!((test.df, test.cells.as_slice()), (1, &[(3, 1)][..]));
@@ -341,10 +360,10 @@ fn not_yet_treated_comparators_on_a_repeated_cross_section() {
         }
     }
     let fit = data
-        .fit(
+        .fit_design(
+            Design::RepeatedCrossSection,
             false,
             &AttGtOptions {
-                design: Design::RepeatedCrossSection,
                 comparison_group: ComparisonGroup::NotYetTreated,
                 ..universal()
             },
@@ -640,11 +659,10 @@ fn invalid_input_and_options_are_refused() {
         rows.push(u32::try_from(i).unwrap(), cohort, data.period[i], y, &[]);
     }
     rows.weight[1] = 2.0;
-    let rc = AttGtOptions {
-        design: Design::RepeatedCrossSection,
-        ..universal()
-    };
-    assert!(rows.fit(false, &rc).is_ok());
+    assert!(
+        rows.fit_design(Design::RepeatedCrossSection, false, &universal())
+            .is_ok()
+    );
     let mut zero = staggered(0.0);
     zero.weight.iter_mut().take(4).for_each(|w| *w = 0.0);
     assert_eq!(
@@ -695,6 +713,10 @@ fn invalid_input_and_options_are_refused() {
         );
     }
     let fit = data.fit(false, &universal()).unwrap();
+    #[expect(
+        deprecated,
+        reason = "the deprecated band without its bootstrap is refused"
+    )]
     let uniform = AggteOptions {
         band: Band::Uniform,
         ..AggteOptions::default()
@@ -722,4 +744,133 @@ fn bad_columns_are_input_errors() {
             .and_then(|panel| estimate(&panel, &universal()));
         Some(built.map(|fit| fit.cells().len()))
     });
+}
+
+/// Repeated cross-sections built with `StaggeredPanel::cross_sections` give
+/// the bits of the deprecated `design` option on invented unit codes, and the
+/// rows need no order.
+#[test]
+fn cross_sections_match_the_deprecated_design_option() {
+    let data = staggered(0.3);
+    let mut rows = Data::default();
+    for (i, (&cohort, &y)) in data.cohort.iter().zip(&data.outcome).enumerate() {
+        let x = data.covariates[0][i];
+        rows.push(u32::try_from(i).unwrap(), cohort, data.period[i], y, &[x]);
+    }
+    let options = AttGtOptions {
+        comparison_group: ComparisonGroup::NotYetTreated,
+        ..universal()
+    };
+    let new = rows
+        .fit_design(Design::RepeatedCrossSection, true, &options)
+        .unwrap();
+    #[expect(
+        deprecated,
+        reason = "the deprecated option is compared with its replacement"
+    )]
+    let legacy = AttGtOptions {
+        design: Design::RepeatedCrossSection,
+        ..options
+    };
+    let old = rows.fit(true, &legacy).unwrap();
+    assert_eq!(new.cells(), old.cells());
+    assert_eq!(new.influence(), old.influence());
+    assert_eq!(new.sample(), old.sample());
+
+    // The estimators that follow units refuse repeated cross-sections.
+    let y = [1.0, 2.0];
+    let view = StaggeredPanel::cross_sections(&[1, 2], &[None, Some(2)], &y)
+        .build()
+        .unwrap();
+    assert_eq!(view.design(), Design::RepeatedCrossSection);
+    assert_eq!(view.n_units(), 2);
+    assert_eq!(
+        crate::twfe::fit(&view, &crate::twfe::TwfeOptions::default())
+            .unwrap_err()
+            .code(),
+        "did.unsupported"
+    );
+}
+
+/// `Inference` holds the bootstrap and the band, gives the bits of the
+/// deprecated pair, and marks a uniform band simultaneous without p-values.
+#[test]
+fn inference_replaces_the_bootstrap_and_band_fields() {
+    let fit = staggered(0.3).fit(false, &universal()).unwrap();
+    let draws = Bootstrap::new(299, Seed(20_261_128));
+    let dynamic = AggteOptions {
+        aggregation: AggteType::Dynamic,
+        ..AggteOptions::default()
+    };
+    let new = fit
+        .aggregate(&AggteOptions {
+            inference: Inference::UniformBand(draws),
+            ..dynamic
+        })
+        .unwrap();
+    #[expect(
+        deprecated,
+        reason = "the deprecated pair is compared with its replacement"
+    )]
+    let legacy = AggteOptions {
+        bootstrap: Some(draws),
+        band: Band::Uniform,
+        ..dynamic
+    };
+    let old = fit.aggregate(&legacy).unwrap();
+    assert!(new.uniform_band);
+    assert_eq!(new.critical_value.to_bits(), old.critical_value.to_bits());
+    for (a, b) in new.points.iter().zip(&old.points) {
+        assert_eq!(a.estimate, b.estimate);
+        let interval = a.estimate.interval.unwrap();
+        assert_eq!(interval.coverage.critical(), Some(new.critical_value));
+        assert_eq!(a.estimate.p_value, None);
+    }
+    let overall = new.overall.unwrap().estimate;
+    assert!(!overall.interval.unwrap().coverage.is_simultaneous());
+    assert!(overall.p_value.is_some());
+
+    #[expect(deprecated, reason = "both forms at once are refused")]
+    let both = AggteOptions {
+        inference: Inference::Bootstrap(draws),
+        bootstrap: Some(draws),
+        ..dynamic
+    };
+    assert_eq!(fit.aggregate(&both).unwrap_err().code(), "did.unsupported");
+
+    let pointwise = fit
+        .aggregate(&AggteOptions {
+            inference: Inference::Bootstrap(draws),
+            ..dynamic
+        })
+        .unwrap();
+    assert!(!pointwise.uniform_band);
+    assert!(
+        pointwise
+            .points
+            .iter()
+            .all(|p| p.estimate.p_value.is_some())
+    );
+}
+
+/// The event study of a fit under the default varying base names the option
+/// to set, before any aggregation.
+#[test]
+fn the_event_study_names_the_base_period_to_set() {
+    let varying = staggered(0.3).fit(false, &AttGtOptions::default()).unwrap();
+    let error = varying
+        .event_study(&EventStudyOptions::default())
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("BasePeriod::Universal"),
+        "{error}"
+    );
+    let universal = staggered(0.3).fit(false, &universal()).unwrap();
+    let study = universal
+        .event_study(&EventStudyOptions {
+            min_e: Some(-1),
+            ..EventStudyOptions::default()
+        })
+        .unwrap();
+    assert!(study.relative_periods().iter().all(|&e| e >= -1));
 }

@@ -21,7 +21,7 @@ mod rows;
 use epistat_core::{Bootstrap as Draws, Classify, Seed};
 use epistat_did::Error;
 use epistat_did::att_gt::{
-    AggteOptions, AggteType, AttGt, AttGtOptions, Band, BasePeriod, Estimator,
+    AggteOptions, AggteType, AttGt, AttGtOptions, BasePeriod, Estimator, Inference,
 };
 use epistat_inference::Clusters;
 use epistat_rng::Stream;
@@ -537,8 +537,7 @@ fn check_bootstrap(label: &str, got: &Summary, want: &BootAgg, biters: usize) {
 fn boot_config(aggregation: AggteType, replicates: usize, seed: u64) -> AggteOptions {
     AggteOptions {
         aggregation,
-        bootstrap: Some(Draws::new(replicates, Seed(seed))),
-        band: Band::Uniform,
+        inference: Inference::UniformBand(Draws::new(replicates, Seed(seed))),
         ..AggteOptions::default()
     }
 }
@@ -667,8 +666,8 @@ fn the_options_choose_what_the_bootstrap_replaces() {
     let se_only = aggregate(
         &fitted,
         AggteOptions {
-            band: Band::Pointwise,
-            ..boot_config(AggteType::Dynamic, 2000, 5)
+            inference: Inference::Bootstrap(Draws::new(2000, Seed(5))),
+            ..config(AggteType::Dynamic)
         },
     );
     assert!(!se_only.uniform_band);
@@ -679,12 +678,7 @@ fn the_options_choose_what_the_bootstrap_replaces() {
     assert_eq!(se_only.overall_se.to_bits(), full.overall_se.to_bits());
     assert!((se_only.by_key[0].se - analytic.by_key[0].se).abs() > 1e-12);
 
-    // A band needs the bootstrap, and the bootstrap a replicate.
-    let band_only = fitted.aggregate(&AggteOptions {
-        band: Band::Uniform,
-        ..config(AggteType::Dynamic)
-    });
-    assert_eq!(band_only.unwrap_err().code(), "did.unsupported");
+    // The bootstrap needs a replicate.
     let none = fitted.aggregate(&boot_config(AggteType::Dynamic, 0, 1));
     assert_eq!(none.unwrap_err().code(), "input.domain");
 }

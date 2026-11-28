@@ -109,7 +109,7 @@ fn panel(panel: &Panel, options: &TwoPeriodOptions) -> TwoPeriod {
     let change: Vec<f64> = panel.y1.iter().zip(&panel.y0).map(|(a, b)| a - b).collect();
     let x: Vec<f64> = panel.x1.iter().chain(&panel.x2).copied().collect();
     let data = TwoPeriodData::panel(&treated, &change)
-        .weights(&panel.w)
+        .weights(epistat_core::CaseWeights::new(&panel.w).expect("weights"))
         .covariates(MatRef::from_column_major_slice(&x, change.len(), 2))
         .build()
         .expect("data");
@@ -121,7 +121,7 @@ fn repeated(rc: &Repeated, options: &TwoPeriodOptions) -> TwoPeriod {
     let post: Vec<bool> = rc.post.iter().map(|&v| v > 0.5).collect();
     let x: Vec<f64> = rc.x1.iter().chain(&rc.x2).copied().collect();
     let data = TwoPeriodData::repeated_cross_section(&treated, &post, &rc.y)
-        .weights(&rc.w)
+        .weights(epistat_core::CaseWeights::new(&rc.w).expect("weights"))
         .covariates(MatRef::from_column_major_slice(&x, rc.y.len(), 2))
         .build()
         .expect("data");

@@ -44,7 +44,7 @@ impl Grid {
                 what: "comparison cohorts in synthdid",
             });
         }
-        let key = panel.key();
+        let key = panel.panel_key()?;
         let Some((_, first)) = key.units().next() else {
             return Err(Error::NoTreatment);
         };

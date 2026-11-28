@@ -149,6 +149,7 @@ pub use inference::did_clusters::{did_cluster_sums, did_covariance, did_standard
 pub use methods::att_gt;
 pub use methods::bacon;
 pub use methods::bacon::{BaconComparison, BaconDecomposition, BaconKind, BaconWithin};
+pub use methods::cohort;
 pub use methods::continuous;
 pub use methods::dcdh;
 pub use methods::dcdh::{

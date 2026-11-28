@@ -30,7 +30,7 @@
 //! 1. Ortiz-Villavicencio M, Sant'Anna PHC. Better understanding triple
 //!    differences estimators. Working paper, 2025.
 
-use epistat_core::{Bootstrap, Estimate, InputError, Level, check};
+use epistat_core::{Bootstrap, CaseWeights, Estimate, InputError, Level, check};
 use epistat_inference::{Clusters, Influence};
 use epistat_linalg::MatRef;
 
@@ -137,8 +137,8 @@ impl<'a> TripleDidData<'a> {
 
 impl<'a> TripleDidDataBuilder<'a> {
     /// Prior weights, one per unit.
-    pub const fn weights(mut self, weights: &'a [f64]) -> Self {
-        self.data.weights = Some(weights);
+    pub const fn weights(mut self, weights: CaseWeights<'a>) -> Self {
+        self.data.weights = Some(weights.as_slice());
         self
     }
 

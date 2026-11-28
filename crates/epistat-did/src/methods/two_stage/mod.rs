@@ -192,7 +192,7 @@ pub fn estimate(panel: &StaggeredPanel<'_>, options: &TwoStageOptions) -> Result
     let x = prepared.covariates.as_ref();
     let fit = feols.fit(x, panel.outcome(), &fe)?;
     let stage = FirstStage::new(
-        panel.unit(),
+        panel.panel_unit()?,
         &prepared.time,
         prepared.treated.clone(),
         panel.outcome(),
@@ -204,7 +204,7 @@ pub fn estimate(panel: &StaggeredPanel<'_>, options: &TwoStageOptions) -> Result
     let used: Vec<bool> = stage.adjusted.iter().map(Option::is_some).collect();
     let dropped_rows: Vec<usize> = (0..n).filter(|&i| !used[i]).collect();
     let treated_rows: Vec<usize> = (0..n).filter(|&i| used[i] && stage.treated[i]).collect();
-    let index = UnitIndex::new(panel.unit(), &used, panel.clusters())?;
+    let index = UnitIndex::new(panel.panel_unit()?, &used, panel.clusters())?;
     let n_units = index.units.len();
 
     // The indicator of each row: its term, or None.
@@ -246,7 +246,7 @@ pub fn estimate(panel: &StaggeredPanel<'_>, options: &TwoStageOptions) -> Result
         .map(|k| (weight_sum[k] > 0.0).then(|| weighted_y[k] / weight_sum[k]))
         .collect();
 
-    let projector = Projector::new(&fe, &fit, x, &[panel.unit(), &prepared.time]);
+    let projector = Projector::new(&fe, &fit, x, &[panel.panel_unit()?, &prepared.time]);
     let fit_rows = fe.rows();
     let fit_weights = fe.weights();
     let mut sums: Vec<Option<Vec<f64>>> = Vec::with_capacity(k_terms);
@@ -285,13 +285,13 @@ pub fn estimate(panel: &StaggeredPanel<'_>, options: &TwoStageOptions) -> Result
         for i in 0..n {
             if row_term[i] == Some(k) {
                 let e2 = stage.adjusted[i].unwrap_or(0.0) - b;
-                let u = index.position[panel.unit()[i] as usize] as usize;
+                let u = index.position[panel.panel_unit()?[i] as usize] as usize;
                 by_unit[u] += scale * stage.weight[i] * e2;
             }
         }
         for (j, &i) in fit_rows.iter().enumerate() {
             let w = fit_weights.map_or(1.0, |w| w[j]);
-            let u = index.position[panel.unit()[i] as usize] as usize;
+            let u = index.position[panel.panel_unit()?[i] as usize] as usize;
             by_unit[u] -= scale * w * h[j] * stage.adjusted[i].unwrap_or(0.0);
         }
         sums.push(Some(index.cluster_sums(&by_unit)));

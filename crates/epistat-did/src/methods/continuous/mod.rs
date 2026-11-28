@@ -52,7 +52,7 @@
 
 mod sieve;
 
-use epistat_core::{Estimate, InputError, Level, check};
+use epistat_core::{CaseWeights, Estimate, InputError, Level, check};
 use epistat_inference::Influence;
 use epistat_linalg::basis::{BSpline, Basis, Polynomial};
 
@@ -227,8 +227,8 @@ impl<'a> ContinuousData<'a> {
 impl<'a> ContinuousDataBuilder<'a> {
     /// Prior weights, one per unit; a unit of weight 0 counts in neither the
     /// trend nor the sieve, but in the means over units.
-    pub const fn weights(mut self, weights: &'a [f64]) -> Self {
-        self.weights = Some(weights);
+    pub const fn weights(mut self, weights: CaseWeights<'a>) -> Self {
+        self.weights = Some(weights.as_slice());
         self
     }
 

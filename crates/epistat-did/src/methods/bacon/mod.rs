@@ -249,7 +249,7 @@ pub fn decompose(panel: &StaggeredPanel<'_>) -> Result<BaconDecomposition, Error
         .map(|i| panel.first_treated()[i].is_some_and(|g| panel.period()[i] >= g))
         .collect();
     decompose_rows(&Rows {
-        unit: panel.unit(),
+        unit: panel.panel_unit()?,
         time: panel.period(),
         time_code: &time_code,
         treated: &treated,

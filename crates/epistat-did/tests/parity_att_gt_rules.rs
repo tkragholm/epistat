@@ -149,6 +149,14 @@ fn observations(rows: &[Row]) -> Vec<Obs> {
         .collect()
 }
 
+const fn design(run: &Run) -> Design {
+    if run.panel {
+        Design::Panel
+    } else {
+        Design::RepeatedCrossSection
+    }
+}
+
 fn options(run: &Run, ridge: f64) -> AttGtOptions {
     AttGtOptions {
         estimator: match run.est_method.as_str() {
@@ -156,11 +164,6 @@ fn options(run: &Run, ridge: f64) -> AttGtOptions {
             "ipw" => Estimator::InverseProbabilityWeighting,
             "reg" => Estimator::OutcomeRegression,
             other => panic!("no estimator {other}"),
-        },
-        design: if run.panel {
-            Design::Panel
-        } else {
-            Design::RepeatedCrossSection
         },
         comparison_group: match run.control_group.as_str() {
             "nevertreated" => ComparisonGroup::NeverTreated,
@@ -195,7 +198,7 @@ fn ridge(run: &Run) -> f64 {
 }
 
 fn estimate(rows: &[Row], run: &Run) -> AttGt {
-    rows::fit(&observations(rows), &options(run, ridge(run)))
+    rows::fit_design(&observations(rows), design(run), &options(run, ridge(run)))
         .unwrap_or_else(|error| panic!("{} {}: {error}", run.est_method, run.base_period))
 }
 
@@ -420,7 +423,11 @@ fn time_varying_weights_are_refused_on_a_panel() {
     let reference = reference();
     for run in &reference.varying_runs {
         assert!(run.panel);
-        let refused = rows::fit(&observations(&reference.varying), &options(run, ridge(run)));
+        let refused = rows::fit_design(
+            &observations(&reference.varying),
+            design(run),
+            &options(run, ridge(run)),
+        );
         assert!(
             matches!(
                 refused,
@@ -473,8 +480,9 @@ fn cells_without_overlap_are_left_out_as_att_gt_does() {
             let tripped = score.is_none_or(|score| score >= 0.999);
             assert_eq!(tripped, group == 3, "overlap {index}: {score:?}");
         }
-        let all = rows::fit(
+        let all = rows::fit_design(
             &observations(&reference.overlap),
+            design(run),
             &AttGtOptions {
                 refuse_poor_overlap: false,
                 ..options(run, ridge(run))
@@ -520,7 +528,7 @@ fn a_small_never_treated_group_is_refused_as_att_gt_refuses_it() {
             },
             ..options(template, 1e-8)
         };
-        let result = rows::fit(&observations, &options);
+        let result = rows::fit_design(&observations, design(template), &options);
         if case.error.is_empty() {
             assert!(result.is_ok(), "{} kept: {result:?}", case.keep);
         } else {
@@ -543,7 +551,7 @@ fn a_small_never_treated_group_is_refused_as_att_gt_refuses_it() {
                 refuse_small_never_treated: false,
                 ..options
             };
-            assert!(rows::fit(&observations, &relaxed).is_ok());
+            assert!(rows::fit_design(&observations, design(template), &relaxed).is_ok());
         }
     }
 }

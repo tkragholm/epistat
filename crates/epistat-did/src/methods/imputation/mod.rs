@@ -402,7 +402,7 @@ pub(crate) fn first_stage_fixed_effects(
     prepared: &Prepared,
 ) -> Result<FixedEffects, Error> {
     Ok(FixedEffects::new(
-        &[panel.unit(), &prepared.time],
+        &[panel.panel_unit()?, &prepared.time],
         Some(&prepared.fit_weight),
         Singletons::Keep,
     )?)
@@ -436,7 +436,7 @@ pub fn estimate(
     let x = prepared.covariates.as_ref();
     let fit = feols.fit(x, panel.outcome(), &fe)?;
     let stage = FirstStage::new(
-        panel.unit(),
+        panel.panel_unit()?,
         &prepared.time,
         prepared.treated.clone(),
         panel.outcome(),
@@ -448,7 +448,7 @@ pub fn estimate(
     let used: Vec<bool> = stage.adjusted.iter().map(Option::is_some).collect();
     let dropped_rows: Vec<usize> = (0..n).filter(|&i| !used[i]).collect();
     let treated_rows: Vec<usize> = (0..n).filter(|&i| used[i] && stage.treated[i]).collect();
-    let index = UnitIndex::new(panel.unit(), &used, panel.clusters())?;
+    let index = UnitIndex::new(panel.panel_unit()?, &used, panel.clusters())?;
     let n_units = index.units.len();
 
     // The estimands.
@@ -502,7 +502,7 @@ pub fn estimate(
         .collect();
     let n_cells = cell_of.len();
 
-    let projector = Projector::new(&fe, &fit, x, &[panel.unit(), &prepared.time]);
+    let projector = Projector::new(&fe, &fit, x, &[panel.panel_unit()?, &prepared.time]);
     let fit_rows = fe.rows();
     let fit_weights = fe.weights();
     let mut effects = Vec::with_capacity(terms.len());
@@ -578,13 +578,13 @@ pub fn estimate(
             let Some(adjusted) = stage.adjusted[i] else {
                 continue;
             };
-            let u = index.position[panel.unit()[i] as usize] as usize;
+            let u = index.position[panel.panel_unit()?[i] as usize] as usize;
             by_unit[u] += v[i] * adjusted;
         }
         // The cell means enter the treated rows only.
         for (&i, &c) in treated_rows.iter().zip(&cells) {
             if v[i] != 0.0 && den[c] > 0.0 {
-                let u = index.position[panel.unit()[i] as usize] as usize;
+                let u = index.position[panel.panel_unit()?[i] as usize] as usize;
                 by_unit[u] -= v[i] * (num[c] / den[c]);
             }
         }
@@ -692,7 +692,7 @@ fn pretrend_regression(
         }
     }
     let fit = feols.fit(x.as_ref(), panel.outcome(), fe)?;
-    let codes = panel.clusters().unwrap_or(panel.unit());
+    let codes = panel.clusters().unwrap_or(panel.panel_unit()?);
     let ways = [codes];
     let cov = fit.vcov(fe, Vcov::Cluster(&ways), Ssc::new())?;
     let p = k_terms + p_cov;
@@ -703,7 +703,7 @@ fn pretrend_regression(
         let column = rows_influence.col_as_slice(a);
         let mut sums = vec![0.0; n_units];
         for (k, &i) in fit_rows.iter().enumerate() {
-            sums[index.position[panel.unit()[i] as usize] as usize] += column[k];
+            sums[index.position[panel.panel_unit()?[i] as usize] as usize] += column[k];
         }
         for s in &mut sums {
             *s *= n_units as f64;

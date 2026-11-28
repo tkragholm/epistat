@@ -100,7 +100,10 @@ mod rows;
 mod tests;
 
 pub use crate::methods::two_period::NuisanceOptions;
-pub use aggte::{Aggte, AggteOptions, AggteOverall, AggtePoint, AggteType, AggteWeights, Band};
+pub use aggte::{
+    Aggte, AggteOptions, AggteOverall, AggtePoint, AggteType, AggteWeights, Band,
+    EventStudyOptions, Inference,
+};
 pub use bands::{AttGtBand, AttGtBands};
 pub use pretest::PretrendWald;
 
@@ -200,7 +203,9 @@ pub enum Estimator {
 }
 
 /// Whether the rows are units followed over periods or independent
-/// observations, `did`'s `panel`.
+/// observations, `did`'s `panel`. A [`StaggeredPanel`] records it:
+/// [`StaggeredPanel::builder`] builds a panel and
+/// [`StaggeredPanel::cross_sections`] repeated cross-sections.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Design {
@@ -215,7 +220,16 @@ pub enum Design {
     RepeatedCrossSection,
 }
 
-/// The options of [`estimate`], with `did::att_gt`'s defaults.
+/// The options of [`estimate`], with `did::att_gt`'s defaults, except that
+/// the cells' intervals are analytic and pointwise. R's `att_gt` bootstraps
+/// (`bstrap = TRUE`) and prints uniform bands (`cband = TRUE`), which need a
+/// seed: [`AttGt::bands`] gives the bands over the cells, and
+/// [`AggteOptions::inference`] with [`Inference::UniformBand`] those of an
+/// aggregation, as R prints them.
+///
+/// A [`StaggeredPanel::cross_sections`] view is estimated as repeated
+/// cross-sections, `panel = FALSE`; an event study for HonestDiD needs
+/// [`BasePeriod::Universal`].
 #[expect(
     clippy::struct_excessive_bools,
     reason = "four independent switches of `did::att_gt`, each named as R names it"
@@ -224,7 +238,14 @@ pub enum Design {
 pub struct AttGtOptions {
     /// The estimator of each cell, `est_method`.
     pub estimator: Estimator,
-    /// Panel or repeated cross-section, `panel`.
+    /// Panel or repeated cross-section, `panel`. Repeated cross-sections
+    /// built as a panel with invented unit codes are estimated as such when
+    /// this says so; the view records its design instead.
+    #[deprecated(
+        since = "0.1.0",
+        note = "build repeated cross-sections with StaggeredPanel::cross_sections, which \
+                records the design; this field is removed in the next release"
+    )]
     pub design: Design,
     /// The comparison group, `control_group`.
     pub comparison_group: ComparisonGroup,
@@ -271,6 +292,10 @@ pub struct AttGtOptions {
 }
 
 impl Default for AttGtOptions {
+    #[expect(
+        deprecated,
+        reason = "the deprecated `design` keeps its default for one release"
+    )]
     fn default() -> Self {
         Self {
             estimator: Estimator::default(),
@@ -603,17 +628,26 @@ impl AttGt {
         pretest::pretest(self)
     }
 
-    /// The event study of the dynamic aggregation under `options`, with
-    /// [`AggteOptions::aggregation`] taken as [`AggteType::Dynamic`]; see
-    /// [`Aggte::event_study`].
+    /// The event study of the dynamic aggregation restricted and weighted
+    /// as `options` say, for HonestDiD; see [`Aggte::event_study`]. The fit
+    /// must have used [`BasePeriod::Universal`].
     ///
     /// # Errors
     ///
-    /// As [`AttGt::aggregate`] and [`Aggte::event_study`].
-    pub fn event_study(&self, options: &AggteOptions) -> Result<EventStudy, Error> {
+    /// [`Error::Unsupported`] for a fit under a varying base period, with the
+    /// option to set, and otherwise as [`AttGt::aggregate`] and
+    /// [`Aggte::event_study`].
+    pub fn event_study(&self, options: &EventStudyOptions) -> Result<EventStudy, Error> {
+        if self.base_period != BasePeriod::Universal {
+            return Err(aggte::VARYING_BASE);
+        }
         let dynamic = AggteOptions {
             aggregation: AggteType::Dynamic,
-            ..*options
+            weights: options.weights,
+            balance_e: options.balance_e,
+            min_e: options.min_e,
+            max_e: options.max_e,
+            ..AggteOptions::default()
         };
         self.aggregate(&dynamic)?.event_study()
     }
@@ -684,10 +718,11 @@ impl AttGt {
 /// - The efficient estimator's [`Error::NoPrePeriods`],
 ///   [`Error::NoPostPeriods`] and [`Error::Singular`].
 pub fn estimate(panel: &StaggeredPanel<'_>, options: &AttGtOptions) -> Result<AttGt, Error> {
-    validate(panel, options)?;
+    let design = design(panel, options);
+    validate(panel, options, design)?;
     let rows = Rows::new(panel);
     let config = Config::new(options);
-    let output = match (options.estimator, options.design) {
+    let output = match (options.estimator, design) {
         (Estimator::Efficient, Design::Panel) => {
             let unsupported = if rows.n_covariates() > 0 {
                 Some("the efficient estimator on a panel with covariates")
@@ -737,11 +772,29 @@ pub fn estimate(panel: &StaggeredPanel<'_>, options: &AttGtOptions) -> Result<At
             pair_estimators::estimate(&rows, config, estimator)?
         }
     };
-    assemble(panel, options, output)
+    assemble(panel, options, design, output)
+}
+
+/// The design of the estimate: repeated cross-sections when the view holds
+/// them, or when the deprecated option asks for them on a panel.
+fn design(panel: &StaggeredPanel<'_>, options: &AttGtOptions) -> Design {
+    #[expect(
+        deprecated,
+        reason = "the deprecated `design` is honoured for one release"
+    )]
+    let asked = options.design;
+    match panel.design() {
+        Design::Panel => asked,
+        _ => Design::RepeatedCrossSection,
+    }
 }
 
 /// The checks of [`estimate`] that the panel's builder does not make.
-fn validate(panel: &StaggeredPanel<'_>, options: &AttGtOptions) -> Result<(), Error> {
+fn validate(
+    panel: &StaggeredPanel<'_>,
+    options: &AttGtOptions,
+    design: Design,
+) -> Result<(), Error> {
     if options.anticipation < 0 {
         return Err(InputError::Domain {
             what: "anticipation",
@@ -767,10 +820,10 @@ fn validate(panel: &StaggeredPanel<'_>, options: &AttGtOptions) -> Result<(), Er
     {
         return Err(domain("weights", value, "(0, inf)"));
     }
-    match options.design {
+    match design {
         Design::Panel => {
             if let Some(weights) = panel.weights() {
-                for (unit, rows) in panel.key().units() {
+                for (unit, rows) in panel.panel_key()?.units() {
                     let first = weights[rows.start].to_bits();
                     if weights[rows].iter().any(|w| w.to_bits() != first) {
                         return Err(InputError::NotConstant {
@@ -809,18 +862,18 @@ fn domain(what: &'static str, value: f64, domain: &'static str) -> Error {
 /// The cluster code of each position of the influence function.
 fn position_clusters(
     panel: &StaggeredPanel<'_>,
-    options: &AttGtOptions,
+    design: Design,
     units: &[u32],
 ) -> Option<Vec<u32>> {
     let clusters = panel.clusters()?;
-    if options.design == Design::RepeatedCrossSection {
+    let (Design::Panel, Some(key)) = (design, panel.key()) else {
         return Some(units.iter().map(|&row| clusters[row as usize]).collect());
-    }
+    };
     // `units` is an ascending subset of the panel's units, whose rows are
     // adjacent and in ascending unit order.
     let mut by_unit = Vec::with_capacity(units.len());
     let mut wanted = units.iter().peekable();
-    for (unit, rows) in panel.key().units() {
+    for (unit, rows) in key.units() {
         if wanted.peek() == Some(&&unit) {
             by_unit.push(clusters[rows.start]);
             wanted.next();
@@ -834,6 +887,7 @@ fn position_clusters(
 fn assemble(
     panel: &StaggeredPanel<'_>,
     options: &AttGtOptions,
+    design: Design,
     output: Output,
 ) -> Result<AttGt, Error> {
     let Output {
@@ -842,7 +896,7 @@ fn assemble(
         sample,
     } = output;
     let n = sample.units.len();
-    let clusters = position_clusters(panel, options, &sample.units);
+    let clusters = position_clusters(panel, design, &sample.units);
     let numbered = clusters.as_deref().map(Clusters::from_codes);
     let confidence = options.level.confidence_value();
     let mut column = 0;

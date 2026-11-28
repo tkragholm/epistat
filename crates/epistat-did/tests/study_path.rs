@@ -281,7 +281,7 @@ fn study_att_gt(
 ) -> AttGt {
     let covariates = MatRef::from_column_major_slice(&data.covariates, data.unit.len(), 3);
     let builder = StaggeredPanel::builder(&data.unit, &data.period, &data.cohort, &data.outcome)
-        .weights(&data.weight)
+        .weights(epistat_core::CaseWeights::new(&data.weight).expect("weights"))
         .covariates(covariates)
         .comparison_cohort(&data.matched);
     let builder = if clustered {
@@ -514,7 +514,7 @@ fn pairwise(out: &mut Vec<(&'static str, u64)>, rows: &[Row]) {
         // The kernels' two-period call passes the covariates, to which the
         // estimator adds the intercept.
         let data = TwoPeriodData::panel(&treated, &delta)
-            .weights(&weight)
+            .weights(epistat_core::CaseWeights::new(&weight).expect("weights"))
             .covariates(covariates)
             .build()
             .expect("two-period data");
@@ -552,7 +552,7 @@ fn pairwise(out: &mut Vec<(&'static str, u64)>, rows: &[Row]) {
             ..nuisance_options()
         };
         let data = TwoPeriodData::panel(&treated, &delta)
-            .weights(&weight)
+            .weights(epistat_core::CaseWeights::new(&weight).expect("weights"))
             .covariates(covariates)
             .build()
             .expect("two-period data");
@@ -570,7 +570,7 @@ fn pairwise(out: &mut Vec<(&'static str, u64)>, rows: &[Row]) {
         h_nuisance.word(u64::from(fit.converged));
         let zeros = vec![0.0; n];
         let zero_change = TwoPeriodData::panel(&treated, &zeros)
-            .weights(&weight)
+            .weights(epistat_core::CaseWeights::new(&weight).expect("weights"))
             .covariates(covariates)
             .build()
             .expect("two-period data");

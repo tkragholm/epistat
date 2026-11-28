@@ -1,6 +1,6 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use epistat_core::{Bootstrap, Seed};
-use epistat_did::att_gt::{self, AttGtOptions, Design, Estimator};
+use epistat_did::att_gt::{self, AttGtOptions, Estimator};
 use epistat_did::did_cc::{self, Assumption, CrossFitting, DidCcOptions};
 use epistat_did::two_period::{self, NuisanceOptions, TwoPeriodOptions};
 use epistat_did::{StaggeredPanel, TwoPeriodData};
@@ -233,13 +233,12 @@ fn bench_att_gt_dr(criterion: &mut Criterion) {
     let rows = build_att_gt_rows(8_000, 2000, 6);
     let n = rows.unit.len();
     let covariates = epistat_linalg::MatRef::from_column_major_slice(&rows.covariates, n, 2);
-    let panel = StaggeredPanel::builder(&rows.unit, &rows.period, &rows.cohort, &rows.outcome)
+    let panel = StaggeredPanel::cross_sections(&rows.period, &rows.cohort, &rows.outcome)
         .covariates(covariates)
         .build()
-        .expect("panel");
+        .expect("repeated cross-sections");
     let options = AttGtOptions {
         estimator: Estimator::TraditionalDoublyRobust,
-        design: Design::RepeatedCrossSection,
         ..AttGtOptions::default()
     };
     let throughput = u64::try_from(n).expect("row count fits u64");

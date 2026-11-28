@@ -60,7 +60,7 @@ fn the_staggered_panel_refuses_bad_columns() {
     assert_rejects_bad_input_with_codes("StaggeredPanel weights", beside, |bad| {
         column(bad, &W).map(|w| {
             StaggeredPanel::builder(&UNIT, &PERIOD, &FIRST, &Y)
-                .weights(&w)
+                .weights(epistat_core::CaseWeights::new(&w).expect("weights"))
                 .build()
                 .map(|panel| panel.len())
         })
@@ -90,7 +90,7 @@ fn the_switching_panel_refuses_bad_columns() {
     assert_rejects_bad_input_with_codes("SwitchingPanel weights", beside, |bad| {
         column(bad, &W).map(|w| {
             SwitchingPanel::builder(&UNIT, &PERIOD, &outcome, &treatment)
-                .weights(&w)
+                .weights(epistat_core::CaseWeights::new(&w).expect("weights"))
                 .build()
                 .map(|panel| panel.len())
         })
@@ -113,7 +113,7 @@ fn the_unit_level_views_refuse_bad_columns() {
     assert_rejects_bad_input_with_codes("TripleDidData weights", beside, |bad| {
         column(bad, &W).map(|w| {
             TripleDidData::builder(&group, &partition, &change)
-                .weights(&w)
+                .weights(epistat_core::CaseWeights::new(&w).expect("weights"))
                 .build()
                 .map(|data| data.len())
         })
@@ -135,7 +135,7 @@ fn the_unit_level_views_refuse_bad_columns() {
     assert_rejects_bad_input_with_codes("ContinuousData weights", beside, |bad| {
         column(bad, &W).map(|w| {
             ContinuousData::builder(&dose, &change)
-                .weights(&w)
+                .weights(epistat_core::CaseWeights::new(&w).expect("weights"))
                 .build()
                 .map(|data| data.len())
         })
