@@ -298,7 +298,8 @@ impl Hasher {
             parameter.q50,
             parameter.q975,
         ] {
-            self.f(value);
+            // Every summary of these fits is defined.
+            self.f(value.expect("a defined summary"));
         }
     }
 
@@ -586,7 +587,8 @@ fn mtp(out: &mut Golden) {
         summary.brier_score,
     ] {
         for value in [interval.mean, interval.q025, interval.q50, interval.q975] {
-            h.f(value);
+            // Every summary of this fit is defined.
+            h.f(value.expect("a defined summary"));
         }
     }
     for bin in &summary.calibration_bins {

@@ -30,6 +30,7 @@
 //! [`cross_validate`] fit it to the data without their weights. [`select`]
 //! fits unweighted models and refuses weighted data.
 
+use epistat_core::check;
 use epistat_linalg::{Mat, MatRef};
 use epistat_rng::Stream;
 use epistat_stats::likelihood;
@@ -103,8 +104,7 @@ pub struct InformationCriteria {
     pub loglik: f64,
     /// Akaike's information criterion, `2k - 2 loglik`.
     pub aic: f64,
-    /// The Bayesian information criterion, `k ln n - 2 loglik`, NaN for no
-    /// rows.
+    /// The Bayesian information criterion, `k ln n - 2 loglik`.
     pub bic: f64,
 }
 
@@ -425,14 +425,14 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
         tweedie: tweedie_model.as_ref().map(|m| m.predict(x)).transpose()?,
         lognormal: lognormal_model.as_ref().map(|m| m.predict(x)).transpose()?,
     };
-    let in_sample = build_in_sample(y, &predictions, tweedie_model.as_ref());
+    let in_sample = build_in_sample(y, &predictions, tweedie_model.as_ref())?;
     let information_criteria = build_information_criteria(
         x,
         y,
         &predictions,
         tweedie_model.as_ref(),
         lognormal_model.as_ref(),
-    );
+    )?;
     let tweedie_ic = tweedie_candidates
         .iter()
         .map(|candidate| ModelInformationCriteria {
@@ -553,19 +553,19 @@ pub fn cross_validate(
             if options.include_two_part {
                 let fitted = two_part::fit(&train_data, &options.two_part, None)?;
                 let prediction = fitted.predict(test.x.as_ref())?;
-                two_part = compute_model_fit_metrics(test.y(), &prediction.expected_outcome, None);
+                two_part = compute_model_fit_metrics(test.y(), &prediction.expected_outcome, None)?;
             }
 
             for (pos, power) in powers.iter().copied().enumerate() {
                 let model = tweedie::fit(&train_data, power, &options.tweedie, None, None)?;
                 let prediction = model.predict(test.x.as_ref())?;
-                tweedie[pos] = compute_model_fit_metrics(test.y(), &prediction.mean, Some(power));
+                tweedie[pos] = compute_model_fit_metrics(test.y(), &prediction.mean, Some(power))?;
             }
 
             if options.include_lognormal {
                 let model = lognormal::fit(&train_data.without_weights(), &options.lognormal)?;
                 let prediction = model.predict(test.x.as_ref())?;
-                lognormal = compute_model_fit_metrics(test.y(), &prediction.mean, None);
+                lognormal = compute_model_fit_metrics(test.y(), &prediction.mean, None)?;
             }
 
             Ok(FoldMetrics {
@@ -656,9 +656,9 @@ pub fn select(data: &CostData<'_>, powers: &[f64]) -> Result<Selection, Error> {
     for &power in powers {
         if let Ok(model) = fit_tweedie(x, y, None, power, TweedieOptions::default()) {
             let pred = model.predict(x)?;
-            let metrics = compute_model_fit_metrics(y, &pred.mean, Some(power));
+            let metrics = compute_model_fit_metrics(y, &pred.mean, Some(power))?;
             let ll = tweedie_quasi_log_likelihood(y, &pred.mean, power);
-            let ic = compute_information_criteria(ll, x.ncols(), y.nrows());
+            let ic = compute_information_criteria(ll, x.ncols(), y.nrows())?;
             tweedie_candidates.push(TweedieCandidate {
                 power,
                 model,
@@ -671,9 +671,9 @@ pub fn select(data: &CostData<'_>, powers: &[f64]) -> Result<Selection, Error> {
     let lognormal_candidate = match fit_lognormal(x, y, None, LogNormalOptions::default()) {
         Ok(model) => {
             let pred = model.predict(x)?;
-            let metrics = compute_model_fit_metrics(y, &pred.mean, None);
+            let metrics = compute_model_fit_metrics(y, &pred.mean, None)?;
             let ll = lognormal_log_likelihood(x, y, &model);
-            let ic = compute_information_criteria(ll, x.ncols(), y.nrows());
+            let ic = compute_information_criteria(ll, x.ncols(), y.nrows())?;
             Some(LogNormalCandidate {
                 model,
                 metrics,
@@ -736,9 +736,9 @@ fn tweedie_candidates(data: &CostData<'_>, powers: &[f64]) -> Result<Vec<Tweedie
             continue;
         };
         let pred = model.predict(x)?;
-        let metrics = compute_model_fit_metrics(y, &pred.mean, Some(power));
+        let metrics = compute_model_fit_metrics(y, &pred.mean, Some(power))?;
         let ll = tweedie_quasi_log_likelihood(y, &pred.mean, power);
-        let information_criteria = compute_information_criteria(ll, x.ncols(), y.nrows());
+        let information_criteria = compute_information_criteria(ll, x.ncols(), y.nrows())?;
         candidates.push(TweedieCandidate {
             power,
             model,
@@ -749,22 +749,19 @@ fn tweedie_candidates(data: &CostData<'_>, powers: &[f64]) -> Result<Vec<Tweedie
     Ok(candidates)
 }
 
-/// The metrics of the [module](self) for `y` and the predictions `mu`, NaN
-/// for no rows.
+/// The metrics of the [module](self) for `y` and the predictions `mu`.
+///
+/// # Errors
+///
+/// [`InputError::Empty`] for no rows and [`InputError::Length`] for
+/// predictions of another length, where the metrics are undefined.
 fn compute_model_fit_metrics(
     y: MatRef<'_, f64>,
     mu: &Mat<f64>,
     tweedie_power: Option<f64>,
-) -> ModelFitMetrics {
-    if y.nrows() == 0 || y.nrows() != mu.nrows() {
-        return ModelFitMetrics {
-            rmse: f64::NAN,
-            mae: f64::NAN,
-            rmsle: f64::NAN,
-            r2: f64::NAN,
-            deviance: f64::NAN,
-        };
-    }
+) -> Result<ModelFitMetrics, Error> {
+    check::same_length("predictions", y.nrows(), mu.nrows())?;
+    check::non_empty("outcome", y.nrows())?;
     let mut mse = 0.0;
     let mut mae = 0.0;
     let mut log_error_sq_sum = 0.0;
@@ -793,27 +790,31 @@ fn compute_model_fit_metrics(
     let r2 = if sst > 0.0 { 1.0 - (mse / sst) } else { 0.0 };
     let deviance = tweedie_power.map_or(rmse * rmse, |power| tweedie_deviance(y, mu, power));
 
-    ModelFitMetrics {
+    Ok(ModelFitMetrics {
         rmse,
         mae,
         rmsle: rms_log_error,
         r2,
         deviance,
-    }
+    })
 }
 
-/// AIC and BIC for a log-likelihood, parameter count and sample size; the BIC
-/// is NaN for no rows.
-fn compute_information_criteria(loglik: f64, k: usize, n: usize) -> InformationCriteria {
-    InformationCriteria {
+/// AIC and BIC for a log-likelihood, parameter count and sample size.
+///
+/// # Errors
+///
+/// [`InputError::Empty`] for no rows, where the BIC is undefined.
+fn compute_information_criteria(
+    loglik: f64,
+    k: usize,
+    n: usize,
+) -> Result<InformationCriteria, Error> {
+    check::non_empty("outcome", n)?;
+    Ok(InformationCriteria {
         loglik,
         aic: likelihood::aic(loglik, k),
-        bic: if n >= 1 {
-            likelihood::bic(loglik, k, n)
-        } else {
-            f64::NAN
-        },
-    }
+        bic: likelihood::bic(loglik, k, n),
+    })
 }
 
 #[derive(Debug, Clone, Default)]
@@ -828,18 +829,18 @@ fn build_in_sample(
     y: MatRef<'_, f64>,
     predictions: &InSamplePredictions,
     tweedie: Option<&TweedieModel>,
-) -> Vec<ModelScore> {
+) -> Result<Vec<ModelScore>, Error> {
     let mut scores = Vec::new();
     if let Some(pred) = predictions.two_part.as_ref() {
         scores.push(ModelScore {
             candidate: Candidate::TwoPart,
-            metrics: compute_model_fit_metrics(y, &pred.expected_outcome, None),
+            metrics: compute_model_fit_metrics(y, &pred.expected_outcome, None)?,
         });
     }
     if let Some(pred) = predictions.two_part_elastic_net.as_ref() {
         scores.push(ModelScore {
             candidate: Candidate::TwoPartElasticNet,
-            metrics: compute_model_fit_metrics(y, &pred.expected_outcome, None),
+            metrics: compute_model_fit_metrics(y, &pred.expected_outcome, None)?,
         });
     }
     if let (Some(tweedie), Some(pred)) = (tweedie, predictions.tweedie.as_ref()) {
@@ -847,16 +848,16 @@ fn build_in_sample(
             candidate: Candidate::Tweedie {
                 power: tweedie.power,
             },
-            metrics: compute_model_fit_metrics(y, &pred.mean, Some(tweedie.power)),
+            metrics: compute_model_fit_metrics(y, &pred.mean, Some(tweedie.power))?,
         });
     }
     if let Some(pred) = predictions.lognormal.as_ref() {
         scores.push(ModelScore {
             candidate: Candidate::LogNormal,
-            metrics: compute_model_fit_metrics(y, &pred.mean, None),
+            metrics: compute_model_fit_metrics(y, &pred.mean, None)?,
         });
     }
-    scores
+    Ok(scores)
 }
 
 fn build_information_criteria(
@@ -865,7 +866,7 @@ fn build_information_criteria(
     predictions: &InSamplePredictions,
     tweedie: Option<&TweedieModel>,
     lognormal: Option<&LogNormalModel>,
-) -> Vec<ModelInformationCriteria> {
+) -> Result<Vec<ModelInformationCriteria>, Error> {
     let row = |candidate, ic: InformationCriteria| ModelInformationCriteria {
         candidate,
         loglik: ic.loglik,
@@ -882,13 +883,13 @@ fn build_information_criteria(
     ] {
         if let Some(pred) = pred {
             let ll = two_part_log_likelihood(y, &pred.prob_positive, &pred.mean_positive);
-            let ic = compute_information_criteria(ll, 2 * x.ncols(), y.nrows());
+            let ic = compute_information_criteria(ll, 2 * x.ncols(), y.nrows())?;
             rows.push(row(candidate, ic));
         }
     }
     if let (Some(tweedie), Some(pred)) = (tweedie, predictions.tweedie.as_ref()) {
         let ll = tweedie_quasi_log_likelihood(y, &pred.mean, tweedie.power);
-        let ic = compute_information_criteria(ll, x.ncols(), y.nrows());
+        let ic = compute_information_criteria(ll, x.ncols(), y.nrows())?;
         rows.push(row(
             Candidate::Tweedie {
                 power: tweedie.power,
@@ -899,11 +900,11 @@ fn build_information_criteria(
     if let Some(lognormal) = lognormal {
         let ll = lognormal_log_likelihood(x, y, lognormal);
         if ll.is_finite() {
-            let ic = compute_information_criteria(ll, x.ncols(), y.nrows());
+            let ic = compute_information_criteria(ll, x.ncols(), y.nrows())?;
             rows.push(row(Candidate::LogNormal, ic));
         }
     }
-    rows
+    Ok(rows)
 }
 
 fn build_cv_summary(
@@ -1130,6 +1131,7 @@ mod tests {
     use super::*;
     use crate::two_part::Regularization;
     use crate::utils::usize_to_f64;
+    use epistat_core::InputError;
 
     const SEED: u64 = 42;
 
@@ -1355,19 +1357,20 @@ mod tests {
     }
 
     #[test]
-    fn compute_metrics_returns_nan_on_dimension_mismatch() {
+    fn compute_metrics_refuses_a_dimension_mismatch() {
         let y = [0.0, 1.0];
         let mu = Mat::from_fn(3, 1, |_, _| 1.0);
-        let metrics = compute_model_fit_metrics(column(&y), &mu, None);
-        assert!(metrics.rmse.is_nan());
-        assert!(metrics.deviance.is_nan());
+        assert!(matches!(
+            compute_model_fit_metrics(column(&y), &mu, None),
+            Err(Error::Input(InputError::Length { .. }))
+        ));
     }
 
     #[test]
     fn bic_is_defined_from_one_observation() {
-        let ic = compute_information_criteria(-10.0, 3, 1);
+        let ic = compute_information_criteria(-10.0, 3, 1).unwrap();
         assert!((ic.bic - 20.0).abs() < 1e-12);
-        assert!(compute_information_criteria(-10.0, 3, 0).bic.is_nan());
+        assert!(compute_information_criteria(-10.0, 3, 0).is_err());
     }
 
     #[test]

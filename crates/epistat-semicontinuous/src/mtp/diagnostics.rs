@@ -142,6 +142,7 @@ pub(crate) fn summarize_multi_chain_convergence_tracking(
 }
 
 /// Posterior predictive diagnostics summary.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct PosteriorPredictiveSummary {
     /// The share of zero outcomes.
@@ -423,8 +424,8 @@ mod tests {
         assert_eq!(summary.calibration_bins.len(), 5);
         let total_count: usize = summary.calibration_bins.iter().map(|bin| bin.count).sum();
         assert_eq!(total_count, input.n_rows());
-        assert!(summary.predicted_mean.mean.is_finite());
-        assert!(summary.brier_score.mean >= 0.0);
+        assert!(summary.predicted_mean.mean.unwrap().is_finite());
+        assert!(summary.brier_score.mean.unwrap() >= 0.0);
     }
 
     #[test]

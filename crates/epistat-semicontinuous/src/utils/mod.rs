@@ -29,17 +29,25 @@ pub struct CalibrationBinSummary {
 }
 
 /// Posterior summary interval for a scalar effect quantity.
+///
+/// Each value is `None` when it is undefined: there are no draws, or a draw
+/// is NaN, as an odds ratio of two zero probabilities is.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EffectIntervalSummary {
     /// The posterior mean.
-    pub mean: f64,
+    pub mean: Option<f64>,
     /// The 2.5% posterior quantile.
-    pub q025: f64,
+    pub q025: Option<f64>,
     /// The posterior median.
-    pub q50: f64,
+    pub q50: Option<f64>,
     /// The 97.5% posterior quantile.
-    pub q975: f64,
+    pub q975: Option<f64>,
+}
+
+/// `value`, or `None` when it is NaN.
+pub(crate) fn defined(value: f64) -> Option<f64> {
+    (!value.is_nan()).then_some(value)
 }
 
 pub fn add_ridge_to_diagonal(matrix: &mut Mat<f64>, lambda: f64, exclude_intercept: bool) {
@@ -483,22 +491,17 @@ pub fn calibration_bins_summary(
 #[must_use]
 pub fn summarize_draws_in_place(values: &mut [f64]) -> EffectIntervalSummary {
     if values.is_empty() {
-        return EffectIntervalSummary {
-            mean: f64::NAN,
-            q025: f64::NAN,
-            q50: f64::NAN,
-            q975: f64::NAN,
-        };
+        return EffectIntervalSummary::default();
     }
 
     let mean = values.iter().sum::<f64>() / usize_to_f64(values.len());
     values.sort_by(f64::total_cmp);
 
     EffectIntervalSummary {
-        mean,
-        q025: calculate_quantile(values, 0.025).unwrap_or(f64::NAN),
-        q50: calculate_quantile(values, 0.5).unwrap_or(f64::NAN),
-        q975: calculate_quantile(values, 0.975).unwrap_or(f64::NAN),
+        mean: defined(mean),
+        q025: calculate_quantile(values, 0.025),
+        q50: calculate_quantile(values, 0.5),
+        q975: calculate_quantile(values, 0.975),
     }
 }
 

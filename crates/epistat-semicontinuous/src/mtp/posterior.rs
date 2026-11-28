@@ -1,8 +1,9 @@
 //! Posterior storage and summaries for MTP.
 
-use crate::utils::{calculate_quantile, usize_to_f64};
+use crate::utils::{calculate_quantile, defined, usize_to_f64};
 
 /// A single posterior draw from the MTP parameter space.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct MtpPosteriorDraw {
     /// Coefficients of the binary part.
@@ -16,6 +17,7 @@ pub struct MtpPosteriorDraw {
 }
 
 /// Posterior draw collection.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct MtpPosteriorSamples {
     /// The retained draws in sampling order.
@@ -37,21 +39,26 @@ impl MtpPosteriorSamples {
 }
 
 /// Scalar posterior summary statistics.
+///
+/// Each value is `None` when it is undefined: there are no draws, or a draw
+/// is NaN.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ParameterSummary {
     /// The posterior mean.
-    pub mean: f64,
+    pub mean: Option<f64>,
     /// The posterior standard deviation.
-    pub std_dev: f64,
+    pub std_dev: Option<f64>,
     /// The 2.5% posterior quantile.
-    pub q025: f64,
+    pub q025: Option<f64>,
     /// The posterior median.
-    pub q50: f64,
+    pub q50: Option<f64>,
     /// The 97.5% posterior quantile.
-    pub q975: f64,
+    pub q975: Option<f64>,
 }
 
 /// Posterior summary for the MTP parameter blocks.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct MtpPosteriorSummary {
     /// Summaries of the binary-part coefficients.
@@ -121,13 +128,7 @@ pub fn summarize_posterior(samples: &MtpPosteriorSamples) -> MtpPosteriorSummary
 #[must_use]
 fn summarize_scalar_in_place(values: &mut [f64]) -> ParameterSummary {
     if values.is_empty() {
-        return ParameterSummary {
-            mean: f64::NAN,
-            std_dev: f64::NAN,
-            q025: f64::NAN,
-            q50: f64::NAN,
-            q975: f64::NAN,
-        };
+        return ParameterSummary::default();
     }
 
     let n = usize_to_f64(values.len());
@@ -144,11 +145,11 @@ fn summarize_scalar_in_place(values: &mut [f64]) -> ParameterSummary {
     values.sort_by(f64::total_cmp);
 
     ParameterSummary {
-        mean,
-        std_dev: variance.sqrt(),
-        q025: calculate_quantile(values, 0.025).unwrap_or(f64::NAN),
-        q50: calculate_quantile(values, 0.5).unwrap_or(f64::NAN),
-        q975: calculate_quantile(values, 0.975).unwrap_or(f64::NAN),
+        mean: defined(mean),
+        std_dev: defined(variance.sqrt()),
+        q025: calculate_quantile(values, 0.025),
+        q50: calculate_quantile(values, 0.5),
+        q975: calculate_quantile(values, 0.975),
     }
 }
 
@@ -187,6 +188,6 @@ mod tests {
         let summary = summarize_posterior(&samples);
         assert_eq!(summary.draw_count, 2);
         assert_eq!(summary.alpha.len(), 1);
-        assert!((summary.alpha[0].mean - 1.0).abs() < 1.0e-12);
+        assert!((summary.alpha[0].mean.unwrap() - 1.0).abs() < 1.0e-12);
     }
 }
