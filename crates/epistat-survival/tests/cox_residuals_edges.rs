@@ -24,7 +24,7 @@ fn model(data: &SurvData<'_>, x: &Mat<f64>) -> CoxModelFit {
     fit(data, x.as_ref(), &CoxOptions::default()).unwrap()
 }
 
-fn options(kind: CoxResidualKind) -> ResidualOptions<'static> {
+fn options(kind: CoxResidualKind) -> ResidualOptions {
     ResidualOptions::new(kind, CoxOptions::default())
 }
 
@@ -132,17 +132,24 @@ fn invalid_options_are_refused() {
     let data = SurvData::builder(&STOP, &STATUS).build().unwrap();
     let x = x_matrix(&X);
     let fitted = model(&data, &x);
-    let run = |opts: &ResidualOptions<'_>| residuals(&data, x.as_ref(), &fitted, opts);
+    let run = |opts: &ResidualOptions| residuals(&data, x.as_ref(), &fitted, opts);
     for kind in [
         CoxResidualKind::Schoenfeld,
         CoxResidualKind::ScaledSchoenfeld,
     ] {
         let codes = [0u32; 12];
+        let grouped = SurvData::builder(&STOP, &STATUS)
+            .cluster(&codes)
+            .build()
+            .unwrap();
         let opts = ResidualOptions {
-            collapse: Collapse::Codes(&codes),
+            collapse: Collapse::Cluster,
             ..options(kind)
         };
-        assert!(run(&opts).is_err(), "{kind:?} collapsed");
+        assert!(
+            residuals(&grouped, x.as_ref(), &fitted, &opts).is_err(),
+            "{kind:?} collapsed"
+        );
     }
     for collapse in [Collapse::Cluster, Collapse::Id] {
         let opts = ResidualOptions {
@@ -151,12 +158,6 @@ fn invalid_options_are_refused() {
         };
         assert!(run(&opts).is_err(), "{collapse:?} without the column");
     }
-    let short = [0u32; 3];
-    let opts = ResidualOptions {
-        collapse: Collapse::Codes(&short),
-        ..options(CoxResidualKind::Score)
-    };
-    assert!(run(&opts).is_err());
     let opts = ResidualOptions {
         weighted: Some(true),
         ..options(CoxResidualKind::Deviance)

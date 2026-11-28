@@ -78,11 +78,11 @@ fn flexpar_fit_predict_contrast() {
         FlexparScale::Probit,
     ] {
         let options = FlexParOptions {
-            tvc: &tvc,
+            tvc: tvc.to_vec(),
             ..FlexParOptions::new(scale, 3)
         };
         assert_same_on_pools(&POOLS, || {
-            let f = fit(&data, x.as_ref(), &options).unwrap();
+            let f = fit(&data, x.as_ref(), None, &options).unwrap();
             assert!(f.converged && f.beta[2].is_none());
             let mut out = flat(&f);
             let o = FlexparPredictOptions {

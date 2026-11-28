@@ -14,8 +14,8 @@
 //! of a cohort, [`net_survival`] estimates `Lambda` without a model, and
 //! [`excess_hazard`] fits `lambda_E` as a piecewise constant function of the
 //! follow-up time and of covariates. The flexible parametric excess hazard
-//! model of Nelson et al. is [`crate::flexpar::fit`] with
-//! [`crate::flexpar::FlexParOptions::bhazard`].
+//! model of Nelson et al. is [`crate::flexpar::fit`] with its
+//! argument `bhazard`.
 //!
 //! # Expected hazard
 //!

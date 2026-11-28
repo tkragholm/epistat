@@ -17,10 +17,10 @@
 //! default `G` is the Kaplan-Meier estimate of the censoring times, in which a
 //! death at a tied time leaves the risk set before the censoring does, as in
 //! `prodlim` with `reverse = TRUE`, which `Score` calls. It is
-//! [`Censoring::KaplanMeier`]. A Cox model for the censoring times, fitted here
-//! by [`cox::fit`](crate::cox::fit), is [`Censoring::Cox`], `cens.model =
+//! [`ScoreCensoring::KaplanMeier`]. A Cox model for the censoring times, fitted here
+//! by [`cox::fit`](crate::cox::fit), is [`ScoreCensoring::Cox`], `cens.model =
 //! "cox"`: `G_i(s) = exp(-exp(x_i' b) L0(s))` with the Breslow baseline `L0`.
-//! Weights from any other model can be supplied with [`Censoring::Supplied`],
+//! Weights from any other model can be supplied with [`ScoreCensoring::Supplied`],
 //! and then the standard errors are the conservative ones: they treat the
 //! weights as known.
 //!
@@ -204,10 +204,11 @@ use crate::order::sort_by_key;
 use crate::surv::SurvData;
 use crate::timefix::TimeFix;
 
-/// How the censoring distribution is obtained.
+/// How the censoring distribution is obtained, with the columns of the data
+/// a model of it reads.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
-pub enum Censoring<'a> {
+pub enum ScoreCensoring<'a> {
     /// The Kaplan-Meier estimate of the censoring times, `cens.model = "km"`.
     #[default]
     KaplanMeier,
@@ -219,6 +220,10 @@ pub enum Censoring<'a> {
     /// [`ScoreOptions::conservative`] is set.
     Cox(CoxCensoring<'a>),
 }
+
+/// [`ScoreCensoring`], under its name in 0.3.
+#[deprecated(since = "0.4.0", note = "renamed `ScoreCensoring`")]
+pub type Censoring<'a> = ScoreCensoring<'a>;
 
 /// Censoring probabilities from a model of the caller's.
 #[derive(Debug, Clone, Copy)]
@@ -268,15 +273,13 @@ pub enum HorizonRule {
 
 /// What the metrics take besides the data, the predictions and the times.
 #[derive(Debug, Clone)]
-pub struct ScoreOptions<'a> {
+pub struct ScoreOptions {
     /// The rule that makes times equal when they differ by rounding error,
     /// applied to the data first. `Exact`: neither `Score` nor `timeROC`
     /// applies one.
     pub timefix: TimeFix,
     /// The event of interest. 1, which is the first cause as in `Score`.
     pub cause: u32,
-    /// How the weights are obtained. Kaplan-Meier, as `cens.model = "km"`.
-    pub censoring: Censoring<'a>,
     /// Compute the standard errors, `se.fit = TRUE` of `Score`.
     pub variance: bool,
     /// Leave the estimation of the censoring distribution out of the standard
@@ -293,12 +296,11 @@ pub struct ScoreOptions<'a> {
     pub horizon: HorizonRule,
 }
 
-impl Default for ScoreOptions<'_> {
+impl Default for ScoreOptions {
     fn default() -> Self {
         Self {
             timefix: TimeFix::Exact,
             cause: 1,
-            censoring: Censoring::KaplanMeier,
             variance: true,
             conservative: false,
             keep_influence: false,
@@ -388,7 +390,12 @@ struct Core<'a> {
 }
 
 impl<'a> Core<'a> {
-    fn new(data: &SurvData<'_>, opts: &ScoreOptions<'a>, times: &[f64]) -> Result<Self> {
+    fn new(
+        data: &SurvData<'_>,
+        censoring: &ScoreCensoring<'a>,
+        opts: &ScoreOptions,
+        times: &[f64],
+    ) -> Result<Self> {
         let n_times = times.len();
         let sorted = sort_rows(data, opts.timefix, opts.cause)?;
         let n = sorted.n();
@@ -396,8 +403,8 @@ impl<'a> Core<'a> {
         let km = CensoringKm::new(&sorted.time, &sorted.is_censored(), &w, true);
         let mut cox = None;
         let mut lam_times = Vec::new();
-        let (supplied, g_own) = match &opts.censoring {
-            Censoring::Cox(spec) => {
+        let (supplied, g_own) = match censoring {
+            ScoreCensoring::Cox(spec) => {
                 let model = CoxCens::new(&sorted, spec)?;
                 let g_own = (0..n)
                     .map(|pos| model.survival(pos, model.lambda_before(sorted.time[pos])))
@@ -406,7 +413,7 @@ impl<'a> Core<'a> {
                 cox = Some(model);
                 (None, g_own)
             }
-            Censoring::KaplanMeier => (
+            ScoreCensoring::KaplanMeier => (
                 None,
                 sorted
                     .time
@@ -414,7 +421,7 @@ impl<'a> Core<'a> {
                     .map(|&t| km.before(t))
                     .collect::<Vec<_>>(),
             ),
-            Censoring::Supplied(s) => {
+            ScoreCensoring::Supplied(s) => {
                 if s.before_own_time.len() != sorted.n_rows {
                     return Err(Error::from(InputError::Length {
                         what: "before_own_time",
@@ -476,7 +483,7 @@ impl<'a> Core<'a> {
     }
 
     /// Whether the estimation of `G` enters the standard error at time `t`.
-    fn uses_censoring_term(&self, opts: &ScoreOptions<'_>, t: f64) -> bool {
+    fn uses_censoring_term(&self, opts: &ScoreOptions, t: f64) -> bool {
         self.supplied.is_none() && !opts.conservative && opts.variance && t < self.sorted.max_time
     }
 
@@ -585,7 +592,7 @@ struct BrierColumn {
 /// The score at time `t`, column `j`, for the risk at each sorted position.
 fn brier_column(
     core: &Core<'_>,
-    opts: &ScoreOptions<'_>,
+    opts: &ScoreOptions,
     j: usize,
     t: f64,
     risk: &dyn Fn(usize) -> f64,
@@ -632,7 +639,7 @@ fn brier_column(
 
 fn collect_score(
     core: &Core<'_>,
-    opts: &ScoreOptions<'_>,
+    opts: &ScoreOptions,
     times: &[f64],
     columns: &[BrierColumn],
 ) -> Result<Score> {
@@ -671,9 +678,10 @@ pub fn brier(
     data: &SurvData<'_>,
     predicted: MatRef<'_, f64>,
     times: &[f64],
-    opts: &ScoreOptions<'_>,
+    censoring: &ScoreCensoring<'_>,
+    opts: &ScoreOptions,
 ) -> Result<Score> {
-    let core = Core::new(data, opts, times)?;
+    let core = Core::new(data, censoring, opts, times)?;
     check_times(times, core.sorted.max_time)?;
     check_matrix("predicted", predicted, core.sorted.n_rows, times.len())?;
     let complement = match opts.predicted {
@@ -720,8 +728,13 @@ pub fn brier(
 /// # Errors
 ///
 /// As for [`brier`], except those about `predicted`.
-pub fn null_brier(data: &SurvData<'_>, times: &[f64], opts: &ScoreOptions<'_>) -> Result<Score> {
-    let core = Core::new(data, opts, times)?;
+pub fn null_brier(
+    data: &SurvData<'_>,
+    times: &[f64],
+    censoring: &ScoreCensoring<'_>,
+    opts: &ScoreOptions,
+) -> Result<Score> {
+    let core = Core::new(data, censoring, opts, times)?;
     check_times(times, core.sorted.max_time)?;
     let marginal = marginal_risk(&core.sorted.time, &core.sorted.kind, times);
     let columns: Vec<BrierColumn> = times
@@ -814,7 +827,7 @@ enum Role {
 
 fn auc_column(
     core: &Core<'_>,
-    opts: &ScoreOptions<'_>,
+    opts: &ScoreOptions,
     j: usize,
     t: f64,
     marker: &dyn Fn(usize) -> f64,
@@ -954,9 +967,10 @@ pub fn auc(
     data: &SurvData<'_>,
     marker: MatRef<'_, f64>,
     times: &[f64],
-    opts: &ScoreOptions<'_>,
+    censoring: &ScoreCensoring<'_>,
+    opts: &ScoreOptions,
 ) -> Result<Auc> {
-    let core = Core::new(data, opts, times)?;
+    let core = Core::new(data, censoring, opts, times)?;
     check_times(times, core.sorted.max_time)?;
     check_matrix("marker", marker, core.sorted.n_rows, times.len())?;
     let columns: Vec<AucColumn> = times

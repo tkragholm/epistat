@@ -48,6 +48,7 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
+use epistat_survival::cox::Collapse;
 use epistat_survival::survreg::{
     DfbetaOptions, Distribution, SurvregOptions, SurvregPredictOptions, SurvregPredictType,
     SurvregResidualKind, TermsReference, fit,
@@ -245,7 +246,9 @@ fn columns(dataset: &str, d: &Dataset) -> Columns {
     c
 }
 
-fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit) -> SurvData<'a> {
+/// The data of the fit, with the clusters of `c` when the fit is clustered or
+/// `clustered` asks for them.
+fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit, clustered: bool) -> SurvData<'a> {
     if dataset == "lung" || dataset == "right" {
         let mut b = SurvData::builder(&c.time, &c.status);
         if r.use_strata {
@@ -254,7 +257,7 @@ fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit) -> SurvData<'a> {
         if r.use_weights {
             b = b.weight(&c.weight);
         }
-        if r.robust == "cluster" {
+        if clustered || r.robust == "cluster" {
             b = b.cluster(&c.cluster);
         }
         if r.use_offset {
@@ -269,7 +272,7 @@ fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit) -> SurvData<'a> {
         if r.use_weights {
             b = b.weight(&c.weight);
         }
-        if r.robust == "cluster" {
+        if clustered || r.robust == "cluster" {
             b = b.cluster(&c.cluster);
         }
         if r.use_offset {
@@ -337,7 +340,8 @@ fn extra_options_match_r() {
             robust: r.robust == "robust",
             ..SurvregOptions::default()
         };
-        let data = build(&r.dataset, &c, r);
+        let data = build(&r.dataset, &c, r, false);
+        let grouped = build(&r.dataset, &c, r, true);
         let f = fit(&data, x.as_ref(), &options).unwrap_or_else(|e| panic!("{}: {e}", r.name));
         if r.dataset == "interval" {
             // The same data as bounds and as a status give the same fit.
@@ -661,7 +665,7 @@ fn extra_options_match_r() {
         // dfbeta, dfbetas, weighted and collapsed.
         let rb = bound * (p as f64 + 1.0);
         let by_cluster = DfbetaOptions {
-            collapse: Some(&c.cluster),
+            collapse: Collapse::Cluster,
             ..DfbetaOptions::default()
         };
         let plain = f
@@ -689,7 +693,7 @@ fn extra_options_match_r() {
             .unwrap();
         let collapsed = f
             .dfbeta(
-                &data,
+                &grouped,
                 x.as_ref(),
                 &DfbetaOptions {
                     weighted: true,
@@ -699,7 +703,7 @@ fn extra_options_match_r() {
             .unwrap();
         let collapsed_s = f
             .dfbeta(
-                &data,
+                &grouped,
                 x.as_ref(),
                 &DfbetaOptions {
                     standardise: true,

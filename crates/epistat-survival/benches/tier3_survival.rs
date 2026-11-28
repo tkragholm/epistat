@@ -82,11 +82,15 @@ fn main() {
     };
     let tvc = [TimeVarying { column: 1, df: 2 }];
     let options = FlexParOptions {
-        tvc: if method == "flexpar_tvc" { &tvc } else { &[] },
+        tvc: if method == "flexpar_tvc" {
+            tvc.to_vec()
+        } else {
+            Vec::new()
+        },
         ..FlexParOptions::new(scale, DF)
     };
     let (times, f) = common::timed(common::reps(), || {
-        fit(&data, x.as_ref(), &options).expect("flexpar")
+        fit(&data, x.as_ref(), None, &options).expect("flexpar")
     });
     let mut lines = Lines::default();
     lines.push("loglik", f.log_likelihood);

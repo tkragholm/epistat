@@ -13,7 +13,7 @@ use epistat_survival::aalen_johansen::{self, AalenJohansenOptions, AalenJohansen
 use epistat_survival::absrisk::{CauseSpecificCox, CscOptions, NewRows, RiskOptions};
 use epistat_survival::aipw::{AipwCensoring, AipwSurvOptions, AipwSurvSpec, aipw_cox};
 use epistat_survival::casecohort::{self, CaseCohortMethod, CaseCohortOptions};
-use epistat_survival::clogit::{ClogitOptions, clogit};
+use epistat_survival::clogit::{ClogitOptions, MatchedSets, clogit};
 use epistat_survival::concordance::{self, ConcordanceOptions};
 use epistat_survival::condense::{self, CondenseOptions};
 use epistat_survival::cox::{self, CoxOptions};
@@ -30,6 +30,7 @@ use epistat_survival::lexis::{
 };
 use epistat_survival::markov::{self, MarkovOptions};
 use epistat_survival::metrics::rttright::{self, RttrightOptions};
+use epistat_survival::metrics::score::ScoreCensoring;
 use epistat_survival::metrics::{
     brier::{self, BrierOptions},
     calibration::{self, CalibrationOptions, Groups},
@@ -484,6 +485,7 @@ fn regression_models_refuse_bad_columns() {
             flexpar::fit(
                 &data,
                 x.as_ref(),
+                None,
                 &FlexParOptions::new(FlexparScale::Hazard, 2),
             )
             .map(|_| ())
@@ -505,17 +507,37 @@ fn regression_models_refuse_bad_columns() {
     rejects("clogit case", |bad| {
         let case = shortened(bad, &case);
         let x = column(&COVARIATE);
-        lengths(bad).then(|| clogit(&case, &set, x.as_ref(), &ClogitOptions::default()).map(|_| ()))
+        lengths(bad).then(|| {
+            clogit(
+                &MatchedSets::new(&case, &set),
+                x.as_ref(),
+                &ClogitOptions::default(),
+            )
+            .map(|_| ())
+        })
     });
     rejects("clogit set", |bad| {
         let set = shortened(bad, &set);
         let x = column(&COVARIATE);
-        lengths(bad).then(|| clogit(&case, &set, x.as_ref(), &ClogitOptions::default()).map(|_| ()))
+        lengths(bad).then(|| {
+            clogit(
+                &MatchedSets::new(&case, &set),
+                x.as_ref(),
+                &ClogitOptions::default(),
+            )
+            .map(|_| ())
+        })
     });
     rejects("clogit x", |bad| {
         let x = column(&col(bad, &COVARIATE));
-        unordered(bad)
-            .then(|| clogit(&case, &set, x.as_ref(), &ClogitOptions::default()).map(|_| ()))
+        unordered(bad).then(|| {
+            clogit(
+                &MatchedSets::new(&case, &set),
+                x.as_ref(),
+                &ClogitOptions::default(),
+            )
+            .map(|_| ())
+        })
     });
     rejects("informative_sets", |bad| {
         let x = column(&col(bad, &COVARIATE));
@@ -721,26 +743,66 @@ fn scores_refuse_bad_columns() {
     let options = ScoreOptions::default();
     rejects("metrics::score::brier predicted", |bad| {
         let predicted = matrix(&col(bad, &RISK), 3);
-        unordered(bad)
-            .then(|| score::brier(&data, predicted.as_ref(), &TIMES, &options).map(|_| ()))
+        unordered(bad).then(|| {
+            score::brier(
+                &data,
+                predicted.as_ref(),
+                &TIMES,
+                &ScoreCensoring::KaplanMeier,
+                &options,
+            )
+            .map(|_| ())
+        })
     });
     rejects("metrics::score::brier times", |bad| {
         let predicted = matrix(&RISK, 3);
         grid(bad).then(|| {
-            score::brier(&data, predicted.as_ref(), &col(bad, &TIMES), &options).map(|_| ())
+            score::brier(
+                &data,
+                predicted.as_ref(),
+                &col(bad, &TIMES),
+                &ScoreCensoring::KaplanMeier,
+                &options,
+            )
+            .map(|_| ())
         })
     });
     rejects("metrics::score::null_brier", |bad| {
-        grid(bad).then(|| score::null_brier(&data, &col(bad, &TIMES), &options).map(|_| ()))
+        grid(bad).then(|| {
+            score::null_brier(
+                &data,
+                &col(bad, &TIMES),
+                &ScoreCensoring::KaplanMeier,
+                &options,
+            )
+            .map(|_| ())
+        })
     });
     rejects("metrics::score::auc marker", |bad| {
         let marker = matrix(&col(bad, &RISK), 3);
-        unordered(bad).then(|| score::auc(&data, marker.as_ref(), &TIMES, &options).map(|_| ()))
+        unordered(bad).then(|| {
+            score::auc(
+                &data,
+                marker.as_ref(),
+                &TIMES,
+                &ScoreCensoring::KaplanMeier,
+                &options,
+            )
+            .map(|_| ())
+        })
     });
     rejects("metrics::score::auc times", |bad| {
         let marker = matrix(&RISK, 3);
-        grid(bad)
-            .then(|| score::auc(&data, marker.as_ref(), &col(bad, &TIMES), &options).map(|_| ()))
+        grid(bad).then(|| {
+            score::auc(
+                &data,
+                marker.as_ref(),
+                &col(bad, &TIMES),
+                &ScoreCensoring::KaplanMeier,
+                &options,
+            )
+            .map(|_| ())
+        })
     });
     rejects("metrics::brier::estimate predicted", |bad| {
         let predicted = matrix(&col(bad, &RISK), 3);
@@ -1521,9 +1583,9 @@ fn net_survival_refuses_bad_columns() {
         let potential = shortened(bad, &[20.0_f64; 10]);
         let options = NetOptions {
             method: NetMethod::Hakulinen,
-            potential: Some(&potential),
             ..NetOptions::default()
         };
+        let expected = expected.clone().with_potential(&potential);
         lengths(bad).then(|| relsurv::net_survival(&data, &expected, &options).map(|_| ()))
     });
     rejects("relsurv::excess_hazard x", |bad| {

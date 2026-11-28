@@ -14,7 +14,7 @@ use epistat_survival::metrics::brier::{self, BrierOptions};
 use epistat_survival::metrics::calibration::{self, CalibrationOptions, Groups};
 use epistat_survival::metrics::rttright::{self, RttrightOptions};
 use epistat_survival::metrics::score::{
-    Censoring, Predicted, ScoreOptions, SuppliedCensoring, auc, brier as score_brier, ipa,
+    Predicted, ScoreCensoring, ScoreOptions, SuppliedCensoring, auc, brier as score_brier, ipa,
     null_brier,
 };
 use epistat_survival::survfit::{SurvfitOptions, estimate as km};
@@ -37,8 +37,22 @@ fn without_censoring_the_metrics_are_the_plain_ones() {
     let times = [2.0, 5.0, 8.0];
     let m = Mat::from_fn(n, 3, |i, j| (risk[i] + 0.01 * j as f64).min(1.0));
     let opts = ScoreOptions::default();
-    let b = score_brier(&data, m.as_ref(), &times, &opts).unwrap();
-    let a = auc(&data, m.as_ref(), &times, &opts).unwrap();
+    let b = score_brier(
+        &data,
+        m.as_ref(),
+        &times,
+        &ScoreCensoring::KaplanMeier,
+        &opts,
+    )
+    .unwrap();
+    let a = auc(
+        &data,
+        m.as_ref(),
+        &times,
+        &ScoreCensoring::KaplanMeier,
+        &opts,
+    )
+    .unwrap();
     let tol = 4.0 * n as f64 * EPS;
     for (j, &t) in times.iter().enumerate() {
         let r: Vec<f64> = (0..n)
@@ -81,11 +95,25 @@ fn an_area_without_cases_or_controls_is_missing() {
     let data = SurvData::builder(&time, &status).build().unwrap();
     // At the last time every row is a case and none is a control.
     let m = Mat::from_fn(time.len(), 1, |i, _| risk[i]);
-    let a = auc(&data, m.as_ref(), &[10.0], &ScoreOptions::default()).unwrap();
+    let a = auc(
+        &data,
+        m.as_ref(),
+        &[10.0],
+        &ScoreCensoring::KaplanMeier,
+        &ScoreOptions::default(),
+    )
+    .unwrap();
     assert_eq!(a.auc, vec![None]);
     assert_eq!(a.se, vec![None]);
     // Before the first time every row is a control and none is a case.
-    let a = auc(&data, m.as_ref(), &[0.5], &ScoreOptions::default()).unwrap();
+    let a = auc(
+        &data,
+        m.as_ref(),
+        &[0.5],
+        &ScoreCensoring::KaplanMeier,
+        &ScoreOptions::default(),
+    )
+    .unwrap();
     assert_eq!(a.auc, vec![None]);
 }
 
@@ -108,8 +136,22 @@ fn rows_of_weight_zero_are_left_out_and_the_influence_has_one_row_per_used_row()
         keep_influence: true,
         ..ScoreOptions::default()
     };
-    let a = score_brier(&weighted, m.as_ref(), &[5.0], &opts).unwrap();
-    let b = score_brier(&reduced, m2.as_ref(), &[5.0], &opts).unwrap();
+    let a = score_brier(
+        &weighted,
+        m.as_ref(),
+        &[5.0],
+        &ScoreCensoring::KaplanMeier,
+        &opts,
+    )
+    .unwrap();
+    let b = score_brier(
+        &reduced,
+        m2.as_ref(),
+        &[5.0],
+        &ScoreCensoring::KaplanMeier,
+        &opts,
+    )
+    .unwrap();
     assert_eq!(a.brier, b.brier);
     assert_eq!(a.se, b.se);
     assert_eq!((a.n_rows, a.n_used), (n, keep.len()));
@@ -129,12 +171,26 @@ fn event_free_probabilities_are_the_complement_of_the_risk() {
     let data = SurvData::builder(&time, &status).build().unwrap();
     let m = Mat::from_fn(n, 1, |i, _| risk[i]);
     let free = Mat::from_fn(n, 1, |i, _| 1.0 - risk[i]);
-    let a = score_brier(&data, m.as_ref(), &[5.0], &ScoreOptions::default()).unwrap();
+    let a = score_brier(
+        &data,
+        m.as_ref(),
+        &[5.0],
+        &ScoreCensoring::KaplanMeier,
+        &ScoreOptions::default(),
+    )
+    .unwrap();
     let opts = ScoreOptions {
         predicted: Predicted::EventFreeProbability,
         ..ScoreOptions::default()
     };
-    let b = score_brier(&data, free.as_ref(), &[5.0], &opts).unwrap();
+    let b = score_brier(
+        &data,
+        free.as_ref(),
+        &[5.0],
+        &ScoreCensoring::KaplanMeier,
+        &opts,
+    )
+    .unwrap();
     assert!((a.brier[0] - b.brier[0]).abs() <= 4.0 * n as f64 * EPS);
 }
 
@@ -147,7 +203,7 @@ fn the_null_model_and_the_ipa_of_the_null_model() {
         keep_influence: true,
         ..ScoreOptions::default()
     };
-    let z = null_brier(&data, &[2.0, 5.0], &opts).unwrap();
+    let z = null_brier(&data, &[2.0, 5.0], &ScoreCensoring::KaplanMeier, &opts).unwrap();
     // Everyone is predicted the proportion with the event by t.
     for (j, &t) in [2.0, 5.0].iter().enumerate() {
         let p = time.iter().filter(|&&u| u <= t).count() as f64 / n as f64;
@@ -170,9 +226,15 @@ fn score_refuses_what_it_cannot_score() {
     let m = Mat::from_fn(n, 2, |i, _| risk[i]);
     let opts = ScoreOptions::default();
     let msg = |times: &[f64]| {
-        score_brier(&data, m.as_ref(), times, &opts)
-            .unwrap_err()
-            .to_string()
+        score_brier(
+            &data,
+            m.as_ref(),
+            times,
+            &ScoreCensoring::KaplanMeier,
+            &opts,
+        )
+        .unwrap_err()
+        .to_string()
     };
     assert!(msg(&[5.0, 2.0]).contains("is not sorted"));
     assert!(msg(&[5.0, 5.0]).contains("repeats at row 1"));
@@ -182,17 +244,40 @@ fn score_refuses_what_it_cannot_score() {
     assert!(msg(&[5.0]).contains("is 11 by 2, but there are 11 rows and 1 times"));
 
     let bad = Mat::from_fn(n, 2, |i, _| risk[i] * 2.0);
-    let e = score_brier(&data, bad.as_ref(), &[2.0, 5.0], &opts).unwrap_err();
+    let e = score_brier(
+        &data,
+        bad.as_ref(),
+        &[2.0, 5.0],
+        &ScoreCensoring::KaplanMeier,
+        &opts,
+    )
+    .unwrap_err();
     assert!(e.to_string().contains("not a probability"));
     // A marker for the area may be any number.
-    assert!(auc(&data, bad.as_ref(), &[2.0, 5.0], &opts).is_ok());
+    assert!(
+        auc(
+            &data,
+            bad.as_ref(),
+            &[2.0, 5.0],
+            &ScoreCensoring::KaplanMeier,
+            &opts
+        )
+        .is_ok()
+    );
 
     let start: Vec<f64> = vec![0.0; n];
     let delayed = SurvData::builder(&time, &status)
         .start(&start)
         .build()
         .unwrap();
-    let e = score_brier(&delayed, m.as_ref(), &[2.0, 5.0], &opts).unwrap_err();
+    let e = score_brier(
+        &delayed,
+        m.as_ref(),
+        &[2.0, 5.0],
+        &ScoreCensoring::KaplanMeier,
+        &opts,
+    )
+    .unwrap_err();
     assert!(e.to_string().contains("delayed entry"));
 
     let weight: Vec<f64> = vec![2.0; n];
@@ -200,13 +285,21 @@ fn score_refuses_what_it_cannot_score() {
         .weight(&weight)
         .build()
         .unwrap();
-    let e = score_brier(&weighted, m.as_ref(), &[2.0, 5.0], &opts).unwrap_err();
+    let e = score_brier(
+        &weighted,
+        m.as_ref(),
+        &[2.0, 5.0],
+        &ScoreCensoring::KaplanMeier,
+        &opts,
+    )
+    .unwrap_err();
     assert!(e.to_string().contains("weights other than 0 and 1"));
 
     let e = score_brier(
         &data,
         m.as_ref(),
         &[2.0, 5.0],
+        &ScoreCensoring::KaplanMeier,
         &ScoreOptions {
             cause: 2,
             ..opts.clone()
@@ -223,7 +316,14 @@ fn score_refuses_what_it_cannot_score() {
         predicted: Predicted::EventFreeProbability,
         ..opts.clone()
     };
-    let e = score_brier(&competing, m.as_ref(), &[2.0, 5.0], &free).unwrap_err();
+    let e = score_brier(
+        &competing,
+        m.as_ref(),
+        &[2.0, 5.0],
+        &ScoreCensoring::KaplanMeier,
+        &free,
+    )
+    .unwrap_err();
     assert!(
         e.to_string()
             .contains("event-free probabilities are for data with one event code")
@@ -231,21 +331,25 @@ fn score_refuses_what_it_cannot_score() {
 
     let own = vec![0.5; n];
     let at = Mat::from_fn(n, 2, |_, _| 0.0);
-    let supplied = ScoreOptions {
-        censoring: Censoring::Supplied(SuppliedCensoring {
-            before_own_time: &own,
-            at_times: at.as_ref(),
-        }),
-        ..opts.clone()
-    };
-    let e = score_brier(&data, m.as_ref(), &[2.0, 5.0], &supplied).unwrap_err();
+    let supplied = ScoreCensoring::Supplied(SuppliedCensoring {
+        before_own_time: &own,
+        at_times: at.as_ref(),
+    });
+    let e = score_brier(&data, m.as_ref(), &[2.0, 5.0], &supplied, &opts).unwrap_err();
     assert!(
         e.to_string()
             .contains("censoring probabilities must be in (0, 1]")
     );
 
-    let a = score_brier(&data, m.as_ref(), &[2.0, 5.0], &opts).unwrap();
-    let z = null_brier(&data, &[2.0, 6.0], &opts).unwrap();
+    let a = score_brier(
+        &data,
+        m.as_ref(),
+        &[2.0, 5.0],
+        &ScoreCensoring::KaplanMeier,
+        &opts,
+    )
+    .unwrap();
+    let z = null_brier(&data, &[2.0, 6.0], &ScoreCensoring::KaplanMeier, &opts).unwrap();
     assert!(
         ipa(&a, &z)
             .unwrap_err()
@@ -260,7 +364,14 @@ fn a_single_row_has_no_standard_error() {
     let status = [1];
     let data = SurvData::builder(&time, &status).build().unwrap();
     let m = Mat::from_fn(1, 1, |_, _| 0.4);
-    let b = score_brier(&data, m.as_ref(), &[3.0], &ScoreOptions::default()).unwrap();
+    let b = score_brier(
+        &data,
+        m.as_ref(),
+        &[3.0],
+        &ScoreCensoring::KaplanMeier,
+        &ScoreOptions::default(),
+    )
+    .unwrap();
     assert!((b.brier[0] - 0.36).abs() <= 4.0 * EPS);
     assert_eq!(b.se, vec![None]);
 }

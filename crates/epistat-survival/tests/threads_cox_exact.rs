@@ -9,7 +9,7 @@
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::clogit::{ClogitMethod, ClogitOptions, clogit};
+use epistat_survival::clogit::{ClogitMethod, ClogitOptions, MatchedSets, clogit};
 use epistat_survival::cox::{CoxOptions, Ties, fit};
 use epistat_testkit::{POOLS, absent, absent_all, assert_same_on_pools};
 
@@ -111,7 +111,7 @@ fn clogit_methods() {
             ..ClogitOptions::default()
         };
         assert_same_on_pools(&POOLS, || {
-            let model = clogit(&case, &set, x.as_ref(), &options).unwrap();
+            let model = clogit(&MatchedSets::new(&case, &set), x.as_ref(), &options).unwrap();
             assert!(model.converged);
             summary(&model)
         });

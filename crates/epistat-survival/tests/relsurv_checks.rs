@@ -148,27 +148,19 @@ fn zero_expected_hazard_gives_the_ordinary_flexible_model() {
     let plain = flexpar::fit(
         &data,
         x.as_ref(),
+        None,
         &FlexParOptions::new(FlexparScale::Hazard, 3),
     )
     .unwrap();
-    let opts = FlexParOptions {
-        bhazard: Some(&zero),
-        ..FlexParOptions::new(FlexparScale::Hazard, 3)
-    };
-    let excess = flexpar::fit(&data, x.as_ref(), &opts).unwrap();
+    let opts = FlexParOptions::new(FlexparScale::Hazard, 3);
+    let excess = flexpar::fit(&data, x.as_ref(), Some(&zero), &opts).unwrap();
     // Debug prints each float so that it reads back to the same bits.
     assert_eq!(format!("{plain:?}"), format!("{excess:?}"));
-    let odds = FlexParOptions {
-        bhazard: Some(&zero),
-        ..FlexParOptions::new(FlexparScale::Odds, 3)
-    };
-    assert!(flexpar::fit(&data, x.as_ref(), &odds).is_err());
+    let odds = FlexParOptions::new(FlexparScale::Odds, 3);
+    assert!(flexpar::fit(&data, x.as_ref(), Some(&zero), &odds).is_err());
     let negative = vec![-1e-3; c.time.len()];
-    let bad = FlexParOptions {
-        bhazard: Some(&negative),
-        ..FlexParOptions::new(FlexparScale::Hazard, 3)
-    };
-    assert!(flexpar::fit(&data, x.as_ref(), &bad).is_err());
+    let bad = FlexParOptions::new(FlexparScale::Hazard, 3);
+    assert!(flexpar::fit(&data, x.as_ref(), Some(&negative), &bad).is_err());
 }
 
 #[test]

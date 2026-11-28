@@ -4,6 +4,7 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
+use epistat_survival::cox::Collapse;
 use epistat_survival::survreg::{
     DfbetaOptions, Distribution, SurvregOptions, SurvregPredictOptions, SurvregPredictType,
     TermsReference, fit,
@@ -158,7 +159,7 @@ fn dfbeta_collapsed_by_the_cluster_of_the_fit_sums_to_the_robust_meat() {
             x.as_ref(),
             &DfbetaOptions {
                 weighted: true,
-                collapse: Some(&cluster),
+                collapse: Collapse::Cluster,
                 ..DfbetaOptions::default()
             },
         )
@@ -178,13 +179,12 @@ fn dfbeta_collapsed_by_the_cluster_of_the_fit_sums_to_the_robust_meat() {
             );
         }
     }
-    let wrong = [0_u32; 3];
     assert!(
         message(f.dfbeta(
             &d,
             x.as_ref(),
             &DfbetaOptions {
-                collapse: Some(&wrong),
+                collapse: Collapse::Id,
                 ..DfbetaOptions::default()
             },
         ))

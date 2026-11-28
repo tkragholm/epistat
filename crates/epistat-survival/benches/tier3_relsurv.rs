@@ -188,11 +188,9 @@ fn main() {
                 let bh: Vec<f64> = (0..n)
                     .map(|i| e.hazard(i, time[i]).expect("hazard") * YEAR)
                     .collect();
-                let opts = FlexParOptions {
-                    bhazard: Some(&bh),
-                    ..FlexParOptions::new(FlexparScale::Hazard, 4)
-                };
-                epistat_survival::flexpar::fit(&fit_data, x.as_ref(), &opts).expect("flexpar")
+                let opts = FlexParOptions::new(FlexparScale::Hazard, 4);
+                epistat_survival::flexpar::fit(&fit_data, x.as_ref(), Some(&bh), &opts)
+                    .expect("flexpar")
             });
             lines.push("loglik", f.log_likelihood);
             lines.push_all(

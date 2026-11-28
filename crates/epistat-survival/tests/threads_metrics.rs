@@ -18,7 +18,8 @@ use epistat_survival::metrics::brier::{self, BrierOptions};
 use epistat_survival::metrics::calibration::{self, CalibrationOptions, Groups};
 use epistat_survival::metrics::rttright::{self, RttrightOptions};
 use epistat_survival::metrics::score::{
-    ControlSet, HorizonRule, ScoreOptions, auc, brier as score_brier, ipa, null_brier,
+    ControlSet, HorizonRule, ScoreCensoring, ScoreOptions, auc, brier as score_brier, ipa,
+    null_brier,
 };
 use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 
@@ -75,10 +76,24 @@ fn score_metrics_and_calibration() {
                 ..ScoreOptions::default()
             };
             assert_same_on_pools(&POOLS, || {
-                let b = score_brier(&data, s.risk.as_ref(), &times, &opts).unwrap();
-                let z = null_brier(&data, &times, &opts).unwrap();
+                let b = score_brier(
+                    &data,
+                    s.risk.as_ref(),
+                    &times,
+                    &ScoreCensoring::KaplanMeier,
+                    &opts,
+                )
+                .unwrap();
+                let z = null_brier(&data, &times, &ScoreCensoring::KaplanMeier, &opts).unwrap();
                 let p = ipa(&b, &z).unwrap();
-                let a = auc(&data, s.risk.as_ref(), &times, &opts).unwrap();
+                let a = auc(
+                    &data,
+                    s.risk.as_ref(),
+                    &times,
+                    &ScoreCensoring::KaplanMeier,
+                    &opts,
+                )
+                .unwrap();
                 let mut out = Vec::new();
                 out.extend(&b.brier);
                 out.extend(b.se.iter().map(|&v| absent(v)));

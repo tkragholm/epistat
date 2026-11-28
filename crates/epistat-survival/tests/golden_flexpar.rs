@@ -93,10 +93,10 @@ fn run(scale: FlexparScale, case: &Case) -> (u64, u64) {
     let xs = Mat::from_fn(n, case.columns, |i, j| x[(i, j)]);
     let tvc = [TimeVarying { column: 1, df: 2 }];
     let options = FlexParOptions {
-        tvc: if case.tvc { &tvc } else { &[] },
+        tvc: if case.tvc { tvc.to_vec() } else { Vec::new() },
         ..FlexParOptions::new(scale, 3)
     };
-    let f = fit(&data, xs.as_ref(), &options).unwrap();
+    let f = fit(&data, xs.as_ref(), None, &options).unwrap();
     assert!(f.converged, "{}", case.name);
     let new = Mat::from_fn(2, case.columns, |i, j| {
         [[0.4, 1.0, 0.0], [-0.3, 0.0, 0.0]][i][j]

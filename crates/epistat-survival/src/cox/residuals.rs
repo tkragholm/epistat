@@ -154,9 +154,13 @@ pub enum CoxResidualKind {
 pub type ResidualKind = CoxResidualKind;
 
 /// The groups whose residuals are summed, as `collapse` of `residuals.coxph`.
+///
+/// The groups are a column of the data: to sum within other groups, give
+/// their codes as the cluster or the id column of the data the residuals are
+/// computed on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
-pub enum Collapse<'a> {
+pub enum Collapse {
     /// One residual per row.
     #[default]
     None,
@@ -164,15 +168,13 @@ pub enum Collapse<'a> {
     Cluster,
     /// Sum within the ids of the data, which are required.
     Id,
-    /// Sum within the codes given, one per row of the data.
-    Codes(&'a [u32]),
 }
 
 /// What [`residuals`] takes besides the data, the design and the fit.
 ///
 /// The kind has no default, so the options are made with [`new`](Self::new).
 #[derive(Debug, Clone, PartialEq)]
-pub struct ResidualOptions<'a> {
+pub struct ResidualOptions {
     /// Which residuals to compute.
     pub kind: CoxResidualKind,
     /// Multiply each residual by the case weight of its row. `None` takes the
@@ -180,14 +182,14 @@ pub struct ResidualOptions<'a> {
     /// for the other kinds.
     pub weighted: Option<bool>,
     /// The groups to sum the residuals over. The default is none.
-    pub collapse: Collapse<'a>,
+    pub collapse: Collapse,
     /// The options of the fit, which must be those the fit was made with: the
     /// tie rule, the rule for the times and the event code. The offset is that
     /// of the data.
     pub cox: CoxOptions,
 }
 
-impl ResidualOptions<'_> {
+impl ResidualOptions {
     /// The residuals of `kind` for a fit made with `cox`, with the defaults of
     /// `residuals.coxph` for `weighted` and `collapse`.
     #[must_use]
@@ -572,7 +574,7 @@ pub fn residuals(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
     fit: &CoxModelFit,
-    opts: &ResidualOptions<'_>,
+    opts: &ResidualOptions,
 ) -> Result<CoxResiduals> {
     let p = x.ncols();
     check_lengths(&[
@@ -682,10 +684,6 @@ pub fn residuals(
             data.id()
                 .ok_or_else(|| Error::missing("collapse: the data have no ids"))?,
         ),
-        Collapse::Codes(codes) => {
-            check_lengths(&[("data", rows), ("collapse", codes.len())])?;
-            Some(codes)
-        }
     };
     let keys = per_row_codes.map(|codes| {
         let mut unique: Vec<u32> = used.iter().map(|&i| codes[i as usize]).collect();
@@ -755,13 +753,13 @@ pub fn residuals(
     })
 }
 
-/// The caller's codes of the groups: for the dense cluster and id codes the
-/// levels map back, and codes passed in are their own labels.
-fn labels_to_codes(collapse: Collapse<'_>, data: &SurvData<'_>, labels: &[u32]) -> Vec<u32> {
+/// The caller's codes of the groups, which the levels of the dense cluster and
+/// id codes map back to.
+fn labels_to_codes(collapse: Collapse, data: &SurvData<'_>, labels: &[u32]) -> Vec<u32> {
     let levels = match collapse {
         Collapse::Cluster => data.cluster_levels(),
         Collapse::Id => data.id_levels(),
-        Collapse::None | Collapse::Codes(_) => None,
+        Collapse::None => None,
     };
     levels.map_or_else(
         || labels.to_vec(),

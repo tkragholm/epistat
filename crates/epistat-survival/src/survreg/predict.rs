@@ -8,6 +8,7 @@ use super::dist::row_derivs;
 use super::robust::{RowInput, dfbeta_row};
 use super::{SurvregFit, times_of};
 use crate::check::refuse_non_finite_matrix;
+use crate::cox::residuals::Collapse;
 use crate::error::{Error, Result};
 use crate::order::{dense_index, dense_of_present};
 use crate::surv::SurvData;
@@ -138,16 +139,18 @@ pub type ResidualKind = SurvregResidualKind;
 
 /// The options of [`SurvregFit::dfbeta`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct DfbetaOptions<'a> {
+pub struct DfbetaOptions {
     /// Divide each column by the model-based standard error of its
     /// parameter: `type = "dfbetas"` instead of `"dfbeta"`.
     pub standardise: bool,
     /// Multiply each row by its case weight, `weighted` of `residuals.survreg`.
     pub weighted: bool,
-    /// Sum the rows within groups, `collapse` of `residuals.survreg`: one code
-    /// for each row of the data, and the result has one row per distinct code,
-    /// in ascending order of the code.
-    pub collapse: Option<&'a [u32]>,
+    /// Sum the rows within groups, `collapse` of `residuals.survreg`: within
+    /// the clusters or the ids of the data, and the result has one row per
+    /// distinct code, in ascending order of the caller's code. To sum within
+    /// other groups, give their codes as the cluster or the id column of the
+    /// data.
+    pub collapse: Collapse,
 }
 
 /// The dfbeta residuals: for each row (or group of rows), the approximate
@@ -553,7 +556,7 @@ impl SurvregFit {
         &self,
         data: &SurvData<'_>,
         x: MatRef<'_, f64>,
-        options: &DfbetaOptions<'_>,
+        options: &DfbetaOptions,
     ) -> Result<Dfbeta> {
         let n = data.n_rows();
         let p = self.n_coef();
@@ -568,9 +571,19 @@ impl SurvregFit {
                 "the strata of the data differ from those of the fit".to_owned(),
             ));
         }
-        if let Some(codes) = options.collapse {
-            check::same_length("collapse", n, codes.len())?;
-        }
+        let collapse = match options.collapse {
+            Collapse::None => None,
+            Collapse::Cluster => Some((
+                data.cluster()
+                    .ok_or_else(|| Error::missing("collapse: the data have no clusters"))?,
+                data.cluster_levels(),
+            )),
+            Collapse::Id => Some((
+                data.id()
+                    .ok_or_else(|| Error::missing("collapse: the data have no ids"))?,
+                data.id_levels(),
+            )),
+        };
         let v = self.dense_variance()?;
         let q = self.n_params();
         let times = times_of(data, self.distribution)?;
@@ -618,9 +631,9 @@ impl SurvregFit {
                 }
             }
         }
-        let (rows, n_rows, groups) = match options.collapse {
+        let (rows, n_rows, groups) = match collapse {
             None => (rows, n, None),
-            Some(codes) => {
+            Some((codes, labels)) => {
                 let levels = dense_of_present(codes.iter().copied());
                 let mut sums = vec![0.0_f64; levels.len() * q];
                 for i in 0..n {
@@ -630,7 +643,11 @@ impl SurvregFit {
                     }
                 }
                 let count = levels.len();
-                (sums, count, Some(levels))
+                let codes = levels
+                    .iter()
+                    .map(|&c| labels.map_or(c, |l| l.code(c as usize).unwrap_or(c)))
+                    .collect();
+                (sums, count, Some(codes))
             }
         };
         let aliased = |b: usize| b < p && self.coefficients[b].is_none();

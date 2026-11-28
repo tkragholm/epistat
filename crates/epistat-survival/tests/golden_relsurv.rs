@@ -53,7 +53,6 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
                 grid,
                 level: Level::confidence(0.9).unwrap(),
                 transform: NetTransform::LogLog,
-                potential: None,
             };
             let mut v = Vec::new();
             for s in net_survival(&data, &expected, &opts).unwrap() {
@@ -122,11 +121,8 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
         .build()
         .unwrap();
     let x = Mat::from_fn(n, 2, |i, j| if j == 0 { c.x1[i] } else { c.x2[i] });
-    let opts = FlexParOptions {
-        bhazard: Some(&bh),
-        ..FlexParOptions::new(FlexparScale::Hazard, 4)
-    };
-    let f = flexpar::fit(&years, x.as_ref(), &opts).unwrap();
+    let opts = FlexParOptions::new(FlexparScale::Hazard, 4);
+    let f = flexpar::fit(&years, x.as_ref(), Some(&bh), &opts).unwrap();
     let mut v = f.gamma.clone();
     v.extend(f.beta.iter().map(|b| b.unwrap_or(f64::NAN)));
     v.extend(

@@ -326,7 +326,6 @@ fn net_survival_matches_relsurv() {
             grid: Grid::EventTimes,
             level: Level::default(),
             transform,
-            potential: None,
         };
         let curves = net_survival(&data, &expected, &opts).unwrap();
         assert_eq!(curves.len(), run.strata.len());
@@ -607,11 +606,8 @@ fn flexible_excess_model_matches_stpm2() {
         }
         let data = b.build().unwrap();
         let x = Mat::from_fn(n, 2, |i, j| if j == 0 { c.x1[i] } else { c.x2[i] });
-        let opts = FlexParOptions {
-            bhazard: Some(&bh),
-            ..FlexParOptions::new(FlexparScale::Hazard, s.df)
-        };
-        let f = flexpar::fit(&data, x.as_ref(), &opts).unwrap();
+        let opts = FlexParOptions::new(FlexparScale::Hazard, s.df);
+        let f = flexpar::fit(&data, x.as_ref(), Some(&bh), &opts).unwrap();
         assert!(f.converged);
         let label = format!("stpm2 df {}{}", s.df, if s.entry { " entry" } else { "" });
         // rstpm2 stops at a relative change of 1e-14 in the log likelihood,

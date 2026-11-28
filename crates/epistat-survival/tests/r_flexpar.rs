@@ -196,11 +196,11 @@ fn run(reference: &Reference, r: &RFit) -> Run {
     let options = FlexParOptions {
         scale: scale_of(&r.scale),
         df: r.df,
-        knots: r.knots.as_deref(),
-        tvc: &tvc,
+        knots: r.knots.clone(),
+        tvc: tvc.clone(),
         ..FlexParOptions::default()
     };
-    let f = fit(&data, x.as_ref(), &options).unwrap();
+    let f = fit(&data, x.as_ref(), None, &options).unwrap();
     assert!(f.converged, "{} did not converge", r.name);
     Run { fit: f, x }
 }
