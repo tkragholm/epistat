@@ -107,15 +107,11 @@ impl Hash {
     }
 
     fn metrics(&mut self, metrics: &ModelFitMetrics) {
-        for value in [
-            metrics.rmse,
-            metrics.mae,
-            metrics.rmsle,
-            metrics.r2,
-            metrics.deviance,
-        ] {
-            self.f(value);
-        }
+        self.f(metrics.rmse);
+        self.f(metrics.mae);
+        self.f(metrics.rmsle);
+        self.o(metrics.r2);
+        self.f(metrics.deviance);
     }
 
     fn two_part(&mut self, model: &TwoPartModel) {

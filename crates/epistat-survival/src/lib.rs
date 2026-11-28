@@ -62,7 +62,8 @@
 //! - [`markov`]: the landmark test of the Markov property.
 //! - [`lowlevel`]: steps of the estimators for callers that accumulate the same
 //!   sums themselves: one Aalen-Johansen step, the integral of an occupation
-//!   curve, codes of a float column.
+//!   curve, codes of a float column. A supported API, with the same bits as
+//!   the estimators that use them.
 //! - [`metrics`]: redistribute-to-the-right weights, the Brier score, the IPCW
 //!   Brier score and index of prediction accuracy, the time-dependent AUC and
 //!   calibration by risk group, as `rttright`, `brier`, `riskRegression::Score`

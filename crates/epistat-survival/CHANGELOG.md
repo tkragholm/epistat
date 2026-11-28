@@ -39,7 +39,7 @@ This release moves the crate onto the shared types of the epistat crates (`Level
 - `weighting::trials` and `weighting::clone`: per-protocol weights, the marginal structural model of sequential trials with a competing event, weight limits, clone-censor-weight analysis with start windows, durations and dynamic starts, and a bootstrap over persons through `trials::bootstrap_trials`. `trials::fit_msm` takes `MsmRows::{Design, Trials, Clones}`.
 - Weights for overlap, matching and optimal-subset estimands in `weighting::iptw`, and inverse probability weights for time-varying treatment.
 - `WeightedKm::at`, `survival`, `risk`, `position_at`, `covariance_known_between` and `contrast`, which gives the risk difference and ratio with intervals. `NetSurvival::at` and `position_at`.
-- `lowlevel`: `advance`, `integrate`, `float_codes` and checked helpers for callers who form their own sums.
+- `lowlevel`: `advance`, `integrate`, `float_codes` and checked helpers for callers who form their own sums. It is a supported API under the same versioning as the estimators.
 - `gather` on the outputs that expand their input (`split`, `condense`, `lexis`, `fine_gray::rows`, `surv2`, `tmerge`, `clone_censor`, `crossover`, `sccs`), and `to_surv_buf` on those with start, stop and status.
 - `clogit` and stratified Cox fits report the number of informative sets.
 - `Error::Counted`, `Classify` for `Error` with stable `survival.*` codes, and re-exports of `Bootstrap`, `Covariance` and `Level` at the crate root.

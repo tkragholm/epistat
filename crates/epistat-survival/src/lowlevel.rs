@@ -5,9 +5,11 @@
 //! check. They are public for callers that accumulate the same sums as
 //! [`aalen_johansen::estimate`](crate::aalen_johansen::estimate) or
 //! [`multistate::bootstrap`](crate::multistate::bootstrap) on data of their
-//! own, such as reweighted or resampled data, and want the same bits. Prefer
-//! the estimators. This module is public through 0.4 and may be narrowed in
-//! a later release.
+//! own, such as reweighted or resampled data, and want the same bits.
+//!
+//! This is a supported API, under the same versioning as the estimators. Use
+//! the estimators when they fit; use these steps when the sums come from
+//! elsewhere.
 
 use epistat_core::InputError;
 

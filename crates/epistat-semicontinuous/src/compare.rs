@@ -10,10 +10,18 @@
 //! # Metrics
 //!
 //! For outcomes `y_i` and predicted means `m_i` on `n` rows: the RMSE and MAE,
-//! the RMSLE `sqrt(mean((ln(1 + y) - ln(1 + m))^2))`, `r2 = 1 - SSE / SST`
-//! (0 when `SST` is 0), and a deviance, the Tweedie deviance for a Tweedie
-//! model and the mean squared error otherwise. The cross-validated metrics are
-//! the means of the fold metrics.
+//! the RMSLE `sqrt(mean((ln(1 + y) - ln(1 + m))^2))`, `r2 = 1 - SSE / SST`,
+//! and a deviance, the Tweedie deviance for a Tweedie model and the mean
+//! squared error otherwise. `r2` is `None` when the outcome does not vary,
+//! where `SST` is 0 and the ratio is undefined.
+//!
+//! The cross-validated metrics are the means of the fold metrics, except
+//! `r2`, which is the mean over the folds where it is defined and `None` when
+//! no fold has one, as caret's `na.rm = TRUE`. A fold whose held-out outcome
+//! is constant, as a fold of zero costs can be, has no `r2`; counting it as 0
+//! would pull the mean toward 0 and could let a fit whose other folds failed
+//! pass the ranking guard. [`CrossValidation::constant_folds`] and
+//! [`ModelComparison::constant_folds`] count those folds.
 //!
 //! # Information criteria
 //!
@@ -90,9 +98,10 @@ pub struct ModelFitMetrics {
     pub mae: f64,
     /// Root mean squared log error (log1p scale).
     pub rmsle: f64,
-    /// Coefficient of determination, 0 when the outcome does not vary, where
-    /// it is undefined; the ranking guard of the comparison reads that 0.
-    pub r2: f64,
+    /// Coefficient of determination, `None` when the outcome does not vary,
+    /// where it is undefined. Cross-validated, the mean over the folds where
+    /// it is defined.
+    pub r2: Option<f64>,
     /// The Tweedie deviance, or the mean squared error.
     pub deviance: f64,
 }
@@ -265,6 +274,9 @@ pub struct ModelComparison {
     pub tweedie_cv_ranking: Vec<TweedieRankingRow>,
     /// The models fitted to the full sample.
     pub models: ComparisonModels,
+    /// The number of cross-validation folds whose held-out outcome is
+    /// constant, which have no `r2` and are left out of its mean.
+    pub constant_folds: usize,
 }
 
 /// The options of [`cross_validate`].
@@ -310,6 +322,9 @@ impl CrossValidationOptions {
 pub struct CrossValidation {
     /// The number of folds.
     pub folds_used: usize,
+    /// The number of folds whose held-out outcome is constant, which have no
+    /// `r2` and are left out of its mean.
+    pub constant_folds: usize,
     /// Cross-validated metrics of the two-part model, when included.
     pub two_part_metrics: Option<ModelFitMetrics>,
     /// Cross-validated metrics of each Tweedie power.
@@ -495,6 +510,7 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
             tweedie: tweedie_model,
             lognormal: lognormal_model,
         },
+        constant_folds: cv_default.constant_folds,
     })
 }
 
@@ -505,7 +521,8 @@ pub fn compare(data: &CostData<'_>, options: &CompareOptions) -> Result<ModelCom
 /// `options.seed` and cut into `folds` consecutive folds of
 /// `ceil(n / folds)` rows, the last shorter. Each model is fitted to the
 /// other folds and scored on the fold; the folds run in parallel and are
-/// summed in fold order.
+/// averaged in fold order. A fold whose held-out outcome is constant has no
+/// `r2`; the cross-validated `r2` is the mean over the other folds.
 ///
 /// # Errors
 ///
@@ -552,6 +569,7 @@ pub fn cross_validate(
             let mut two_part = zero_metrics();
             let mut lognormal = zero_metrics();
             let mut tweedie = powers.iter().map(|_| zero_metrics()).collect::<Vec<_>>();
+            let constant = is_constant(test.y());
 
             if options.include_two_part {
                 let fitted = two_part::fit(&train_data, &options.two_part, None)?;
@@ -575,53 +593,37 @@ pub fn cross_validate(
                 two_part,
                 lognormal,
                 tweedie,
+                constant,
             })
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+        .into_iter()
+        .collect::<Result<Vec<_>, Error>>()?;
 
     let folds_used = fold_metrics.len();
-    let mut two_part_accum = zero_metrics();
-    let mut lognormal_accum = zero_metrics();
-    let mut tweedie_accum = powers.iter().map(|_| zero_metrics()).collect::<Vec<_>>();
-
-    for fold in fold_metrics {
-        let fold = fold?;
-        if options.include_two_part {
-            add_metrics(&mut two_part_accum, &fold.two_part);
-        }
-        if options.include_lognormal {
-            add_metrics(&mut lognormal_accum, &fold.lognormal);
-        }
-        for (accum, next) in tweedie_accum.iter_mut().zip(fold.tweedie.iter()) {
-            add_metrics(accum, next);
-        }
-    }
-
-    let folds_f = f64::from(u32::try_from(folds_used).unwrap_or(u32::MAX));
-    if folds_used > 0 {
-        if options.include_two_part {
-            scale_metrics(&mut two_part_accum, folds_f);
-        }
-        if options.include_lognormal {
-            scale_metrics(&mut lognormal_accum, folds_f);
-        }
-        for metrics in &mut tweedie_accum {
-            scale_metrics(metrics, folds_f);
-        }
-    }
-
+    let constant_folds = fold_metrics.iter().filter(|fold| fold.constant).count();
+    let two_part_metrics = options
+        .include_two_part
+        .then(|| average_folds(fold_metrics.iter().map(|fold| &fold.two_part)));
+    let lognormal_metrics = options
+        .include_lognormal
+        .then(|| average_folds(fold_metrics.iter().map(|fold| &fold.lognormal)));
     let tweedie_candidates = powers
         .iter()
         .copied()
-        .zip(tweedie_accum)
-        .map(|(power, metrics)| TweedieCvCandidate { power, metrics })
+        .enumerate()
+        .map(|(pos, power)| TweedieCvCandidate {
+            power,
+            metrics: average_folds(fold_metrics.iter().map(|fold| &fold.tweedie[pos])),
+        })
         .collect();
 
     Ok(CrossValidation {
         folds_used,
-        two_part_metrics: options.include_two_part.then_some(two_part_accum),
+        constant_folds,
+        two_part_metrics,
         tweedie_candidates,
-        lognormal_metrics: options.include_lognormal.then_some(lognormal_accum),
+        lognormal_metrics,
     })
 }
 
@@ -794,7 +796,7 @@ fn compute_model_fit_metrics(
     let rmse = (mse / denom).sqrt();
     let mae = mae / denom;
     let rms_log_error = (log_error_sq_sum / denom).sqrt();
-    let r2 = if sst > 0.0 { 1.0 - (mse / sst) } else { 0.0 };
+    let r2 = (!is_constant(y) && sst > 0.0).then(|| 1.0 - (mse / sst));
     let deviance = tweedie_power.map_or(rmse * rmse, |power| tweedie_deviance(y, mu, power));
 
     Ok(ModelFitMetrics {
@@ -953,6 +955,8 @@ fn build_cv_summary(
 /// Something is implausible once it exceeds its reference scale by 50x. Here the
 /// reference is the trivial mean predictor, whose RMSE is the outcome's own spread and
 /// whose r2 is 0 by definition, so `rmse > 50 * rmse_mean` is exactly `r2 < -2499`.
+/// Without an r2, where every fold's outcome was constant, there is no spread to
+/// compare with and only the RMSE being finite is judged.
 const CV_MAGNITUDE_GUARD_K: f64 = 50.0;
 
 /// Whether a cross-validated score can be compared with the others at all.
@@ -962,10 +966,15 @@ const CV_MAGNITUDE_GUARD_K: f64 = 50.0;
 /// A model whose held-out RMSE is ten orders of magnitude above the outcome
 /// scale has not produced a score, it has failed, and putting it in a ranked
 /// list says it came last when what happened is that it did not run.
+///
+/// The r2 judged is the mean over the folds where it is defined. A constant
+/// fold counted as r2 = 0 would pull that mean toward 0 and let a failed fit
+/// pass, which is why such a fold has no r2.
 fn cv_score_is_comparable(metrics: &ModelFitMetrics) -> bool {
     metrics.rmse.is_finite()
-        && metrics.r2.is_finite()
-        && metrics.r2 >= 1.0 - CV_MAGNITUDE_GUARD_K * CV_MAGNITUDE_GUARD_K
+        && metrics.r2.is_none_or(|r2| {
+            r2.is_finite() && r2 >= 1.0 - CV_MAGNITUDE_GUARD_K * CV_MAGNITUDE_GUARD_K
+        })
 }
 
 /// Comparable scores first, ordered by RMSE; failures after them, and within
@@ -1016,6 +1025,8 @@ struct FoldMetrics {
     two_part: ModelFitMetrics,
     lognormal: ModelFitMetrics,
     tweedie: Vec<ModelFitMetrics>,
+    /// Whether the held-out outcome is constant.
+    constant: bool,
 }
 
 /// The rows `indices` of the data, copied.
@@ -1061,25 +1072,47 @@ const fn zero_metrics() -> ModelFitMetrics {
         rmse: 0.0,
         mae: 0.0,
         rmsle: 0.0,
-        r2: 0.0,
+        r2: None,
         deviance: 0.0,
     }
 }
 
-fn add_metrics(accum: &mut ModelFitMetrics, next: &ModelFitMetrics) {
-    accum.rmse += next.rmse;
-    accum.mae += next.mae;
-    accum.rmsle += next.rmsle;
-    accum.r2 += next.r2;
-    accum.deviance += next.deviance;
+/// Whether every value of the outcome equals the first, so it does not vary.
+#[expect(
+    clippy::float_cmp,
+    reason = "an outcome is constant when its values are exactly equal"
+)]
+fn is_constant(y: MatRef<'_, f64>) -> bool {
+    (1..y.nrows()).all(|i| y[(i, 0)] == y[(0, 0)])
 }
 
-fn scale_metrics(metrics: &mut ModelFitMetrics, folds: f64) {
-    metrics.rmse /= folds;
-    metrics.mae /= folds;
-    metrics.rmsle /= folds;
-    metrics.r2 /= folds;
-    metrics.deviance /= folds;
+/// The means of the fold metrics, summed in fold order; `r2` is the mean over
+/// the folds that have one, `None` when none has.
+fn average_folds<'a>(folds: impl Iterator<Item = &'a ModelFitMetrics>) -> ModelFitMetrics {
+    let mut sum = zero_metrics();
+    let mut count = 0_u32;
+    let mut r2_sum = 0.0;
+    let mut r2_count = 0_u32;
+    for fold in folds {
+        sum.rmse += fold.rmse;
+        sum.mae += fold.mae;
+        sum.rmsle += fold.rmsle;
+        sum.deviance += fold.deviance;
+        count += 1;
+        if let Some(r2) = fold.r2 {
+            r2_sum += r2;
+            r2_count += 1;
+        }
+    }
+    if count > 0 {
+        let folds = f64::from(count);
+        sum.rmse /= folds;
+        sum.mae /= folds;
+        sum.rmsle /= folds;
+        sum.deviance /= folds;
+    }
+    sum.r2 = (r2_count > 0).then(|| r2_sum / f64::from(r2_count));
+    sum
 }
 
 fn complement_indices(n: usize, test_idx: &[usize]) -> Vec<usize> {
@@ -1179,6 +1212,10 @@ mod tests {
     }
 
     fn score(candidate: Candidate, rmse: f64, r2: f64) -> ModelScore {
+        score_with(candidate, rmse, Some(r2))
+    }
+
+    fn score_with(candidate: Candidate, rmse: f64, r2: Option<f64>) -> ModelScore {
         ModelScore {
             candidate,
             metrics: ModelFitMetrics {
@@ -1444,5 +1481,128 @@ mod tests {
         let err = cross_validate(&data, &[], &CrossValidationOptions::new(SEED))
             .expect_err("all-zero outcomes should fail two-part fitting");
         assert_eq!(err, Error::NoPositiveOutcome);
+    }
+
+    fn fold(rmse: f64, r2: Option<f64>) -> ModelFitMetrics {
+        score_with(Candidate::TwoPart, rmse, r2).metrics
+    }
+
+    #[test]
+    fn a_constant_outcome_has_no_r2() {
+        let y = [3.0, 3.0, 3.0];
+        let mu = Mat::from_fn(3, 1, |i, _| usize_to_f64(i));
+        let metrics = compute_model_fit_metrics(column(&y), &mu, None).unwrap();
+        assert_eq!(metrics.r2, None);
+        assert!(metrics.rmse > 0.0);
+    }
+
+    #[test]
+    fn the_cv_r2_is_the_mean_over_the_folds_that_have_one() {
+        let mean =
+            average_folds([fold(1.0, Some(0.2)), fold(2.0, None), fold(3.0, Some(0.4))].iter());
+        // The RMSE averages over all three folds, the r2 over the two that have one.
+        assert_eq!(mean.rmse, (1.0 + 2.0 + 3.0) / 3.0);
+        assert_eq!(mean.r2, Some(f64::midpoint(0.2, 0.4)));
+        let none = average_folds([fold(1.0, None), fold(2.0, None)].iter());
+        assert_eq!(none.r2, None);
+        assert_eq!(none.rmse, 1.5);
+    }
+
+    #[test]
+    fn a_constant_fold_does_not_carry_a_failed_fit_past_the_guard() {
+        // Four folds where the fit failed, with r2 = -2800 (RMSE about 53 times the
+        // outcome's spread), and one constant fold. Counted as 0, the constant fold
+        // would give a mean r2 of -2240, inside the guard's -2499.
+        let folds = [
+            fold(5.3e7, Some(-2800.0)),
+            fold(5.3e7, Some(-2800.0)),
+            fold(0.0, None),
+            fold(5.3e7, Some(-2800.0)),
+            fold(5.3e7, Some(-2800.0)),
+        ];
+        let mean = average_folds(folds.iter());
+        assert_eq!(mean.r2, Some(-2800.0));
+        assert!(!cv_score_is_comparable(&mean));
+        let ranked = build_cv_ranking(&[
+            score_with(Candidate::LogNormal, mean.rmse, mean.r2),
+            score(Candidate::TwoPart, 1.0e8, 0.1),
+        ]);
+        assert_eq!(ranked[0].candidate, Candidate::TwoPart);
+    }
+
+    #[test]
+    fn a_score_without_r2_is_judged_by_its_rmse() {
+        assert!(cv_score_is_comparable(&fold(1.0e9, None)));
+        assert!(!cv_score_is_comparable(&fold(f64::INFINITY, None)));
+        assert!(!cv_score_is_comparable(&fold(f64::NAN, None)));
+    }
+
+    /// Sixty rows, the even ones zero, and the first shuffle seed from 0 whose
+    /// first fold holds only zero rows and whose other folds all vary.
+    #[expect(clippy::float_cmp, reason = "the zero costs are exactly 0")]
+    fn sample_with_a_zero_fold(folds: usize) -> (Sample, u64) {
+        let s = sample(60, 10.0, 2, 1.0, 0.2);
+        let n = s.y.len();
+        let size = n.div_ceil(folds);
+        let seed = (0..100_000_u64)
+            .find(|&seed| {
+                let mut indices = (0..n).collect::<Vec<_>>();
+                Stream::seeded(seed).shuffle(&mut indices);
+                indices[..size].iter().all(|&i| s.y[i] == 0.0)
+                    && (size..n).step_by(size).all(|start| {
+                        let fold = &indices[start..(start + size).min(n)];
+                        fold.iter().any(|&i| s.y[i] != s.y[fold[0]])
+                    })
+            })
+            .expect("a seed with one zero fold");
+        (s, seed)
+    }
+
+    #[test]
+    fn cross_validation_counts_a_constant_fold_and_leaves_it_out_of_r2() {
+        let folds = 10;
+        let (s, seed) = sample_with_a_zero_fold(folds);
+        let options = CrossValidationOptions {
+            folds,
+            include_lognormal: false,
+            ..CrossValidationOptions::new(seed)
+        };
+        let cv = cross_validate(&s.data(), &[1.5], &options).expect("cv");
+        assert_eq!(cv.constant_folds, 1);
+        assert_eq!(cv.folds_used, folds);
+        assert!(cv.two_part_metrics.expect("two-part").r2.is_some());
+        assert!(cv.tweedie_candidates[0].metrics.r2.is_some());
+        let report = compare(
+            &s.data(),
+            &CompareOptions {
+                folds,
+                include_lognormal: false,
+                ..CompareOptions::new(seed)
+            },
+        )
+        .expect("comparison");
+        assert_eq!(report.constant_folds, 1);
+    }
+
+    #[test]
+    fn cross_validation_without_variation_in_any_fold_has_no_r2() {
+        // Positive costs of 2 everywhere: each fold, and each training set, is
+        // constant, and only the Tweedie fit, which needs no zero, runs.
+        let n = 12;
+        let x = Mat::from_fn(n, 1, |_, _| 1.0);
+        let y = vec![2.0; n];
+        let data = CostData::builder(x.as_ref(), &y).build().expect("data");
+        let options = CrossValidationOptions {
+            folds: 3,
+            include_two_part: false,
+            include_lognormal: false,
+            ..CrossValidationOptions::new(SEED)
+        };
+        let cv = cross_validate(&data, &[1.5], &options).expect("cv");
+        assert_eq!(cv.constant_folds, 3);
+        let metrics = cv.tweedie_candidates[0].metrics;
+        assert_eq!(metrics.r2, None);
+        assert!(metrics.rmse.is_finite());
+        assert!(cv_score_is_comparable(&metrics));
     }
 }

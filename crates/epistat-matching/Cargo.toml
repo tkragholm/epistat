@@ -5,8 +5,10 @@ keywords = ["matching", "epidemiology", "cohort", "statistics", "propensity"]
 categories = ["algorithms", "science"]
 readme = "README.md"
 # The R references, and the scripts that write them, are read only by this
-# repository's tests, so they stay out of the package.
-exclude = ["tests/data/"]
+# repository's tests, so they stay out of the package. The benches include a
+# harness from the repository's bench/ directory and build only in the
+# repository, so they stay out as well.
+exclude = ["benches/", "tests/data/"]
 version = "0.3.0"
 edition.workspace = true
 rust-version.workspace = true
