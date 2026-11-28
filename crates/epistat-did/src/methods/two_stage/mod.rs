@@ -106,6 +106,8 @@ pub struct TwoStageOptions {
     pub keep_projections: bool,
     /// The level of the intervals.
     pub level: Level,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// One second-stage coefficient.

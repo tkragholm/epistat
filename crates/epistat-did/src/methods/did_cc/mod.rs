@@ -136,6 +136,8 @@ pub struct DidCcOptions {
     /// [`DidCc::propensity_fallbacks`]. Off, the default, such a fit is
     /// [`Error::PropensityFit`].
     pub propensity_fallback: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// An ATT under compositional changes.

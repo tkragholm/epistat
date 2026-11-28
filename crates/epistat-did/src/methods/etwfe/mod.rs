@@ -252,11 +252,14 @@ pub struct EtwfeOptions {
     pub max_iterations: usize,
     /// The level of the intervals.
     pub level: Level,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for EtwfeOptions {
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             family: EtwfeFamily::Gaussian,
             control: EtwfeControl::NotYetTreated,
             effects: EtwfeEffects::Cohort,

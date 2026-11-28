@@ -129,11 +129,14 @@ pub struct NuisanceOptions {
     /// default, the estimator is `DRDID::drdid_rc1`. The other estimators
     /// ignore it.
     pub legacy_repeated_cross_section: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for NuisanceOptions {
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             propensity_clip: 1e-6,
             ridge: 1e-8,
             max_iterations: 200,
@@ -208,6 +211,8 @@ pub struct TwoPeriodOptions {
     /// `replicate_seed(seed, r)`. `None`, the default, gives the normal
     /// interval. Not with clusters, and not used by the improved estimators.
     pub bootstrap: Option<Bootstrap>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// A two-period ATT.

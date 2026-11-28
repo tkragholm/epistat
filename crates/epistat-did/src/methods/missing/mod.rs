@@ -509,11 +509,14 @@ pub struct MissingOptions {
     pub tolerance: f64,
     /// The largest number of Newton steps of a logistic fit. Default 50.
     pub max_iterations: usize,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for MissingOptions {
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             assumption: MissingAssumption::MarX,
             models: NuisanceModels::default(),
             folds: MissingFolds::None,

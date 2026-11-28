@@ -289,6 +289,8 @@ pub struct AttGtOptions {
     /// cells' clustered standard errors are formed before it is dropped. The
     /// default is `true`.
     pub keep_influence: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for AttGtOptions {
@@ -298,6 +300,7 @@ impl Default for AttGtOptions {
     )]
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             estimator: Estimator::default(),
             design: Design::default(),
             comparison_group: ComparisonGroup::default(),

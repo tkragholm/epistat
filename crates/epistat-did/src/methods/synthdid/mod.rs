@@ -282,12 +282,15 @@ pub struct SynthDidOptions {
     pub variance: SynthVariance,
     /// The level of the normal intervals; by default 95%.
     pub level: Level,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for SynthDidOptions {
     /// `synthdid_estimate` with its defaults.
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             noise_level: None,
             eta_omega: None,
             eta_lambda: 1e-6,

@@ -336,6 +336,8 @@ pub struct HonestOptions {
     /// caller who wants R's numbers passes
     /// `Some(Bootstrap::new(1_000, Seed(0)))`.
     pub least_favorable: Option<Bootstrap>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// The class of restrictions of a summary, by `HonestDiD`'s name for it.
@@ -1068,6 +1070,8 @@ pub struct JointPathOptions {
     /// restriction (`C-LF`); without it the conditional test alone. The
     /// default is on.
     pub hybrid: bool,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for JointPathOptions {
@@ -1075,6 +1079,7 @@ impl Default for JointPathOptions {
     /// Bonferroni calibration, the hybrid on and no least-favourable draws.
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             level: Level::default(),
             null: 0.0,
             directions: Directions::Periods,

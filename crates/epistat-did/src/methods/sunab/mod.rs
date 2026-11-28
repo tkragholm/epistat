@@ -167,11 +167,14 @@ pub struct SunabOptions {
     pub ssc: Ssc,
     /// The level of the intervals.
     pub level: Level,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for SunabOptions {
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             control: SunabControl::NeverTreated,
             references: vec![SunabReference::Period(-1)],
             bins: SunabBins::None,

@@ -467,6 +467,7 @@ fn aggregations(out: &mut Vec<(&'static str, u64)>, fitted: &AttGt, clustered: &
 /// which the panel ignores.
 fn nuisance_options() -> NuisanceOptions {
     NuisanceOptions {
+        _extensible: epistat_core::Extensible::NEW,
         propensity_clip: 1e-6,
         ridge: 1e-8,
         max_iterations: 200,
@@ -521,6 +522,7 @@ fn pairwise(out: &mut Vec<(&'static str, u64)>, rows: &[Row]) {
         let fitted = two_period::estimate(
             &data,
             &TwoPeriodOptions {
+                _extensible: epistat_core::Extensible::NEW,
                 estimator: Estimator::DoublyRobust,
                 nuisance: nuisance_options(),
                 level: Level::confidence(CONFIDENCE).expect("level"),

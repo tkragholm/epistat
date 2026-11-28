@@ -121,6 +121,8 @@ pub struct TwfeOptions {
     pub ssc: Ssc,
     /// The level of the intervals.
     pub level: Level,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// One treatment coefficient.

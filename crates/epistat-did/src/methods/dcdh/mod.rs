@@ -334,11 +334,14 @@ pub struct DcdhOptions {
     /// replicates; `None` for the analytic inference alone, the default.
     /// [`design`], [`first_switch_dates`] and [`heterogeneity`] ignore it.
     pub bootstrap: Option<Bootstrap>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for DcdhOptions {
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             effects: 1,
             placebo: 0,
             normalized: false,

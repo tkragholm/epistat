@@ -139,6 +139,8 @@ pub struct PretrendOptions {
     /// The random shifts of the quasi-Monte Carlo lattice, at least 2, and
     /// their seed: draws of the integration, not a bootstrap of the data.
     pub shifts: Bootstrap,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl PretrendOptions {
@@ -148,6 +150,7 @@ impl PretrendOptions {
     #[must_use]
     pub fn new(violation: Violation, shifts: Bootstrap) -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             violation,
             critical: Critical::default(),
             tolerance: 1e-7,

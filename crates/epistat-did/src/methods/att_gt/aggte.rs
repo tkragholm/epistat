@@ -228,6 +228,8 @@ pub struct AggteOptions {
                 next release"
     )]
     pub band: Band,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 impl Default for AggteOptions {
@@ -237,6 +239,7 @@ impl Default for AggteOptions {
     )]
     fn default() -> Self {
         Self {
+            _extensible: epistat_core::Extensible::NEW,
             aggregation: AggteType::default(),
             weights: AggteWeights::default(),
             balance_e: None,
@@ -308,6 +311,8 @@ pub struct EventStudyOptions {
     pub max_e: Option<i64>,
     /// How the cells are weighted within an event time.
     pub weights: AggteWeights,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// One point of a summary's path.

@@ -285,6 +285,8 @@ pub struct AcrtOptions {
     pub basis: BasisSpec,
     /// The confidence level of the normal interval.
     pub level: Level,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// The ACRT of a continuous treatment.

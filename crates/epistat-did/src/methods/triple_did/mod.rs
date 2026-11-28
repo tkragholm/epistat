@@ -218,6 +218,8 @@ pub struct TripleDidOptions {
     /// [`TwoPeriodOptions::bootstrap`](crate::two_period::TwoPeriodOptions::bootstrap);
     /// `None`, the default, gives the normal interval. Not with clusters.
     pub bootstrap: Option<Bootstrap>,
+    #[doc(hidden)]
+    pub _extensible: epistat_core::Extensible,
 }
 
 /// A triple-difference ATT.

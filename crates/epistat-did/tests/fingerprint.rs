@@ -517,6 +517,7 @@ fn clustered_options(comparison_group: ComparisonGroup, base_period: BasePeriod)
 /// `drdid_rc1` estimator.
 fn two_period_options(estimator: two_period::Estimator) -> TwoPeriodOptions {
     TwoPeriodOptions {
+        _extensible: epistat_core::Extensible::NEW,
         estimator,
         nuisance: NuisanceOptions {
             legacy_repeated_cross_section: true,
@@ -975,6 +976,7 @@ fn cases(data: &Data) -> Vec<(&'static str, u64)> {
     let ddd = triple_did::estimate(
         &triple_data,
         &TripleDidOptions {
+            _extensible: epistat_core::Extensible::NEW,
             nuisance: nuisance_options,
             level: Level::default(),
             bootstrap: Some(Bootstrap::new(999, Seed(17_431))),
