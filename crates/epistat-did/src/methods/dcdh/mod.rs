@@ -609,7 +609,7 @@ fn wald(estimates: &[f64], cov: &[Vec<f64>]) -> Option<f64> {
     let m = Mat::from_fn(k, k, |i, j| cov[i][j]);
     epistat_inference::wald::wald(estimates, m.as_ref())
         .ok()
-        .map(|w| w.p_value)
+        .and_then(|w| w.p_value)
 }
 
 /// The joint test that `estimates` are zero, from their cluster sums.

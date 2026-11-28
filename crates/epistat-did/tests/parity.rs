@@ -247,8 +247,8 @@ fn parity_wald_test() {
     let k = reference.estimates.len();
     let vcov = Mat::from_fn(k, k, |i, j| reference.vcov[i][j]);
     let test = epistat_inference::wald::wald(&reference.estimates, vcov.as_ref()).expect("wald");
-    assert!((test.statistic - reference.statistic).abs() < 1e-10);
-    assert!((test.p_value - reference.p_value).abs() < 1e-10);
+    assert!((test.statistic.unwrap() - reference.statistic).abs() < 1e-10);
+    assert!((test.p_value.unwrap() - reference.p_value).abs() < 1e-10);
 }
 
 #[test]

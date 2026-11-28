@@ -115,10 +115,10 @@
 
 #![expect(clippy::float_cmp, reason = "a constant column holds one exact value")]
 
-use epistat_core::Covariance;
+use epistat_core::{Covariance, Test};
 use epistat_inference::Clusters;
 use epistat_inference::sandwich::{meat, sandwich_with_inverse};
-use epistat_inference::wald::{Wald, wald};
+use epistat_inference::wald::wald;
 use epistat_linalg::design::independent_columns;
 use epistat_linalg::{Attempt, Factor, Mat, MatRef, Method, weighted_gram};
 use epistat_stats::dist::normal;
@@ -947,9 +947,9 @@ pub struct BrantTest {
     pub coefficients: Vec<f64>,
     /// The Wald test that every covariate has the same slope in all models,
     /// with `p (K - 2)` degrees of freedom.
-    pub omnibus: Wald,
+    pub omnibus: Test,
     /// The Wald test of each covariate, with `K - 2` degrees of freedom.
-    pub per_covariate: Vec<Wald>,
+    pub per_covariate: Vec<Test>,
 }
 
 /// The Brant test of the proportional odds assumption for the categories of
@@ -1036,7 +1036,7 @@ pub fn brant(data: &OrdinalData<'_>) -> Result<BrantTest, Error> {
         }
     }
     // The differences b_k - b_{k+1}, for the covariates in `which`.
-    let test = |which: &[usize]| -> Result<Wald, Error> {
+    let test = |which: &[usize]| -> Result<Test, Error> {
         let rows: Vec<(usize, usize)> = which
             .iter()
             .flat_map(|&j| (0..k1 - 1).map(move |k| (j, k)))

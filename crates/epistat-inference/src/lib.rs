@@ -42,6 +42,7 @@ pub mod bootstrap;
 mod clusters;
 pub mod curve;
 pub mod influence;
+mod input;
 pub mod interval;
 pub mod multiplicity;
 pub mod pooling;
@@ -51,6 +52,7 @@ pub mod wald;
 
 pub use clusters::Clusters;
 pub use influence::{ClusterRule, Influence, KeyedBy};
+pub use input::CovarianceInput;
 
 use epistat_core::check;
 use epistat_core::{Classify, ErrorKind, InputError};

@@ -348,12 +348,20 @@ fn brant_test_matches_the_transcription() {
         )
         .unwrap();
         let b = worst(&got.coefficients, &case.coefficients, "slopes");
-        let o = (got.omnibus.statistic - case.omnibus).abs() / case.omnibus;
-        let per: Vec<f64> = got.per_covariate.iter().map(|w| w.statistic).collect();
+        let o = (got.omnibus.statistic.unwrap() - case.omnibus).abs() / case.omnibus;
+        let per: Vec<f64> = got
+            .per_covariate
+            .iter()
+            .map(|w| w.statistic.unwrap())
+            .collect();
         let c = worst(&per, &case.per_covariate, "per covariate");
         eprintln!("brant: slopes {b:.1e} omnibus {o:.1e} per covariate {c:.1e}");
-        assert_eq!(got.omnibus.df, case.omnibus_df);
-        assert!(got.per_covariate.iter().all(|w| w.df == case.per_df));
+        assert_eq!(got.omnibus.df, Some(case.omnibus_df as f64));
+        assert!(
+            got.per_covariate
+                .iter()
+                .all(|w| w.df == Some(case.per_df as f64))
+        );
         assert!(b < 1e-9 && o < 1e-9 && c < 1e-9);
     }
 }
@@ -377,17 +385,22 @@ fn brant_test_matches_the_brant_package() {
             &ordinal_data(x.as_ref(), None, &case.y, Some(&case.weights), None, None).unwrap(),
         )
         .unwrap();
-        let o = (got.omnibus.statistic - case.pkg_omnibus).abs() / case.pkg_omnibus;
-        let per: Vec<f64> = got.per_covariate.iter().map(|w| w.statistic).collect();
+        let o = (got.omnibus.statistic.unwrap() - case.pkg_omnibus).abs() / case.pkg_omnibus;
+        let per: Vec<f64> = got
+            .per_covariate
+            .iter()
+            .map(|w| w.statistic.unwrap())
+            .collect();
         let c = per
             .iter()
             .zip(&case.pkg_per_covariate)
             .map(|(a, b)| (a - b).abs() / b)
             .fold(0.0_f64, f64::max);
         eprintln!("brant package: omnibus {o:.1e} per covariate {c:.1e}");
-        assert_eq!(got.omnibus.df, case.pkg_omnibus_df);
-        let dfs: Vec<usize> = got.per_covariate.iter().map(|w| w.df).collect();
-        assert_eq!(dfs, case.pkg_per_df);
+        assert_eq!(got.omnibus.df, Some(case.pkg_omnibus_df as f64));
+        let dfs: Vec<Option<f64>> = got.per_covariate.iter().map(|w| w.df).collect();
+        let expected: Vec<Option<f64>> = case.pkg_per_df.iter().map(|&d| Some(d as f64)).collect();
+        assert_eq!(dfs, expected);
         assert!(o < 2e-3 && c < 2e-3);
     }
 }
@@ -509,7 +522,7 @@ fn all_bits() -> Vec<f64> {
     )
     .unwrap();
     out.extend(&got.coefficients);
-    out.push(got.omnibus.statistic);
+    out.push(got.omnibus.statistic.unwrap());
     out
 }
 

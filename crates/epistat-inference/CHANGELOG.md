@@ -16,6 +16,8 @@ Confidence levels, bootstrap settings and errors now use the shared types of `ep
 - `Clusters` numbers clusters as `u32`, like the codes they come from: `Clusters::of` returns `&[u32]` in place of `&[usize]`. `from_labels_first_seen`, `from_sorted_labels`, `singletons` and the deprecated `from_labels` return `Result<Clusters, Error>` and refuse more than `u32::MAX` clusters with `InputError::TooLarge` (code `input.too_large`); add `?`. `from_codes`, `per_unit`, `per_row` and `for_keys` cannot exceed the limit and are unchanged.
 - `epistat_linalg::SolveError` inside `Error::Solve` is now `epistat_linalg::Error`.
 - The minimum supported Rust version is 1.89, up from 1.85. The crate depends on `epistat-core`, and on `epistat-linalg` 0.4, `epistat-rng` 0.2 and `epistat-stats` 0.3.
+- `wald::wald` returns the shared `epistat_core::Test`, a chi-square test whose `df` is `Some(k as f64)` and whose `statistic` and `p_value` are `Option`s, in place of `Wald`. Match on the `Option` where 0.3 read a number. `Wald` is a deprecated alias of `Test`.
+- `wald::wald` refuses a covariance whose estimated reciprocal condition number is below the machine epsilon with `Error::Solve` holding `epistat_linalg::Error::IllConditioned`, the rule of R's `solve`, where it returned a statistic with no correct digits: `[[1, 1], [1, 1 + 2^-52]]` gave a statistic near `10^16` and a p-value of 0. It refuses a NaN or infinite estimate or covariance entry with `InputError::NotFinite`. A covariance R accepts gives the same bits as before.
 
 ### Added
 
@@ -29,6 +31,7 @@ Confidence levels, bootstrap settings and errors now use the shared types of `ep
 - `interval::percentile_sorted`, the percentile interval of replicates that are already sorted.
 - `bootstrap::unit_counts_of`, the resampling counts of one replicate.
 - `Error`, which implements `Classify`.
+- `CovarianceInput`, the covariance forms `wald` takes: a faer `MatRef` or `&Mat`, an `epistat_core::Covariance` such as `Influence::variance` returns, or an `epistat_core::Matrix`. A `Covariance` with an undefined entry is refused with `InputError::NotFinite`.
 
 ### Deprecated
 
@@ -38,6 +41,7 @@ Deprecated items are removed in the next release that breaks the API.
 - `Clusters::from_labels`, use `Clusters::from_labels_first_seen`, which gives the same numbering, or `Clusters::from_sorted_labels` for the order of `Codes::from_labels`.
 - `influence::standard_error`, use `Influence::variance_with` with `ClusterRule::NoSmallSample`.
 - `influence::clustered_variance`, `clustered_standard_error` and `clustered_covariance`, use `Influence::variance`, which centres the influence function.
+- `wald::Wald`, use `epistat_core::Test`.
 
 ### Results
 
