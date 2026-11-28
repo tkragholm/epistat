@@ -11,6 +11,7 @@
 //! | [`Level`] | a confidence level, kept as the confidence or alpha the caller gave |
 //! | [`Interval`], [`Coverage`], [`Estimate`], [`Scale`], [`Contrast`] | how an estimator reports a number |
 //! | [`Covariance`] | a covariance matrix that knows its dimension |
+//! | [`Matrix`] | a rectangular matrix of results, row-major |
 //! | [`Test`], [`Reference`] | a test statistic, its degrees of freedom and p-value |
 //! | [`EventStudy`] | event-study coefficients, their covariance and the reference period |
 //! | [`Bootstrap`], [`Seed`] | the replicates and root seed of a randomised call |
@@ -43,6 +44,7 @@ pub mod event_study;
 mod format;
 pub mod hypothesis;
 pub mod level;
+pub mod matrix;
 pub mod panel;
 pub mod permutation;
 
@@ -57,5 +59,6 @@ pub use estimate::{Contrast, Coverage, Estimate, Interval, Scale};
 pub use event_study::EventStudy;
 pub use hypothesis::{Reference, Test};
 pub use level::Level;
+pub use matrix::Matrix;
 pub use panel::Panel;
 pub use permutation::Permutation;
