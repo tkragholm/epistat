@@ -251,7 +251,7 @@ pub fn solve_with(
 ) -> Result<Solution, Error> {
     check_shape(a, b.nrows())?;
     if let Some(limit) = options.max_condition
-        && !(limit >= 1.0)
+        && (limit.is_nan() || limit < 1.0)
     {
         return Err(Error::Input(InputError::Domain {
             what: "max_condition",
@@ -518,8 +518,8 @@ fn inverse_norm_one(
             y = solve(x.as_ref());
             let next = one_norm(&y);
             let next_signs = signs(&y);
-            let repeated = (0..n).all(|i| next_signs[(i, 0)] == xi[(i, 0)]);
-            if repeated || !(next > estimate) {
+            let repeated = (0..n).all(|i| next_signs[(i, 0)].to_bits() == xi[(i, 0)].to_bits());
+            if repeated || next.is_nan() || next <= estimate {
                 estimate = estimate.max(next);
                 break;
             }
