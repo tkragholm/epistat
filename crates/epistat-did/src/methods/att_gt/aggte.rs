@@ -286,7 +286,7 @@ impl Aggte {
             estimate += weight * self.points[index].estimate.estimate;
         }
         let combined = self.influence.combine(&columns)?;
-        let se = standard_error(combined.column(0), &self.numbered_clusters());
+        let se = standard_error(combined.column(0), &self.numbered_clusters()?);
         let ci = normal_interval(estimate, se, self.level.confidence_value());
         Ok(cell_estimate(estimate, se, ci, self.level))
     }
@@ -312,7 +312,7 @@ impl Aggte {
         }
         let k = self.points.len();
         let columns: Vec<&[f64]> = (0..k).map(|j| self.influence.column(j)).collect();
-        let values = covariance(&columns, &self.numbered_clusters());
+        let values = covariance(&columns, &self.numbered_clusters()?);
         let covariance = Covariance::new(k, values.into_iter().map(Some).collect())?;
         Ok(EventStudy::new(
             self.points
@@ -325,11 +325,11 @@ impl Aggte {
         )?)
     }
 
-    fn numbered_clusters(&self) -> Clusters {
-        match &self.clusters {
+    fn numbered_clusters(&self) -> Result<Clusters, Error> {
+        Ok(match &self.clusters {
             Some(codes) => Clusters::from_codes(codes),
-            None => Clusters::singletons(self.influence.n_units()),
-        }
+            None => Clusters::singletons(self.influence.n_units())?,
+        })
     }
 }
 
@@ -965,10 +965,10 @@ pub(super) fn aggregate(fit: &AttGt, options: &AggteOptions) -> Result<Aggte, Er
         weights: &fit.sample.weights,
     };
     let codes = fit.clusters.as_deref();
-    let clusters = codes.map_or_else(
-        || Clusters::singletons(units.groups.len()),
-        Clusters::from_codes,
-    );
+    let clusters = match codes {
+        Some(codes) => Clusters::from_codes(codes),
+        None => Clusters::singletons(units.groups.len())?,
+    };
 
     let summary = match options.weights {
         AggteWeights::Estimated => by_share(&cells, &columns, &units, &clusters, options)?,

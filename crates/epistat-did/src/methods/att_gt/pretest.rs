@@ -57,10 +57,10 @@ pub struct PretrendWald {
 /// [`AttGt::pretest`].
 pub(super) fn pretest(fit: &AttGt) -> Result<PretrendWald, Error> {
     let influence = fit.kept_influence()?;
-    let clusters = fit.clusters.as_deref().map_or_else(
-        || Clusters::singletons(influence.n_units()),
-        Clusters::from_codes,
-    );
+    let clusters = match fit.clusters.as_deref() {
+        Some(codes) => Clusters::from_codes(codes),
+        None => Clusters::singletons(influence.n_units())?,
+    };
     let estimated: Vec<_> = fit.estimated().collect();
     let floor = 10.0 * f64::EPSILON.sqrt();
     let used = (0..estimated.len())

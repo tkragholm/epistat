@@ -232,7 +232,7 @@ fn twfe_matches_fixest() {
                 case.clusters.as_ref().map_or(u, |c| c[row])
             })
             .collect();
-        let clusters = Clusters::from_labels_first_seen(&unit_cluster);
+        let clusters = Clusters::from_labels_first_seen(&unit_cluster).unwrap();
         for (a, &j) in kept.iter().enumerate() {
             assert_eq!(result.influence_of(j), Some(influence.column(a)));
         }
@@ -396,12 +396,12 @@ fn covariance_bound(case: &Case, x: Option<&Mat<f64>>) -> (Vec<f64>, f64, f64) {
         .iter()
         .map(|&i| case.clusters.as_ref().map_or(case.unit[i], |c| c[i]))
         .collect();
-    let of = Clusters::from_labels_first_seen(&clusters);
+    let of = Clusters::from_labels_first_seen(&clusters).unwrap();
     let g = of.count();
     let mut s = vec![0.0; g * k];
     let mut u = vec![0.0; g * k];
     for r in 0..m {
-        let c = of.of()[r];
+        let c = of.of()[r] as usize;
         for a in 0..k {
             s[c * k + a] += w[r] * fit.residuals[r] * d[(r, a)];
             u[c * k + a] +=

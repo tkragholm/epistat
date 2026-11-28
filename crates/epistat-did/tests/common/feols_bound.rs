@@ -135,12 +135,12 @@ pub fn feols_bound(
         }
     };
     let fit_clusters: Vec<u32> = rows.iter().map(|&i| clusters[i]).collect();
-    let of = Clusters::from_labels_first_seen(&fit_clusters);
+    let of = Clusters::from_labels_first_seen(&fit_clusters).unwrap();
     let g = of.count();
     let mut s = vec![0.0; g * k];
     let mut u = vec![0.0; g * k];
     for r in 0..m {
-        let c = of.of()[r];
+        let c = of.of()[r] as usize;
         for a in 0..k {
             s[c * k + a] += w[r] * fit.residuals[r] * d[(r, a)];
             u[c * k + a] +=

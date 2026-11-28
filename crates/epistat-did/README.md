@@ -122,12 +122,12 @@ of the estimate, which the package's is not.
 
 When the pre-treatment outcome is missing for some units, missing at random
 given the covariates and treatment, or given those and the post-treatment
-outcome, `att_missing_pre` estimates the two-period ATT by the efficient
+outcome, `missing::estimate` estimates the two-period ATT by the efficient
 estimators of Testa, Kennedy and Reimherr, including the nested regression
 that the outcome-dependent case needs. It fits logistic models for the
 propensity and the probability of an observed baseline and least squares for
 the outcome regressions, on all units or cross-fitted over folds dealt from a
-seed (by cluster when there are clusters). `att_missing_pre_from_predictions`
+seed (by cluster when there are clusters). `missing::from_predictions`
 takes out-of-fold predictions from any learner instead, which is how random
 forests or other flexible models are used. Probabilities near 0 or 1 are
 reported and can be refused at a floor of the caller's; they are not clipped.

@@ -406,7 +406,7 @@ fn jackknife(
             }
             let mut groups = vec![Vec::new(); c.count()];
             for (unit, &g) in c.of().iter().enumerate() {
-                groups[g].push(unit);
+                groups[g as usize].push(unit);
             }
             groups
         }

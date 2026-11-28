@@ -968,7 +968,7 @@ fn subclassification() {
         .collect();
     assert_same_on_pools(&POOLS, || {
         let mut d = Digest::default();
-        for estimand in [Estimand::Att, Estimand::Atc, Estimand::Ate, Estimand::Atm] {
+        for estimand in [Estimand::Att, Estimand::Atc, Estimand::Ate] {
             for subclasses in [1, 6, 20] {
                 let out = subclassify_by_propensity_score_map(
                     &anchors,

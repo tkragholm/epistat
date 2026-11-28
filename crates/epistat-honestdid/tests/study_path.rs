@@ -319,7 +319,7 @@ fn event_study(dynamic: &Aggte, clusters: &Clusters) -> EventStudy {
 /// clusters, as the kernels form them.
 fn dynamic(clustered: &AttGt) -> (Aggte, Clusters) {
     let families = clustered.clusters().expect("clusters").to_vec();
-    let clusters = Clusters::from_labels_first_seen(&families);
+    let clusters = Clusters::from_labels_first_seen(&families).unwrap();
     let options = AggteOptions {
         aggregation: AggteType::Dynamic,
         level: Level::confidence(CONFIDENCE).expect("level"),

@@ -21,6 +21,10 @@
 //! makes the results reproducible, so the two numberings of one column agree
 //! to rounding but not always to the bit. [`Clusters::singletons`] puts each
 //! observation in its own cluster.
+//!
+//! The cluster numbers are `u32`, like the codes they come from, so a
+//! constructor that counts clusters refuses more than `u32::MAX` of them
+//! with [`InputError::TooLarge`].
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -37,53 +41,92 @@ use crate::{Error, KeyedBy};
 /// [`Clusters::per_row`], it also knows the key of each entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Clusters {
-    of: Vec<usize>,
+    of: Vec<u32>,
     count: usize,
     keys: Option<(KeyedBy, Vec<u32>)>,
 }
 
 impl Clusters {
     /// Numbers the distinct labels in the order they first appear.
+    ///
+    /// # Errors
+    ///
+    /// As [`Clusters::from_labels_first_seen`].
     #[deprecated(
         since = "0.4.0",
         note = "use Clusters::from_labels_first_seen, the same numbering under a name that \
                 says its order, or Clusters::from_sorted_labels for the order of Codes::from_labels"
     )]
-    #[must_use]
-    pub fn from_labels<L: Eq + Hash>(labels: &[L]) -> Self {
+    pub fn from_labels<L: Eq + Hash>(labels: &[L]) -> Result<Self, Error> {
         Self::from_labels_first_seen(labels)
     }
 
     /// Numbers the distinct labels in the order they first appear.
-    #[must_use]
-    pub fn from_labels_first_seen<L: Eq + Hash>(labels: &[L]) -> Self {
-        let mut number: HashMap<&L, usize> = HashMap::new();
-        let of = labels
-            .iter()
-            .map(|label| {
-                let next = number.len();
-                *number.entry(label).or_insert(next)
-            })
-            .collect();
-        Self {
-            of,
-            count: number.len(),
-            keys: None,
+    ///
+    /// # Errors
+    ///
+    /// [`InputError::TooLarge`] for more than `u32::MAX` distinct labels.
+    pub fn from_labels_first_seen<L: Eq + Hash>(labels: &[L]) -> Result<Self, Error> {
+        let mut number: HashMap<&L, u32> = HashMap::new();
+        let mut of = Vec::with_capacity(labels.len());
+        for label in labels {
+            let next = check::fits_u32("clusters", number.len())?;
+            of.push(*number.entry(label).or_insert(next));
         }
+        let count = number.len();
+        check::fits_u32("clusters", count)?;
+        Ok(Self {
+            of,
+            count,
+            keys: None,
+        })
     }
 
     /// Numbers the distinct labels in increasing order, as R's `rowsum`
     /// with `reorder = TRUE` and `sort(unique(x))` do.
-    #[must_use]
-    pub fn from_sorted_labels<L: Ord>(labels: &[L]) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// [`InputError::TooLarge`] for more than `u32::MAX` distinct labels.
+    pub fn from_sorted_labels<L: Ord>(labels: &[L]) -> Result<Self, Error> {
         let mut distinct: Vec<&L> = labels.iter().collect();
         distinct.sort_unstable();
         distinct.dedup();
+        check::fits_u32("clusters", distinct.len())?;
         let of = labels
             .iter()
             .map(|label| {
-                // Every label is among the distinct ones, so this is `Ok`.
-                distinct.binary_search(&label).unwrap_or_else(|at| at)
+                // Every label is among the distinct ones, so the search is
+                // `Ok`, and its position is below their count.
+                let at = distinct.binary_search(&label).unwrap_or_else(|at| at);
+                check::fits_u32("clusters", at)
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self {
+            of,
+            count: distinct.len(),
+            keys: None,
+        })
+    }
+
+    /// Numbers the distinct codes in increasing order, so clusters are summed
+    /// in code order. Codes from `epistat_core::Codes::from_labels` are in
+    /// sorted label order, and then so are the clusters.
+    ///
+    /// There are at most as many clusters as `u32` codes, so the numbers
+    /// always fit.
+    #[must_use]
+    pub fn from_codes(codes: &[u32]) -> Self {
+        let mut distinct = codes.to_vec();
+        distinct.sort_unstable();
+        distinct.dedup();
+        let of = codes
+            .iter()
+            .map(|code| {
+                // Every code is among the distinct ones, and there are at
+                // most `u32::MAX + 1` of them, so its position is a `u32`.
+                let at = distinct.binary_search(code).unwrap_or_else(|at| at);
+                u32::try_from(at).unwrap_or(u32::MAX)
             })
             .collect();
         Self {
@@ -91,14 +134,6 @@ impl Clusters {
             count: distinct.len(),
             keys: None,
         }
-    }
-
-    /// Numbers the distinct codes in increasing order, so clusters are summed
-    /// in code order. Codes from `epistat_core::Codes::from_labels` are in
-    /// sorted label order, and then so are the clusters.
-    #[must_use]
-    pub fn from_codes(codes: &[u32]) -> Self {
-        Self::from_sorted_labels(codes)
     }
 
     /// The cluster of each unit of person-period data, from the unit and
@@ -141,11 +176,7 @@ impl Clusters {
     /// rows than `u32` numbers.
     pub fn per_row(cluster: &[u32]) -> Result<Self, Error> {
         check::non_empty("cluster", cluster.len())?;
-        let n = u32::try_from(cluster.len()).map_err(|_| InputError::TooLarge {
-            what: "cluster",
-            limit: u64::from(u32::MAX),
-            found: cluster.len() as u64,
-        })?;
+        let n = check::fits_u32("cluster", cluster.len())?;
         Ok(Self {
             keys: Some((KeyedBy::Rows, (0..n).collect())),
             ..Self::from_codes(cluster)
@@ -178,7 +209,7 @@ impl Clusters {
             })?;
             numbers.push(self.of[at]);
         }
-        let numbered = Self::from_sorted_labels(&numbers);
+        let numbered = Self::from_codes(&numbers);
         Ok(Self {
             keys: Some((*keyed_by, keys.to_vec())),
             ..numbered
@@ -186,13 +217,17 @@ impl Clusters {
     }
 
     /// Every observation its own cluster.
-    #[must_use]
-    pub fn singletons(n: usize) -> Self {
-        Self {
-            of: (0..n).collect(),
+    ///
+    /// # Errors
+    ///
+    /// [`InputError::TooLarge`] for more than `u32::MAX` observations.
+    pub fn singletons(n: usize) -> Result<Self, Error> {
+        let last = check::fits_u32("clusters", n)?;
+        Ok(Self {
+            of: (0..last).collect(),
             count: n,
             keys: None,
-        }
+        })
     }
 
     /// What the keys of the entries are, for clusters built by
@@ -210,7 +245,7 @@ impl Clusters {
 
     /// The cluster of each observation, from 0.
     #[must_use]
-    pub fn of(&self) -> &[usize] {
+    pub fn of(&self) -> &[u32] {
         &self.of
     }
 
@@ -236,7 +271,7 @@ impl Clusters {
     pub(crate) fn sums(&self, values: impl IntoIterator<Item = f64>) -> Vec<f64> {
         let mut sums = vec![0.0; self.count];
         for (value, &cluster) in values.into_iter().zip(&self.of) {
-            sums[cluster] += value;
+            sums[cluster as usize] += value;
         }
         sums
     }
@@ -248,7 +283,7 @@ mod tests {
 
     #[test]
     fn clusters_are_numbered_by_first_appearance() {
-        let clusters = Clusters::from_labels_first_seen(&["b", "a", "b", "c", "a"]);
+        let clusters = Clusters::from_labels_first_seen(&["b", "a", "b", "c", "a"]).unwrap();
         assert_eq!(clusters.of(), [0, 1, 0, 2, 1]);
         assert_eq!((clusters.count(), clusters.len()), (3, 5));
         assert_eq!(clusters.sums([1.0, 2.0, 3.0, 4.0, 5.0]), [4.0, 7.0, 4.0]);
@@ -296,8 +331,8 @@ mod tests {
     fn the_deprecated_name_numbers_by_first_appearance() {
         let labels = ["b", "a", "b"];
         assert_eq!(
-            Clusters::from_labels(&labels),
-            Clusters::from_labels_first_seen(&labels)
+            Clusters::from_labels(&labels).unwrap(),
+            Clusters::from_labels_first_seen(&labels).unwrap()
         );
     }
 
@@ -308,8 +343,24 @@ mod tests {
 
     #[test]
     fn sorted_labels_are_numbered_in_increasing_order() {
-        let clusters = Clusters::from_sorted_labels(&[30, 10, 30, 20, 10]);
+        let clusters = Clusters::from_sorted_labels(&[30, 10, 30, 20, 10]).unwrap();
         assert_eq!(clusters.of(), [2, 0, 2, 1, 0]);
         assert_eq!((clusters.count(), clusters.len()), (3, 5));
+    }
+
+    #[test]
+    fn singletons_number_each_observation() {
+        let clusters = Clusters::singletons(3).unwrap();
+        assert_eq!((clusters.of(), clusters.count()), (&[0, 1, 2][..], 3));
+        assert!(Clusters::singletons(0).unwrap().is_empty());
+    }
+
+    #[test]
+    fn codes_and_sorted_labels_number_alike() {
+        let codes = [7, 2, 7, 5, u32::MAX, 0];
+        assert_eq!(
+            Clusters::from_codes(&codes),
+            Clusters::from_sorted_labels(&codes).unwrap()
+        );
     }
 }

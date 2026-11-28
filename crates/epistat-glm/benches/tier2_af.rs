@@ -60,7 +60,7 @@ fn main() {
         ..AfOptions::default()
     };
     let (times, result) = common::timed(common::reps(), || {
-        let clusters = Clusters::from_labels_first_seen(&cluster);
+        let clusters = Clusters::from_labels_first_seen(&cluster).unwrap();
         attributable_logistic(&fit, &data, x0.as_ref(), Some(&clusters), &opts).expect("af")
     });
     let af = result.af.expect("a fraction");

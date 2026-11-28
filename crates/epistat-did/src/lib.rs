@@ -67,10 +67,11 @@
 //! [`epistat_inference::Influence`], each under the cluster rule of its R
 //! reference.
 //! - The two-period ATT when the pre-treatment outcome is missing at random,
-//!   after Testa, Kennedy and Reimherr \[16\]: [`att_missing_pre`] with
+//!   after Testa, Kennedy and Reimherr \[16\]: [`missing::estimate`] with
 //!   parametric nuisance models, with or without cross-fitting, and
-//!   [`att_missing_pre_from_predictions`] for out-of-fold predictions of any
-//!   learner; the module [`missing`] gives the algorithm.
+//!   [`missing::from_predictions`] for out-of-fold predictions of any
+//!   learner, on a validated [`MissingData`]; the module [`missing`] gives
+//!   the algorithm.
 //! - The sensitivity analysis of Rambachan and Roth \[7\] is in the crate
 //!   `epistat-honestdid`, on the same event study.
 //!
@@ -168,9 +169,13 @@ pub use methods::imputation::{
 };
 pub use methods::missing;
 pub use methods::missing::{
-    CrossFitFolds, MissingAssumption, MissingAtt, MissingFolds, MissingModels, MissingNuisance,
-    MissingOptions, MissingPreData, MissingPredictions, NestedOutcome, att_missing_pre,
-    att_missing_pre_from_predictions, missing_cross_fit_folds,
+    CrossFitFolds, MissingAssumption, MissingAtt, MissingData, MissingDataBuilder, MissingFolds,
+    MissingNuisance, MissingOptions, MissingPredictions, NestedOutcome, NuisanceModels,
+};
+#[expect(deprecated, reason = "the 0.1 names stay one release")]
+pub use methods::missing::{
+    MissingModels, MissingPreData, att_missing_pre, att_missing_pre_from_predictions,
+    missing_cross_fit_folds,
 };
 pub use methods::staggered::{StaggeredPanel, StaggeredPanelBuilder};
 pub use methods::sunab;

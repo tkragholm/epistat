@@ -1,6 +1,6 @@
 //! Improved panel `DR-DiD`, following `DRDID::drdid_imp_panel`.
 
-use crate::inference::{standard_error_from_influence, validate_confidence_level};
+use crate::inference::{normal_interval, standard_error_from_influence, validate_confidence_level};
 use crate::methods::drdid::design::{DEPENDENCE_TOLERANCE, prune_design};
 use crate::methods::drdid::moments::normalize_weights_to_n;
 use crate::types::{DrDidConfig, DrDidError, DrDidEstimate, DrDidObservation};
@@ -17,8 +17,9 @@ const SCORE_CAP: f64 = 1.0 - 1e-6;
 /// The control outcome regression of the outcome change is weighted by
 /// `w * ps / (1 - ps)`. Comparators with a score of 0.995 or more are trimmed.
 /// `DrDidObservation::covariates` is the finished design, intercept first.
-/// The interval is `att +- 1.96 se` whatever `config.confidence_level` is, and
-/// the bootstrap settings are not used.
+/// The interval is the normal one, `att +- z se` with `z` the normal quantile
+/// of `config.confidence_level`, and the bootstrap settings are not used.
+/// `DRDID`'s `drdid_imp_panel` forms `att +- 1.96 se` at 95% only.
 ///
 /// # Errors
 ///
@@ -129,7 +130,7 @@ pub fn estimate_drdid_improved_panel(
         .collect();
 
     let se = standard_error_from_influence(&influence_function);
-    let (ci_low, ci_high) = (att - 1.96 * se, att + 1.96 * se);
+    let (ci_low, ci_high) = normal_interval(att, se, config.confidence_level);
     Ok(DrDidEstimate {
         att,
         se,

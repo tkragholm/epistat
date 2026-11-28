@@ -43,7 +43,7 @@ pub(super) fn covariance_logit(
     let residuals = Mat::from_fn(y.nrows(), 1, |i, _| {
         (y[(i, 0)] - p[(i, 0)]) * weights[(i, 0)]
     });
-    let (meat, _) = score_meat(x, |i| residuals[(i, 0)], clusters);
+    let (meat, _) = score_meat(x, |i| residuals[(i, 0)], clusters)?;
     sandwich(xtwx.as_ref(), meat.as_ref()).ok_or(Error::Singular)
 }
 
@@ -73,7 +73,7 @@ pub(super) fn covariance_gamma(
     let residuals = Mat::from_fn(y.nrows(), 1, |i, _| {
         ((y[(i, 0)] - mu[(i, 0)]) / mu[(i, 0)]) * weights[(i, 0)]
     });
-    let (meat, _) = score_meat(x, |i| residuals[(i, 0)], clusters);
+    let (meat, _) = score_meat(x, |i| residuals[(i, 0)], clusters)?;
     sandwich(xtx.as_ref(), meat.as_ref()).ok_or(Error::Singular)
 }
 

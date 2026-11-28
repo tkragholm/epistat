@@ -9,7 +9,7 @@
 
 use epistat_causal::aipw::{AipwInput, AipwOptions, GlmInput, aipw, aipw_glm};
 use epistat_causal::tmle::{TmleOptions, tmle};
-use epistat_causal::{ClusterRule, Clusters, Estimand, Influence, Level};
+use epistat_causal::{ClusterRule, Clusters, Estimand, Influence, Level, ProbabilityBounds};
 use epistat_glm::Family;
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
@@ -94,9 +94,12 @@ fn refusals() {
         )
         .is_err()
     );
-    for truncation in [(0.0, 0.9), (0.1, 1.0), (0.6, 0.4)] {
+    // Bounds of 0 or 1 are bounds, but not truncation limits here; bounds in
+    // the wrong order cannot be built.
+    assert!(ProbabilityBounds::new(0.6, 0.4).is_err());
+    for truncation in [(0.0, 0.9), (0.1, 1.0)] {
         let opts = AipwOptions {
-            truncation: Some(truncation),
+            truncation: Some(ProbabilityBounds::new(truncation.0, truncation.1).unwrap()),
             ..AipwOptions::default()
         };
         assert!(

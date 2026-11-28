@@ -41,7 +41,7 @@ pub fn between_within(
     // decrease along the rows. Rows keep their order within a cluster.
     let mut bounds = vec![0usize; g + 1];
     for &c in of {
-        bounds[c + 1] += 1;
+        bounds[c as usize + 1] += 1;
     }
     for c in 0..g {
         bounds[c + 1] += bounds[c];
@@ -51,6 +51,7 @@ pub fn between_within(
         let mut next = bounds.clone();
         let mut order = vec![0usize; n];
         for (i, &c) in of.iter().enumerate() {
+            let c = c as usize;
             order[next[c]] = i;
             next[c] += 1;
         }
@@ -107,7 +108,7 @@ pub fn between_within(
             .for_each(|(block, chunk)| {
                 for (k, out) in chunk.iter_mut().enumerate() {
                     let i = block * ROW_BLOCK + k;
-                    let c = of[i];
+                    let c = of[i] as usize;
                     if !constant[c * columns + j] {
                         *out = x[(i, j)] - means[c * columns + j];
                     }

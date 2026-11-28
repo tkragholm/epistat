@@ -26,6 +26,7 @@
 //! | [`strictly_sorted_by`] | that, or a row equal to its predecessor | `Unsorted`, `Duplicate` |
 //! | [`csr_offsets`] | offsets that are not a layout of the rows | `Empty`, `Domain`, `Unsorted`, `Length` |
 //! | [`constant_within`] | a value that changes within a unit | `NotConstant` |
+//! | [`fits_u32`] | a count above `u32::MAX` | `TooLarge` |
 //!
 //! The checks are written for each argument once, where it enters, and an
 //! estimator does not repeat them on input a validated view already holds.
@@ -468,9 +469,38 @@ pub fn constant_within<T: PartialEq + Copy>(
     Ok(())
 }
 
+/// `count` as a `u32`, for codes numbered `0..count` or a count stored as
+/// one.
+///
+/// # Errors
+///
+/// [`InputError::TooLarge`] for a count above `u32::MAX`.
+pub fn fits_u32(what: &'static str, count: usize) -> Result<u32, InputError> {
+    u32::try_from(count).map_err(|_| InputError::TooLarge {
+        what,
+        limit: u64::from(u32::MAX),
+        found: u64::try_from(count).unwrap_or(u64::MAX),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counts_fit_u32_up_to_its_maximum() {
+        assert_eq!(fits_u32("clusters", 0), Ok(0));
+        assert_eq!(fits_u32("clusters", u32::MAX as usize), Ok(u32::MAX));
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            fits_u32("clusters", u32::MAX as usize + 1),
+            Err(InputError::TooLarge {
+                what: "clusters",
+                limit: u64::from(u32::MAX),
+                found: u64::from(u32::MAX) + 1,
+            })
+        );
+    }
 
     #[test]
     fn lengths_and_emptiness() {

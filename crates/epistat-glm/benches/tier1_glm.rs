@@ -107,7 +107,7 @@ fn main() {
         "risk_robust" | "risk_cluster" => {
             let x = design(&t, true);
             let fam: Vec<u64> = t.ints("fam");
-            let clusters = Clusters::from_labels_first_seen(&fam);
+            let clusters = Clusters::from_labels_first_seen(&fam).unwrap();
             let clustered = method == "risk_cluster";
             let data = GlmData::builder(x.as_ref(), t.col("b"))
                 .build()

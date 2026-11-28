@@ -70,7 +70,7 @@ fn cluster_sums(influence: &[f64], clusters: &Clusters) -> Vec<f64> {
     let mean = influence.iter().sum::<f64>() / n_f;
     let mut sums = vec![0.0; clusters.count()];
     for (value, &group) in influence.iter().zip(clusters.of()) {
-        sums[group] += value - mean;
+        sums[group as usize] += value - mean;
     }
     for sum in &mut sums {
         *sum /= n_f;
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn singleton_clusters_give_the_unclustered_standard_error() {
         let psi = [0.5, -1.25, 2.0, 0.75, -2.0, 0.0];
-        let got = did_standard_error(&psi, &Clusters::singletons(psi.len())).unwrap();
+        let got = did_standard_error(&psi, &Clusters::singletons(psi.len()).unwrap()).unwrap();
         let want = crate::inference::standard_error_from_influence(&psi);
         assert!((got - want).abs() < 1e-15, "{got} vs {want}");
     }
@@ -147,7 +147,7 @@ mod tests {
     fn the_covariance_diagonal_is_the_squared_standard_error_to_the_bit() {
         let a = vec![0.5, -1.25, 2.0, 0.75, -2.0, 0.0, 1.0, -1.0];
         let b = vec![1.5, 0.25, -0.5, 0.75, 1.0, -3.0, 0.0, 0.5];
-        let clusters = Clusters::from_labels_first_seen(&[1_i64, 1, 2, 2, 3, 3, 3, 4]);
+        let clusters = Clusters::from_labels_first_seen(&[1_i64, 1, 2, 2, 3, 3, 3, 4]).unwrap();
         let cov = did_covariance(&[a.clone(), b.clone()], &clusters).unwrap();
         let se_a = did_standard_error(&a, &clusters).unwrap();
         let se_b = did_standard_error(&b, &clusters).unwrap();
@@ -161,7 +161,7 @@ mod tests {
         // Two clusters of equal size with sums +s and -s: the variance is
         // 2 (s / n)^2, not 2 times G / (G - 1) = 4 times that.
         let psi = [1.0, 1.0, -1.0, -1.0];
-        let clusters = Clusters::from_labels_first_seen(&[0_i64, 0, 1, 1]);
+        let clusters = Clusters::from_labels_first_seen(&[0_i64, 0, 1, 1]).unwrap();
         let se = did_standard_error(&psi, &clusters).unwrap();
         assert!((se - (2.0_f64 * 0.25).sqrt()).abs() < 1e-15);
     }
@@ -177,14 +177,14 @@ mod tests {
         let psi: Vec<Vec<f64>> = (0..3)
             .map(|_| (0..n).map(|_| stream.uniform() - 0.4).collect())
             .collect();
-        let clusters = Clusters::from_labels_first_seen(&labels);
+        let clusters = Clusters::from_labels_first_seen(&labels).unwrap();
 
         let transcribed_sums = |values: &[f64]| {
             let n_f = values.len() as f64;
             let mean = values.iter().sum::<f64>() / n_f;
             let mut sums = vec![0.0; clusters.count()];
             for (value, &group) in values.iter().zip(clusters.of()) {
-                sums[group] += value - mean;
+                sums[group as usize] += value - mean;
             }
             for sum in &mut sums {
                 *sum /= n_f;
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn bad_input_is_an_error() {
         use epistat_core::InputError;
-        let clusters = Clusters::singletons(3);
+        let clusters = Clusters::singletons(3).unwrap();
         assert_eq!(
             did_standard_error(&[1.0, 2.0], &clusters),
             Err(Error::Input(InputError::Length {
@@ -249,7 +249,7 @@ mod tests {
             }))
         );
         assert_eq!(
-            did_standard_error(&[], &Clusters::singletons(0)),
+            did_standard_error(&[], &Clusters::singletons(0).unwrap()),
             Err(Error::Input(InputError::Empty { what: "influence" }))
         );
         assert_eq!(

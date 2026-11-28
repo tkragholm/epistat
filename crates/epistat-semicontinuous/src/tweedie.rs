@@ -765,7 +765,7 @@ fn robust_covariance(
             * (y[(i, 0)] - mu[(i, 0)])
             * mu[(i, 0)].powf(1.0 - power)
     };
-    let (meat, cluster_count) = score_meat(x, score_residual, clusters);
+    let (meat, cluster_count) = score_meat(x, score_residual, clusters)?;
     let cov = stabilized_sandwich(xtwx, &meat)?;
     Ok((Some(cov), cluster_count.is_some(), cluster_count))
 }

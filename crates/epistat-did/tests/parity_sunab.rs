@@ -309,7 +309,7 @@ fn sunab_matches_fixest() {
                 clusters[row]
             })
             .collect();
-        let of = Clusters::from_labels_first_seen(&unit_cluster);
+        let of = Clusters::from_labels_first_seen(&unit_cluster).unwrap();
         assert_eq!(influence.n_columns(), p);
         let raw = influence
             .variance_with(Some(&of), ClusterRule::NoSmallSample)

@@ -15,7 +15,7 @@ First release. The crate holds the types the other epistat crates share, so that
 - `Codes`, labels as dense `u32` codes in sorted order, with the way back to the labels.
 - `Panel`, the validated unit-and-period key of person-period data.
 - `day`, civil dates as `i64` days since 1970-01-01, with `from_civil`, `to_civil`, `add_years`, `add_months` and the `LeapBirthday` rule for 29 February.
-- `check` and `InputError`, the input checks the estimators share: `same_length`, `non_empty`, `finite`, `finite_column`, `weights`, `positive_weights`, `positive`, `below`, `probability`, `sorted_by`, `strictly_sorted_by`, `csr_offsets` and `constant_within`. `InputError` reports the position of the offending row or column where there is one.
+- `check` and `InputError`, the input checks the estimators share: `same_length`, `non_empty`, `finite`, `finite_column`, `weights`, `positive_weights`, `positive`, `below`, `probability`, `sorted_by`, `strictly_sorted_by`, `csr_offsets`, `constant_within` and `fits_u32`. `InputError` reports the position of the offending row or column where there is one.
 - `ErrorKind` (`Input`, `Numerical`, `Unsupported`) and the `Classify` trait, which give every error a kind and a stable code such as `input.length`.
 - The `serde` feature, which derives serialisation for the shared types. Types whose fields must agree with each other are validated when deserialised, and `Bootstrap` refuses unknown fields.
 
