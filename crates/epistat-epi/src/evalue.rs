@@ -27,6 +27,36 @@
 //! the interval contains the true value, its E-value is 1. The limit on the
 //! far side has no E-value.
 //!
+//! [`evalues`] takes the estimate as an `epistat_core::Estimate`, so the
+//! scale and the level travel with it. A ratio is read from an estimate on
+//! [`Scale::Log`], whose point and interval are ratios, such as
+//! `Coefficients::exp` gives; a ratio measure on [`Scale::Identity`] is
+//! refused, since a Cox or logistic coefficient there is a log ratio and its
+//! E-value would be that of a different effect. A mean difference is read
+//! from an estimate on the identity scale with its standard error.
+//!
+//! ```
+//! use epistat_core::{Estimate, Interval, Level, Scale};
+//! use epistat_epi::evalue::{EffectMeasure, Outcome, evalues};
+//!
+//! // A hazard ratio of 1.35 (95% CI 1.11 to 1.65) for a rare outcome.
+//! let hr = Estimate::point(1.35)
+//!     .with_interval(Some(Interval::new(Some(1.11), Some(1.65), Level::P95)))
+//!     .with_scale(Scale::Log);
+//! let e = evalues(&hr, EffectMeasure::HazardRatio(Outcome::Rare), 1.0)?;
+//! assert!((e.estimate - 2.04).abs() < 0.01);
+//! assert!((e.lower.unwrap() - 1.46).abs() < 0.01);
+//! assert_eq!(e.level, Some(Level::P95));
+//!
+//! // The same number as a log hazard ratio on the identity scale is refused.
+//! let coefficient = Estimate::point(0.3);
+//! assert!(evalues(&coefficient, EffectMeasure::HazardRatio(Outcome::Rare), 1.0).is_err());
+//! # Ok::<(), epistat_epi::Error>(())
+//! ```
+//!
+//! The functions on numbers, [`evalues_rr`], [`evalues_or`], [`evalues_hr`]
+//! and [`evalues_md`], take ratios and cannot tell a log ratio from one.
+//!
 //! Other effect measures are converted to an approximate risk ratio first:
 //!
 //! * An odds ratio is the risk ratio when the outcome is rare, and its
@@ -72,7 +102,7 @@
 //!    2019;30(4):509-16.
 
 use crate::Error;
-use epistat_core::{Estimate, Interval, Level};
+use epistat_core::{Estimate, Interval, Level, Scale};
 use std::fmt::{Display, Formatter};
 
 /// What is wrong with an E-value input.
@@ -111,6 +141,11 @@ pub(crate) enum EValueError {
     NegativeDifference,
     /// A true value at or above the estimate.
     TrueNotBelowEstimate,
+    /// A ratio measure given on the identity scale, where it may be a log
+    /// ratio.
+    RatioOnIdentityScale,
+    /// A mean difference given on the log scale.
+    DifferenceOnLogScale,
 }
 
 impl Display for EValueError {
@@ -137,6 +172,13 @@ impl Display for EValueError {
             ),
             Self::TrueNotBelowEstimate => {
                 write!(f, "the true value must be below the estimate")
+            }
+            Self::RatioOnIdentityScale => write!(
+                f,
+                "a ratio must be given on the log scale; exponentiate a log ratio first"
+            ),
+            Self::DifferenceOnLogScale => {
+                write!(f, "a mean difference must be given on the identity scale")
             }
         }
     }
@@ -167,6 +209,80 @@ pub struct EValues {
     /// The E-value of the upper limit. It is given when the estimate is below
     /// the true value, and 1 when the interval contains it.
     pub upper: Option<f64>,
+    /// The confidence level of the limits, when [`evalues`] read them from an
+    /// estimate's interval; `None` from the functions on numbers, whose
+    /// limits carry no level.
+    pub level: Option<Level>,
+}
+
+/// The effect measure an estimate given to [`evalues`] is.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EffectMeasure {
+    /// A risk ratio, `EValue::evalues.RR`.
+    RiskRatio,
+    /// An odds ratio, `evalues.OR`.
+    OddsRatio(Outcome),
+    /// A hazard ratio, `evalues.HR`.
+    HazardRatio(Outcome),
+    /// A standardised mean difference with its standard error,
+    /// `evalues.MD`: the limits are `exp(0.91 d -+ 1.78 se)`, a 95% interval,
+    /// whatever interval the estimate carries.
+    MeanDifference,
+}
+
+/// The E-values of `estimate`, a measure of the kind `measure`, for moving
+/// it and its interval to `true_value`, on the scale of the measure: 1 for
+/// the null of a ratio, 0 for that of a mean difference.
+///
+/// A ratio is read from an estimate on [`Scale::Log`], its point and the
+/// limits of its interval as ratios, and the result carries the interval's
+/// level. A mean difference is read from an estimate on [`Scale::Identity`]
+/// with its standard error, and its limits are those of a 95% interval, as
+/// `EValue::evalues.MD` gives them. Without an interval, or without a
+/// standard error for a mean difference, only the estimate has an E-value.
+///
+/// # Errors
+///
+/// [`Error::Invalid`] for a ratio measure on [`Scale::Identity`], whose
+/// number may be a log ratio, and for a mean difference on [`Scale::Log`];
+/// otherwise as [`evalues_rr`], [`evalues_or`], [`evalues_hr`] and
+/// [`evalues_md`].
+pub fn evalues(
+    estimate: &Estimate,
+    measure: EffectMeasure,
+    true_value: f64,
+) -> Result<EValues, Error> {
+    let level = estimate.interval.map(|interval| interval.level);
+    let (lower, upper) = (estimate.lower(), estimate.upper());
+    let ratio_scale = || match estimate.scale {
+        Scale::Log => Ok(()),
+        _ => Err(Error::from(EValueError::RatioOnIdentityScale)),
+    };
+    let mut result = match measure {
+        EffectMeasure::RiskRatio => {
+            ratio_scale()?;
+            evalues_rr(estimate.estimate, lower, upper, true_value)?
+        }
+        EffectMeasure::OddsRatio(outcome) => {
+            ratio_scale()?;
+            evalues_or(estimate.estimate, lower, upper, outcome, true_value)?
+        }
+        EffectMeasure::HazardRatio(outcome) => {
+            ratio_scale()?;
+            evalues_hr(estimate.estimate, lower, upper, outcome, true_value)?
+        }
+        EffectMeasure::MeanDifference => {
+            if estimate.scale == Scale::Log {
+                return Err(EValueError::DifferenceOnLogScale.into());
+            }
+            let mut e = evalues_md(estimate.estimate, estimate.se, true_value)?;
+            e.level = estimate.se.map(|_| Level::P95);
+            return Ok(e);
+        }
+    };
+    result.level = level.filter(|_| lower.is_some() || upper.is_some());
+    Ok(result)
 }
 
 /// Whether the outcome is rare enough to treat an odds or hazard ratio as a
@@ -285,6 +401,7 @@ fn interval_evalues(
         estimate: point,
         lower: lower_e,
         upper: upper_e,
+        level: None,
     })
 }
 
@@ -373,9 +490,10 @@ pub fn evalues_hr(
     )
 }
 
-/// E-values for a standardised mean difference with its standard error. The
-/// interval is `exp(0.91 d -+ 1.78 se)` on the risk ratio scale. The true
-/// value is a difference, 0 for the null.
+/// E-values for a standardised mean difference with its standard error, with
+/// the limits of a 95% interval: `exp(0.91 d -+ 1.78 se)` on the risk ratio
+/// scale, as `EValue::evalues.MD`, which has no other level. The true value
+/// is a difference, 0 for the null.
 ///
 /// # Errors
 ///
@@ -776,6 +894,74 @@ mod tests {
             Err(EValueError::TrueNotBelowEstimate.into())
         );
         assert!(evalues_rd(&t, f64::NAN, level).is_err());
+    }
+
+    #[test]
+    fn an_estimate_gives_the_evalues_of_its_numbers_and_its_level() {
+        use epistat_core::Interval;
+        let level = Level::P90;
+        let hr = Estimate::point(0.7)
+            .with_interval(Some(Interval::new(Some(0.55), Some(0.9), level)))
+            .with_scale(Scale::Log);
+        let outcome = Outcome::Common;
+        let from_estimate = evalues(&hr, EffectMeasure::HazardRatio(outcome), 1.0).unwrap();
+        let mut from_numbers = evalues_hr(0.7, Some(0.55), Some(0.9), outcome, 1.0).unwrap();
+        assert_eq!(from_numbers.level, None);
+        from_numbers.level = Some(level);
+        assert_eq!(from_estimate, from_numbers);
+        let rr = evalues(&hr, EffectMeasure::RiskRatio, 1.0).unwrap();
+        assert_eq!(rr.estimate, evalue_threshold(0.7, 1.0).unwrap());
+        let or = evalues(&hr, EffectMeasure::OddsRatio(Outcome::Rare), 1.0).unwrap();
+        assert_eq!(or.estimate, rr.estimate);
+        // Without an interval only the estimate has an E-value and no level.
+        let point = evalues(
+            &Estimate::point(2.0).with_scale(Scale::Log),
+            EffectMeasure::RiskRatio,
+            1.0,
+        )
+        .unwrap();
+        assert_eq!((point.lower, point.upper, point.level), (None, None, None));
+    }
+
+    #[test]
+    fn a_ratio_on_the_identity_scale_and_a_difference_on_the_log_scale_are_refused() {
+        // A Cox coefficient of 0.3 with limits 0.1 and 0.5: a log hazard
+        // ratio, which the functions on numbers would read as a ratio of 0.3.
+        let coefficient = Estimate::point(0.3).with_interval(Some(epistat_core::Interval::new(
+            Some(0.1),
+            Some(0.5),
+            Level::P95,
+        )));
+        for measure in [
+            EffectMeasure::RiskRatio,
+            EffectMeasure::OddsRatio(Outcome::Rare),
+            EffectMeasure::HazardRatio(Outcome::Common),
+        ] {
+            assert!(matches!(
+                evalues(&coefficient, measure, 1.0),
+                Err(Error::Invalid {
+                    what: "estimate",
+                    ..
+                })
+            ));
+        }
+        let difference = Estimate::point(0.5).with_se(Some(0.1));
+        let md = evalues(&difference, EffectMeasure::MeanDifference, 0.0).unwrap();
+        assert_eq!(
+            (md.estimate, md.level),
+            (
+                evalues_md(0.5, Some(0.1), 0.0).unwrap().estimate,
+                Some(Level::P95)
+            )
+        );
+        assert!(matches!(
+            evalues(
+                &difference.with_scale(Scale::Log),
+                EffectMeasure::MeanDifference,
+                0.0
+            ),
+            Err(Error::Invalid { .. })
+        ));
     }
 
     #[test]
