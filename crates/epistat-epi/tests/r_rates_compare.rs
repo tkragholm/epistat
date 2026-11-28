@@ -124,7 +124,7 @@ fn ratio_and_difference_of_standardised_rates() {
             }
             None => assert_eq!((log.estimate, log.lower()), (0.0, None), "{name}"),
         }
-        let d = standardised_difference(group, reference, &case.weights, level)
+        let d = standardised_difference(group, reference, &case.weights, level, 1.0)
             .unwrap()
             .unwrap();
         // The difference is a difference of two sums: its error is relative to
@@ -213,7 +213,7 @@ fn undefined_comparisons() {
         let r = standardised_ratio(some, missing, &weights, level, interval).unwrap();
         assert_eq!(r, None);
     }
-    let d = standardised_difference(none, none, &weights, Level::default())
+    let d = standardised_difference(none, none, &weights, Level::default(), 1.0)
         .unwrap()
         .unwrap();
     assert_eq!((d.estimate, d.interval), (0.0, None));

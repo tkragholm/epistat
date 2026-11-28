@@ -18,7 +18,7 @@ use epistat_epi::rosenbaum::{
     wilcoxon_bounds, wilcoxon_sensitivity_value,
 };
 use epistat_epi::sir::{sir, sir_homogeneity, sir_trend};
-use epistat_epi::{Counts2x2, PersonTime2, bias, evalue, mantel_haenszel, signed_rank};
+use epistat_epi::{Counts2x2, PersonTime, PersonTime2, bias, evalue, mantel_haenszel, signed_rank};
 use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
 
 const EVENTS: [f64; 4] = [3.0, 5.0, 2.0, 7.0];
@@ -91,14 +91,38 @@ fn rates_refuse_bad_columns() {
     let level = Level::default();
     assert_rejects_bad_input_with_codes("direct_standardised", several, |bad| {
         columns(bad).then(|| match bad {
-            BadInput::Mismatched => {
-                direct_standardised(&EVENTS, &bad.column(&TIME), &WEIGHTS, level)
-            }
-            _ => direct_standardised(&bad.column(&EVENTS), &TIME, &WEIGHTS, level),
+            BadInput::Mismatched => direct_standardised(
+                Strata {
+                    events: &EVENTS,
+                    time: &bad.column(&TIME),
+                },
+                &WEIGHTS,
+                level,
+                1.0,
+            ),
+            _ => direct_standardised(
+                Strata {
+                    events: &bad.column(&EVENTS),
+                    time: &TIME,
+                },
+                &WEIGHTS,
+                level,
+                1.0,
+            ),
         })
     });
     assert_rejects_bad_input_with_codes("direct_standardised weights", several, |bad| {
-        columns(bad).then(|| direct_standardised(&EVENTS, &TIME, &bad.column(&WEIGHTS), level))
+        columns(bad).then(|| {
+            direct_standardised(
+                Strata {
+                    events: &EVENTS,
+                    time: &TIME,
+                },
+                &bad.column(&WEIGHTS),
+                level,
+                1.0,
+            )
+        })
     });
     let reference = Strata {
         events: &EVENTS0,
@@ -131,7 +155,7 @@ fn rates_refuse_bad_columns() {
                 events: &EVENTS,
                 time: &TIME,
             };
-            standardised_difference(group, reference, &WEIGHTS, level)
+            standardised_difference(group, reference, &WEIGHTS, level, 1.0)
         })
     });
 }
@@ -140,19 +164,59 @@ fn rates_refuse_bad_columns() {
 fn rates_refuse_bad_numbers() {
     let level = Level::default();
     assert_rejects_bad_input_with_codes("crude_rate", single, |bad| {
-        number(bad, 7.0).map(|events| crude_rate(events, 12.5, level, 1000.0))
+        number(bad, 7.0).map(|events| crude_rate(PersonTime { events, time: 12.5 }, level, 1000.0))
     });
     assert_rejects_bad_input_with_codes("crude_rate scale", single, |bad| {
-        number(bad, 1000.0).map(|scale| crude_rate(7.0, 12.5, level, scale))
+        number(bad, 1000.0).map(|scale| {
+            crude_rate(
+                PersonTime {
+                    events: 7.0,
+                    time: 12.5,
+                },
+                level,
+                scale,
+            )
+        })
     });
     assert_rejects_bad_input_with_codes("rate_ratio", single, |bad| {
-        number(bad, 100.0).map(|t1| rate_ratio(5.0, t1, 9.0, 120.0, level))
+        number(bad, 100.0).map(|t1| {
+            rate_ratio(
+                &PersonTime2 {
+                    exposed_events: 5.0,
+                    exposed_time: t1,
+                    unexposed_events: 9.0,
+                    unexposed_time: 120.0,
+                },
+                level,
+            )
+        })
     });
     assert_rejects_bad_input_with_codes("rate_difference", single, |bad| {
-        number(bad, 9.0).map(|e0| rate_difference(5.0, 100.0, e0, 120.0, level))
+        number(bad, 9.0).map(|e0| {
+            rate_difference(
+                &PersonTime2 {
+                    exposed_events: 5.0,
+                    exposed_time: 100.0,
+                    unexposed_events: e0,
+                    unexposed_time: 120.0,
+                },
+                level,
+                1.0,
+            )
+        })
     });
     assert_rejects_bad_input_with_codes("rate_ratio_exact", single, |bad| {
-        number(bad, 5.0).map(|e1| rate_ratio_exact(e1, 100.0, 9.0, 120.0, level))
+        number(bad, 5.0).map(|e1| {
+            rate_ratio_exact(
+                &PersonTime2 {
+                    exposed_events: e1,
+                    exposed_time: 100.0,
+                    unexposed_events: 9.0,
+                    unexposed_time: 120.0,
+                },
+                level,
+            )
+        })
     });
 }
 

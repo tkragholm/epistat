@@ -5,7 +5,37 @@
 //!
 //! A stratum with `d` events in person-time `y` has the rate `d / y`. Its
 //! interval is the exact Poisson interval of [`epistat_stats::dist::poisson`], divided by
-//! `y` and multiplied by `scale`.
+//! `y`.
+//!
+//! # Rates per person-time
+//!
+//! Every function that returns a rate or a difference of rates takes `per`,
+//! the person-time the rate is expressed per: 1 for a rate per unit of
+//! person-time, 1000 for one per 1000. The estimate, its standard error and
+//! its interval are multiplied by it after they are formed, so a p-value does
+//! not depend on it. `per` multiplies and is not the `scale` of
+//! `survival::pyears`, which divides. A group's events and person-time are
+//! named fields of [`PersonTime`] and [`PersonTime2`], so the two cannot be
+//! swapped:
+//!
+//! ```
+//! use epistat_core::Level;
+//! use epistat_epi::rates::{crude_rate, rate_ratio};
+//! use epistat_epi::{PersonTime, PersonTime2};
+//!
+//! let rate = crude_rate(PersonTime { events: 12.0, time: 5_000.0 }, Level::P95, 1_000.0)?
+//!     .expect("person-time");
+//! assert!((rate.estimate - 2.4).abs() < 1e-12);
+//! let table = PersonTime2 {
+//!     exposed_events: 30.0,
+//!     exposed_time: 1_200.0,
+//!     unexposed_events: 12.0,
+//!     unexposed_time: 1_500.0,
+//! };
+//! let rr = rate_ratio(&table, Level::P95)?.expect("events in both groups");
+//! assert!((rr.estimate - 3.125).abs() < 1e-12);
+//! # Ok::<(), epistat_epi::Error>(())
+//! ```
 //!
 //! A directly standardised rate over strata `s` with weights `w_s`, scaled to
 //! sum to 1, is
@@ -119,8 +149,8 @@
 //!    standardized rates with sparse data. Commun Stat Theory Methods
 //!    1999;28:2141-2160.
 
-use crate::Error;
 use crate::error::{columns, count, counts, finite_number};
+use crate::{Error, PersonTime, PersonTime2};
 use std::fmt;
 
 use crate::exact::binomial_two_sided;
@@ -168,7 +198,7 @@ pub struct Standardised {
     /// [`variance`](Self::variance) and its interval the gamma interval; it
     /// has no p-value.
     pub rate: Estimate,
-    /// The variance of the rate, `sum w_s^2 d_s / y_s^2`.
+    /// The variance of the rate, `sum w_s^2 d_s / y_s^2` times `per^2`.
     pub variance: f64,
 }
 
@@ -180,40 +210,46 @@ fn check_time(what: &'static str, x: f64) -> Result<(), Error> {
     count(what, x, None)
 }
 
-/// A scale that is finite and positive.
-fn check_scale(scale: f64) -> Result<(), Error> {
-    finite_number("scale", scale)?;
-    Ok(check::positive("scale", scale)?)
+/// A person-time multiplier that is finite and positive.
+fn check_per(per: f64) -> Result<(), Error> {
+    finite_number("per", per)?;
+    Ok(check::positive("per", per)?)
 }
 
-/// The rate `events / time * scale` with the exact Poisson interval at
-/// `level`, `None` without person-time. The estimate has no standard error
-/// or p-value.
+/// `estimate` with its point, standard error and limits multiplied by `per`,
+/// a rate per unit of person-time made one per `per`.
+fn per_time(estimate: Estimate, per: f64) -> Estimate {
+    let mut scaled = estimate;
+    scaled.estimate = estimate.estimate * per;
+    scaled.se = estimate.se.map(|se| se * per);
+    scaled.interval = estimate.interval.map(|i| {
+        Interval::new(i.lower.map(|x| x * per), i.upper.map(|x| x * per), i.level)
+            .with_coverage(i.coverage)
+    });
+    scaled
+}
+
+/// The rate `events / time` per `per` person-time with the exact Poisson
+/// interval at `level`, `None` without person-time. The estimate has no
+/// standard error or p-value.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] for a negative or non-finite count or time, or a scale
+/// [`crate::Error`] for a negative or non-finite count or time, or a `per`
 /// that is not positive and finite.
-pub fn crude_rate(
-    events: f64,
-    time: f64,
-    level: Level,
-    scale: f64,
-) -> Result<Option<Estimate>, Error> {
+pub fn crude_rate(group: PersonTime, level: Level, per: f64) -> Result<Option<Estimate>, Error> {
+    let PersonTime { events, time } = group;
     check_count("events", events)?;
     check_time("time", time)?;
-    check_scale(scale)?;
+    check_per(per)?;
     if time == 0.0 {
         return Ok(None);
     }
     let ci =
         poisson::cipoisson(events, time, level, Method::Exact).map_err(|_| RateError::Events)?;
-    Ok(Some(Estimate::point(events / time * scale).with_interval(
-        interval(
-            ci.lower.map(|x| x * scale),
-            ci.upper.map(|x| x * scale),
-            level,
-        ),
+    Ok(Some(per_time(
+        Estimate::point(events / time).with_interval(interval(ci.lower, ci.upper, level)),
+        per,
     )))
 }
 
@@ -280,27 +316,29 @@ fn standardise(events: &[f64], time: &[f64], weights: &[f64]) -> Result<Option<P
     }))
 }
 
-/// The rate standardised to `weights`, with its variance and the gamma
-/// interval of Fay and Feuer at `level`. The weights are scaled to sum to 1,
-/// and the rate is per unit of person-time. `None` when a stratum with a
-/// positive weight has no person-time.
+/// The rate of `group` standardised to `weights`, per `per` person-time, with
+/// its variance and the gamma interval of Fay and Feuer at `level`. The
+/// weights are scaled to sum to 1. `None` when a stratum with a positive
+/// weight has no person-time.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] for slices of different length or no strata, a negative or
-/// non-finite count, time or weight, or weights that sum to 0.
+/// [`crate::Error`] for columns of different length or no strata, a negative
+/// or non-finite count, time or weight, weights that sum to 0, or a `per`
+/// that is not positive and finite.
 pub fn direct_standardised(
-    events: &[f64],
-    time: &[f64],
+    group: Strata<'_>,
     weights: &[f64],
     level: Level,
+    per: f64,
 ) -> Result<Option<Standardised>, Error> {
+    check_per(per)?;
     let Some(Parts {
         rate,
         variance,
         w_max,
         ..
-    }) = standardise(events, time, weights)?
+    }) = standardise(group.events, group.time, weights)?
     else {
         return Ok(None);
     };
@@ -319,10 +357,13 @@ pub fn direct_standardised(
     ))
     .map(|q| q * v_up / (2.0 * shifted));
     Ok(Some(Standardised {
-        rate: Estimate::point(rate)
-            .with_se(Some(variance.sqrt()))
-            .with_interval(interval(lower, upper, level)),
-        variance,
+        rate: per_time(
+            Estimate::point(rate)
+                .with_se(Some(variance.sqrt()))
+                .with_interval(interval(lower, upper, level)),
+            per,
+        ),
+        variance: variance * per * per,
     }))
 }
 
@@ -438,8 +479,8 @@ pub fn standardised_ratio(
 }
 
 /// The difference of the rate of `group` and that of `reference`, both
-/// directly standardised to `weights`, with the normal interval and p-value
-/// at `level` from the variance `V1 + V0`.
+/// directly standardised to `weights`, per `per` person-time, with the
+/// normal interval and p-value at `level` from the variance `V1 + V0`.
 ///
 /// The difference is `None` when either rate is undefined, and its interval
 /// and p-value are `None` when both variances are 0.
@@ -452,24 +493,44 @@ pub fn standardised_difference(
     reference: Strata<'_>,
     weights: &[f64],
     level: Level,
+    per: f64,
 ) -> Result<Option<Estimate>, Error> {
+    check_per(per)?;
     let Some((one, zero)) = standardise_pair(group, reference, weights)? else {
         return Ok(None);
     };
     let difference = one.rate - zero.rate;
     let se = (one.variance + zero.variance).sqrt();
     if se == 0.0 {
-        return Ok(Some(Estimate::point(difference).with_se(Some(se))));
+        return Ok(Some(per_time(
+            Estimate::point(difference).with_se(Some(se)),
+            per,
+        )));
     }
-    Ok(Some(wald(difference, se, level, Scale::Identity)))
+    Ok(Some(per_time(
+        wald(difference, se, level, Scale::Identity),
+        per,
+    )))
 }
 
-fn check_pair(e1: f64, t1: f64, e0: f64, t0: f64) -> Result<(), Error> {
-    check_count("e1", e1)?;
-    check_count("e0", e0)?;
-    check_time("t1", t1)?;
-    check_time("t0", t0)?;
-    Ok(())
+/// The exposed events and time and the unexposed events and time.
+const fn parts(table: &PersonTime2) -> (f64, f64, f64, f64) {
+    (
+        table.exposed_events,
+        table.exposed_time,
+        table.unexposed_events,
+        table.unexposed_time,
+    )
+}
+
+/// The cells of `table`, each a count or person-time.
+fn check_pair(table: &PersonTime2) -> Result<(f64, f64, f64, f64), Error> {
+    let (e1, t1, e0, t0) = parts(table);
+    check_count("exposed_events", e1)?;
+    check_count("unexposed_events", e0)?;
+    check_time("exposed_time", t1)?;
+    check_time("unexposed_time", t0)?;
+    Ok((e1, t1, e0, t0))
 }
 
 /// The Wald estimate of `estimate` with the standard error `se` at `level`.
@@ -492,8 +553,9 @@ fn wald(estimate: f64, se: f64, level: Level, scale: Scale) -> Estimate {
     )
 }
 
-/// The rate ratio `(e1 / t1) / (e0 / t0)` with the Wald interval and p-value
-/// on the log scale at `level`, on [`Scale::Log`].
+/// The rate ratio `(e1 / t1) / (e0 / t0)` of the exposed to the unexposed,
+/// `e` the events and `t` the person-time of [`PersonTime2`], with the Wald
+/// interval and p-value on the log scale at `level`, on [`Scale::Log`].
 ///
 /// `None` when the denominator has no events or either time is 0. With no
 /// events in the numerator the ratio is 0 and has no standard error,
@@ -502,14 +564,8 @@ fn wald(estimate: f64, se: f64, level: Level, scale: Scale) -> Estimate {
 /// # Errors
 ///
 /// [`crate::Error`] for a negative or non-finite count or time.
-pub fn rate_ratio(
-    e1: f64,
-    t1: f64,
-    e0: f64,
-    t0: f64,
-    level: Level,
-) -> Result<Option<Estimate>, Error> {
-    check_pair(e1, t1, e0, t0)?;
+pub fn rate_ratio(table: &PersonTime2, level: Level) -> Result<Option<Estimate>, Error> {
+    let (e1, t1, e0, t0) = check_pair(table)?;
     if t1 == 0.0 || t0 == 0.0 || e0 == 0.0 {
         return Ok(None);
     }
@@ -525,44 +581,51 @@ pub fn rate_ratio(
     )))
 }
 
-/// The rate difference `e1 / t1 - e0 / t0` with the normal interval and
-/// p-value at `level`.
+/// The rate difference `e1 / t1 - e0 / t0` of the exposed and the unexposed,
+/// per `per` person-time, with the normal interval and p-value at `level`.
 ///
 /// `None` when either time is 0. Without events the difference is 0 and its
 /// interval and p-value are `None`.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] for a negative or non-finite count or time.
+/// [`crate::Error`] for a negative or non-finite count or time, or a `per`
+/// that is not positive and finite.
 pub fn rate_difference(
-    e1: f64,
-    t1: f64,
-    e0: f64,
-    t0: f64,
+    table: &PersonTime2,
     level: Level,
+    per: f64,
 ) -> Result<Option<Estimate>, Error> {
-    check_pair(e1, t1, e0, t0)?;
+    let (e1, t1, e0, t0) = check_pair(table)?;
+    check_per(per)?;
     if t1 == 0.0 || t0 == 0.0 {
         return Ok(None);
     }
     let se = (e1 / (t1 * t1) + e0 / (t0 * t0)).sqrt();
     let difference = e1 / t1 - e0 / t0;
     if se == 0.0 {
-        return Ok(Some(Estimate::point(difference).with_se(Some(se))));
+        return Ok(Some(per_time(
+            Estimate::point(difference).with_se(Some(se)),
+            per,
+        )));
     }
-    Ok(Some(wald(difference, se, level, Scale::Identity)))
+    Ok(Some(per_time(
+        wald(difference, se, level, Scale::Identity),
+        per,
+    )))
 }
 
 /// The two-sided p-value of the exact conditional test that the two rates
-/// are equal, as `stats::poisson.test(c(e1, e0), c(t1, t0))`. `None` when
+/// of `table` are equal, as `stats::poisson.test(c(e1, e0), c(t1, t0))` with
+/// the exposed first. `None` when
 /// there are no events or a person-time is 0.
 ///
 /// # Errors
 ///
 /// [`crate::Error`] for a negative or non-finite count or time, and
 /// [`crate::Error`] for a count more than `1e-7` from an integer.
-pub fn rate_ratio_exact_test(e1: f64, t1: f64, e0: f64, t0: f64) -> Result<Option<f64>, Error> {
-    check_pair(e1, t1, e0, t0)?;
+pub fn rate_ratio_exact_test(table: &PersonTime2) -> Result<Option<f64>, Error> {
+    let (e1, t1, e0, t0) = check_pair(table)?;
     let (x1, x0) = (e1.round(), e0.round());
     if (e1 - x1).abs() > 1e-7 || (e0 - x0).abs() > 1e-7 {
         return Err(RateError::NotInteger.into());
@@ -573,9 +636,9 @@ pub fn rate_ratio_exact_test(e1: f64, t1: f64, e0: f64, t0: f64) -> Result<Optio
     Ok(Some(binomial_two_sided(x1, x1 + x0, t1 / (t1 + t0))))
 }
 
-/// The rate ratio `(e1 / t1) / (e0 / t0)` with its exact conditional interval
-/// at `level` and the exact two-sided p-value of equal rates, as
-/// `stats::poisson.test(c(e1, e0), c(t1, t0))`.
+/// The rate ratio `(e1 / t1) / (e0 / t0)` of the exposed to the unexposed
+/// with its exact conditional interval at `level` and the exact two-sided
+/// p-value of equal rates, as `stats::poisson.test(c(e1, e0), c(t1, t0))`.
 ///
 /// `None` when there are no events or a time is 0. With `e0 = 0` the
 /// estimate is infinite, as `poisson.test` reports it, and the interval has
@@ -586,16 +649,11 @@ pub fn rate_ratio_exact_test(e1: f64, t1: f64, e0: f64, t0: f64) -> Result<Optio
 ///
 /// [`crate::Error`] for a negative or non-finite count or time, and for a
 /// count more than `1e-7` from an integer.
-pub fn rate_ratio_exact(
-    e1: f64,
-    t1: f64,
-    e0: f64,
-    t0: f64,
-    level: Level,
-) -> Result<Option<Estimate>, Error> {
-    let Some(p_value) = rate_ratio_exact_test(e1, t1, e0, t0)? else {
+pub fn rate_ratio_exact(table: &PersonTime2, level: Level) -> Result<Option<Estimate>, Error> {
+    let Some(p_value) = rate_ratio_exact_test(table)? else {
         return Ok(None);
     };
+    let (e1, t1, e0, t0) = parts(table);
     let (x1, x0) = (e1.round(), e0.round());
     let to_ratio = |p: f64| p / (1.0 - p) * (t0 / t1);
     let lower = if x1 == 0.0 {
@@ -627,9 +685,17 @@ mod tests {
     #[test]
     fn standardised_rate_of_equal_strata_is_the_crude_rate() {
         let level = Level::default();
-        let s = direct_standardised(&[10.0, 20.0], &[100.0, 200.0], &[1.0, 3.0], level)
-            .unwrap()
-            .unwrap();
+        let s = direct_standardised(
+            Strata {
+                events: &[10.0, 20.0],
+                time: &[100.0, 200.0],
+            },
+            &[1.0, 3.0],
+            level,
+            1.0,
+        )
+        .unwrap()
+        .unwrap();
         assert!((s.rate.estimate - 0.1).abs() < 1e-15);
         let (lo, hi) = (s.rate.lower().unwrap(), s.rate.upper().unwrap());
         assert!(lo < 0.1 && 0.1 < hi);
@@ -638,16 +704,42 @@ mod tests {
     #[test]
     fn empty_stratum_with_weight_has_no_rate() {
         let level = Level::default();
-        let s = direct_standardised(&[1.0, 0.0], &[10.0, 0.0], &[1.0, 1.0], level).unwrap();
+        let s = direct_standardised(
+            Strata {
+                events: &[1.0, 0.0],
+                time: &[10.0, 0.0],
+            },
+            &[1.0, 1.0],
+            level,
+            1.0,
+        )
+        .unwrap();
         assert_eq!(s, None);
-        let s = direct_standardised(&[1.0, 0.0], &[10.0, 0.0], &[1.0, 0.0], level).unwrap();
+        let s = direct_standardised(
+            Strata {
+                events: &[1.0, 0.0],
+                time: &[10.0, 0.0],
+            },
+            &[1.0, 0.0],
+            level,
+            1.0,
+        )
+        .unwrap();
         assert_eq!(s.map(|s| s.rate.estimate), Some(0.1));
     }
 
     #[test]
     fn refuses_bad_input() {
         assert_eq!(
-            direct_standardised(&[1.0], &[1.0, 2.0], &[1.0], Level::default()),
+            direct_standardised(
+                Strata {
+                    events: &[1.0],
+                    time: &[1.0, 2.0]
+                },
+                &[1.0],
+                Level::default(),
+                1.0
+            ),
             Err(epistat_core::InputError::Length {
                 what: "time",
                 expected: 1,
@@ -656,11 +748,26 @@ mod tests {
             .into())
         );
         assert_eq!(
-            direct_standardised(&[1.0], &[1.0], &[0.0], Level::default()),
+            direct_standardised(
+                Strata {
+                    events: &[1.0],
+                    time: &[1.0]
+                },
+                &[0.0],
+                Level::default(),
+                1.0
+            ),
             Err(RateError::Weights.into())
         );
         assert_eq!(
-            crude_rate(-1.0, 1.0, Level::default(), 1.0),
+            crude_rate(
+                PersonTime {
+                    events: -1.0,
+                    time: 1.0
+                },
+                Level::default(),
+                1.0
+            ),
             Err(epistat_core::InputError::Domain {
                 what: "events",
                 value: -1.0,
@@ -670,16 +777,99 @@ mod tests {
             .into())
         );
         assert_eq!(
-            rate_ratio_exact_test(1.5, 1.0, 2.0, 1.0),
+            rate_ratio_exact_test(&PersonTime2 {
+                exposed_events: 1.5,
+                exposed_time: 1.0,
+                unexposed_events: 2.0,
+                unexposed_time: 1.0
+            }),
             Err(RateError::NotInteger.into())
         );
     }
 
     #[test]
+    fn per_multiplies_the_rate_and_leaves_the_p_value() {
+        let level = Level::default();
+        let table = PersonTime2 {
+            exposed_events: 30.0,
+            exposed_time: 1_200.0,
+            unexposed_events: 12.0,
+            unexposed_time: 1_500.0,
+        };
+        let one = rate_difference(&table, level, 1.0).unwrap().unwrap();
+        let thousand = rate_difference(&table, level, 1_000.0).unwrap().unwrap();
+        assert_eq!(thousand.estimate, one.estimate * 1_000.0);
+        assert_eq!(thousand.se, one.se.map(|se| se * 1_000.0));
+        assert_eq!(thousand.upper(), one.upper().map(|u| u * 1_000.0));
+        assert_eq!(thousand.p_value, one.p_value);
+        let strata = Strata {
+            events: &[10.0, 20.0],
+            time: &[100.0, 200.0],
+        };
+        let s1 = direct_standardised(strata, &[1.0, 3.0], level, 1.0)
+            .unwrap()
+            .unwrap();
+        let s100 = direct_standardised(strata, &[1.0, 3.0], level, 100.0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(s100.rate.estimate, s1.rate.estimate * 100.0);
+        assert_eq!(s100.rate.lower(), s1.rate.lower().map(|l| l * 100.0));
+        assert_eq!(s100.variance, s1.variance * 100.0 * 100.0);
+        let crude = crude_rate(
+            PersonTime {
+                events: 30.0,
+                time: 300.0,
+            },
+            level,
+            100.0,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(crude.estimate, 30.0 / 300.0 * 100.0);
+        for per in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(rate_difference(&table, level, per).is_err());
+            assert!(direct_standardised(strata, &[1.0, 3.0], level, per).is_err());
+            assert!(
+                crude_rate(
+                    PersonTime {
+                        events: 1.0,
+                        time: 1.0
+                    },
+                    level,
+                    per
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
     fn zero_events_in_the_denominator_leave_the_ratio_undefined() {
         let level = Level::default();
-        assert_eq!(rate_ratio(3.0, 10.0, 0.0, 10.0, level).unwrap(), None);
-        let c = rate_ratio(0.0, 10.0, 3.0, 10.0, level).unwrap().unwrap();
+        assert_eq!(
+            rate_ratio(
+                &PersonTime2 {
+                    exposed_events: 3.0,
+                    exposed_time: 10.0,
+                    unexposed_events: 0.0,
+                    unexposed_time: 10.0
+                },
+                level
+            )
+            .unwrap(),
+            None
+        );
+        let c = rate_ratio(
+            &PersonTime2 {
+                exposed_events: 0.0,
+                exposed_time: 10.0,
+                unexposed_events: 3.0,
+                unexposed_time: 10.0,
+            },
+            level,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!((c.estimate, c.interval, c.p_value), (0.0, None, None));
     }
 }

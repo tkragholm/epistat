@@ -21,7 +21,8 @@ mod common;
 use common::{Lines, Rng, Table, Writer};
 use epistat_core::Estimand;
 use epistat_core::Level;
-use epistat_epi::rates::{direct_standardised, rate_ratio};
+use epistat_epi::PersonTime2;
+use epistat_epi::rates::{Strata, direct_standardised, rate_ratio};
 use epistat_epi::sir::{SirInterval, sir};
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
@@ -181,14 +182,30 @@ fn main() {
                                 time[a] += table.person_time[cell];
                             }
                         }
-                        let standardised =
-                            direct_standardised(&events, &time, &weights, Level::default())
-                                .expect("rate");
+                        let standardised = direct_standardised(
+                            Strata {
+                                events: &events,
+                                time: &time,
+                            },
+                            &weights,
+                            Level::default(),
+                            1.0,
+                        )
+                        .expect("rate");
                         by_sex.push((events, time, standardised));
                     }
                     let (e0, t0) = (by_sex[0].0.iter().sum::<f64>(), by_sex[0].1.iter().sum());
                     let (e1, t1) = (by_sex[1].0.iter().sum::<f64>(), by_sex[1].1.iter().sum());
-                    let ratio = rate_ratio(e1, t1, e0, t0, Level::default()).expect("rate ratio");
+                    let ratio = rate_ratio(
+                        &PersonTime2 {
+                            exposed_events: e1,
+                            exposed_time: t1,
+                            unexposed_events: e0,
+                            unexposed_time: t0,
+                        },
+                        Level::default(),
+                    )
+                    .expect("rate ratio");
                     (by_sex, ratio)
                 });
                 for (s, (events, time, standardised)) in out.0.iter().enumerate() {

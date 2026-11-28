@@ -1,7 +1,8 @@
 //! The two tables every measure of the crate starts from.
 //!
-//! [`Counts2x2`] holds the four counts of a 2 x 2 table and [`PersonTime2`]
-//! the events and person-time of two groups. The fields are named, so a table
+//! [`Counts2x2`] holds the four counts of a 2 x 2 table, [`PersonTime`] the
+//! events and person-time of one group and [`PersonTime2`] those of two
+//! groups. The fields are named, so a table
 //! means the same thing in every module: textbooks and R packages order the
 //! cells differently (`episensr` puts the unexposed cases second, `epiR` the
 //! exposed non-cases), and a table built for one order and read in the other
@@ -79,6 +80,15 @@ impl Counts2x2 {
                 - self.unexposed_cases / (self.unexposed_cases + self.unexposed_noncases),
         )
     }
+}
+
+/// The events and person-time of one group.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PersonTime {
+    /// The events.
+    pub events: f64,
+    /// The person-time.
+    pub time: f64,
 }
 
 /// The events and person-time of an exposed and an unexposed group.
