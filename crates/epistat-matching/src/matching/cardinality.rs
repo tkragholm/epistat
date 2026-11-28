@@ -202,6 +202,7 @@ impl<'a> CardinalityRequest<'a> {
 
 /// How the search of one stratum went.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct StratumReport {
     /// The exact key of the stratum, 0 without strata.
     pub key: u64,
@@ -227,6 +228,7 @@ pub struct StratumReport {
 
 /// The result of cardinality or profile matching.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CardinalityOutcome {
     /// The weight of each unit: 0 for a unit that is not selected.
     pub weights: Vec<f64>,
@@ -594,9 +596,12 @@ pub fn match_cardinality(request: &CardinalityRequest<'_>) -> Result<Cardinality
     if request.discarded.is_some_and(|d| d.len() != n) {
         return Err(Error::Shape("discarded has the wrong length".to_string()));
     }
-    if request.estimand == Estimand::Atm {
+    if !matches!(
+        request.estimand,
+        Estimand::Att | Estimand::Atc | Estimand::Ate
+    ) {
         return Err(Error::UnsupportedEstimand {
-            estimand: request.estimand.into(),
+            estimand: request.estimand,
             method: "cardinality matching",
         });
     }

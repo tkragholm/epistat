@@ -299,7 +299,7 @@ fn spec_mode_matches_the_job() {
     let spec = MatchSpec {
         mode: MatchMode::ExposureDensity,
         method: MatchMethod::Random,
-        seed: 23,
+        seed: Some(23),
         ratio: 2,
         replace: true,
         birth_window_days: 30_000,
@@ -470,6 +470,7 @@ fn spec_mode_needs_a_cohort_and_risk_set_options() {
     let recs = records(&reference.people);
     let spec = MatchSpec {
         mode: MatchMode::ExposureDensity,
+        seed: Some(0),
         ..MatchSpec::default()
     };
     assert!(matches!(

@@ -28,6 +28,7 @@
 //!    2011;42(8).
 
 use crate::Error;
+use crate::matching::has_subclass_weights;
 use crate::matching::to_f64;
 use crate::matching::{
     MatchWeightMethod, PropensityScoreEstimate, SubclassedUnits, SubclassificationOutcome,
@@ -152,6 +153,7 @@ impl Units {
 /// MatchIt's `match.matrix`: one row per case, in input order, holding its
 /// controls in the order they were assigned.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MatchMatrix {
     /// The case of each row.
     pub case_id: Vec<String>,
@@ -813,10 +815,10 @@ impl SubclassedUnits {
     }
 
     /// The weights of the kept units for an estimand, sorted by id, or `None`
-    /// for the matched-sample effect.
+    /// for an estimand other than the ATT, the ATC and the ATE.
     #[must_use]
     pub fn weights_sorted(&self, estimand: Estimand) -> Option<(Vec<&str>, Vec<f64>)> {
-        if estimand == Estimand::Atm {
+        if !has_subclass_weights(estimand) {
             return None;
         }
         Some(sorted_pairs(self.ids.iter().enumerate().filter_map(
@@ -848,8 +850,8 @@ impl SubclassedUnits {
 
 impl SubclassedUnits {
     /// The weights of the kept units for an estimand as per-group maps by id,
-    /// the shape the balance functions take, or `None` for the matched-sample
-    /// effect. A dropped unit is in neither map.
+    /// the shape the balance functions take, or `None` for an estimand other
+    /// than the ATT, the ATC and the ATE. A dropped unit is in neither map.
     #[must_use]
     pub fn unit_weights(&self, estimand: Estimand) -> Option<UnitWeightSet> {
         let weights = self.weights(estimand)?;
@@ -869,7 +871,8 @@ impl SubclassedUnits {
 
     /// MatchIt's `match_data()` for these units: each unit with its weight for
     /// the estimand and its subclass, in the order of the units. Subclasses are
-    /// numbered from 1. `None` for the matched-sample effect.
+    /// numbered from 1. `None` for an estimand other than the ATT, the ATC and
+    /// the ATE.
     ///
     /// # Errors
     ///
@@ -899,7 +902,8 @@ impl SubclassedUnits {
     /// numbered from 1. With `normalize` the weights of each group are rescaled
     /// to a mean of 1 over its kept units, as `matchit()` does. A unit that is
     /// not kept has weight 0 and no subclass, and is left out with
-    /// `drop_unmatched`. `None` for the matched-sample effect.
+    /// `drop_unmatched`. `None` for an estimand other than the ATT, the ATC and
+    /// the ATE.
     #[must_use]
     pub fn match_data_for(
         &self,
@@ -908,7 +912,7 @@ impl SubclassedUnits {
         normalize: bool,
         drop_unmatched: bool,
     ) -> Option<MatchData> {
-        if estimand == Estimand::Atm {
+        if !has_subclass_weights(estimand) {
             return None;
         }
         let at: HashMap<&str, usize> = self

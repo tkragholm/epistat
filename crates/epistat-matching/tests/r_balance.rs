@@ -36,11 +36,12 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::MatchWeightMethod;
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    BalanceRecord, BalanceReport, BalanceReportOptions, CovariateValue, Estimand, MatchDiagnostics,
-    NumericBalance, NumericBalanceTransform, SupplementalBalanceCovariates, balance_report,
+    BalanceRecord, BalanceReport, BalanceReportOptions, CovariateValue, NumericBalance,
+    NumericBalanceTransform, SupplementalBalanceCovariates, balance_report,
 };
 use epistat_testkit::{Tolerance, load_json, na_f64, na_f64_vec};
 use r_reference::{Versions, assert_r_version};
@@ -177,22 +178,13 @@ fn estimand(name: &str) -> Estimand {
 }
 
 fn outcome(pairs: &[(String, String)], estimand: Estimand) -> MatchOutcome {
-    MatchOutcome {
-        pairs: pairs
+    MatchOutcome::from_pairs(
+        pairs
             .iter()
             .map(|(treated, control)| MatchedPair::new(treated.clone(), control.clone()))
             .collect(),
-        unmatched_cases: 0,
-        used_controls: 0,
-        matched_cases: 0,
-        avg_controls_per_case: None,
-        diagnostics: {
-            let mut diagnostics = MatchDiagnostics::default();
-            diagnostics.requested_estimand = estimand;
-            diagnostics.realized_estimand = estimand;
-            diagnostics
-        },
-    }
+        estimand,
+    )
 }
 
 #[track_caller]
@@ -408,7 +400,8 @@ fn balance_on_matchit_pairs_agrees_with_summary_matchit() {
                 &sample.controls,
                 &outcome,
                 &epistat_matching::BalanceReportOptions::default(),
-            );
+            )
+            .expect("a matched estimand");
             let label = format!("{set_name} {}", fit.name);
             compare_fit(
                 &label,
@@ -438,7 +431,8 @@ fn standardised_differences_before_matching_under_the_ate() {
             &sample.controls,
             &outcome(&[], Estimand::Ate),
             &epistat_matching::BalanceReportOptions::default(),
-        );
+        )
+        .expect("a matched estimand");
         for row in &report.numeric {
             let r = &fit.standardised.all[&row.name];
             let label = format!("{set_name} ate {}", row.name);
@@ -502,9 +496,10 @@ fn unit_weights_and_sample_sizes_agree_with_matchit() {
                     (split(true), split(false))
                 } else {
                     let matched = outcome(&fit.pairs, estimand(&fit.estimand));
-                    let weights = matched.match_weights(MatchWeightMethod::for_estimand(
-                        matched.diagnostics.realized_estimand,
-                    ));
+                    let weights = matched.match_weights(
+                        MatchWeightMethod::for_estimand(matched.diagnostics.realized_estimand)
+                            .expect("a matched estimand"),
+                    );
                     let groups: [HashMap<String, f64>; 2] = [
                         weights.cases().map(|(id, w)| (id.to_string(), w)).collect(),
                         weights
@@ -596,7 +591,8 @@ fn squares_and_interactions_agree_with_matchit() {
             &sample.controls,
             &outcome(&fit.pairs, estimand(&fit.estimand)),
             &options,
-        );
+        )
+        .expect("a matched estimand");
         // MatchIt's names: "a²" for a square, "a * b" for a product.
         let r_key = |name: &str| unordered(&name.replace('²', "^2"));
         let r_rows = fit
@@ -680,7 +676,8 @@ fn supplemental_covariates_agree_with_addlvariables() {
                 &sample.controls,
                 &outcome(&fit.pairs, estimand(&fit.estimand)),
                 &options,
-            );
+            )
+            .expect("a matched estimand");
             let name = addl[0];
             let row = report.numeric.iter().find(|row| row.name == name).unwrap();
             compare_numeric(
@@ -718,7 +715,8 @@ fn covariates_without_variance_have_no_standardised_difference() {
         &sample.controls,
         &outcome(&degenerate.pairs, Estimand::Att),
         &epistat_matching::BalanceReportOptions::default(),
-    );
+    )
+    .expect("a matched estimand");
     let row = |name: &str| report.numeric.iter().find(|row| row.name == name).unwrap();
     let r = |name: &str| &degenerate.standardised.all[name];
 

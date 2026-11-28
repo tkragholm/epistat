@@ -94,6 +94,7 @@ impl<R> Copy for ImputedSet<'_, R> {}
 
 /// The matches of the imputed data sets.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ImputedMatches {
     /// The approach used.
     pub approach: ImputationApproach,
@@ -276,6 +277,7 @@ impl CompleteDataDf {
 /// An effect is `None` when a data set gives no standard error for it, or the
 /// effect does not exist for the model, as in [`EffectEstimates`].
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct PooledEffects {
     /// The difference of the average predictions.
     pub difference: Option<Pooled>,
@@ -294,6 +296,7 @@ pub struct PooledEffects {
 
 /// The effects of every data set and their pooled value.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct ImputedEffects {
     /// The estimates of each data set, in the order given.
     pub per_set: Vec<EffectEstimates>,

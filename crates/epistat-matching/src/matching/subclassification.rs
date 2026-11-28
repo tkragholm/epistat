@@ -102,6 +102,7 @@ impl Default for SubclassificationConfig {
 
 /// Per-subclass summary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SubclassSummary {
     /// Subclass index.
     pub subclass: usize,
@@ -120,7 +121,8 @@ pub struct SubclassSummary {
 /// that position. A unit that is dropped has no subclass and no weight. The
 /// weights are not stored; each is derived from the case share of the unit's
 /// subclass in [`subclasses`](Self::subclasses) when asked for.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SubclassificationOutcome {
     /// Requested estimand for weighting.
     pub estimand: Estimand,
@@ -149,6 +151,23 @@ pub struct SubclassificationOutcome {
     /// when the match did not trim. They are not among the units above.
     #[serde(default)]
     pub trimmed: crate::TrimmedUnits,
+}
+
+/// No units, for the ATT.
+impl Default for SubclassificationOutcome {
+    fn default() -> Self {
+        Self {
+            estimand: Estimand::Att,
+            requested_subclasses: 0,
+            realized_subclasses: 0,
+            quantile_cuts: Vec::new(),
+            ids: Vec::new(),
+            case_count: 0,
+            subclass: Vec::new(),
+            subclasses: Vec::new(),
+            trimmed: crate::TrimmedUnits::default(),
+        }
+    }
 }
 
 impl SubclassificationOutcome {
@@ -260,7 +279,8 @@ struct ScoredUnit {
 /// # Errors
 ///
 /// Returns [`Error::NoSubclasses`] when `config.subclasses`
-/// is 0.
+/// is 0, and [`Error::UnsupportedEstimand`] for an estimand other than the
+/// ATT, the ATC, the ATE and the ATM, which takes the weights of the ATE.
 pub fn subclassify_by_propensity_score_map<R: MatchingRecord, H: BuildHasher + Sync>(
     anchors: &[R],
     candidates: &[R],
@@ -301,6 +321,7 @@ pub fn subclassify_with_set_aside_scores<R: MatchingRecord, H: BuildHasher + Syn
     set_aside_anchors: &[f64],
     set_aside_candidates: &[f64],
 ) -> Result<SubclassificationOutcome, Error> {
+    crate::types::matched_estimand(estimand, "subclassification")?;
     if config.subclasses == 0 {
         return Err(Error::NoSubclasses);
     }
@@ -412,7 +433,8 @@ fn resolve_reference_group(
     reference_group.unwrap_or(match estimand {
         Estimand::Att => SubclassReferenceGroup::Cases,
         Estimand::Atc => SubclassReferenceGroup::Controls,
-        Estimand::Ate | Estimand::Atm => SubclassReferenceGroup::Pooled,
+        // The ATE and the ATM; the entry points refuse any other estimand.
+        _ => SubclassReferenceGroup::Pooled,
     })
 }
 
@@ -626,7 +648,8 @@ pub(super) fn subclass_weight_for_estimand(
                 1.0
             }
         }
-        Estimand::Ate | Estimand::Atm => {
+        // The ATE and the ATM; the entry points refuse any other estimand.
+        _ => {
             if is_anchor_unit {
                 1.0 / propensity
             } else {

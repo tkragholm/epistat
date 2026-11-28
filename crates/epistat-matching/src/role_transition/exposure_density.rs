@@ -38,6 +38,7 @@ pub struct ExposedPerson {
 
 /// A control in the set of one exposed person.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ExposureDensityControl {
     /// The exposed person whose set the control is in.
     pub exposed_id: String,
@@ -63,6 +64,7 @@ impl ExposureDensityControl {
 
 /// The sets of exposure density sampling.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct ExposureDensityOutcome {
     /// The pairs and diagnostics of the underlying risk-set matching.
     pub outcome: MatchOutcome,

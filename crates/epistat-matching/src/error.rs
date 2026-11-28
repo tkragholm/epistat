@@ -958,3 +958,363 @@ impl Classify for Error {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One value of every variant whose code is the crate's own. The match
+    /// below has no wildcard, so a new variant does not compile until it is
+    /// listed here.
+    fn every_own_variant() -> Vec<Error> {
+        let errors = vec![
+            Error::Option {
+                option: "x",
+                message: String::new(),
+            },
+            Error::NegativeBirthDateWindow,
+            Error::ZeroMatchRatio,
+            Error::InvalidCriteria(InvalidCriteriaReason::StudyOptions),
+            Error::CommonSupport(CommonSupportFailureReason::NoOverlap),
+            Error::InputMode {
+                mode: MatchMode::Standard,
+            },
+            Error::DuplicateId { id: String::new() },
+            Error::EventBeforeBirth { id: String::new() },
+            Error::ColumnLength {
+                column: String::new(),
+                found: 0,
+                expected: 0,
+            },
+            Error::DuplicateColumn {
+                column: String::new(),
+            },
+            Error::TooManyValues {
+                column: String::new(),
+            },
+            Error::MissingColumn {
+                column: String::new(),
+                present: Vec::new(),
+            },
+            Error::WrongType {
+                column: String::new(),
+                found: String::new(),
+                expected: "x",
+            },
+            Error::NullValue {
+                column: String::new(),
+                row: 0,
+            },
+            Error::DateOutOfRange {
+                column: String::new(),
+                row: 0,
+            },
+            Error::Value { what: "x", row: 0 },
+            Error::InvalidWeight {
+                id: String::new(),
+                weight: 0.0,
+            },
+            Error::UnknownUnit { id: String::new() },
+            Error::UnknownCase { id: String::new() },
+            Error::UnknownControl { id: String::new() },
+            Error::NoFixedRoles { output: "x" },
+            Error::NotPaired,
+            Error::InconsistentPair {
+                case_id: String::new(),
+                control_id: String::new(),
+            },
+            Error::PeriodsNotIncreasing {
+                id: String::new(),
+                period: 0,
+            },
+            Error::InconsistentDate { period: 0 },
+            Error::DatesNotIncreasing { period: 0 },
+            Error::StrataRows {
+                expected: 0,
+                found: 0,
+            },
+            Error::UnknownMember {
+                id: String::new(),
+                period: 0,
+            },
+            Error::NoVariables,
+            Error::MissingValue {
+                id: String::new(),
+                variable: String::new(),
+            },
+            Error::NoSharedStratum,
+            Error::Binning {
+                variable: String::new(),
+                message: String::new(),
+            },
+            Error::CemOrder,
+            Error::EmptyGroup,
+            Error::MissingValues {
+                covariate: String::new(),
+            },
+            Error::NonFiniteCovariate {
+                id: String::new(),
+                covariate: String::new(),
+            },
+            Error::MixedCovariateType {
+                covariate: String::new(),
+            },
+            Error::NoObservedValues {
+                covariate: String::new(),
+            },
+            Error::NoCovariates,
+            Error::ConstantCovariate(0),
+            Error::ZeroWithinGroupVariance {
+                column: String::new(),
+            },
+            Error::InvalidElasticNet,
+            Error::InvalidModelControl,
+            Error::InvalidCrossValidation,
+            Error::InvalidSamplingWeight { id: String::new() },
+            Error::ReestimateWithoutDiscard,
+            Error::NoCommonSupport,
+            Error::CbpsNeedsIntercept,
+            Error::NotFullRank,
+            Error::InvalidCbps,
+            Error::InvalidCovariance,
+            Error::DistanceBuild,
+            Error::ZeroDimension,
+            Error::InverseCovarianceLength,
+            Error::VectorLength,
+            Error::NotPositiveSemiDefinite,
+            Error::DistanceNotANumber {
+                case: 0,
+                control: 0,
+            },
+            Error::NegativeDistance {
+                case: 0,
+                control: 0,
+            },
+            Error::Coordinates,
+            Error::NonFiniteCoordinate { unit: 0 },
+            Error::MissingCoordinates { id: String::new() },
+            Error::SubclassMinimum,
+            Error::SizeBelowMinimums,
+            Error::InvalidCaliper,
+            Error::TooFewUnits { stratum: None },
+            Error::NoSubclass,
+            Error::TooManyUnits,
+            Error::NoSubclasses,
+            Error::ZeroMaxRatio,
+            Error::NegativeCaliperDays(0),
+            Error::AverageNotAboveOne,
+            Error::MinimumBelowOne,
+            Error::MinimumNotBelowAverage,
+            Error::MaximumNotAboveAverage,
+            Error::Shape(String::new()),
+            Error::NotFinite(String::new()),
+            Error::Invalid(String::new()),
+            Error::NegativeTolerance,
+            Error::InvalidRatio(String::new()),
+            Error::InvalidTolerance,
+            Error::OneGroup,
+            Error::TooManyMatches {
+                asked: 0,
+                available: 0,
+            },
+            Error::TooManyVarianceMatches { asked: 0, group: 0 },
+            Error::ZeroMatches,
+            Error::MissingPair { row: 0 },
+            Error::EmptyTarget,
+            Error::Outcome { row: 0 },
+            Error::TooFewRows,
+            Error::Bootstrap,
+            Error::TooFewSets { found: 0 },
+            Error::UnitsDiffer {
+                set: 0,
+                id: String::new(),
+            },
+            Error::Groups { groups: 0 },
+            Error::Clusters,
+            Error::EmptySupport { group: 0 },
+            Error::NotOneTreated { set: 0, treated: 0 },
+            Error::NoControl { set: 0 },
+            Error::NotAPair {
+                set: 0,
+                controls: 0,
+            },
+            Error::ReusedUnit { id: String::new() },
+            Error::NoSets,
+            Error::NotBinary(0.0),
+            Error::UnsupportedEstimand {
+                estimand: epistat_core::Estimand::Ato,
+                method: "x",
+            },
+            Error::SamplingWeightsNeedProfile,
+            Error::PairingNeedsWholeRatio,
+            Error::ReestimateAcross,
+            Error::NoMatches,
+            Error::Infeasible {
+                stratum: 0,
+                message: String::new(),
+            },
+            Error::TooLarge { stratum: 0 },
+            Error::InfeasibleBalance { stratum: 0 },
+            Error::NoSolutionInTime { stratum: 0 },
+            Error::Solver(String::new()),
+            Error::ZeroVarianceGroup,
+            Error::SingularCovariance,
+            Error::SingularRegression,
+            Error::LinearSystem,
+            Error::Separated,
+            Error::Aliased,
+            Error::NotConverged,
+            Error::Replicate {
+                index: 0,
+                reason: String::new(),
+            },
+        ];
+        for error in &errors {
+            match error {
+                Error::Input(_)
+                | Error::Option { .. }
+                | Error::NegativeBirthDateWindow
+                | Error::ZeroMatchRatio
+                | Error::InvalidCriteria(_)
+                | Error::CommonSupport(_)
+                | Error::InputMode { .. }
+                | Error::DuplicateId { .. }
+                | Error::EventBeforeBirth { .. }
+                | Error::ColumnLength { .. }
+                | Error::DuplicateColumn { .. }
+                | Error::TooManyValues { .. }
+                | Error::MissingColumn { .. }
+                | Error::WrongType { .. }
+                | Error::NullValue { .. }
+                | Error::DateOutOfRange { .. }
+                | Error::Value { .. }
+                | Error::InvalidWeight { .. }
+                | Error::UnknownUnit { .. }
+                | Error::UnknownCase { .. }
+                | Error::UnknownControl { .. }
+                | Error::NoFixedRoles { .. }
+                | Error::NotPaired
+                | Error::InconsistentPair { .. }
+                | Error::PeriodsNotIncreasing { .. }
+                | Error::InconsistentDate { .. }
+                | Error::DatesNotIncreasing { .. }
+                | Error::StrataRows { .. }
+                | Error::UnknownMember { .. }
+                | Error::Trial { .. }
+                | Error::NoVariables
+                | Error::MissingValue { .. }
+                | Error::NoSharedStratum
+                | Error::Binning { .. }
+                | Error::CemOrder
+                | Error::EmptyGroup
+                | Error::MissingValues { .. }
+                | Error::NonFiniteCovariate { .. }
+                | Error::MixedCovariateType { .. }
+                | Error::NoObservedValues { .. }
+                | Error::NoCovariates
+                | Error::ConstantCovariate(_)
+                | Error::ZeroWithinGroupVariance { .. }
+                | Error::InvalidElasticNet
+                | Error::InvalidModelControl
+                | Error::InvalidCrossValidation
+                | Error::InvalidSamplingWeight { .. }
+                | Error::ReestimateWithoutDiscard
+                | Error::NoCommonSupport
+                | Error::CbpsNeedsIntercept
+                | Error::NotFullRank
+                | Error::InvalidCbps
+                | Error::InvalidCovariance
+                | Error::DistanceBuild
+                | Error::ZeroDimension
+                | Error::InverseCovarianceLength
+                | Error::VectorLength
+                | Error::NotPositiveSemiDefinite
+                | Error::DistanceNotANumber { .. }
+                | Error::NegativeDistance { .. }
+                | Error::Coordinates
+                | Error::NonFiniteCoordinate { .. }
+                | Error::MissingCoordinates { .. }
+                | Error::SubclassMinimum
+                | Error::SizeBelowMinimums
+                | Error::InvalidCaliper
+                | Error::TooFewUnits { .. }
+                | Error::NoSubclass
+                | Error::TooManyUnits
+                | Error::NoSubclasses
+                | Error::ZeroMaxRatio
+                | Error::NegativeCaliperDays(_)
+                | Error::AverageNotAboveOne
+                | Error::MinimumBelowOne
+                | Error::MinimumNotBelowAverage
+                | Error::MaximumNotAboveAverage
+                | Error::Shape(_)
+                | Error::NotFinite(_)
+                | Error::Invalid(_)
+                | Error::NegativeTolerance
+                | Error::InvalidRatio(_)
+                | Error::InvalidTolerance
+                | Error::OneGroup
+                | Error::TooManyMatches { .. }
+                | Error::TooManyVarianceMatches { .. }
+                | Error::ZeroMatches
+                | Error::MissingPair { .. }
+                | Error::EmptyTarget
+                | Error::Outcome { .. }
+                | Error::TooFewRows
+                | Error::Bootstrap
+                | Error::TooFewSets { .. }
+                | Error::UnitsDiffer { .. }
+                | Error::Groups { .. }
+                | Error::Clusters
+                | Error::EmptySupport { .. }
+                | Error::NotOneTreated { .. }
+                | Error::NoControl { .. }
+                | Error::NotAPair { .. }
+                | Error::ReusedUnit { .. }
+                | Error::NoSets
+                | Error::NotBinary(_)
+                | Error::UnsupportedEstimand { .. }
+                | Error::SamplingWeightsNeedProfile
+                | Error::PairingNeedsWholeRatio
+                | Error::ReestimateAcross
+                | Error::NoMatches
+                | Error::Infeasible { .. }
+                | Error::TooLarge { .. }
+                | Error::InfeasibleBalance { .. }
+                | Error::NoSolutionInTime { .. }
+                | Error::Solver(_)
+                | Error::ZeroVarianceGroup
+                | Error::SingularCovariance
+                | Error::SingularRegression
+                | Error::LinearSystem
+                | Error::Separated
+                | Error::Aliased
+                | Error::NotConverged
+                | Error::Replicate { .. }
+                | Error::Glm(_)
+                | Error::Optim(_)
+                | Error::Inference(_)
+                | Error::Stats(_)
+                | Error::Epi(_) => {}
+            }
+        }
+        errors
+    }
+
+    #[test]
+    fn every_code_is_unique_and_names_the_crate() {
+        epistat_testkit::assert_codes_unique("matching", &every_own_variant());
+    }
+
+    #[test]
+    fn a_delegating_variant_has_the_code_of_its_source() {
+        let input = Error::from(InputError::Empty { what: "x" });
+        assert_eq!(input.code(), "input.empty");
+        let trial = Error::Trial {
+            period: 1,
+            source: Box::new(Error::NoMatches),
+        };
+        assert_eq!(trial.code(), Error::NoMatches.code());
+        assert_eq!(trial.kind(), Error::NoMatches.kind());
+    }
+}

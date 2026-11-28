@@ -25,9 +25,10 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::Error;
 use epistat_matching::prelude::*;
-use epistat_matching::{Estimand, SubclassedUnits, exact_match_subclasses};
+use epistat_matching::{SubclassedUnits, exact_match_subclasses};
 
 use r_reference::{Versions, reference as load_reference, unit_id as id};
 use serde::Deserialize;

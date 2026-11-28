@@ -51,10 +51,11 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::prelude::*;
 use epistat_matching::{Assignment, DeterministicSelection, MatchOrder};
-use epistat_matching::{DistanceCaliper, DistanceConfig, Estimand};
+use epistat_matching::{DistanceCaliper, DistanceConfig};
 use epistat_testkit::load_json;
 use r_reference::{Versions, assert_r_version, reference as load_reference};
 use rapidhash::RapidHashMap;

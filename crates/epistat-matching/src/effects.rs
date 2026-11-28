@@ -114,14 +114,15 @@
     reason = "the fits take their data as separate arguments, the epistat-glm 0.2 form"
 )]
 
-use crate::{Error, Estimand};
+use crate::Error;
+use epistat_core::Estimand;
 use std::collections::HashMap;
 
-use epistat_core::{Interval, Level};
+use epistat_core::{Bootstrap, Interval, Level};
 use epistat_glm::{Family, Glm, Link, expit};
+use epistat_inference::Clusters;
 use epistat_inference::interval::{self, Percentile};
 use epistat_inference::sandwich::{meat, sandwich};
-use epistat_inference::{Clusters, Error as InferenceError};
 use epistat_linalg::{Attempt, Mat, row_scaled_gram};
 use epistat_rng::{Stream, replicate_seed};
 use rayon::prelude::*;
@@ -437,6 +438,7 @@ impl MatchedSample {
 
 /// An effect and its standard error.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct Effect {
     /// The estimate.
     pub estimate: f64,
@@ -447,6 +449,7 @@ pub struct Effect {
 
 /// The effect estimates of one fit.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct EffectEstimates {
     /// The weighted average prediction of the target with everyone treated.
     pub mean_treated: f64,
@@ -584,18 +587,18 @@ struct Means {
 }
 
 fn means(sample: &MatchedSample, spec: &EffectSpec, beta: &[f64]) -> Result<Means, Error> {
-    if spec.target == Estimand::Atm {
-        return Err(Error::UnsupportedEstimand {
-            estimand: spec.target.into(),
-            method: "the effect estimate",
-        });
-    }
+    let all = match spec.target {
+        Estimand::Att | Estimand::Atc => false,
+        Estimand::Ate => true,
+        other => {
+            return Err(Error::UnsupportedEstimand {
+                estimand: other,
+                method: "the effect estimate",
+            });
+        }
+    };
     let rows: Vec<usize> = (0..sample.len())
-        .filter(|&i| match spec.target {
-            Estimand::Att => sample.treated[i],
-            Estimand::Atc => !sample.treated[i],
-            Estimand::Ate | Estimand::Atm => true,
-        })
+        .filter(|&i| all || sample.treated[i] == (spec.target == Estimand::Att))
         .collect();
     let total: f64 = rows.iter().map(|&i| sample.weight[i]).sum();
     if total <= 0.0 {
@@ -797,14 +800,14 @@ pub fn estimate_effects(
     })
 }
 
-/// The pair draws of a bootstrap: `replicates` lists of `n_clusters` indices
-/// in `0..n_clusters`, the list of replicate `r` drawn from the stream seeded
-/// with `replicate_seed(seed, r)`.
+/// The pair draws of a bootstrap: `bootstrap.replicates` lists of
+/// `n_clusters` indices in `0..n_clusters`, the list of replicate `r` drawn
+/// from the stream seeded with `replicate_seed(bootstrap.seed, r)`.
 #[must_use]
-pub fn cluster_resamples(n_clusters: usize, replicates: usize, seed: u64) -> Vec<Vec<usize>> {
-    (0..replicates)
+pub fn cluster_resamples(n_clusters: usize, bootstrap: Bootstrap) -> Vec<Vec<usize>> {
+    (0..bootstrap.replicates)
         .map(|r| {
-            let mut stream = Stream::seeded(replicate_seed(seed, r as u64));
+            let mut stream = Stream::seeded(replicate_seed(bootstrap.seed, r as u64));
             (0..n_clusters).map(|_| stream.below(n_clusters)).collect()
         })
         .collect()
@@ -813,41 +816,42 @@ pub fn cluster_resamples(n_clusters: usize, replicates: usize, seed: u64) -> Vec
 /// The settings of a bootstrap.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BootstrapSpec {
-    /// The number of replicates.
-    pub replicates: usize,
-    /// The seed of the draws.
-    pub seed: u64,
-    /// The two-sided error level of the intervals.
-    pub alpha: f64,
+    /// The number of replicates and the root seed of their draws.
+    pub bootstrap: Bootstrap,
+    /// The level of the two intervals.
+    pub level: Level,
 }
 
 impl BootstrapSpec {
-    /// `replicates` replicates, intervals at the 95 percent level.
+    /// The replicates of `bootstrap`, intervals at `Level::alpha(0.05)`, the
+    /// 95 percent level in the form R's `alpha = 0.05` gives it.
     #[must_use]
-    pub const fn new(replicates: usize, seed: u64) -> Self {
+    pub fn new(bootstrap: Bootstrap) -> Self {
         Self {
-            replicates,
-            seed,
-            alpha: 0.05,
+            bootstrap,
+            level: Level::alpha(0.05).unwrap_or_default(),
         }
     }
 }
 
 /// The bootstrap distribution of one statistic.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BootstrapSummary {
     /// The estimate in the matched sample.
     pub estimate: f64,
     /// The standard deviation of the replicates.
     pub se: f64,
     /// The estimate plus and minus the normal quantile times `se`.
-    pub normal: (f64, f64),
-    /// The type 7 quantiles of the replicates at `alpha / 2` and `1 - alpha / 2`.
-    pub percentile: (f64, f64),
+    pub normal: Interval,
+    /// The type 7 quantiles of the replicates at the lower and the upper
+    /// probability of the level.
+    pub percentile: Interval,
 }
 
 /// The values of one statistic in every replicate, with its summary.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BootstrapStatistic {
     /// The replicates in the order of their draws.
     pub replicates: Vec<f64>,
@@ -857,6 +861,7 @@ pub struct BootstrapStatistic {
 
 /// The bootstrap of the matched sets.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct BootstrapEffects {
     /// The difference of the average predictions.
     pub difference: BootstrapStatistic,
@@ -892,7 +897,7 @@ pub fn bootstrap(
     let labels = sample.pair_labels()?;
     let clusters = Clusters::from_sorted_labels(&labels);
     let g = clusters.count();
-    if settings.replicates < 2 || g < 2 {
+    if settings.bootstrap.replicates < 2 || g < 2 {
         return Err(Error::Bootstrap);
     }
     let mut members: Vec<Vec<usize>> = vec![Vec::new(); g];
@@ -900,7 +905,7 @@ pub fn bootstrap(
         members[c].push(row);
     }
     let observed = point_contrasts(sample, spec)?;
-    let draws = cluster_resamples(g, settings.replicates, settings.seed);
+    let draws = cluster_resamples(g, settings.bootstrap);
     let points: Vec<Contrasts> = draws
         .par_iter()
         .enumerate()
@@ -919,11 +924,9 @@ pub fn bootstrap(
         let n = values.len() as f64;
         let mean = values.iter().sum::<f64>() / n;
         let se = (values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / (n - 1.0)).sqrt();
-        let level = Level::alpha(settings.alpha).map_err(InferenceError::from)?;
-        let bounds = |i: Interval| (i.lower.unwrap_or(f64::NAN), i.upper.unwrap_or(f64::NAN));
-        let normal = bounds(interval::normal(estimate, se, level));
+        let normal = interval::normal(estimate, se, settings.level);
         let mut sorted = values.clone();
-        let percentile = bounds(interval::percentile(&mut sorted, level, Percentile::Type7)?);
+        let percentile = interval::percentile(&mut sorted, settings.level, Percentile::Type7)?;
         Ok(BootstrapStatistic {
             replicates: values,
             summary: BootstrapSummary {
@@ -979,10 +982,10 @@ mod tests {
         let sample = pairs_sample();
         let spec = EffectSpec::new(OutcomeModel::Linear);
         assert_eq!(
-            bootstrap(&sample, &spec, &BootstrapSpec::new(1, 7)).unwrap_err(),
+            bootstrap(&sample, &spec, &BootstrapSpec::new(Bootstrap::new(1, 7))).unwrap_err(),
             Error::Bootstrap
         );
-        let two = bootstrap(&sample, &spec, &BootstrapSpec::new(2, 7)).unwrap();
+        let two = bootstrap(&sample, &spec, &BootstrapSpec::new(Bootstrap::new(2, 7))).unwrap();
         assert!(two.difference.summary.se.is_finite());
     }
 
@@ -1021,7 +1024,7 @@ mod tests {
                 .se
                 .is_some()
         );
-        let boot = bootstrap(&sample, &spec, &BootstrapSpec::new(10, 1));
+        let boot = bootstrap(&sample, &spec, &BootstrapSpec::new(Bootstrap::new(10, 1)));
         assert_eq!(boot.unwrap_err(), Error::MissingPair { row: 0 });
     }
 
@@ -1067,9 +1070,9 @@ mod tests {
 
     #[test]
     fn resamples_are_reproducible_and_within_range() {
-        let a = cluster_resamples(5, 20, 3);
-        assert_eq!(a, cluster_resamples(5, 20, 3));
-        assert_ne!(a, cluster_resamples(5, 20, 4));
+        let a = cluster_resamples(5, Bootstrap::new(20, 3));
+        assert_eq!(a, cluster_resamples(5, Bootstrap::new(20, 3)));
+        assert_ne!(a, cluster_resamples(5, Bootstrap::new(20, 4)));
         assert!(a.iter().all(|d| d.len() == 5 && d.iter().all(|&c| c < 5)));
     }
 
@@ -1077,14 +1080,17 @@ mod tests {
     fn the_bootstrap_summarises_its_replicates() {
         let sample = pairs_sample();
         let spec = EffectSpec::new(OutcomeModel::Linear);
-        let out = bootstrap(&sample, &spec, &BootstrapSpec::new(50, 11)).unwrap();
+        let out = bootstrap(&sample, &spec, &BootstrapSpec::new(Bootstrap::new(50, 11))).unwrap();
         let d = &out.difference;
         assert_eq!(d.replicates.len(), 50);
         assert!((d.summary.estimate - 2.625).abs() < 1e-12);
-        assert!(d.summary.percentile.0 <= d.summary.estimate + 1.0);
-        assert!(d.summary.normal.0 < d.summary.estimate && d.summary.estimate < d.summary.normal.1);
+        assert!(d.summary.percentile.lower.unwrap() <= d.summary.estimate + 1.0);
+        assert!(
+            d.summary.normal.lower.unwrap() < d.summary.estimate
+                && d.summary.estimate < d.summary.normal.upper.unwrap()
+        );
         assert!(out.ratio.is_none() && out.odds_ratio.is_none());
-        let few = bootstrap(&sample, &spec, &BootstrapSpec::new(0, 11));
+        let few = bootstrap(&sample, &spec, &BootstrapSpec::new(Bootstrap::new(0, 11)));
         assert_eq!(few.unwrap_err(), Error::Bootstrap);
     }
 }

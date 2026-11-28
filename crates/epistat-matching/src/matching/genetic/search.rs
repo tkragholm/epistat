@@ -6,7 +6,8 @@ use rayon::prelude::*;
 
 use super::{GeneticFit, GeneticLoss, GeneticMatches, GeneticProblem};
 
-/// The settings of the search, with `GenMatch`'s defaults.
+/// The settings of the search. [`GeneticSearch::new`] gives `GenMatch`'s
+/// defaults with the seed of the caller's choice; there is no default seed.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GeneticSearch {
     /// Individuals per generation. `pop.size`, 100 by default. 0 leaves only
@@ -34,12 +35,16 @@ pub struct GeneticSearch {
     /// which is when a generation counts as no improvement. 1e-6, as
     /// `solution.tolerance` of `genoud`.
     pub solution_tolerance: f64,
-    /// Seed of the random draws.
+    /// Seed of the random draws. The operators draw from the stream seeded
+    /// with `seed`, and the loss of individual `i` of generation `g` from
+    /// `replicate_seed(replicate_seed(seed, g), i)`.
     pub seed: u64,
 }
 
-impl Default for GeneticSearch {
-    fn default() -> Self {
+impl GeneticSearch {
+    /// `GenMatch`'s defaults, with the draws seeded by `seed`.
+    #[must_use]
+    pub const fn new(seed: u64) -> Self {
         Self {
             population: 100,
             max_generations: 100,
@@ -49,13 +54,14 @@ impl Default for GeneticSearch {
             max_weight: 1000.0,
             starting_values: None,
             solution_tolerance: 1e-6,
-            seed: 0,
+            seed,
         }
     }
 }
 
 /// What a search found.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GeneticOutcome {
     /// The best weights, one per matching variable.
     pub weights: Vec<f64>,

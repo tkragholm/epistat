@@ -38,13 +38,14 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::Error;
 use epistat_matching::{
     BalanceRecord, CovariateEncodingConfig, CovariateValue, PropensityDistancePreparation,
     PropensityEstimator, PropensityScoreConfig, PropensityScoreOutputScale,
     prepare_propensity_distance_config,
 };
-use epistat_matching::{CbpsConfig, CbpsMethod, Estimand};
+use epistat_matching::{CbpsConfig, CbpsMethod};
 
 use r_reference::{Versions, assert_r_version, reference as load_reference, unit_id as id};
 use serde::Deserialize;

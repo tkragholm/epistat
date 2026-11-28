@@ -28,12 +28,17 @@
 //!
 //! [`wilcoxon_sensitivity_value`], [`m_statistic_sensitivity_value`],
 //! [`binary_sensitivity_value`] and [`censored_sensitivity_value`] give the
-//! `gamma` at which the upper bound of the p-value reaches the level, and
+//! `gamma` at which the upper bound of the p-value reaches `alpha`, and
 //! [`hodges_lehmann_gamma`] the `gamma` at which the lower bound of the
 //! estimate reaches a value. [`m_statistic_interval`] gives the range of
 //! point estimates and the confidence interval of the effect under a `gamma`.
 //! [`amplify`] turns a `gamma` into the pairs of associations with treatment
 //! and outcome it stands for.
+//!
+//! The `alpha` of a sensitivity value is the significance level of a
+//! one-sided test, the p-value bound that counts as a rejection, not the
+//! level of an interval, so it is a plain number in `(0, 1)` named as in
+//! `rbounds` and `sensitivitymw`. The interval takes a [`Level`].
 //!
 //! # E-values
 //!

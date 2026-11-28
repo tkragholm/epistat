@@ -31,7 +31,7 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
-use epistat_matching::Estimand;
+use epistat_core::Estimand;
 use epistat_matching::abadie_imbens::{
     AbadieImbensData, AbadieImbensSpec, DistanceWeight, abadie_imbens,
 };

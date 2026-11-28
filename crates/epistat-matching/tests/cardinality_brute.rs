@@ -6,10 +6,9 @@
 //! module documentation of `cardinality` must be the size the solver returns,
 //! and the solver must report it proven.
 
+use epistat_core::Estimand;
 use epistat_matching::Error;
-use epistat_matching::{
-    CardinalityLimits, CardinalityRequest, Estimand, match_cardinality, pair_units,
-};
+use epistat_matching::{CardinalityLimits, CardinalityRequest, match_cardinality, pair_units};
 
 struct Rng(u64);
 

@@ -575,8 +575,7 @@ fn search_is_as_good_as_genmatch() {
                 max_generations: reference.budget.generations,
                 wait_generations: reference.budget.generations,
                 hard_generation_limit: true,
-                seed,
-                ..GeneticSearch::default()
+                ..GeneticSearch::new(seed)
             };
             let outcome = problem.search(&fit, &search).unwrap();
             ours.push(outcome.loss.values().to_vec());
@@ -672,8 +671,7 @@ fn search_does_not_depend_on_threads() {
                     max_generations: 4,
                     wait_generations: 4,
                     hard_generation_limit: true,
-                    seed: 99,
-                    ..GeneticSearch::default()
+                    ..GeneticSearch::new(99)
                 },
             )
             .unwrap();

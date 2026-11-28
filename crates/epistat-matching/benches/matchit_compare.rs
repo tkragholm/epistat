@@ -30,6 +30,7 @@
 #[path = "../tests/common/trial_panel.rs"]
 mod trial_panel;
 use chrono::{Days, NaiveDate};
+use epistat_core::Bootstrap;
 use epistat_matching::CbpsConfig;
 use epistat_matching::abadie_imbens::{AbadieImbensData, AbadieImbensSpec, abadie_imbens};
 use epistat_matching::effects::{
@@ -378,7 +379,11 @@ fn euclidean() -> DistanceSpec {
 
 /// The window of methods that do not read one.
 fn unwindowed() -> i32 {
-    MatchSpec::default().birth_window_days
+    MatchSpec {
+        seed: Some(0),
+        ..MatchSpec::default()
+    }
+    .birth_window_days
 }
 
 fn wide() -> i32 {
@@ -392,6 +397,7 @@ fn spec_for(method: &str) -> Option<MatchSpec> {
         method: MatchMethod::Nearest,
         distance: propensity(None),
         birth_window_days: wide(),
+        seed: Some(0),
         ..MatchSpec::default()
     };
     let strata = vec!["s".to_string()];
@@ -549,7 +555,7 @@ fn spec_for(method: &str) -> Option<MatchSpec> {
                 pop_size: 0,
                 ..GeneticSpec::default()
             },
-            seed: 7,
+            seed: Some(7),
             birth_window_days: unwindowed(),
             ..base
         },
@@ -563,7 +569,7 @@ fn spec_for(method: &str) -> Option<MatchSpec> {
                 hard_generation_limit: true,
                 ..GeneticSpec::default()
             },
-            seed: 7,
+            seed: Some(7),
             birth_window_days: unwindowed(),
             ..base
         },
@@ -659,6 +665,7 @@ fn output_lines(out: &SpecOutput) -> (usize, Vec<(u64, u64)>, &'static str) {
             Vec::new(),
             "",
         ),
+        _ => (0, Vec::new(), ""),
     }
 }
 
@@ -725,7 +732,7 @@ fn risk_set_spec(mode: MatchMode, replace: bool) -> MatchSpec {
         require_alive: true,
         age_limit_years: Some(6),
         replace,
-        seed: 7,
+        seed: Some(7),
         ..MatchSpec::default()
     }
 }
@@ -818,7 +825,7 @@ fn run_trials_on<R: CovariateRecord + Clone>(panel: &[PanelPerson<R>], reps: usi
         birth_window_days: wide(),
         require_alive: true,
         age_limit_years: Some(6),
-        seed: 7,
+        seed: Some(7),
         ..MatchSpec::default()
     };
     let (times, out) = time_reps(reps, || {
@@ -922,6 +929,7 @@ fn run_balance<R: CovariateRecord>(input: &Inputs<R>, reps: usize) -> (Timed, St
             &outcome,
             &epistat_matching::BalanceReportOptions::default(),
         )
+        .expect("a matched estimand")
     });
     for row in &report.numeric {
         writeln!(
@@ -956,7 +964,12 @@ fn run_effects<R: CovariateRecord>(input: &Inputs<R>, reps: usize, boot: bool) -
     let (times, rows) = time_reps(reps, || {
         let sample = MatchedSample::from_match_data(&md, &data).expect("sample");
         if boot {
-            bootstrap(&sample, &spec, &BootstrapSpec::new(BOOT_REPLICATES, 11)).expect("bootstrap");
+            bootstrap(
+                &sample,
+                &spec,
+                &BootstrapSpec::new(Bootstrap::new(BOOT_REPLICATES, 11)),
+            )
+            .expect("bootstrap");
         } else {
             estimate_effects(&sample, &spec).expect("effects");
         }

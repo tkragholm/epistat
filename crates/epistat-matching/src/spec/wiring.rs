@@ -126,7 +126,8 @@ pub struct GeneticSpec {
 
 impl Default for GeneticSpec {
     fn default() -> Self {
-        let search = GeneticSearch::default();
+        // The seed is the spec's; only the sizes of the search are read here.
+        let search = GeneticSearch::new(0);
         let fit = GeneticFit::default();
         Self {
             covariates: CovariatesSpec::default(),
@@ -199,6 +200,7 @@ impl Default for CardinalitySpec {
 /// The outcome of cardinality or profile matching with the units it was run
 /// on.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CardinalityMatch {
     /// The weights, selection and pairs, by position in `ids`.
     pub outcome: CardinalityOutcome,
@@ -522,7 +524,7 @@ pub(super) fn run_genetic<R: MatchingRecord + CovariateRecord>(
         anchors,
         candidates,
         spec.estimand,
-        spec.seed,
+        spec.root_seed()?,
         false,
     )?;
     let score: Option<Vec<f64>> = built
@@ -634,8 +636,7 @@ pub(super) fn run_genetic<R: MatchingRecord + CovariateRecord>(
         max_generations: genetic.max_generations,
         wait_generations: genetic.wait_generations,
         hard_generation_limit: genetic.hard_generation_limit,
-        seed: spec.seed,
-        ..GeneticSearch::default()
+        ..GeneticSearch::new(spec.root_seed()?)
     };
     let found = problem.search(&fit, &search)?;
 

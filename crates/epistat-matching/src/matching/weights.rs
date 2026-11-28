@@ -31,7 +31,7 @@
 //!    forward. Statistical Science 2010;25:1-21.
 
 use crate::Error;
-use crate::types::{Estimand, MatchOutcome, MatchedPair};
+use crate::types::{Estimand, MatchOutcome, MatchedPair, matched_estimand};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -87,19 +87,25 @@ impl MatchWeightMethod {
     )]
     pub const CandidateUnitAnchorFractional: Self = Self::ControlUnitCaseFractional;
 
-    /// Resolve a default weighting method from an estimand.
-    #[must_use]
-    pub const fn for_estimand(estimand: Estimand) -> Self {
-        match estimand {
-            Estimand::Att => Self::CaseUnitControlFractional,
-            Estimand::Atc => Self::ControlUnitCaseFractional,
-            Estimand::Ate | Estimand::Atm => Self::PairCount,
+    /// The weighting method of an estimand: fractional control weights for
+    /// the ATT, fractional case weights for the ATC, pair counts for the ATE
+    /// and the ATM.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedEstimand`] for any other estimand.
+    pub fn for_estimand(estimand: Estimand) -> Result<Self, Error> {
+        match matched_estimand(estimand, "the matching weights")? {
+            Estimand::Att => Ok(Self::CaseUnitControlFractional),
+            Estimand::Atc => Ok(Self::ControlUnitCaseFractional),
+            _ => Ok(Self::PairCount),
         }
     }
 }
 
 /// Pair-level weight entry aligned to one matched pair.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PairWeight {
     /// Matched pair identifier tuple.
     pub pair: MatchedPair,
@@ -109,6 +115,7 @@ pub struct PairWeight {
 
 /// Pair-level weight output.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PairWeightSet {
     /// Pair-level entries in the same order as source pairs.
     pub pairs: Vec<PairWeight>,
@@ -140,6 +147,7 @@ impl PairWeightSet {
 
 /// Flat row for pair-level table outputs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PairWeightRow {
     /// Case-side unit identifier.
     pub case_id: String,
@@ -151,6 +159,7 @@ pub struct PairWeightRow {
 
 /// Pair-weight rows for dataframe/table ingestion.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PairWeightTable {
     /// Flat pair-level rows.
     pub rows: Vec<PairWeightRow>,
@@ -193,6 +202,7 @@ impl UnitRole {
 
 /// Flat row for unit-weight table outputs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UnitWeightRow {
     /// Unit identifier.
     pub unit_id: String,
@@ -208,6 +218,7 @@ pub struct UnitWeightRow {
 
 /// Unit-weight rows for dataframe/table ingestion.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UnitWeightTable {
     /// Flat unit-level rows.
     pub rows: Vec<UnitWeightRow>,
@@ -227,6 +238,7 @@ impl UnitWeightTable {
 /// Every sum, mean and table formed from the set runs over the ids in sorted
 /// order, so the results do not depend on how the set was built.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct UnitWeightSet {
     pub(crate) case: BTreeMap<String, f64>,
     pub(crate) control: BTreeMap<String, f64>,
@@ -718,9 +730,10 @@ mod tests {
     #[test]
     fn realized_estimand_method_resolves_expected_scheme() {
         let outcome = outcome_with_pairs(vec![MatchedPair::new("a1", "c1")], Estimand::Atc);
-        let weights = outcome.match_weights(MatchWeightMethod::for_estimand(
-            outcome.diagnostics.realized_estimand,
-        ));
+        let weights = outcome.match_weights(
+            MatchWeightMethod::for_estimand(outcome.diagnostics.realized_estimand)
+                .expect("a matched estimand"),
+        );
 
         assert_eq!(weights.control.get("c1").copied(), Some(1.0));
         assert_eq!(weights.case.get("a1").copied(), Some(1.0));
@@ -763,9 +776,10 @@ mod tests {
         assert_eq!(pair_count.pairs.len(), 3);
         assert!((pair_count.total_weight() - 3.0).abs() < 1e-12);
 
-        let realized = outcome.pair_weights(MatchWeightMethod::for_estimand(
-            outcome.diagnostics.realized_estimand,
-        ));
+        let realized = outcome.pair_weights(
+            MatchWeightMethod::for_estimand(outcome.diagnostics.realized_estimand)
+                .expect("a matched estimand"),
+        );
         assert_eq!(realized.pairs.len(), 3);
         assert!((realized.total_weight() - 2.0).abs() < 1e-12);
     }
@@ -797,8 +811,12 @@ mod tests {
             Estimand::Att,
         );
 
-        let ate = outcome.match_weights(MatchWeightMethod::for_estimand(Estimand::Ate));
-        let atm = outcome.match_weights(MatchWeightMethod::for_estimand(Estimand::Atm));
+        let ate = outcome.match_weights(
+            MatchWeightMethod::for_estimand(Estimand::Ate).expect("a matched estimand"),
+        );
+        let atm = outcome.match_weights(
+            MatchWeightMethod::for_estimand(Estimand::Atm).expect("a matched estimand"),
+        );
 
         assert_eq!(ate, atm);
         assert_eq!(ate.case.get("a1").copied(), Some(2.0));
@@ -842,9 +860,10 @@ mod tests {
         let outcome = outcome_with_pairs(vec![MatchedPair::new("a1", "c1")], Estimand::Ate);
 
         let table = outcome
-            .pair_weights(MatchWeightMethod::for_estimand(
-                outcome.diagnostics.realized_estimand,
-            ))
+            .pair_weights(
+                MatchWeightMethod::for_estimand(outcome.diagnostics.realized_estimand)
+                    .expect("a matched estimand"),
+            )
             .to_table();
         assert_eq!(table.rows.len(), 1);
         assert_eq!(table.rows[0].case_id, "a1");

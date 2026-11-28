@@ -88,6 +88,7 @@ impl Default for GeneticFit {
 /// The value of a fitness function. It is a list of numbers compared from the
 /// first, and either as large as possible or as small as possible.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GeneticLoss {
     values: Vec<f64>,
     maximise: bool,

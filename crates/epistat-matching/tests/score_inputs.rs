@@ -4,11 +4,12 @@
 //! documentation requires: an undefined value is `None` and invalid input an error.
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::Error;
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    BalanceRecord, ElasticNetLogisticConfig, Estimand, MahalanobisPreparationConfig,
-    PropensityEstimator, PropensityScoreConfig, SubclassificationConfig, cross_validation_folds,
+    BalanceRecord, ElasticNetLogisticConfig, MahalanobisPreparationConfig, PropensityEstimator,
+    PropensityScoreConfig, SubclassificationConfig, cross_validation_folds,
     prepare_mahalanobis_distance_config, prepare_propensity_distance_config,
     subclassify_by_propensity_score_map,
 };
@@ -142,8 +143,7 @@ fn a_population_too_small_for_every_operator_is_an_error() {
             &GeneticFit::default(),
             &GeneticSearch {
                 population,
-                seed: 1,
-                ..GeneticSearch::default()
+                ..GeneticSearch::new(1)
             },
         );
         assert!(r.is_err(), "population {population} accepted");
@@ -153,8 +153,7 @@ fn a_population_too_small_for_every_operator_is_an_error() {
             &GeneticFit::default(),
             &GeneticSearch {
                 population: 9,
-                seed: 1,
-                ..GeneticSearch::default()
+                ..GeneticSearch::new(1)
             },
         )
         .unwrap();
@@ -183,7 +182,7 @@ fn default_start_outside_the_weight_range_is_an_error() {
         &GeneticSearch {
             population: 0,
             min_weight: 2.0,
-            ..GeneticSearch::default()
+            ..GeneticSearch::new(0)
         },
     );
     assert!(out.is_err());

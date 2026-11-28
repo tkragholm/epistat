@@ -4,12 +4,16 @@
 //! estimators that take them. The codes of the crate's error are unique.
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_core::{Classify, ErrorKind, InputError};
-use epistat_matching::abadie_imbens::AbadieImbensData;
+use epistat_matching::abadie_imbens::{AbadieImbensData, AbadieImbensSpec, abadie_imbens};
 use epistat_matching::constraints::caliper_on_field;
+use epistat_matching::effects::UnitData;
+use epistat_matching::output::{MatchDataOptions, Units, match_data_from_weights};
+use epistat_matching::sensitivity::{MatchedSet, WilcoxonDistribution, wilcoxon_bounds};
 use epistat_matching::{
-    AgeLimitYears, BaseRecord, BirthDateWindowDays, Error, MatchJob, MatchRatio,
-    PairDistanceMatrix, RoleTransitionRecord,
+    AgeLimitYears, BaseRecord, BirthDateWindowDays, Error, MatchJob, MatchRatio, MatchWeightMethod,
+    PairDistanceMatrix, QuickMatchOptions, RoleTransitionRecord, quick_clusters,
 };
 use epistat_testkit::{
     BadInput, assert_codes_unique, assert_input_error, assert_rejects_bad_input,
@@ -97,6 +101,43 @@ fn a_caliper_window_must_be_finite_and_not_negative() {
 }
 
 #[test]
+fn an_estimand_no_matcher_targets_is_an_error() {
+    let records = cohort();
+    let refused = MatchJob::new_transition(&records, 1)
+        .with_estimand(Estimand::Ato)
+        .run()
+        .unwrap_err();
+    assert_eq!(
+        refused,
+        Error::UnsupportedEstimand {
+            estimand: Estimand::Ato,
+            method: "matching",
+        }
+    );
+    assert_eq!(refused.kind(), ErrorKind::Unsupported);
+    assert!(matches!(
+        MatchWeightMethod::for_estimand(Estimand::Ato),
+        Err(Error::UnsupportedEstimand { .. })
+    ));
+    let data = AbadieImbensData::new(
+        vec![true, false, true, false],
+        vec![1.0, 2.0, 3.0, 4.0],
+        vec![vec![0.5, 1.5, 2.0, 3.5]],
+    )
+    .expect("valid columns");
+    for target in [Estimand::Atm, Estimand::Ato] {
+        let spec = AbadieImbensSpec {
+            target,
+            ..AbadieImbensSpec::new()
+        };
+        assert!(matches!(
+            abadie_imbens(&data, &spec),
+            Err(Error::UnsupportedEstimand { .. })
+        ));
+    }
+}
+
+#[test]
 fn the_abadie_imbens_data_refuse_bad_columns() {
     let outcome = [1.0, 2.0, 3.0, 4.0];
     let treated = vec![true, false, true, false];
@@ -119,6 +160,75 @@ fn the_distance_matrix_refuses_bad_values() {
     assert_rejects_bad_input("PairDistanceMatrix::new", |bad| {
         matches!(bad, BadInput::Nan | BadInput::Mismatched).then(|| {
             PairDistanceMatrix::new(ids(&["a", "b"]), ids(&["x", "y"]), bad.column(&values))
+        })
+    });
+}
+
+#[test]
+fn the_unit_data_refuse_bad_columns() {
+    let ids: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
+    let treated = vec![true, false, true, false];
+    let outcome = [1.0, 2.0, 3.0, 4.0];
+    assert_rejects_bad_input("UnitData::new outcome", |bad| {
+        (bad != BadInput::Unsorted)
+            .then(|| UnitData::new(ids.clone(), treated.clone(), bad.column(&outcome)))
+    });
+    let units = UnitData::new(ids.clone(), treated.clone(), outcome.to_vec()).expect("valid");
+    assert_rejects_bad_input("UnitData::with_covariate", |bad| {
+        (bad != BadInput::Unsorted).then(|| units.clone().with_covariate("x", bad.column(&outcome)))
+    });
+}
+
+#[test]
+fn the_quick_clusters_refuse_bad_points() {
+    let points = [0.0, 1.0, 2.0, 3.0];
+    let case = [true, false, true, false];
+    assert_rejects_bad_input("quick_clusters", |bad| {
+        (bad != BadInput::Unsorted).then(|| {
+            quick_clusters(
+                &bad.column(&points),
+                1,
+                &case,
+                &QuickMatchOptions::default(),
+            )
+        })
+    });
+}
+
+#[test]
+fn the_match_data_refuse_bad_weights() {
+    let ids: Vec<String> = ["a", "b", "c", "d"].map(String::from).to_vec();
+    let units = Units::new(ids, vec![true, false, true, false]).expect("valid units");
+    let pair = [Some(0), Some(0), Some(1), Some(1)];
+    let weights = [1.0, 1.0, 1.0, 1.0];
+    assert_rejects_bad_input("match_data_from_weights", |bad| {
+        (bad != BadInput::Unsorted).then(|| {
+            match_data_from_weights(
+                &bad.column(&weights),
+                &pair,
+                &units,
+                MatchDataOptions::default(),
+            )
+        })
+    });
+}
+
+#[test]
+fn the_sensitivity_bounds_refuse_bad_outcomes() {
+    let treated = [3.0, 2.5, 4.0, 1.5];
+    let control = [1.0, 2.0, 0.5, 1.0];
+    assert_rejects_bad_input("wilcoxon_bounds", |bad| {
+        matches!(bad, BadInput::Nan | BadInput::Infinite | BadInput::Empty).then(|| {
+            let sets: Vec<MatchedSet> = bad
+                .column(&treated)
+                .into_iter()
+                .zip(control)
+                .map(|(treated, control)| MatchedSet {
+                    treated,
+                    controls: vec![control],
+                })
+                .collect();
+            wilcoxon_bounds(&sets, &[1.0, 2.0], WilcoxonDistribution::Normal)
         })
     });
 }

@@ -29,12 +29,12 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::match_full;
 use epistat_matching::output::Units;
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    DistanceCaliper, DistanceConfig, Estimand, FullMatchConfig, MatchingCriteria, OptimalRequest,
-    Retain,
+    DistanceCaliper, DistanceConfig, FullMatchConfig, MatchingCriteria, OptimalRequest, Retain,
 };
 use rapidhash::RapidHashMap;
 

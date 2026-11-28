@@ -252,7 +252,7 @@ pub struct CbpsConfig {
 impl Default for CbpsConfig {
     fn default() -> Self {
         Self {
-            estimand: Estimand::default(),
+            estimand: Estimand::Att,
             method: CbpsMethod::default(),
             max_iter: 1000,
             gradient_tolerance: f64::EPSILON.powf(2.0 / 3.0),

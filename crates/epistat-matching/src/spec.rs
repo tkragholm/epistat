@@ -852,8 +852,9 @@ pub struct MatchSpec {
     pub require_resident: bool,
     /// The target estimand.
     pub estimand: Estimand,
-    /// Seed of every random choice.
-    pub seed: u64,
+    /// Seed of every random choice. There is no default: [`MatchSpec::validate`]
+    /// refuses a spec without one, whatever its method.
+    pub seed: Option<u64>,
 }
 
 impl Default for MatchSpec {
@@ -890,7 +891,7 @@ impl Default for MatchSpec {
             require_alive: false,
             require_resident: false,
             estimand: criteria.estimand,
-            seed: 0,
+            seed: None,
         }
     }
 }
@@ -947,6 +948,7 @@ pub enum SpecInput<'a, R> {
 
 /// What a spec produced.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum SpecOutput {
     /// Pairs of cases and controls.
     Pairs {
@@ -1034,6 +1036,20 @@ fn typed_caliper(
 }
 
 impl MatchSpec {
+    /// The seed of the spec.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Option`] naming `seed` when the spec has none.
+    pub(crate) fn root_seed(&self) -> Result<u64, Error> {
+        self.seed.ok_or_else(|| {
+            Error::option(
+                "seed",
+                "the spec has no seed; give the seed of its random choices",
+            )
+        })
+    }
+
     /// Check the options against each other, before any unit is read.
     ///
     /// [`run_spec`] does this first.
@@ -1043,6 +1059,7 @@ impl MatchSpec {
     /// A [`Error`] naming the option that is out of range or conflicts
     /// with another, and how to fix it.
     pub fn validate(&self) -> Result<(), Error> {
+        self.root_seed()?;
         self.criteria().validate()?;
         for ratio in &self.ratio_fallback {
             if MatchRatio::new(*ratio).is_none() {
@@ -1630,7 +1647,7 @@ fn propensity_config(
             estimand: match estimand {
                 Estimand::Att => Estimand::Att,
                 Estimand::Ate => Estimand::Ate,
-                Estimand::Atc | Estimand::Atm => {
+                _ => {
                     return Err(Error::option(
                         "estimand",
                         "the covariate balancing propensity score is defined for the \
@@ -2016,7 +2033,13 @@ where
         .collect();
     if spec.reestimate {
         let caliper = typed_caliper("distance", spec.distance.caliper())?;
-        let config = propensity_config(&spec.distance, spec.estimand, spec.seed, caliper, true)?;
+        let config = propensity_config(
+            &spec.distance,
+            spec.estimand,
+            spec.root_seed()?,
+            caliper,
+            true,
+        )?;
         let constraints = Chained {
             first: Chained {
                 first: sex,
@@ -2049,7 +2072,7 @@ where
         };
         return Ok((reject_invalid(matched.outcome)?, Some(matched.propensity)));
     }
-    let mut job = MatchJob::new_standard(plan.anchors, plan.candidates, spec.seed)
+    let mut job = MatchJob::new_standard(plan.anchors, plan.candidates, spec.root_seed()?)
         .with_ratio(typed_ratio(spec)?)
         .with_birth_window(typed_window(spec)?)
         .with_replacement(spec.replace)
@@ -2172,7 +2195,7 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
                 anchors,
                 candidates,
                 spec.estimand,
-                spec.seed,
+                spec.root_seed()?,
                 false,
             )?;
             let scores = built
@@ -2204,7 +2227,7 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
                 anchors,
                 candidates,
                 spec.estimand,
-                spec.seed,
+                spec.root_seed()?,
                 false,
             )?;
             let config = built
@@ -2229,7 +2252,7 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
                 anchors,
                 candidates,
                 spec.estimand,
-                spec.seed,
+                spec.root_seed()?,
                 false,
             )?;
             let calipers = field_calipers(spec, anchors, candidates, None)?;
@@ -2303,7 +2326,7 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
             anchors,
             candidates,
             spec.estimand,
-            spec.seed,
+            spec.root_seed()?,
             false,
         )?
     };
@@ -2315,7 +2338,7 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
             anchors,
             candidates,
             spec.estimand,
-            spec.seed,
+            spec.root_seed()?,
             false,
         )?;
         field_calipers(
@@ -2342,14 +2365,16 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
         rounds,
     };
     let (outcome, refitted) = match spec.method {
-        MatchMethod::Random => run_standard_with(plan(rounds), RandomSelection::seeded(spec.seed))?,
+        MatchMethod::Random => {
+            run_standard_with(plan(rounds), RandomSelection::seeded(spec.root_seed()?))?
+        }
         MatchMethod::LowestIndex => run_standard_with(plan(rounds), DeterministicSelection)?,
         MatchMethod::NearestBirthDate => {
             run_standard_with(plan(rounds), NearestBirthDateSelection)?
         }
         MatchMethod::Nearest => {
-            let mut strategy =
-                NearestSelection::new(spec.seed).with_std_caliper(spec.std_caliper.distance());
+            let mut strategy = NearestSelection::new(spec.root_seed()?)
+                .with_std_caliper(spec.std_caliper.distance());
             if let Some(order) = spec.nearest.m_order {
                 strategy = strategy.with_order(order.into());
             }
@@ -2364,8 +2389,14 @@ fn run_untrimmed<R: MatchingRecord + CovariateRecord>(
                 strategy = strategy.with_assignment(assignment.into());
             }
             if let Some(ranking) = &spec.nearest.mahvars {
-                let ranking =
-                    build_distance(ranking, anchors, candidates, spec.estimand, spec.seed, true)?;
+                let ranking = build_distance(
+                    ranking,
+                    anchors,
+                    candidates,
+                    spec.estimand,
+                    spec.root_seed()?,
+                    true,
+                )?;
                 if let Some(config) = ranking.config {
                     strategy = strategy.with_mahvars(config);
                 }
@@ -2418,7 +2449,7 @@ fn run_trimmed<R: MatchingRecord + CovariateRecord>(
         anchors,
         candidates,
         spec.estimand,
-        spec.seed,
+        spec.root_seed()?,
         false,
     )?;
     let scores = first
@@ -2609,7 +2640,7 @@ fn run_cem<R: MatchingRecord + CovariateRecord>(
                 anchors,
                 candidates,
                 spec.estimand,
-                spec.seed,
+                spec.root_seed()?,
                 false,
             )
         })
@@ -2621,7 +2652,7 @@ fn run_cem<R: MatchingRecord + CovariateRecord>(
         &strata,
         built.as_ref().and_then(|built| built.config.as_ref()),
         order,
-        spec.seed,
+        spec.root_seed()?,
         spec.estimand,
     )?;
     Ok(SpecOutput::Pairs {
@@ -2656,7 +2687,7 @@ fn run_trials<R: MatchingRecord + CovariateRecord>(
 ) -> Result<SpecOutput, Error> {
     let outcome = match_trials(panel, &spec.trials, &TrialMatching::default(), |pool| {
         let in_trial = MatchSpec {
-            seed: trial_seed(spec.seed, pool.period()),
+            seed: Some(trial_seed(spec.root_seed()?, pool.period())),
             mode: MatchMode::RiskSet,
             ..spec.clone()
         };
@@ -2730,7 +2761,7 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         Vec::new()
     };
 
-    let mut job = MatchJob::new_transition(cohort, spec.seed)
+    let mut job = MatchJob::new_transition(cohort, spec.root_seed()?)
         .with_id_order(id_order)
         .with_common_support(spec.discard.map(Into::into))
         .with_ratio(typed_ratio(spec)?)
@@ -2752,7 +2783,9 @@ fn run_risk_set<R: MatchingRecord + CovariateRecord>(
         job = job.with_distance_config(distance);
     }
     let outcome = match spec.method {
-        MatchMethod::Random => job.with_strategy(RandomSelection::seeded(spec.seed)).run(),
+        MatchMethod::Random => job
+            .with_strategy(RandomSelection::seeded(spec.root_seed()?))
+            .run(),
         MatchMethod::LowestIndex => job.with_strategy(DeterministicSelection).run(),
         MatchMethod::NearestBirthDate => job.with_strategy(NearestBirthDateSelection).run(),
         MatchMethod::Nearest

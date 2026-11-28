@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 /// Cohort-level balance diagnostics from match results.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BalanceDiagnostics {
     /// Proportion of cases matched, `None` when there are no cases.
     pub match_rate: Option<f64>,
@@ -34,6 +35,7 @@ pub struct BalanceDiagnostics {
 /// cumulative weights as a step function, as `summary()` of MatchIt does with
 /// `standardize = FALSE`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NumericBalance {
     /// Covariate name.
     pub name: String,
@@ -83,6 +85,7 @@ pub struct NumericBalance {
 
 /// Categorical level balance summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CategoricalLevelBalance {
     /// Level name.
     pub level: String,
@@ -102,6 +105,7 @@ pub struct CategoricalLevelBalance {
 
 /// Categorical covariate balance summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CategoricalBalance {
     /// Covariate name.
     pub name: String,
@@ -115,6 +119,7 @@ pub struct CategoricalBalance {
 
 /// Full balance report across numeric and categorical covariates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BalanceReport {
     /// Numeric covariate summaries.
     pub numeric: Vec<NumericBalance>,
@@ -129,6 +134,7 @@ pub struct BalanceReport {
 /// unit is matched when that product is positive. The effective sample size of
 /// a set of weights is `sum(w)^2 / sum(w^2)`, `None` when no weight is positive.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GroupSampleSizes {
     /// Units in the group before matching.
     pub all: usize,
@@ -147,6 +153,7 @@ pub struct GroupSampleSizes {
 
 /// The sample size table of a balance summary: one column per group.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SampleSizeTable {
     /// The cases (treated units).
     pub cases: GroupSampleSizes,
@@ -161,6 +168,7 @@ pub struct SampleSizeTable {
 /// which either unit lacks the covariate are left out. Sampling weights do not
 /// enter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PairDistance {
     /// Covariate name; a level of a categorical covariate is the covariate
     /// name followed by the level.
@@ -175,6 +183,7 @@ pub struct PairDistance {
 
 /// A balance report with the sample size table and pair distances.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BalanceSummary {
     /// Covariate balance before and after matching.
     pub report: BalanceReport,
@@ -192,6 +201,7 @@ pub struct BalanceSummary {
 /// ratio the same on the absolute logarithm of the ratio. It is `None` when
 /// the statistic before matching is 0 or either value is undefined.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NumericImprovement {
     /// Covariate name.
     pub name: String,
@@ -211,6 +221,7 @@ pub struct NumericImprovement {
 
 /// Percent balance improvement of one level of a categorical covariate.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct LevelImprovement {
     /// Covariate name.
     pub name: String,
@@ -222,6 +233,7 @@ pub struct LevelImprovement {
 
 /// Percent balance improvement for a balance report.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BalanceImprovement {
     /// Numeric covariates in the order of the report.
     pub numeric: Vec<NumericImprovement>,
@@ -345,6 +357,7 @@ impl BalanceThresholds {
 
 /// Threshold-check result for one numeric covariate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NumericBalanceThresholdCheck {
     /// Covariate name.
     pub name: String,
@@ -362,6 +375,7 @@ pub struct NumericBalanceThresholdCheck {
 
 /// Summary of threshold checks across numeric covariates.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BalanceThresholdSummary {
     /// Per-covariate threshold checks.
     pub numeric: Vec<NumericBalanceThresholdCheck>,

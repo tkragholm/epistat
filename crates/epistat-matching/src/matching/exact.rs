@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 /// unit's subclass in [`subclasses`](Self::subclasses) when asked for, so the
 /// result holds one id and one subclass number per unit and nothing else.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SubclassedUnits {
     /// The id of each unit.
     pub ids: Vec<String>,
@@ -112,15 +113,16 @@ impl SubclassedUnits {
     }
 
     /// The weight of the unit at `position` for an estimand. `None` for a
-    /// dropped unit and for the matched-sample effect, which these methods do
-    /// not define separately.
+    /// dropped unit and for an estimand other than the ATT, the ATC and the
+    /// ATE, such as the matched-sample effect, which these methods do not
+    /// define separately.
     ///
     /// # Panics
     ///
     /// When `position` is not below [`len`](Self::len).
     #[must_use]
     pub fn weight(&self, estimand: Estimand, position: usize) -> Option<f64> {
-        if estimand == Estimand::Atm {
+        if !has_subclass_weights(estimand) {
             return None;
         }
         let share = self.subclasses[self.subclass[position]?].subclass_propensity?;
@@ -132,7 +134,8 @@ impl SubclassedUnits {
     }
 
     /// The weights of all units for an estimand, by position, with 0 for a
-    /// dropped unit, or `None` for the matched-sample effect.
+    /// dropped unit, or `None` for an estimand other than the ATT, the ATC and
+    /// the ATE.
     ///
     /// Subclass weights for the effect in the case group, in the control
     /// group or in the whole population. They are not rescaled. MatchIt
@@ -140,7 +143,7 @@ impl SubclassedUnits {
     /// units.
     #[must_use]
     pub fn weights(&self, estimand: Estimand) -> Option<Vec<f64>> {
-        if estimand == Estimand::Atm {
+        if !has_subclass_weights(estimand) {
             return None;
         }
         Some(
@@ -150,6 +153,12 @@ impl SubclassedUnits {
                 .collect(),
         )
     }
+}
+
+/// Whether subclasses carry weights for `estimand`: the ATT, the ATC and the
+/// ATE.
+pub(crate) const fn has_subclass_weights(estimand: Estimand) -> bool {
+    matches!(estimand, Estimand::Att | Estimand::Atc | Estimand::Ate)
 }
 
 /// Ids of the cases and then the controls.

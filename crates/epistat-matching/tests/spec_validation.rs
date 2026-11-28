@@ -3,6 +3,7 @@
 //! error names the option or the unit.
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::Error;
 use epistat_matching::FineBalance;
 use epistat_matching::prelude::*;
@@ -10,7 +11,7 @@ use epistat_matching::spec::{
     BinningSpec, CardinalitySpec, CemSpec, CemVariableSpec, CovarianceSpec, CovariatesSpec,
     DistanceSpec, MatchMethod, NearestSpec, TransformSpec, VariableRatioSpec,
 };
-use epistat_matching::{BalanceRecord, Estimand, SpecOutput};
+use epistat_matching::{BalanceRecord, SpecOutput};
 use std::collections::BTreeMap;
 
 fn day(day: u32) -> NaiveDate {
@@ -71,6 +72,7 @@ fn nearest_on(scores: BTreeMap<String, f64>) -> MatchSpec {
             scores,
             caliper: None,
         },
+        seed: Some(0),
         ..Default::default()
     }
 }
@@ -91,6 +93,7 @@ fn a_cardinality_time_limit_a_duration_cannot_hold_is_an_error() {
             time: Some(1e30),
             ..Default::default()
         },
+        seed: Some(0),
         ..Default::default()
     };
     names(
@@ -104,6 +107,7 @@ fn a_cardinality_time_limit_a_duration_cannot_hold_is_an_error() {
 fn fine_balance_outside_the_optimal_method_is_an_error() {
     let spec = MatchSpec {
         fine_balance: Some(FineBalance::on_keys(["sex"])),
+        seed: Some(0),
         ..Default::default()
     };
     names(&spec.validate().expect_err("random method"), "fine_balance");
@@ -120,6 +124,7 @@ fn a_birth_window_is_an_error_for_methods_that_do_not_read_it() {
         method: MatchMethod::Exact,
         exact: vec!["sex".into()],
         birth_window_days: 5,
+        seed: Some(0),
         ..Default::default()
     };
     names(&exact.validate().expect_err("exact"), "birth_window_days");
@@ -142,6 +147,7 @@ fn a_birth_window_is_an_error_for_methods_that_do_not_read_it() {
             ..Default::default()
         },
         birth_window_days: 5,
+        seed: Some(0),
         ..Default::default()
     };
     names(&cem.validate().expect_err("cem"), "birth_window_days");
@@ -153,6 +159,7 @@ fn an_estimand_is_an_error_for_methods_that_do_not_read_it() {
         method: MatchMethod::Exact,
         exact: vec!["sex".into()],
         estimand: Estimand::Ate,
+        seed: Some(0),
         ..Default::default()
     };
     names(&exact.validate().expect_err("exact"), "estimand");
@@ -172,6 +179,7 @@ fn a_distance_caliper_is_an_error_for_the_subclass_method() {
             scores: scores(|_| Some(0.5)),
             caliper: Some(0.1),
         },
+        seed: Some(0),
         ..Default::default()
     };
     names(&spec.validate().expect_err("caliper"), "distance");
@@ -179,7 +187,10 @@ fn a_distance_caliper_is_an_error_for_the_subclass_method() {
 
 #[test]
 fn trial_options_outside_trial_mode_are_an_error() {
-    let mut spec = MatchSpec::default();
+    let mut spec = MatchSpec {
+        seed: Some(0),
+        ..MatchSpec::default()
+    };
     spec.trials.first_period = Some(3);
     names(&spec.validate().expect_err("standard mode"), "trials");
 }
@@ -202,6 +213,7 @@ fn a_variable_ratio_needs_a_score_distance() {
             }),
             ..Default::default()
         },
+        seed: Some(0),
         ..Default::default()
     };
     names(

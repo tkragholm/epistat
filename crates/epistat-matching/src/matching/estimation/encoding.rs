@@ -27,6 +27,7 @@ const MISSING_LEVEL: &str = "__missing__";
 
 /// Row-major dense covariate matrix.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CovariateMatrix {
     /// Row ids aligned with matrix rows.
     pub row_ids: Vec<String>,

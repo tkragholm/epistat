@@ -144,6 +144,7 @@ impl CemVariable {
 /// The stratum of every case and control, or `None` where a unit is in a
 /// stratum that lacks one of the groups.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CemStrata {
     /// Stratum of each case, in the order of the cases.
     pub cases: Vec<Option<usize>>,
@@ -517,7 +518,8 @@ fn nearest_available<R: MatchingRecord>(
 /// # Errors
 ///
 /// [`Error::CemOrder`] for the largest and smallest orders, which need a
-/// score.
+/// score, and [`Error::UnsupportedEstimand`] for an estimand no matcher
+/// targets.
 pub fn cem_k2k_pairs<R: MatchingRecord>(
     anchors: &[R],
     candidates: &[R],
@@ -530,6 +532,7 @@ pub fn cem_k2k_pairs<R: MatchingRecord>(
     if matches!(order, MatchOrder::Largest | MatchOrder::Smallest) {
         return Err(Error::CemOrder);
     }
+    crate::types::matched_estimand(estimand, "coarsened exact matching")?;
     let metric = distance.map(DistanceConfig::metric);
 
     let mut anchors_of: Vec<Vec<usize>> = vec![Vec::new(); strata.count];

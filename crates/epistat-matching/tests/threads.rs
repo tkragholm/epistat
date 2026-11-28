@@ -15,11 +15,12 @@ mod common;
 mod trial_panel;
 use chrono::NaiveDate;
 use common::{Level, cohort, records, two_pass};
+use epistat_core::Estimand;
 use epistat_matching::prelude::*;
 use epistat_matching::spec::MatchMode;
 use epistat_matching::{
     BalanceRecord, BalanceReportOptions, ControlReuse, CovariateEncodingConfig, CovariateValue,
-    DistanceCaliper, DistanceConfig, ElasticNetCvConfig, ElasticNetLogisticConfig, Estimand,
+    DistanceCaliper, DistanceConfig, ElasticNetCvConfig, ElasticNetLogisticConfig,
     EuclideanPreparationConfig, EuclideanScale, LogisticRegressionConfig,
     MahalanobisCovarianceStrategy, MahalanobisPreparationConfig, MahalanobisTransform, MatchOrder,
     MatchWeightMethod, MatchingCriteria, MissingValuePolicy, NumericBalanceTransform,
@@ -346,7 +347,7 @@ fn exposure_density_sampling() {
                 .collect();
         let spec = MatchSpec {
             mode: MatchMode::ExposureDensity,
-            seed: 99,
+            seed: Some(99),
             ratio: 3,
             replace: true,
             birth_window_days: 60,
@@ -414,7 +415,7 @@ fn sequential_trials() {
         let mut d = Digest::default();
         let spec = MatchSpec {
             mode: MatchMode::SequentialTrials,
-            seed: 5,
+            seed: Some(5),
             ratio: 2,
             replace: false,
             birth_window_days: 365,
@@ -504,7 +505,8 @@ fn run_with_balance_and_balance_reports() {
                     &controls,
                     &outcome,
                     &BalanceReportOptions::default(),
-                );
+                )
+                .expect("a matched estimand");
                 (outcome, report)
             })
             .expect("a valid job");
@@ -519,7 +521,8 @@ fn run_with_balance_and_balance_reports() {
                     &controls,
                     &outcome,
                     &BalanceReportOptions::default(),
-                );
+                )
+                .expect("a matched estimand");
                 (outcome, report)
             })
             .expect("a valid job");
@@ -539,7 +542,8 @@ fn run_with_balance_and_balance_reports() {
                         SupplementalBalanceCovariates::default()
                     },
                 };
-                let report = balance_report(&cases, &controls, &first, &options);
+                let report = balance_report(&cases, &controls, &first, &options)
+                    .expect("a matched estimand");
                 assert!(!report.numeric.is_empty(), "no output, test is vacuous");
                 d.debug(&report);
             }
@@ -598,7 +602,8 @@ fn transition_run_with_balance() {
                     &controls,
                     &outcome,
                     &BalanceReportOptions::default(),
-                );
+                )
+                .expect("a matched estimand");
                 (outcome, report)
             })
             .expect("a valid job");

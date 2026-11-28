@@ -31,6 +31,7 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+use epistat_core::Bootstrap;
 use epistat_matching::UnitRole;
 use epistat_matching::effects::{
     BootstrapSpec, BootstrapStatistic, EffectSpec, MatchedSample, OutcomeModel, UnitData,
@@ -65,7 +66,7 @@ fn write_bootstrap_draws() {
         replicates: REPLICATES,
         seed: SEED,
         pairs: PAIRS,
-        resamples: cluster_resamples(PAIRS, REPLICATES, SEED),
+        resamples: cluster_resamples(PAIRS, Bootstrap::new(REPLICATES, SEED)),
     };
     let text = serde_json::to_string(&draws).unwrap();
     std::fs::write(data_path("effects_boot_draws.json"), text).unwrap();
@@ -185,14 +186,14 @@ fn compare(label: &str, ours: &BootstrapStatistic, r: &Stat, rel: f64) {
     close(&format!("{label} se"), ours.summary.se, r.sd, rel, scale);
     close(
         &format!("{label} perc low"),
-        ours.summary.percentile.0,
+        ours.summary.percentile.lower.unwrap(),
         r.quantile7.0,
         rel,
         scale,
     );
     close(
         &format!("{label} perc high"),
-        ours.summary.percentile.1,
+        ours.summary.percentile.upper.unwrap(),
         r.quantile7.1,
         rel,
         scale,
@@ -202,9 +203,15 @@ fn compare(label: &str, ours: &BootstrapStatistic, r: &Stat, rel: f64) {
     let (lo, hi) = (r.t.len() * 25 / 1000, r.t.len() * 975 / 1000);
     // Ranks 5 and 6, and 195 and 196, counting from one.
     for (value, bounds) in [
-        (ours.summary.percentile.0, (sorted[lo - 1], sorted[lo])),
+        (
+            ours.summary.percentile.lower.unwrap(),
+            (sorted[lo - 1], sorted[lo]),
+        ),
         (r.boot_perc.0, (sorted[lo - 1], sorted[lo])),
-        (ours.summary.percentile.1, (sorted[hi - 1], sorted[hi])),
+        (
+            ours.summary.percentile.upper.unwrap(),
+            (sorted[hi - 1], sorted[hi]),
+        ),
         (r.boot_perc.1, (sorted[hi - 1], sorted[hi])),
     ] {
         let slack = 1e-9 * scale;
@@ -217,14 +224,14 @@ fn compare(label: &str, ours: &BootstrapStatistic, r: &Stat, rel: f64) {
     let bias = mean - r.t0;
     close(
         &format!("{label} norm low"),
-        ours.summary.normal.0 - bias,
+        ours.summary.normal.lower.unwrap() - bias,
         r.boot_norm.0,
         rel,
         scale,
     );
     close(
         &format!("{label} norm high"),
-        ours.summary.normal.1 - bias,
+        ours.summary.normal.upper.unwrap() - bias,
         r.boot_norm.1,
         rel,
         scale,
@@ -236,7 +243,7 @@ fn bootstrap_agrees_with_boot() {
     let draws: Draws = load_json(data_path("effects_boot_draws.json"));
     assert_eq!(
         draws.resamples,
-        cluster_resamples(draws.pairs, draws.replicates, draws.seed),
+        cluster_resamples(draws.pairs, Bootstrap::new(draws.replicates, draws.seed)),
         "the committed draws are not what the code draws; run write_bootstrap_draws and the R script"
     );
     assert_eq!(
@@ -258,7 +265,12 @@ fn bootstrap_agrees_with_boot() {
             OutcomeModel::Linear
         });
         spec.interactions = true;
-        let out = bootstrap(&sample, &spec, &BootstrapSpec::new(REPLICATES, SEED)).unwrap();
+        let out = bootstrap(
+            &sample,
+            &spec,
+            &BootstrapSpec::new(Bootstrap::new(REPLICATES, SEED)),
+        )
+        .unwrap();
         let rel = if binary { 1e-6 } else { 1e-9 };
         let label = format!("{} {}", run.case, run.outcome);
         compare(

@@ -326,6 +326,7 @@ impl Default for TrialOptions {
 
 /// A person who was matched in a trial.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct TrialMember {
     /// The person.
     pub id: String,
@@ -349,6 +350,7 @@ pub struct TrialMember {
 
 /// The sets of one trial.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TrialResult {
     /// The period at which the trial starts.
     pub period: i64,
@@ -369,6 +371,7 @@ pub struct TrialResult {
 
 /// The trials of a run, in the order of their start.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct TrialOutcome {
     /// The trials that have at least one initiator in the pool.
     pub trials: Vec<TrialResult>,
@@ -528,6 +531,7 @@ fn plan<R: MatchingRecord>(panel: &[TrialPerson<R>], options: &TrialOptions) -> 
 /// `follow_up_time` are the columns of its `TrialRows`, and the spans of
 /// [`Self::spans`] those of its `TrialSpans`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub struct TrialColumns {
     /// The person, as the unit of the panel's key.
     pub unit: Vec<u32>,

@@ -47,12 +47,13 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::DeterministicSelection;
 use epistat_matching::MatchWeightMethod;
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::output::{MatchDataOptions, Units, get_matches, match_data, match_matrix};
 use epistat_matching::prelude::*;
-use epistat_matching::{Estimand, UnitRole, UnitWeightSet};
+use epistat_matching::{UnitRole, UnitWeightSet};
 use epistat_testkit::Tolerance;
 use r_reference::{Versions, reference as load_reference};
 use serde::Deserialize;
@@ -364,8 +365,9 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
         );
 
         // Weights of the matched side by estimand.
-        let weights_anchor_side =
-            outcome.match_weights(MatchWeightMethod::for_estimand(Estimand::Att));
+        let weights_anchor_side = outcome.match_weights(
+            MatchWeightMethod::for_estimand(Estimand::Att).expect("a matched estimand"),
+        );
         let raw = expected_of(&expected.idx, &expected.raw);
         assert_weights(
             &format!("{label} raw"),
@@ -382,8 +384,9 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
             focal_value,
             &norm,
         );
-        let weights_candidate_side =
-            outcome.match_weights(MatchWeightMethod::for_estimand(Estimand::Atc));
+        let weights_candidate_side = outcome.match_weights(
+            MatchWeightMethod::for_estimand(Estimand::Atc).expect("a matched estimand"),
+        );
         let other = expected_of(&expected.idx, &expected.other_raw);
         assert_weights(
             &format!("{label} other"),
@@ -394,7 +397,9 @@ fn pairs_weights_and_shapes_agree_with_matchit() {
         );
 
         // PairCount is the number of pairs a unit is in.
-        let weights_count = outcome.match_weights(MatchWeightMethod::for_estimand(Estimand::Ate));
+        let weights_count = outcome.match_weights(
+            MatchWeightMethod::for_estimand(Estimand::Ate).expect("a matched estimand"),
+        );
         let mut counts: HashMap<usize, f64> = HashMap::new();
         for (anchor, controls) in focal_idx.iter().zip(&rows) {
             for control in controls {

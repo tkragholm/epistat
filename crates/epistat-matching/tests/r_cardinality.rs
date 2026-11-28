@@ -48,10 +48,9 @@
 #[path = "common/r_reference.rs"]
 mod r_reference;
 
+use epistat_core::Estimand;
 use epistat_matching::Error;
-use epistat_matching::{
-    CardinalityLimits, CardinalityRequest, Estimand, match_cardinality, pair_units,
-};
+use epistat_matching::{CardinalityLimits, CardinalityRequest, match_cardinality, pair_units};
 use epistat_testkit::{assert_same_on_pools, load_json};
 use r_reference::Versions;
 use serde::{Deserialize, Deserializer};

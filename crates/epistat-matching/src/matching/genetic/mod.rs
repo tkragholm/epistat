@@ -131,6 +131,7 @@ impl Default for GeneticMatchOptions {
 
 /// The pairs of a match.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub struct GeneticMatches {
     /// The focal unit of each row, by position in the input.
     pub focal: Vec<usize>,
@@ -1073,8 +1074,7 @@ mod tests {
             population: 20,
             max_generations: 5,
             hard_generation_limit: true,
-            seed: 3,
-            ..GeneticSearch::default()
+            ..GeneticSearch::new(3)
         };
         let first = problem.search(&fit, &search).unwrap();
         let second = problem.search(&fit, &search).unwrap();

@@ -226,6 +226,7 @@ impl BalanceLevel {
 
 /// Pairs matched with balance, and the balance achieved.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct FineBalanceOutcome {
     /// The pairs and their diagnostics.
     pub outcome: MatchOutcome,

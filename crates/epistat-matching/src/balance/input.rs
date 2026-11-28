@@ -66,16 +66,17 @@ impl BalanceWeights {
 
     /// The matching weights of a pair-based outcome for its realised estimand,
     /// with its pairs.
-    #[must_use]
-    pub fn from_outcome(outcome: &MatchOutcome) -> Self {
-        let mut weights = Self::new(
-            outcome.diagnostics.realized_estimand,
-            outcome.match_weights(crate::MatchWeightMethod::for_estimand(
-                outcome.diagnostics.realized_estimand,
-            )),
-        );
+    ///
+    /// # Errors
+    ///
+    /// [`Error::UnsupportedEstimand`] when the realised estimand is not one a
+    /// matcher targets.
+    pub fn from_outcome(outcome: &MatchOutcome) -> Result<Self, Error> {
+        let estimand = outcome.diagnostics.realized_estimand;
+        let method = crate::MatchWeightMethod::for_estimand(estimand)?;
+        let mut weights = Self::new(estimand, outcome.match_weights(method));
         weights.pairs.clone_from(&outcome.pairs);
-        weights
+        Ok(weights)
     }
 
     /// One weight per unit identifier, as subclassification and the exact method
@@ -135,6 +136,7 @@ impl BalanceWeights {
     /// [`Error::InvalidWeight`] for the weight that is not, the one
     /// of the unit whose identifier sorts first when there are several.
     pub fn validate(&self) -> Result<(), Error> {
+        crate::types::matched_estimand(self.estimand, "the balance statistics")?;
         let mut checks: Vec<(&String, f64)> = Vec::new();
         for group in [&self.matching.case, &self.matching.control] {
             checks.extend(group.iter().map(|(id, weight)| (id, *weight)));

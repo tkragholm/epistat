@@ -25,10 +25,11 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::constraints::caliper_on_field;
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    BalanceRecord, CovariateValue, DistanceCaliper, DistanceConfig, Estimand, InvalidCriteriaReason,
+    BalanceRecord, CovariateValue, DistanceCaliper, DistanceConfig, InvalidCriteriaReason,
 };
 use epistat_matching::{
     EuclideanPreparationConfig, EuclideanScale, MahalanobisCovarianceStrategy,

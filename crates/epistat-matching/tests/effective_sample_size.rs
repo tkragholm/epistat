@@ -1,9 +1,10 @@
 //! Effective sample size: the value does not depend on the scale of the weights,
 //! and a weight that is negative or not finite is an error.
 
+use epistat_core::Estimand;
 use epistat_core::{Classify, ErrorKind};
 use epistat_matching::{
-    BalanceRecord, BalanceReportOptions, BalanceWeights, CovariateValue, Estimand, balance_summary,
+    BalanceRecord, BalanceReportOptions, BalanceWeights, CovariateValue, balance_summary,
 };
 use epistat_stats::weighted::effective_sample_size;
 use std::collections::HashMap;

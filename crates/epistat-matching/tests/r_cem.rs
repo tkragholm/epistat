@@ -44,10 +44,11 @@
 mod r_reference;
 
 use chrono::NaiveDate;
+use epistat_core::Estimand;
 use epistat_matching::prelude::*;
 use epistat_matching::{
-    BalanceRecord, CovariateEncodingConfig, CovariateValue, Estimand,
-    prepare_euclidean_distance_config, prepare_mahalanobis_distance_config,
+    BalanceRecord, CovariateEncodingConfig, CovariateValue, prepare_euclidean_distance_config,
+    prepare_mahalanobis_distance_config,
 };
 use epistat_matching::{
     CemBinning, CemRule, CemVariable, EuclideanPreparationConfig, EuclideanScale,

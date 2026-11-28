@@ -356,9 +356,14 @@ fn standard_specs() -> Vec<(&'static str, MatchSpec)> {
         method: MatchMethod::Nearest,
         distance: propensity(None),
         birth_window_days: 36_500,
+        seed: Some(0),
         ..MatchSpec::default()
     };
-    let unwindowed = MatchSpec::default().birth_window_days;
+    let unwindowed = MatchSpec {
+        seed: Some(0),
+        ..MatchSpec::default()
+    }
+    .birth_window_days;
     let mut field_caliper = BTreeMap::new();
     field_caliper.insert("x2".to_string(), 1.0);
     vec![
@@ -402,7 +407,7 @@ fn standard_specs() -> Vec<(&'static str, MatchSpec)> {
                 distance: DistanceSpec::default(),
                 exact: vec!["s".into()],
                 birth_window_days: 3,
-                seed: 9,
+                seed: Some(9),
                 ..base.clone()
             },
         ),
@@ -583,7 +588,7 @@ fn risk_set_specs() -> Vec<(&'static str, MatchSpec)> {
         birth_window_days: 4,
         require_alive: true,
         age_limit_years: Some(6),
-        seed: 7,
+        seed: Some(7),
         ..MatchSpec::default()
     };
     let mut field_caliper = BTreeMap::new();
@@ -736,7 +741,7 @@ fn sequential_trials_are_the_same_on_rows() {
                 require_alive: true,
                 age_limit_years: Some(8),
                 replace,
-                seed,
+                seed: Some(seed),
                 ..MatchSpec::default()
             };
             let on_owned = run_spec(
@@ -782,8 +787,10 @@ fn balance_and_effects_are_the_same_on_rows() {
             numeric_transforms: NumericBalanceTransform::SquaresAndPairwiseInteractions,
             ..BalanceReportOptions::default()
         };
-        let on_owned = balance_report(&g.anchors, &g.candidates, &outcome, &options);
-        let on_rows = balance_report(&g.anchor_rows, &g.candidate_rows, &outcome, &options);
+        let on_owned = balance_report(&g.anchors, &g.candidates, &outcome, &options)
+            .expect("a matched estimand");
+        let on_rows = balance_report(&g.anchor_rows, &g.candidate_rows, &outcome, &options)
+            .expect("a matched estimand");
         assert!(!on_owned.numeric.is_empty() && !on_owned.categorical.is_empty());
         assert_same(
             &format!("{on_owned:?}"),
@@ -791,7 +798,7 @@ fn balance_and_effects_are_the_same_on_rows() {
             &format!("seed {seed}"),
         );
 
-        let weights = BalanceWeights::from_outcome(&outcome);
+        let weights = BalanceWeights::from_outcome(&outcome).expect("a matched estimand");
         let summary_owned = balance_summary(&g.anchors, &g.candidates, &weights, &options);
         let summary_rows = balance_summary(&g.anchor_rows, &g.candidate_rows, &weights, &options);
         assert_same(
