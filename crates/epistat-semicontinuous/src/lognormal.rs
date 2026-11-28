@@ -443,15 +443,21 @@ fn fit_lognormal_with_lambda(
             let scores = Mat::from_fn(prior.nrows(), 1, |i, _| {
                 weight_at(w_pos.as_ref().map(Mat::as_ref), i) * residuals[(i, 0)]
             });
-            let (meat, cluster_count) =
-                score_meat(x_pos.as_ref(), |i| scores[(i, 0)], cluster_ids_pos.as_deref())?;
+            let (meat, cluster_count) = score_meat(
+                x_pos.as_ref(),
+                |i| scores[(i, 0)],
+                cluster_ids_pos.as_deref(),
+            )?;
             let cov = sandwich(xtx.as_ref(), meat.as_ref()).ok_or(Error::Singular)?;
             (Some(to_covariance(&cov, 1.0)), cluster_count)
         }
         Some(_) => {
             let identity = Mat::<f64>::identity(p, p);
             let inverse = solve_linear_system(&xtx, &identity).map_err(|_| Error::Singular)?;
-            (residual_variance.map(|s2| to_covariance(&inverse, s2)), None)
+            (
+                residual_variance.map(|s2| to_covariance(&inverse, s2)),
+                None,
+            )
         }
         None => (None, None),
     };
@@ -598,7 +604,9 @@ mod tests {
             .expect("data");
         let weighted = fit(&data, &LogNormalOptions::default()).expect("weighted");
 
-        let rows: Vec<usize> = (0..n).flat_map(|i| std::iter::repeat_n(i, 1 + i % 3)).collect();
+        let rows: Vec<usize> = (0..n)
+            .flat_map(|i| std::iter::repeat_n(i, 1 + i % 3))
+            .collect();
         let x_long = Mat::from_fn(rows.len(), 2, |i, j| x[(rows[i], j)]);
         let y_long: Vec<f64> = rows.iter().map(|&i| y[i]).collect();
         let long = CostData::builder(x_long.as_ref(), &y_long)
@@ -621,7 +629,7 @@ mod tests {
                 }
             }
         }
-        let half_trace = 0.5 * (information[0][0] + information[1][1]);
+        let half_trace = f64::midpoint(information[0][0], information[1][1]);
         let det = information[0][0].mul_add(information[1][1], -information[0][1].powi(2));
         let root = half_trace.mul_add(half_trace, -det).sqrt();
         let kappa = (half_trace + root) / (half_trace - root);

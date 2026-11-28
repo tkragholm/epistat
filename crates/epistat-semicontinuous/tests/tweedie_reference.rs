@@ -9,8 +9,8 @@
 
 use epistat_core::CaseWeights;
 use epistat_linalg::Mat;
-use epistat_semicontinuous::Variance;
 use epistat_semicontinuous::CostData;
+use epistat_semicontinuous::Variance;
 use epistat_semicontinuous::tweedie::{self, TweedieOptions};
 use serde::Deserialize;
 
@@ -72,7 +72,10 @@ fn tweedie_matches_statmod_glm() {
         let model = tweedie::fit(&input, case.power, &options, None, None).expect("tweedie fit");
         for j in 0..3 {
             let beta_dev = rel(model.coefficients[j], case.beta[j]);
-            let se_dev = rel(model.se[j].expect("robust standard error"), case.se_robust[j]);
+            let se_dev = rel(
+                model.se[j].expect("robust standard error"),
+                case.se_robust[j],
+            );
             worst_beta = worst_beta.max(beta_dev);
             worst_se = worst_se.max(se_dev);
         }

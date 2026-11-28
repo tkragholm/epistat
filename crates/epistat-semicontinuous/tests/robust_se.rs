@@ -59,13 +59,19 @@ fn standard_errors(se: &[Option<f64>]) -> Vec<f64> {
 /// The standard errors of a part at unit dispersion.
 fn unit_dispersion_se(part: &PartFit) -> Vec<f64> {
     let root = part.dispersion.expect("dispersion").sqrt();
-    standard_errors(&part.se).iter().map(|se| se / root).collect()
+    standard_errors(&part.se)
+        .iter()
+        .map(|se| se / root)
+        .collect()
 }
 
 /// The model-based standard errors of a Tweedie fit at unit dispersion.
 fn tweedie_unit_dispersion_se(model: &TweedieModel) -> Vec<f64> {
     let root = model.dispersion.expect("dispersion").sqrt();
-    standard_errors(&model.se).iter().map(|se| se / root).collect()
+    standard_errors(&model.se)
+        .iter()
+        .map(|se| se / root)
+        .collect()
 }
 
 /// HC0 standard errors from R 4 on the rows of `two_part_fixture`:

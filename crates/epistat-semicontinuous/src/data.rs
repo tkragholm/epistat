@@ -128,7 +128,7 @@ pub(crate) fn column(values: &[f64]) -> MatRef<'_, f64> {
 /// let y: Vec<f64> = (0..n).map(|i| if i % 4 == 0 { 0.0 } else { 1.0 + 0.1 * i as f64 }).collect();
 /// let data = CostData::builder(x.as_ref(), &y).build()?;
 /// let model = two_part::fit(&data, &two_part::TwoPartOptions::default(), None)?;
-/// assert_eq!(model.beta_logit.nrows(), 2);
+/// assert_eq!(model.logit.coefficients.len(), 2);
 /// # Ok::<(), epistat_semicontinuous::Error>(())
 /// ```
 #[derive(Clone, Copy, Debug)]
@@ -496,7 +496,12 @@ mod tests {
         );
         let zero = [1.0, 0.0, 1.0];
         let zero = CaseWeights::new(&zero).expect("a zero weight is allowed");
-        assert!(CostData::builder(x.as_ref(), &y).weights(zero).build().is_ok());
+        assert!(
+            CostData::builder(x.as_ref(), &y)
+                .weights(zero)
+                .build()
+                .is_ok()
+        );
         let short = [1.0, 1.0];
         assert_eq!(
             refused(

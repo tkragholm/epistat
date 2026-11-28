@@ -60,12 +60,12 @@ use crate::matrix_ops::{
     center_beta, center_columns_into, map_mat, max_abs_linear_predictor, uncenter_beta,
     weighted_column_means,
 };
+use crate::tidy::{TableParts, table};
 use crate::utils::{
     add_ridge_to_diagonal, cached_factor, col_slice, fill_constant_irls_weights, linear_predictor,
     matvec_into, max_abs_diff, solve_linear_system_ref, weighted_xtx_ref,
     weighted_xtz_ref_with_buffer,
 };
-use crate::tidy::{TableParts, table};
 use crate::utils::{column_mat, column_values, solve_linear_system};
 use crate::variance::{
     Inference, Variance, pearson_dispersion, residual_df, standard_errors, to_covariance,
@@ -604,7 +604,7 @@ fn fit_tweedie_with_lambda(
                     inference,
                     lambda,
                 },
-                beta_raw,
+                &beta_raw,
                 iteration + 1,
                 known_max_eta,
             );
@@ -647,6 +647,7 @@ fn sample_weight_at(sample_weights: Option<MatRef<'_, f64>>, row: usize) -> f64 
 }
 
 /// The data and choices a converged fit is finished with.
+#[derive(Clone, Copy)]
 struct FinalFit<'a> {
     x: MatRef<'a, f64>,
     y: MatRef<'a, f64>,
@@ -660,7 +661,7 @@ struct FinalFit<'a> {
 
 fn finalize_fit(
     request: FinalFit<'_>,
-    beta_final: Mat<f64>,
+    beta_final: &Mat<f64>,
     iterations: usize,
     known_max_eta: Option<f64>,
 ) -> Result<TweedieModel, Error> {
@@ -681,7 +682,7 @@ fn finalize_fit(
     // retries with stronger ridge (which shrinks η back into range); if it still saturates
     // the fit fails loudly rather than exporting a meaningless estimate. Centering keeps η
     // well inside the range for well-posed data, so this only fires on genuine divergence.
-    let max_eta = known_max_eta.unwrap_or_else(|| max_abs_linear_predictor(x, &beta_final));
+    let max_eta = known_max_eta.unwrap_or_else(|| max_abs_linear_predictor(x, beta_final));
     if max_eta >= LINEAR_PREDICTOR_CLIP {
         return Err(Error::Saturated);
     }
@@ -693,7 +694,7 @@ fn finalize_fit(
     // fit that does not ask for one skips both.
     let (covariance, dispersion, cluster_count) = match inference.variance {
         Some(kind) => {
-            let eta = linear_predictor(x, &beta_final);
+            let eta = linear_predictor(x, beta_final);
             let mu = map_mat(&eta, exp_clamped);
             let weights = Mat::from_fn(mu.nrows(), 1, |i, _| {
                 let base_weight = sample_weight_at(sample_weights, i);
@@ -715,8 +716,7 @@ fn finalize_fit(
                 (Some(to_covariance(&cov, 1.0)), dispersion, cluster_count)
             } else {
                 let identity = Mat::<f64>::identity(p, p);
-                let inverse =
-                    solve_linear_system(&xtwx, &identity).map_err(|_| Error::Singular)?;
+                let inverse = solve_linear_system(&xtwx, &identity).map_err(|_| Error::Singular)?;
                 let covariance = dispersion.map(|phi| to_covariance(&inverse, phi));
                 (covariance, dispersion, None)
             }
@@ -736,7 +736,7 @@ fn finalize_fit(
         attempts: Vec::new(),
     };
     Ok(TweedieModel {
-        coefficients: column_values(&beta_final),
+        coefficients: column_values(beta_final),
         power,
         se: standard_errors(covariance.as_ref(), p),
         covariance,
@@ -1283,7 +1283,7 @@ mod tests {
             )
             .expect("fit")
             .se[1]
-            .expect("se")
+                .expect("se")
         };
         let se_base = slope_se(1.0);
         let se_scaled = slope_se(1000.0);
@@ -1400,8 +1400,14 @@ mod tests {
 
         let cold = fit(&data, 2.0, &options, None, None).expect("cold fit");
         let mut scratch = TweedieScratch::default();
-        let warm =
-            fit(&data, 2.0, &options, Some(&cold.coefficients), Some(&mut scratch)).expect("warm fit");
+        let warm = fit(
+            &data,
+            2.0,
+            &options,
+            Some(&cold.coefficients),
+            Some(&mut scratch),
+        )
+        .expect("warm fit");
         let (cold_report, warm_report) = (&cold.report, &warm.report);
 
         // Same optimum to the IRLS convergence tolerance. (IRLS stops on a small STEP,

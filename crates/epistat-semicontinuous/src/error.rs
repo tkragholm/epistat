@@ -127,8 +127,8 @@ impl Classify for Error {
                 ErrorKind::Input
             }
             Self::Unsupported { .. } | Self::NoCovariance { .. } => ErrorKind::Unsupported,
-            Self::Separation { .. } => ErrorKind::Numerical,
-            Self::NotConverged { .. }
+            Self::Separation { .. }
+            | Self::NotConverged { .. }
             | Self::Saturated
             | Self::Singular
             | Self::IllConditioned

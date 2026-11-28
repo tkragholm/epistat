@@ -8,7 +8,9 @@
 //! gives, and the test asserts them only on that target. Elsewhere it computes them
 //! and, when `EPISTAT_HASH_OUT` is set, appends them to that file. Print them with
 //! `GOLDEN_PRINT=1 cargo test --test estimator_fingerprints -- --nocapture`.
-use epistat_core::{Bootstrap, CaseWeights, Covariance, Interval, Level, Matrix, Seed, Tidy, VarianceKind};
+use epistat_core::{
+    Bootstrap, CaseWeights, Covariance, Interval, Level, Matrix, Seed, Tidy, VarianceKind,
+};
 use epistat_linalg::Mat;
 use epistat_rng::Stream as Draws;
 use epistat_semicontinuous::compare::{CompareOptions, ModelComparison, ModelFitMetrics};
@@ -458,7 +460,12 @@ fn compact(out: &mut Golden, input: &Fixture, warm: &TwoPartWarmStart) {
     let positive_weights = &weights[..positive.y.len()];
     let case_weights = CaseWeights::new(positive_weights).expect("weights");
     let fit = design
-        .fit(case_weights, &gamma.coefficients, &gamma_options, &mut scratch)
+        .fit(
+            case_weights,
+            &gamma.coefficients,
+            &gamma_options,
+            &mut scratch,
+        )
         .expect("compact gamma");
     let mut h = Hasher::new();
     h.vec(&fit.coefficients);

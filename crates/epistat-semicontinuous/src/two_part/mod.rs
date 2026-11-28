@@ -677,7 +677,13 @@ pub(crate) fn fit_two_part_weighted(
     let part = |part, beta: &Mat<f64>, covariance: Option<Covariance>, rows| {
         let (n, n_used, df, dispersion, iterations) = match part {
             Part::Logit => (rows, n_used_logit, df_logit, Some(1.0), iterations_logit),
-            Part::Gamma => (rows, n_used_gamma, df_gamma, dispersion_gamma, iterations_gamma),
+            Part::Gamma => (
+                rows,
+                n_used_gamma,
+                df_gamma,
+                dispersion_gamma,
+                iterations_gamma,
+            ),
         };
         PartFit {
             coefficients: column_values(beta),
@@ -783,7 +789,11 @@ mod tests {
     /// A design of an intercept and `i / scale`, with every third outcome
     /// zero and the others rising with `i`.
     fn linear_sample(n: usize, scale: f64) -> (Mat<f64>, Vec<f64>) {
-        let x = Mat::from_fn(n, 2, |i, j| if j == 0 { 1.0 } else { usize_to_f64(i) / scale });
+        let x = Mat::from_fn(
+            n,
+            2,
+            |i, j| if j == 0 { 1.0 } else { usize_to_f64(i) / scale },
+        );
         let y = (0..n)
             .map(|i| {
                 if i % 3 == 0 {
@@ -885,10 +895,7 @@ mod tests {
             regularization: reg,
             ..TwoPartOptions::default()
         };
-        assert!(matches!(
-            fit(&data, &options, None),
-            Err(Error::Input(_))
-        ));
+        assert!(matches!(fit(&data, &options, None), Err(Error::Input(_))));
     }
 
     #[test]
@@ -1118,7 +1125,7 @@ mod tests {
             [a[1][1] / det, -a[0][1] / det],
             [-a[1][0] / det, a[0][0] / det],
         ];
-        let half_trace = 0.5 * (a[0][0] + a[1][1]);
+        let half_trace = f64::midpoint(a[0][0], a[1][1]);
         let root = half_trace.mul_add(half_trace, -det).sqrt();
         let condition = (half_trace + root) / (half_trace - root);
         (inverse, condition)
@@ -1172,9 +1179,9 @@ mod tests {
             .fold(0.0_f64, |m, v| m.max(v.abs()))
             * phi;
         let tolerance = 16.0 * condition * f64::EPSILON * scale;
-        for a in 0..2 {
-            for b in 0..2 {
-                let expected = phi * inverse[a][b];
+        for (a, row) in inverse.iter().enumerate() {
+            for (b, &entry) in row.iter().enumerate() {
+                let expected = phi * entry;
                 let actual = covariance.get(a, b).expect("defined");
                 assert!(
                     (actual - expected).abs() <= tolerance,
@@ -1187,7 +1194,9 @@ mod tests {
     #[test]
     fn clustered_data_get_the_sandwich_unless_the_model_based_covariance_is_asked_for() {
         let (x, y) = linear_sample(60, 20.0);
-        let clusters: Vec<u32> = (0..60).map(|i| u32::try_from(i / 6).expect("small")).collect();
+        let clusters: Vec<u32> = (0..60)
+            .map(|i| u32::try_from(i / 6).expect("small"))
+            .collect();
         let data = CostData::builder(x.as_ref(), &y)
             .clusters(&clusters)
             .build()
@@ -1211,7 +1220,11 @@ mod tests {
         let plain = fitted(&x, &y, TwoPartOptions::default());
         assert_eq!(
             plain.gamma.covariance.as_ref().map(Covariance::as_slice),
-            model_based.gamma.covariance.as_ref().map(Covariance::as_slice)
+            model_based
+                .gamma
+                .covariance
+                .as_ref()
+                .map(Covariance::as_slice)
         );
     }
 
@@ -1267,17 +1280,17 @@ mod tests {
         // information at those coefficients: a change of b by d moves the
         // information by at most |x|_1 d relative, |x|_1 <= 1 + 59 / 20,
         // and the inverse by kappa times that, plus its own 2 kappa gamma_m.
-        let kept_rows: Vec<usize> = (0..60).filter(|i| !dropped.contains(i)).collect();
         let condition = |beta: &[f64], positive_only: bool| {
             let mut information = [[0.0; 2]; 2];
-            for &i in &kept_rows {
+            for &i in &kept {
                 if positive_only && y[i] <= 0.0 {
                     continue;
                 }
                 let weight = if positive_only {
                     1.0
                 } else {
-                    let prob = 1.0 / (1.0 + (-beta[0].mul_add(x[(i, 0)], beta[1] * x[(i, 1)])).exp());
+                    let prob =
+                        1.0 / (1.0 + (-beta[0].mul_add(x[(i, 0)], beta[1] * x[(i, 1)])).exp());
                     prob * (1.0 - prob)
                 };
                 for (a, row) in information.iter_mut().enumerate() {
@@ -1288,14 +1301,17 @@ mod tests {
             }
             inverse_2x2(information).1
         };
-        let m = usize_to_f64(kept_rows.len());
+        let m = usize_to_f64(kept.len());
         let gamma_m = m * f64::EPSILON / (1.0 - m * f64::EPSILON);
         for (name, a, b, positive_only) in [
             ("logit", &weighted.logit, &removed.logit, false),
             ("gamma", &weighted.gamma, &removed.gamma, true),
         ] {
             let kappa = condition(&b.coefficients, positive_only);
-            let largest = b.coefficients.iter().fold(0.0_f64, |acc, v| acc.max(v.abs()));
+            let largest = b
+                .coefficients
+                .iter()
+                .fold(0.0_f64, |acc, v| acc.max(v.abs()));
             let coefficient_tolerance = 2.0 * kappa * gamma_m * 2.0_f64.sqrt() * largest;
             for (u, v) in a.coefficients.iter().zip(&b.coefficients) {
                 assert!(
@@ -1327,7 +1343,7 @@ mod tests {
         let largest = beta.iter().fold(0.0_f64, |acc, v| acc.max(v.abs()));
         let d = 2.0 * kappa * gamma_m * 2.0_f64.sqrt() * largest;
         let (mut squares, mut moved) = (0.0, 0.0);
-        for &i in kept_rows.iter().filter(|&&i| y[i] > 0.0) {
+        for &i in kept.iter().filter(|&&i| y[i] > 0.0) {
             let ratio = y[i] / beta[0].mul_add(x[(i, 0)], beta[1] * x[(i, 1)]).exp();
             let r = ratio - 1.0;
             squares += r * r;
@@ -1488,9 +1504,9 @@ mod tests {
     fn bootstrap_summary_handles_empty_input() {
         let empty = Matrix::new(0, 0, Vec::new()).expect("empty");
         let summary = summary(&empty, Level::default());
-        assert!(summary.mean.is_empty());
-        assert!(summary.se.is_empty());
-        assert!(summary.intervals.is_empty());
+        assert_eq!(summary.mean, Vec::<f64>::new());
+        assert_eq!(summary.se, Vec::<Option<f64>>::new());
+        assert_eq!(summary.intervals, Vec::new());
     }
 
     #[test]

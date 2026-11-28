@@ -46,9 +46,10 @@ fn cost_data_refuses_bad_columns() {
     assert_rejects_bad_input_with_codes("CostData outcome", code, |bad| {
         column(bad, &Y).map(|y| CostData::builder(x.as_ref(), &y).build().map(|_| ()))
     });
-    // The weights refuse a value that is not finite when they are built,
-    // and the view a column of the wrong length.
-    assert_rejects_bad_input_with_codes("CostData weights", code, |bad| {
+    // The weights are built on their own, so an empty column has the code of
+    // an empty argument; they refuse a value that is not finite, and the view
+    // a column of the wrong length.
+    assert_rejects_bad_input_with_codes("CostData weights", first, |bad| {
         column(bad, &WEIGHTS).map(|w| -> Result<(), Error> {
             let weights = CaseWeights::new(&w)?;
             CostData::builder(x.as_ref(), &Y)

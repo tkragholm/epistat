@@ -1,10 +1,10 @@
 //! Core public types for the MTP module.
 
-use epistat_core::Seed;
 use super::posterior::MtpPosteriorSummary;
 use super::priors::MtpPriors;
 use crate::Error;
 use crate::fit::FitMetadata;
+use epistat_core::Seed;
 
 /// At least `min` chains.
 pub(crate) fn validate_chain_count(found: usize, min: usize) -> Result<(), Error> {

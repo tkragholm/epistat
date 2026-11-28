@@ -121,8 +121,14 @@ fn collect() -> Vec<Fit> {
     let prediction = model.predict(zeros.x.as_ref()).expect("predict");
     out.push(Fit {
         name: "two_part/robust/clustered",
-        coefficients: [model.logit.coefficients.as_slice(), &model.gamma.coefficients].concat(),
-        standard_errors: defined(&model.logit.se).chain(defined(&model.gamma.se)).collect(),
+        coefficients: [
+            model.logit.coefficients.as_slice(),
+            &model.gamma.coefficients,
+        ]
+        .concat(),
+        standard_errors: defined(&model.logit.se)
+            .chain(defined(&model.gamma.se))
+            .collect(),
         predictions: prediction.mean,
     });
     let warm = TwoPartWarmStart::from(&model);
@@ -136,8 +142,14 @@ fn collect() -> Vec<Fit> {
     let prediction = model.predict(zeros.x.as_ref()).expect("predict");
     out.push(Fit {
         name: "two_part/model_se",
-        coefficients: [model.logit.coefficients.as_slice(), &model.gamma.coefficients].concat(),
-        standard_errors: defined(&model.logit.se).chain(defined(&model.gamma.se)).collect(),
+        coefficients: [
+            model.logit.coefficients.as_slice(),
+            &model.gamma.coefficients,
+        ]
+        .concat(),
+        standard_errors: defined(&model.logit.se)
+            .chain(defined(&model.gamma.se))
+            .collect(),
         predictions: prediction.mean,
     });
 
@@ -149,7 +161,11 @@ fn collect() -> Vec<Fit> {
     let prediction = model.predict(zeros.x.as_ref()).expect("predict");
     out.push(Fit {
         name: "two_part/warm/no_cov",
-        coefficients: [model.logit.coefficients.as_slice(), &model.gamma.coefficients].concat(),
+        coefficients: [
+            model.logit.coefficients.as_slice(),
+            &model.gamma.coefficients,
+        ]
+        .concat(),
         standard_errors: Vec::new(),
         predictions: prediction.mean,
     });

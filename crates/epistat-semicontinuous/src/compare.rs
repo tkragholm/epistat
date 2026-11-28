@@ -43,8 +43,9 @@
 //! `AIC = 2k - 2 loglik` and `BIC = k ln n - 2 loglik`, with `k` the number of
 //! coefficients (twice the columns for the two-part model). The Tweedie
 //! log-likelihood is the quasi-likelihood `-D / 2`, the log-normal one is that
-//! of the positive outcomes, and the two-part one is the binomial plus the
-//! gamma log-likelihood at the moment estimate of the dispersion.
+//! of the positive outcomes, with `n` the positive rows that entered the fit,
+//! and the two-part one is the binomial plus the gamma log-likelihood at the
+//! moment estimate of the dispersion.
 //!
 //! # Folds
 //!
@@ -73,12 +74,12 @@ use crate::tweedie::{
     TweedieModel, TweedieOptions, deviance as tweedie_deviance, fit_tweedie,
     quasi_log_likelihood as tweedie_quasi_log_likelihood,
 };
+use crate::two_part::{TwoPartModel, TwoPartOptions, log_likelihood as two_part_log_likelihood};
 use crate::utils::column_mat;
 use crate::variance::Variance;
+use crate::{Error, lognormal, tweedie, two_part};
 use epistat_core::Seed;
 use std::collections::BTreeSet;
-use crate::two_part::{TwoPartModel, TwoPartOptions, log_likelihood as two_part_log_likelihood};
-use crate::{Error, lognormal, tweedie, two_part};
 
 /// A model the comparison fits.
 #[non_exhaustive]
@@ -749,7 +750,8 @@ pub fn select(data: &CostData<'_>, powers: &[f64]) -> Result<Selection, Error> {
             let pred = model.predict(x)?;
             let metrics = positive_metrics(data.y(), &pred.mean_positive)?;
             let ll = lognormal_log_likelihood(x, y, data.weights_column(), &model);
-            let ic = compute_information_criteria(ll, x.ncols(), y.nrows())?;
+            // The likelihood is that of the positive rows, so they are its n.
+            let ic = compute_information_criteria(ll, x.ncols(), model.n_used)?;
             Some(LogNormalCandidate {
                 model,
                 metrics,
@@ -950,9 +952,7 @@ fn fold_rows(
             bounds
                 .map(|(start, end)| {
                     let members: BTreeSet<u32> = codes[start..end].iter().copied().collect();
-                    (0..n)
-                        .filter(|&i| members.contains(&clusters[i]))
-                        .collect()
+                    (0..n).filter(|&i| members.contains(&clusters[i])).collect()
                 })
                 .collect()
         }
@@ -1062,7 +1062,8 @@ fn build_information_criteria(
     if let Some(lognormal) = lognormal {
         let ll = lognormal_log_likelihood(x, y, weights, lognormal);
         if ll.is_finite() {
-            let ic = compute_information_criteria(ll, x.ncols(), y.nrows())?;
+            // The likelihood is that of the positive rows, so they are its n.
+            let ic = compute_information_criteria(ll, x.ncols(), lognormal.n_used)?;
             rows.push(row(Candidate::LogNormal, Likelihood::LogNormalPositive, ic));
         }
     }
@@ -1278,7 +1279,9 @@ fn complement_indices(n: usize, test_idx: &[usize]) -> Vec<usize> {
     (0..n).filter(|&idx| !mask[idx]).collect()
 }
 
-fn recommend_by_ic(tweedie_candidates: &[TweedieCandidate]) -> (Option<Candidate>, Option<Candidate>) {
+fn recommend_by_ic(
+    tweedie_candidates: &[TweedieCandidate],
+) -> (Option<Candidate>, Option<Candidate>) {
     let mut by_akaike: Option<(f64, Candidate)> = None;
     let mut by_bayes: Option<(f64, Candidate)> = None;
     let mut consider = |aic: f64, bic: f64, candidate: Candidate| {
@@ -1437,7 +1440,10 @@ mod tests {
         let x_pos = select_rows_ref(s.x.as_ref(), &rows);
         let expected = compute_model_fit_metrics(
             column(&positives),
-            &model.predict(x_pos.as_ref()).expect("predict").mean_positive,
+            &model
+                .predict(x_pos.as_ref())
+                .expect("predict")
+                .mean_positive,
             None,
         )
         .expect("metrics");
@@ -1562,12 +1568,15 @@ mod tests {
     fn selection_uses_weights() {
         let s = sample(40, 10.0, 6, 1.0, 0.2);
         let w: Vec<f64> = (0..40).map(|i| 1.0 + usize_to_f64(i % 3)).collect();
-        let data = s.data().with_weights(CaseWeights::new(&w).expect("weights")).expect("data");
+        let data = s
+            .data()
+            .with_weights(CaseWeights::new(&w).expect("weights"))
+            .expect("data");
         let weighted = select(&data, &[1.5]).expect("weighted selection");
         let unweighted = select(&s.data(), &[1.5]).expect("selection");
         assert_eq!(weighted.tweedie_candidates.len(), 1);
-        let expected = tweedie::fit(&data, 1.5, &TweedieOptions::default(), None, None)
-            .expect("weighted fit");
+        let expected =
+            tweedie::fit(&data, 1.5, &TweedieOptions::default(), None, None).expect("weighted fit");
         assert_eq!(
             weighted.tweedie_candidates[0].model.coefficients,
             expected.coefficients
@@ -1800,7 +1809,9 @@ mod tests {
     /// Sixty rows in ten clusters of six, every fourth outcome zero.
     fn clustered_sample() -> (Sample, Vec<u32>) {
         let s = sample(60, 10.0, 4, 1.0, 0.2);
-        let clusters = (0..60).map(|i| u32::try_from(i / 6).expect("small")).collect();
+        let clusters = (0..60)
+            .map(|i| u32::try_from(i / 6).expect("small"))
+            .collect();
         (s, clusters)
     }
 
@@ -1827,7 +1838,11 @@ mod tests {
         for i in 0..60 {
             for j in 0..60 {
                 if clusters[i] == clusters[j] {
-                    assert_eq!(fold_of_row[i], fold_of_row[j], "cluster {} split", clusters[i]);
+                    assert_eq!(
+                        fold_of_row[i], fold_of_row[j],
+                        "cluster {} split",
+                        clusters[i]
+                    );
                 }
             }
         }

@@ -181,4 +181,3 @@ pub fn summary(draws: &Matrix, level: Level) -> BootstrapSummary {
         intervals,
     }
 }
-

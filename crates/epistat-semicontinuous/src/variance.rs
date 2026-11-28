@@ -50,13 +50,12 @@ impl Variance {
             .is_some_and(|w| w.kind() == WeightKind::Frequency);
         let variance = match self {
             Self::Auto if sampling || data.clusters().is_some() => Some(VarianceKind::Robust),
-            Self::Auto => Some(VarianceKind::ModelBased),
             Self::ModelBased if sampling => {
                 return Err(Error::Unsupported {
                     what: "a model-based covariance with sampling weights",
                 });
             }
-            Self::ModelBased => Some(VarianceKind::ModelBased),
+            Self::Auto | Self::ModelBased => Some(VarianceKind::ModelBased),
             Self::Sandwich => Some(VarianceKind::Robust),
             Self::None => None,
         };

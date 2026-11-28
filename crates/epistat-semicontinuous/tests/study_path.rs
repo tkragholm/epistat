@@ -488,7 +488,8 @@ fn compact(out: &mut Vec<(&'static str, u64)>, slice: &Slice) {
 }
 
 fn comparison(out: &mut Vec<(&'static str, u64)>, slice: &Slice) {
-    let comparison = compare::compare(&slice.data(), &CompareOptions::new(Seed(42))).expect("compare");
+    let comparison =
+        compare::compare(&slice.data(), &CompareOptions::new(Seed(42))).expect("compare");
     let mut h = Hash::new();
     h.comparison(&comparison);
     out.push(("model_comparison", h.finish()));

@@ -98,13 +98,7 @@ fn close_columns(label: &str, compact: &[f64], dense: &[f64]) {
 /// The fitted linear predictors over the rows of `x`. The dense logit runs on the raw
 /// design, whose intercept and calendar-year coefficients trade off against each other
 /// by far more than either moves a prediction.
-fn close_predictors(
-    label: &str,
-    x: &Mat<f64>,
-    compact: &[f64],
-    dense: &[f64],
-    tolerance: f64,
-) {
+fn close_predictors(label: &str, x: &Mat<f64>, compact: &[f64], dense: &[f64], tolerance: f64) {
     let mut largest = 0.0_f64;
     for i in 0..x.nrows() {
         let difference: f64 = (0..x.ncols())
@@ -173,7 +167,12 @@ fn a_gamma_fit_agrees_with_the_dense_fit() {
         )
         .expect("dense");
         let compact = prepared
-            .fit(case_weights(&weights), &warm, &gamma_options(), &mut scratch)
+            .fit(
+                case_weights(&weights),
+                &warm,
+                &gamma_options(),
+                &mut scratch,
+            )
             .expect("compact");
         close_columns("beta", &compact.coefficients, &dense.coefficients);
         assert!(compact.iterations.abs_diff(dense.report.meta.iterations) <= 1);
@@ -288,7 +287,10 @@ fn a_rare_outcome_class_gives_the_intercept_only_logit_of_the_dense_fit() {
         )
         .expect("compact");
     assert_eq!(compact.iterations_logit, 0);
-    assert_eq!(compact.logit_intercept_only, dense.report.logit_intercept_only);
+    assert_eq!(
+        compact.logit_intercept_only,
+        dense.report.logit_intercept_only
+    );
     close_columns("logit", &compact.logit, &dense.logit.coefficients);
     close_predictors(
         "gamma",

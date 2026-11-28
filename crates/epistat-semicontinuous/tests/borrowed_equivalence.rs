@@ -153,15 +153,11 @@ fn two_part_reweighted_view_matches_built_view() {
     let n = 6_000;
     let (x, y) = sample(n, 11);
     let cluster_ids = clusters(n);
-    let options = [
-        Variance::ModelBased,
-        Variance::Sandwich,
-        Variance::None,
-    ]
-    .map(|variance| TwoPartOptions {
-        variance,
-        ..TwoPartOptions::default()
-    });
+    let options =
+        [Variance::ModelBased, Variance::Sandwich, Variance::None].map(|variance| TwoPartOptions {
+            variance,
+            ..TwoPartOptions::default()
+        });
     let full_weights = replicate_weights(n, 0);
     let full = two_part::fit(
         &CostData::builder(x.as_ref(), &y)
@@ -441,11 +437,7 @@ fn predict_mean_matches_the_mean_of_the_full_prediction() {
         for weights in [None, Some(weights.as_slice())] {
             assert_eq!(
                 two_part.predict_mean(x, weights).expect("mean").to_bits(),
-                reference_mean(
-                    &two_part.predict(x).expect("prediction").mean,
-                    weights
-                )
-                .to_bits(),
+                reference_mean(&two_part.predict(x).expect("prediction").mean, weights).to_bits(),
                 "two-part, n = {n}"
             );
             assert_eq!(

@@ -31,13 +31,13 @@ pub(super) fn elastic_net_wls(
     z: MatRef<'_, f64>,
     regularization: Regularization,
 ) -> Result<Mat<f64>, Error> {
-    let (lambda, alpha, exclude_intercept) = match regularization {
-        Regularization::ElasticNet {
-            lambda,
-            alpha,
-            exclude_intercept,
-        } => (lambda, alpha, exclude_intercept),
-        _ => return Err(Error::Singular),
+    let Regularization::ElasticNet {
+        lambda,
+        alpha,
+        exclude_intercept,
+    } = regularization
+    else {
+        return Err(Error::Singular);
     };
 
     let n = x.nrows();

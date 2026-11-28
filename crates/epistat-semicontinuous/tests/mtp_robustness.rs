@@ -1,5 +1,5 @@
-use epistat_linalg::Mat;
 use epistat_core::Seed;
+use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_semicontinuous::LongitudinalData;
 use epistat_semicontinuous::mtp::{

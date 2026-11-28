@@ -94,7 +94,9 @@ use crate::tweedie::{
     relative_change,
 };
 use crate::two_part::irls::{GAMMA_LOG_LINK_ETA_CLAMP, LOGIT_ETA_CLAMP, ridge_from_regularization};
-use crate::two_part::{InterceptOnly, Regularization, Separation, TwoPartOptions, TwoPartWarmStart};
+use crate::two_part::{
+    InterceptOnly, Regularization, Separation, TwoPartOptions, TwoPartWarmStart,
+};
 use crate::utils::add_ridge_to_diagonal;
 use epistat_linalg::{Attempt, Factor, Method};
 
@@ -1153,12 +1155,7 @@ impl PreparedPredictionDesign {
     /// Panics if `weights` is not as long as the design has rows, or a coefficient vector
     /// is shorter than the design has columns.
     #[must_use]
-    pub fn mean_two_part(
-        &self,
-        logit: &[f64],
-        gamma: &[f64],
-        weights: &[f64],
-    ) -> f64 {
+    pub fn mean_two_part(&self, logit: &[f64], gamma: &[f64], weights: &[f64]) -> f64 {
         assert_eq!(weights.len(), self.rows.n, "one weight per row");
         let (intercept_logit, intercept_gamma) = (
             self.rows.shifted_from_raw(logit),
