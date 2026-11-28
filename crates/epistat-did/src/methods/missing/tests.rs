@@ -10,7 +10,9 @@ fn a_hand_computed_example() {
     let treated = [true, true, false, false];
     let pre = [Some(1.0), None, Some(2.0), None];
     let post = [4.0, 5.0, 3.0, 2.5];
-    let data = MissingData::builder(&treated, &pre, &post).build().unwrap();
+    let data = MissingData::builder(&treated, &pre[..], &post)
+        .build()
+        .unwrap();
     let p = MissingPredictions {
         propensity: &[0.6, 0.6, 0.5, 0.25],
         gamma_treated: &[0.5, 0.5, 0.5, 0.5],
@@ -126,7 +128,7 @@ fn bad_columns_are_input_errors() {
         other => other.code(),
     };
     let run = |post: &[f64], p: &MissingPredictions<'_>| {
-        let data = MissingData::builder(&treated, &pre, post).build()?;
+        let data = MissingData::builder(&treated, &pre[..], post).build()?;
         from_predictions(&data, p, &options).map(|fit| fit.estimate.estimate)
     };
     assert!(run(&post, &p).is_ok());
@@ -149,7 +151,7 @@ fn bad_columns_are_input_errors() {
         (bad != BadInput::Unsorted).then(|| {
             let column = bad.column(&level);
             let x = Mat::from_fn(column.len(), 1, |i, _| column[i]);
-            let data = MissingData::builder(&treated, &pre, &post)
+            let data = MissingData::builder(&treated, &pre[..], &post)
                 .covariates(x.as_ref())
                 .build()?;
             estimate(&data, &options).map(|fit| fit.estimate.estimate)
@@ -159,7 +161,9 @@ fn bad_columns_are_input_errors() {
         gamma_floor: 1.0,
         ..options.clone()
     };
-    let data = MissingData::builder(&treated, &pre, &post).build().unwrap();
+    let data = MissingData::builder(&treated, &pre[..], &post)
+        .build()
+        .unwrap();
     epistat_testkit::assert_input_error_code("gamma_floor", "input.domain", || {
         from_predictions(&data, &p, &invalid).map(|fit| fit.estimate.estimate)
     });

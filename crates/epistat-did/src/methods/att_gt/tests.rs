@@ -779,7 +779,7 @@ fn cross_sections_match_the_deprecated_design_option() {
 
     // The estimators that follow units refuse repeated cross-sections.
     let y = [1.0, 2.0];
-    let view = StaggeredPanel::cross_sections(&[1, 2], &[None, Some(2)], &y)
+    let view = StaggeredPanel::cross_sections(&[1, 2], &[None, Some(2)][..], &y)
         .build()
         .unwrap();
     assert_eq!(view.design(), Design::RepeatedCrossSection);

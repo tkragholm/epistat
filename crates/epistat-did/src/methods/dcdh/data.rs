@@ -1,7 +1,7 @@
 //! The panel of a treatment that may switch on and off, the data view of the
 //! dCDH estimator.
 
-use epistat_core::{CaseWeights, InputError, Panel, check};
+use epistat_core::{CaseWeights, Col, InputError, Panel, check};
 use epistat_linalg::{Mat, MatRef};
 
 use crate::error::Error;
@@ -48,15 +48,15 @@ use crate::error::Error;
 /// let period = [1, 2, 3, 1, 2, 3];
 /// let y = [Some(1.0), Some(2.0), Some(1.2), Some(0.9), None, Some(1.1)];
 /// let d = [Some(0.0), Some(1.0), Some(0.0), Some(0.0), Some(0.0), Some(0.0)];
-/// let panel = SwitchingPanel::builder(&unit, &period, &y, &d).build()?;
+/// let panel = SwitchingPanel::builder(&unit, &period, &y[..], &d[..]).build()?;
 /// assert_eq!(panel.n_units(), 2);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct SwitchingPanel<'a> {
     key: Panel<'a>,
-    outcome: &'a [Option<f64>],
-    treatment: &'a [Option<f64>],
+    outcome: Vec<Option<f64>>,
+    treatment: Vec<Option<f64>>,
     weights: Option<&'a [f64]>,
     controls: Option<MatRef<'a, f64>>,
     strata: Option<&'a [u32]>,
@@ -66,13 +66,13 @@ pub struct SwitchingPanel<'a> {
 }
 
 /// The builder of a [`SwitchingPanel`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[must_use]
 pub struct SwitchingPanelBuilder<'a> {
     unit: &'a [u32],
     period: &'a [i64],
-    outcome: &'a [Option<f64>],
-    treatment: &'a [Option<f64>],
+    outcome: Vec<Option<f64>>,
+    treatment: Vec<Option<f64>>,
     weights: Option<&'a [f64]>,
     controls: Option<MatRef<'a, f64>>,
     strata: Option<&'a [u32]>,
@@ -83,18 +83,20 @@ pub struct SwitchingPanelBuilder<'a> {
 
 impl<'a> SwitchingPanel<'a> {
     /// The panel of the unit codes `unit`, the periods `period`, and the
-    /// outcome and treatment of each row, `None` where missing.
-    pub const fn builder(
+    /// outcome and treatment of each row, null where missing. Both are
+    /// nullable columns: a `&[Option<f64>]`, or a [`Col`] over an Arrow
+    /// column's values and validity.
+    pub fn builder(
         unit: &'a [u32],
         period: &'a [i64],
-        outcome: &'a [Option<f64>],
-        treatment: &'a [Option<f64>],
+        outcome: impl Into<Col<'a, f64>>,
+        treatment: impl Into<Col<'a, f64>>,
     ) -> SwitchingPanelBuilder<'a> {
         SwitchingPanelBuilder {
             unit,
             period,
-            outcome,
-            treatment,
+            outcome: outcome.into().iter().collect(),
+            treatment: treatment.into().iter().collect(),
             weights: None,
             controls: None,
             strata: None,
@@ -124,14 +126,14 @@ impl<'a> SwitchingPanel<'a> {
 
     /// The outcome of each row, `None` where missing.
     #[must_use]
-    pub const fn outcome(&self) -> &'a [Option<f64>] {
-        self.outcome
+    pub fn outcome(&self) -> &[Option<f64>] {
+        &self.outcome
     }
 
     /// The treatment of each row, `None` where missing.
     #[must_use]
-    pub const fn treatment(&self) -> &'a [Option<f64>] {
-        self.treatment
+    pub fn treatment(&self) -> &[Option<f64>] {
+        &self.treatment
     }
 
     /// The sampling weight of each row, `None` when every row weighs 1.
@@ -320,7 +322,7 @@ impl<'a> SwitchingPanelBuilder<'a> {
     pub fn build(self) -> Result<SwitchingPanel<'a>, Error> {
         let key = Panel::new(self.unit, self.period)?;
         let n = key.len();
-        for (what, column) in [("outcome", self.outcome), ("treatment", self.treatment)] {
+        for (what, column) in [("outcome", &self.outcome), ("treatment", &self.treatment)] {
             check::same_length(what, n, column.len())?;
             if let Some(row) = column
                 .iter()
@@ -433,7 +435,7 @@ mod tests {
         let x = Mat::from_fn(6, 1, |i, _| f64::from(u32::try_from(i).unwrap()));
         let h = Mat::from_fn(6, 1, |i, _| if i < 3 { 1.0 } else { 2.0 });
         let codes = [7, 7, 7, 3, 3, 3];
-        let panel = SwitchingPanel::builder(&UNIT, &PERIOD, &Y, &D)
+        let panel = SwitchingPanel::builder(&UNIT, &PERIOD, &Y[..], &D[..])
             .weights(epistat_core::CaseWeights::new(&w).expect("weights"))
             .controls(x.as_ref())
             .strata(&codes)
@@ -459,9 +461,9 @@ mod tests {
     #[test]
     fn bad_columns_are_refused() {
         let period = [1, 1, 3, 1, 2, 3];
-        let error = input(SwitchingPanel::builder(&UNIT, &period, &Y, &D).build());
+        let error = input(SwitchingPanel::builder(&UNIT, &period, &Y[..], &D[..]).build());
         assert_eq!(error.code(), "input.duplicate");
-        let error = input(SwitchingPanel::builder(&UNIT, &PERIOD, &Y[..5], &D).build());
+        let error = input(SwitchingPanel::builder(&UNIT, &PERIOD, &Y[..5], &D[..]).build());
         assert_eq!(
             error,
             InputError::Length {
@@ -472,7 +474,7 @@ mod tests {
         );
         let mut y = Y;
         y[4] = Some(f64::NAN);
-        let error = input(SwitchingPanel::builder(&UNIT, &PERIOD, &y, &D).build());
+        let error = input(SwitchingPanel::builder(&UNIT, &PERIOD, &y[..], &D[..]).build());
         assert_eq!(
             error,
             InputError::NotFinite {
@@ -486,7 +488,7 @@ mod tests {
         assert_eq!(error.code(), "input.domain");
         let x = Mat::from_fn(6, 1, |i, _| if i == 2 { f64::INFINITY } else { 0.0 });
         let error = input(
-            SwitchingPanel::builder(&UNIT, &PERIOD, &Y, &D)
+            SwitchingPanel::builder(&UNIT, &PERIOD, &Y[..], &D[..])
                 .controls(x.as_ref())
                 .build(),
         );
@@ -504,7 +506,7 @@ mod tests {
     fn unit_level_columns_must_be_constant_within_a_unit() {
         let strata = [1, 1, 1, 4, 5, 4];
         let error = input(
-            SwitchingPanel::builder(&UNIT, &PERIOD, &Y, &D)
+            SwitchingPanel::builder(&UNIT, &PERIOD, &Y[..], &D[..])
                 .strata(&strata)
                 .build(),
         );
@@ -517,7 +519,7 @@ mod tests {
         );
         let h = Mat::from_fn(6, 1, |i, _| if i == 1 { 1.0 } else { 0.0 });
         let error = input(
-            SwitchingPanel::builder(&UNIT, &PERIOD, &Y, &D)
+            SwitchingPanel::builder(&UNIT, &PERIOD, &Y[..], &D[..])
                 .het_covariates(h.as_ref())
                 .build(),
         );
@@ -538,12 +540,17 @@ mod tests {
         assert_rejects_bad_input("SwitchingPanel::build", |bad| {
             let weights = bad.column(&w);
             let built = match bad {
-                BadInput::Unsorted => SwitchingPanel::builder(&UNIT, &reversed, &Y, &D).build(),
-                BadInput::Empty => SwitchingPanel::builder(&[], &[], &[], &[]).build(),
+                BadInput::Unsorted => {
+                    SwitchingPanel::builder(&UNIT, &reversed, &Y[..], &D[..]).build()
+                }
+                BadInput::Empty => {
+                    SwitchingPanel::builder(&[], &[], &[] as &[Option<f64>], &[] as &[Option<f64>])
+                        .build()
+                }
                 _ => epistat_core::CaseWeights::new(&weights)
                     .map_err(Error::from)
                     .and_then(|w| {
-                        SwitchingPanel::builder(&UNIT, &PERIOD, &Y, &D)
+                        SwitchingPanel::builder(&UNIT, &PERIOD, &Y[..], &D[..])
                             .weights(w)
                             .build()
                     }),

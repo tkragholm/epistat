@@ -1,7 +1,7 @@
 //! The panel of staggered adoption, the data view of the estimators that
 //! follow units over periods.
 
-use epistat_core::{CaseWeights, InputError, Panel, check};
+use epistat_core::{CaseWeights, Col, InputError, Panel, check};
 use epistat_linalg::MatRef;
 
 use crate::error::Error;
@@ -72,47 +72,54 @@ use crate::methods::att_gt::Design;
 /// assert_eq!(panel.first_treated()[0], None);
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct StaggeredPanel<'a> {
     /// `None` for repeated cross-sections, which have no unit codes.
     key: Option<Panel<'a>>,
     period: &'a [i64],
-    first_treated: &'a [Option<i64>],
+    first_treated: Vec<Option<i64>>,
     outcome: &'a [f64],
     weights: Option<&'a [f64]>,
     covariates: Option<MatRef<'a, f64>>,
     clusters: Option<&'a [u32]>,
-    comparison_cohort: Option<&'a [Option<i64>]>,
+    comparison_cohort: Option<Vec<Option<i64>>>,
 }
 
 /// The builder of a [`StaggeredPanel`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 #[must_use]
 pub struct StaggeredPanelBuilder<'a> {
     unit: Option<&'a [u32]>,
     period: &'a [i64],
-    first_treated: &'a [Option<i64>],
+    first_treated: Vec<Option<i64>>,
     outcome: &'a [f64],
     weights: Option<&'a [f64]>,
     covariates: Option<MatRef<'a, f64>>,
     clusters: Option<&'a [u32]>,
-    comparison_cohort: Option<&'a [Option<i64>]>,
+    comparison_cohort: Option<Vec<Option<i64>>>,
+}
+
+/// The rows of a nullable column, a null row `None`.
+fn rows<'a>(column: impl Into<Col<'a, i64>>) -> Vec<Option<i64>> {
+    column.into().iter().collect()
 }
 
 impl<'a> StaggeredPanel<'a> {
     /// The panel of the unit codes `unit`, the periods `period`, the first
-    /// treated period of each row's unit (`None` for never treated) and the
-    /// outcome.
-    pub const fn builder(
+    /// treated period of each row's unit (null for never treated) and the
+    /// outcome. The first treated periods are a nullable column: a
+    /// `&[Option<i64>]`, or a [`Col`] over an Arrow column's values and
+    /// validity.
+    pub fn builder(
         unit: &'a [u32],
         period: &'a [i64],
-        first_treated: &'a [Option<i64>],
+        first_treated: impl Into<Col<'a, i64>>,
         outcome: &'a [f64],
     ) -> StaggeredPanelBuilder<'a> {
         StaggeredPanelBuilder {
             unit: Some(unit),
             period,
-            first_treated,
+            first_treated: rows(first_treated),
             outcome,
             weights: None,
             covariates: None,
@@ -133,20 +140,20 @@ impl<'a> StaggeredPanel<'a> {
     /// let year = [2005, 2004, 2005, 2004];
     /// let first_treated = [Some(2005), Some(2005), None, None];
     /// let y = [2.0, 1.0, 1.6, 1.5];
-    /// let rows = StaggeredPanel::cross_sections(&year, &first_treated, &y).build()?;
+    /// let rows = StaggeredPanel::cross_sections(&year, &first_treated[..], &y).build()?;
     /// assert_eq!(rows.design(), Design::RepeatedCrossSection);
     /// assert_eq!(rows.unit(), None);
     /// # Ok::<(), epistat_did::Error>(())
     /// ```
-    pub const fn cross_sections(
+    pub fn cross_sections(
         period: &'a [i64],
-        first_treated: &'a [Option<i64>],
+        first_treated: impl Into<Col<'a, i64>>,
         outcome: &'a [f64],
     ) -> StaggeredPanelBuilder<'a> {
         StaggeredPanelBuilder {
             unit: None,
             period,
-            first_treated,
+            first_treated: rows(first_treated),
             outcome,
             weights: None,
             covariates: None,
@@ -211,8 +218,8 @@ impl<'a> StaggeredPanel<'a> {
     /// The first treated period of each row's unit, `None` for never
     /// treated.
     #[must_use]
-    pub const fn first_treated(&self) -> &'a [Option<i64>] {
-        self.first_treated
+    pub fn first_treated(&self) -> &[Option<i64>] {
+        &self.first_treated
     }
 
     /// The outcome of each row.
@@ -244,8 +251,8 @@ impl<'a> StaggeredPanel<'a> {
     /// to as a comparator, `None` for a unit matched to none; `None` for the
     /// whole column when the design is not matched.
     #[must_use]
-    pub const fn comparison_cohort(&self) -> Option<&'a [Option<i64>]> {
-        self.comparison_cohort
+    pub fn comparison_cohort(&self) -> Option<&[Option<i64>]> {
+        self.comparison_cohort.as_deref()
     }
 
     /// The number of rows.
@@ -301,8 +308,8 @@ impl<'a> StaggeredPanelBuilder<'a> {
 
     /// The cohort each never-treated unit was matched to as a comparator,
     /// one entry per row and constant within a unit.
-    pub const fn comparison_cohort(mut self, comparison_cohort: &'a [Option<i64>]) -> Self {
-        self.comparison_cohort = Some(comparison_cohort);
+    pub fn comparison_cohort(mut self, comparison_cohort: impl Into<Col<'a, i64>>) -> Self {
+        self.comparison_cohort = Some(rows(comparison_cohort));
         self
     }
 
@@ -345,19 +352,19 @@ impl<'a> StaggeredPanelBuilder<'a> {
                 }
             }
         }
-        check_r_never_treated(self.period, self.first_treated)?;
+        check_r_never_treated(self.period, &self.first_treated)?;
         if let Some(clusters) = self.clusters {
             check::same_length("clusters", n, clusters.len())?;
         }
-        if let Some(cohort) = self.comparison_cohort {
+        if let Some(cohort) = &self.comparison_cohort {
             check::same_length("comparison_cohort", n, cohort.len())?;
         }
         if let Some(key) = key {
-            constant_by_unit(key, "first_treated", self.first_treated)?;
+            constant_by_unit(key, "first_treated", &self.first_treated)?;
             if let Some(clusters) = self.clusters {
                 constant_by_unit(key, "clusters", clusters)?;
             }
-            if let Some(cohort) = self.comparison_cohort {
+            if let Some(cohort) = &self.comparison_cohort {
                 constant_by_unit(key, "comparison_cohort", cohort)?;
             }
         }
@@ -433,11 +440,11 @@ mod tests {
         let x = Mat::from_fn(6, 1, |i, _| f64::from(u32::try_from(i).unwrap()));
         let clusters = [7, 7, 7, 3, 3, 3];
         let matched = [None, None, None, Some(2001), Some(2001), Some(2001)];
-        let panel = StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT, &Y)
+        let panel = StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT[..], &Y)
             .weights(epistat_core::CaseWeights::new(&w).expect("weights"))
             .covariates(x.as_ref())
             .clusters(&clusters)
-            .comparison_cohort(&matched)
+            .comparison_cohort(&matched[..])
             .build()
             .unwrap();
         assert_eq!(panel.len(), 6);
@@ -456,7 +463,7 @@ mod tests {
     #[test]
     fn the_key_must_be_sorted_and_unique() {
         let period = [2001, 2000, 2002, 2000, 2001, 2002];
-        let error = input(StaggeredPanel::builder(&UNIT, &period, &COHORT, &Y).build());
+        let error = input(StaggeredPanel::builder(&UNIT, &period, &COHORT[..], &Y).build());
         assert_eq!(
             error,
             InputError::Unsorted {
@@ -465,7 +472,7 @@ mod tests {
             }
         );
         let period = [2000, 2000, 2002, 2000, 2001, 2002];
-        let error = input(StaggeredPanel::builder(&UNIT, &period, &COHORT, &Y).build());
+        let error = input(StaggeredPanel::builder(&UNIT, &period, &COHORT[..], &Y).build());
         assert_eq!(
             error,
             InputError::Duplicate {
@@ -473,7 +480,7 @@ mod tests {
                 row: 1
             }
         );
-        let error = input(StaggeredPanel::builder(&[], &[], &[], &[]).build());
+        let error = input(StaggeredPanel::builder(&[], &[], &[] as &[Option<i64>], &[]).build());
         assert_eq!(error.code(), "input.empty");
     }
 
@@ -489,14 +496,14 @@ mod tests {
             }
         );
         let error = input(
-            StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT, &Y)
+            StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT[..], &Y)
                 .clusters(&[0, 0])
                 .build(),
         );
         assert_eq!(error.code(), "input.length");
         let x = Mat::<f64>::zeros(5, 1);
         let error = input(
-            StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT, &Y)
+            StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT[..], &Y)
                 .covariates(x.as_ref())
                 .build(),
         );
@@ -507,7 +514,7 @@ mod tests {
     fn values_outside_their_domain_are_refused() {
         let mut y = Y;
         y[4] = f64::NAN;
-        let error = input(StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT, &y).build());
+        let error = input(StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT[..], &y).build());
         assert_eq!(
             error,
             InputError::NotFinite {
@@ -519,7 +526,7 @@ mod tests {
         let w = [1.0, 1.0, -1.0, 1.0, 1.0, 1.0];
         let error = CaseWeights::new(&w).unwrap_err();
         assert_eq!(error.code(), "input.domain");
-        let error = input(StaggeredPanel::builder(&UNIT, &PERIOD, &[Some(0); 6], &Y).build());
+        let error = input(StaggeredPanel::builder(&UNIT, &PERIOD, &[Some(0); 6][..], &Y).build());
         assert_eq!(error.code(), "input.domain");
         assert!(
             error
@@ -531,7 +538,7 @@ mod tests {
         let period = [0, 1, 2, 0, 1, 2];
         let cohort = [Some(0), Some(0), Some(0), None, None, None];
         assert!(
-            StaggeredPanel::builder(&UNIT, &period, &cohort, &Y)
+            StaggeredPanel::builder(&UNIT, &period, &cohort[..], &Y)
                 .build()
                 .is_ok()
         );
@@ -541,7 +548,7 @@ mod tests {
             |i, j| if i == 3 && j == 1 { f64::INFINITY } else { 0.0 },
         );
         let error = input(
-            StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT, &Y)
+            StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT[..], &Y)
                 .covariates(x.as_ref())
                 .build(),
         );
@@ -563,10 +570,12 @@ mod tests {
             let y = bad.column(&Y);
             let built = match bad {
                 BadInput::Unsorted => {
-                    StaggeredPanel::builder(&UNIT, &reversed, &COHORT, &Y).build()
+                    StaggeredPanel::builder(&UNIT, &reversed, &COHORT[..], &Y).build()
                 }
-                BadInput::Empty => StaggeredPanel::builder(&[], &[], &[], &y).build(),
-                _ => StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT, &y).build(),
+                BadInput::Empty => {
+                    StaggeredPanel::builder(&[], &[], &[] as &[Option<i64>], &y).build()
+                }
+                _ => StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT[..], &y).build(),
             };
             Some(built.map(|panel| panel.len()))
         });
@@ -575,7 +584,7 @@ mod tests {
     #[test]
     fn unit_level_columns_must_be_constant_within_a_unit() {
         let cohort = [Some(2001), Some(2002), Some(2001), None, None, None];
-        let error = input(StaggeredPanel::builder(&UNIT, &PERIOD, &cohort, &Y).build());
+        let error = input(StaggeredPanel::builder(&UNIT, &PERIOD, &cohort[..], &Y).build());
         assert_eq!(
             error,
             InputError::NotConstant {
@@ -585,7 +594,7 @@ mod tests {
         );
         let clusters = [1, 1, 1, 4, 5, 4];
         let error = input(
-            StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT, &Y)
+            StaggeredPanel::builder(&UNIT, &PERIOD, &COHORT[..], &Y)
                 .clusters(&clusters)
                 .build(),
         );

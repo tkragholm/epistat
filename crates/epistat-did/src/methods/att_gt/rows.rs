@@ -20,7 +20,7 @@ pub(super) struct Rows<'a> {
 impl<'a> Rows<'a> {
     /// The rows of `panel`; repeated cross-sections have no unit codes, and
     /// their routes do not read them.
-    pub(super) fn new(panel: &StaggeredPanel<'a>) -> Self {
+    pub(super) fn new(panel: &'a StaggeredPanel<'_>) -> Self {
         Self {
             unit: panel.unit().unwrap_or_default(),
             period: panel.period(),

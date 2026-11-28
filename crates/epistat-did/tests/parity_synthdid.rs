@@ -991,7 +991,7 @@ fn refuses_what_it_cannot_estimate() {
     let period = [0, 1, 0];
     let first = [None, None, Some(1)];
     let y = [1.0, 2.0, 3.0];
-    let unbalanced = StaggeredPanel::builder(&unit, &period, &first, &y)
+    let unbalanced = StaggeredPanel::builder(&unit, &period, &first[..], &y)
         .build()
         .unwrap();
     assert_eq!(

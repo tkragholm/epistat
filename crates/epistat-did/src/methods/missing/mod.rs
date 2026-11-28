@@ -182,7 +182,7 @@
 
 mod fit;
 
-use epistat_core::{Estimate, InputError, Level, check};
+use epistat_core::{Col, Estimate, InputError, Level, check};
 use epistat_inference::{ClusterRule, Clusters, Influence};
 use epistat_linalg::MatRef;
 
@@ -230,7 +230,7 @@ pub enum MissingAssumption {
 /// let pre = [Some(1.0), None, Some(1.4), Some(0.9), Some(1.1), None, Some(1.0), Some(1.3)];
 /// let post = [3.2, 2.9, 3.6, 1.0, 1.3, 1.2, 1.1, 1.5];
 /// let age = [41.0, 37.0, 45.0, 40.0, 38.0, 44.0, 39.0, 43.0];
-/// let data = MissingData::builder(&treated, &pre, &post)
+/// let data = MissingData::builder(&treated, &pre[..], &post)
 ///     .covariates(MatRef::from_column_major_slice(&age, 8, 1))
 ///     .build()?;
 /// // Age in the propensity and outcome models, the missingness by arm only.
@@ -248,35 +248,35 @@ pub enum MissingAssumption {
 #[derive(Debug, Clone)]
 pub struct MissingData<'a> {
     treated: &'a [bool],
-    outcome_pre: &'a [Option<f64>],
+    outcome_pre: Vec<Option<f64>>,
     outcome_post: &'a [f64],
     covariates: Option<MatRef<'a, f64>>,
     clusters: Option<Clusters>,
 }
 
 /// The builder of a [`MissingData`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 #[must_use]
 pub struct MissingDataBuilder<'a> {
     treated: &'a [bool],
-    outcome_pre: &'a [Option<f64>],
+    outcome_pre: Vec<Option<f64>>,
     outcome_post: &'a [f64],
     covariates: Option<MatRef<'a, f64>>,
     clusters: Option<&'a [u32]>,
 }
 
 impl<'a> MissingData<'a> {
-    /// Whether each unit is treated, its pre-treatment outcome (`None` where
-    /// it is missing) and its post-treatment outcome, which is observed for
-    /// every unit.
-    pub const fn builder(
+    /// Whether each unit is treated, its pre-treatment outcome (null where
+    /// it is missing, a `&[Option<f64>]` or a [`Col`] over an Arrow column)
+    /// and its post-treatment outcome, which is observed for every unit.
+    pub fn builder(
         treated: &'a [bool],
-        outcome_pre: &'a [Option<f64>],
+        outcome_pre: impl Into<Col<'a, f64>>,
         outcome_post: &'a [f64],
     ) -> MissingDataBuilder<'a> {
         MissingDataBuilder {
             treated,
-            outcome_pre,
+            outcome_pre: outcome_pre.into().iter().collect(),
             outcome_post,
             covariates: None,
             clusters: None,
@@ -291,8 +291,8 @@ impl<'a> MissingData<'a> {
 
     /// The pre-treatment outcome, `None` where it is missing.
     #[must_use]
-    pub const fn outcome_pre(&self) -> &'a [Option<f64>] {
-        self.outcome_pre
+    pub fn outcome_pre(&self) -> &[Option<f64>] {
+        &self.outcome_pre
     }
 
     /// The post-treatment outcome.

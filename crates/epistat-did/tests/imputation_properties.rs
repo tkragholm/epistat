@@ -145,7 +145,7 @@ fn a_row_whose_effects_lie_in_different_components_is_dropped() {
         None,
     ];
     let y = [1.0, 2.0, 5.0, 1.5, 2.5, 3.0, 4.0, 9.0, 3.5, 4.5];
-    let panel = StaggeredPanel::builder(&unit, &time, &g, &y)
+    let panel = StaggeredPanel::builder(&unit, &time, &g[..], &y)
         .build()
         .unwrap();
     let out = imputation::estimate(&panel, &ImputationOptions::default()).unwrap();

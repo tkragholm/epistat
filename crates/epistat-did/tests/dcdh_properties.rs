@@ -340,7 +340,8 @@ fn invalid_input_is_refused() {
         Err(Error::Input(e)) => e,
         other => panic!("expected an input error, got {other:?}"),
     };
-    let empty = SwitchingPanel::builder(&[], &[], &[], &[]).build();
+    let empty =
+        SwitchingPanel::builder(&[], &[], &[] as &[Option<f64>], &[] as &[Option<f64>]).build();
     assert!(matches!(empty, Err(Error::Input(InputError::Empty { .. }))));
     let error = input(estimate(
         &rows,
@@ -371,7 +372,7 @@ fn invalid_input_is_refused() {
     let (unit, period) = ([0, 0, 1, 1], [1, 2, 1, 2]);
     let y = [Some(0.0); 4];
     let d = [Some(0.0), Some(1.0), Some(0.0), Some(0.0)];
-    let nested = SwitchingPanel::builder(&unit, &period, &y, &d)
+    let nested = SwitchingPanel::builder(&unit, &period, &y[..], &d[..])
         .clusters(&[0, 1, 2, 2])
         .build();
     assert_eq!(
@@ -405,7 +406,10 @@ fn bad_columns_are_input_errors() {
         let y: Vec<Option<f64>> = bad.column(&y).into_iter().map(Some).collect();
         let built = match bad {
             BadInput::Unsorted => SwitchingPanel::builder(&unit, &reversed, &y, &d).build(),
-            BadInput::Empty => SwitchingPanel::builder(&[], &[], &[], &[]).build(),
+            BadInput::Empty => {
+                SwitchingPanel::builder(&[], &[], &[] as &[Option<f64>], &[] as &[Option<f64>])
+                    .build()
+            }
             _ => SwitchingPanel::builder(&unit, &period, &y, &d).build(),
         };
         Some(built.and_then(|panel| dcdh::estimate(&panel, &options)))
