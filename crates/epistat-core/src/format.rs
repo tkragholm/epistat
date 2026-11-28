@@ -42,6 +42,16 @@ pub(crate) fn optional(value: Option<f64>, digits: usize, decimals: Option<usize
     value.map_or_else(|| "NA".to_owned(), |v| number(v, digits, decimals))
 }
 
+/// A p-value with two significant digits, `<2e-16` below the machine epsilon
+/// as R's `format.pval` prints it, `NA` when undefined.
+pub(crate) fn p_value(p: Option<f64>) -> String {
+    match p {
+        None => "NA".to_owned(),
+        Some(p) if p < 2.2e-16 => "<2e-16".to_owned(),
+        Some(p) => significant(p, 2, false),
+    }
+}
+
 /// `= 0.20` or `< 2e-16`, the p-value after its name in a sentence.
 pub(crate) fn p_clause(p: f64) -> String {
     if p < 2.2e-16 {
@@ -149,6 +159,11 @@ mod tests {
 
     #[test]
     fn p_values_print_as_r_prints_them() {
+        assert_eq!(p_value(Some(0.2)), "0.20");
+        assert_eq!(p_value(Some(0.054_3)), "0.054");
+        assert_eq!(p_value(Some(4.9e-14)), "4.9e-14");
+        assert_eq!(p_value(Some(1e-300)), "<2e-16");
+        assert_eq!(p_value(None), "NA");
         assert_eq!(p_clause(0.01), "= 0.010");
         assert_eq!(p_clause(0.0), "< 2e-16");
     }
