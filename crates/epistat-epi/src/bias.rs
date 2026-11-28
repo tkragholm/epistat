@@ -117,7 +117,7 @@ pub use rates::{
 };
 pub use record::record_level_misclass;
 
-use epistat_core::{Estimate, Level};
+use epistat_core::{Bootstrap, Estimate, Level};
 use epistat_stats::dist::beta;
 use epistat_stats::dist::normal;
 
@@ -154,15 +154,7 @@ pub(crate) enum BiasError {
 
 impl Counts2x2 {
     fn check(&self) -> Result<(), Error> {
-        let cells = [
-            self.exposed_cases,
-            self.unexposed_cases,
-            self.exposed_noncases,
-            self.unexposed_noncases,
-        ];
-        if cells.iter().any(|x| !x.is_finite() || *x < 0.0) {
-            return Err(BiasError::Table("cells must be finite and not negative").into());
-        }
+        self.check_cells()?;
         if self.exposed_cases + self.unexposed_cases <= 0.0
             || self.exposed_noncases + self.unexposed_noncases <= 0.0
             || self.exposed_cases + self.exposed_noncases <= 0.0
@@ -893,12 +885,13 @@ impl Pair {
 }
 
 /// Options of a probabilistic bias analysis.
+///
+/// There is no default: the seed of the draws is the caller's.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProbOptions {
-    /// The number of draws.
-    pub draws: usize,
-    /// The seed: draw `r` uses `Stream::seeded(replicate_seed(seed, r))`.
-    pub seed: u64,
+    /// The number of draws, `bootstrap.replicates`, and their root seed:
+    /// draw `r` uses `Stream::seeded(replicate_seed(bootstrap.seed, r))`.
+    pub bootstrap: Bootstrap,
     /// Whether to add the sampling error of the table to the systematic error.
     pub random_error: bool,
     /// The level of the limits: they are the percentiles at
@@ -939,6 +932,7 @@ pub struct ProbResult {
 }
 
 /// The corrected measures of one draw.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Measures {
     /// The risk ratio.
@@ -954,14 +948,15 @@ pub struct Measures {
 ///
 /// The parameters of draw `r` are `parameters[r * names.len()..(r + 1) *
 /// names.len()]`, in the order of `names`; a parameter that could not be
-/// drawn is NaN. A discarded draw has `None` among the corrected values. The
-/// memory is about `8 (names.len() + 6)` bytes a draw.
+/// drawn is `None`. A discarded draw has `None` among the corrected values.
+/// The memory is about `16 names.len() + 48` bytes a draw.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct Draws<M> {
     /// The names of the bias parameters.
     pub names: Vec<String>,
     /// The bias parameters of every draw, `names.len()` a draw.
-    pub parameters: Vec<f64>,
+    pub parameters: Vec<Option<f64>>,
     /// The corrected value of every draw with systematic error only.
     pub systematic: Vec<Option<M>>,
     /// The corrected value of every draw with systematic and random error,
@@ -983,6 +978,12 @@ impl<M> Draws<M> {
         }
     }
 
+    /// Appends the parameters of one draw, NaN marking one not drawn.
+    fn push_parameters(&mut self, parameters: &[f64]) {
+        self.parameters
+            .extend(parameters.iter().map(|&p| (!p.is_nan()).then_some(p)));
+    }
+
     /// The number of draws.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -1001,7 +1002,7 @@ impl<M> Draws<M> {
     ///
     /// When `r` is not below [`Draws::len`].
     #[must_use]
-    pub fn parameters_of(&self, r: usize) -> &[f64] {
+    pub fn parameters_of(&self, r: usize) -> &[Option<f64>] {
         let k = self.names.len();
         &self.parameters[r * k..(r + 1) * k]
     }
@@ -1036,14 +1037,14 @@ struct Collector {
 impl Collector {
     fn new(names: Vec<String>, opts: &ProbOptions) -> Self {
         Self {
-            draws: Draws::new(names, opts.draws, opts.random_error),
+            draws: Draws::new(names, opts.bootstrap.replicates, opts.random_error),
             random_error: opts.random_error,
             discarded: 0,
         }
     }
 
     fn push(&mut self, parameters: &[f64], d: Option<Draw>) {
-        self.draws.parameters.extend_from_slice(parameters);
+        self.draws.push_parameters(parameters);
         match d {
             Some(d)
                 if d.systematic.risk_ratio.is_finite() && d.systematic.odds_ratio.is_finite() =>
@@ -1104,7 +1105,7 @@ fn summarise(values: &mut [f64], level: Level) -> Option<Estimate> {
 }
 
 fn check_options(o: &ProbOptions) -> Result<(), Error> {
-    if o.draws == 0 {
+    if o.bootstrap.replicates == 0 {
         return Err(BiasError::Parameter("the number of draws must be positive").into());
     }
     Ok(())
@@ -1237,8 +1238,8 @@ pub fn probabilistic_misclass(
         ]),
         opts,
     );
-    for r in 0..opts.draws {
-        let mut stream = Stream::seeded(replicate_seed(opts.seed, r as u64));
+    for r in 0..opts.bootstrap.replicates {
+        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed, r as u64));
         let mut parameters = [f64::NAN; 4];
         let draw = misclass_draw(
             t,
@@ -1385,8 +1386,8 @@ pub fn probabilistic_selection(
         names(&["selection a", "selection b", "selection c", "selection d"]),
         opts,
     );
-    for r in 0..opts.draws {
-        let mut stream = Stream::seeded(replicate_seed(opts.seed, r as u64));
+    for r in 0..opts.bootstrap.replicates {
+        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed, r as u64));
         let mut parameters = [f64::NAN; 4];
         let draw = (|| {
             let p = draw_selection(s, &mut stream, &mut parameters)?;
@@ -1498,11 +1499,11 @@ pub fn probabilistic_confounding(
     let se = standard_errors(t);
     let mut draws = Draws::new(
         names(&["prevalence exposed", "prevalence unexposed", "association"]),
-        opts.draws,
+        opts.bootstrap.replicates,
         opts.random_error,
     );
-    for r in 0..opts.draws {
-        let mut stream = Stream::seeded(replicate_seed(opts.seed, r as u64));
+    for r in 0..opts.bootstrap.replicates {
+        let mut stream = Stream::seeded(replicate_seed(opts.bootstrap.seed, r as u64));
         let mut parameters = [f64::NAN; 3];
         let adjusted = draw_confounding(
             t,
@@ -1512,7 +1513,7 @@ pub fn probabilistic_confounding(
             &mut stream,
             &mut parameters,
         );
-        draws.parameters.extend_from_slice(&parameters);
+        draws.push_parameters(&parameters);
         draws.systematic.push(adjusted);
         if opts.random_error {
             draws
@@ -1903,8 +1904,7 @@ mod tests {
 
     fn options(draws: usize, random_error: bool) -> ProbOptions {
         ProbOptions {
-            draws,
-            seed: 11,
+            bootstrap: Bootstrap::new(draws, 11),
             random_error,
             level: Level::alpha(0.05).unwrap(),
         }
@@ -1951,7 +1951,7 @@ mod tests {
                 &se,
                 &sp,
                 &ProbOptions {
-                    seed,
+                    bootstrap: Bootstrap::new(2000, seed),
                     ..options(2000, true)
                 },
             )
@@ -2124,7 +2124,12 @@ mod tests {
         assert_eq!(r.draws.total.len(), 500);
         let mut discarded = 0;
         for k in 0..r.draws.len() {
-            let p = r.draws.parameters_of(k);
+            let p: Vec<f64> = r
+                .draws
+                .parameters_of(k)
+                .iter()
+                .map(|p| p.unwrap())
+                .collect();
             let simple = correct_outcome(
                 &t,
                 &Misclass {
@@ -2286,10 +2291,15 @@ mod tests {
         .unwrap();
         assert_eq!(r.draws.names.len(), 11);
         for k in 0..r.draws.len() {
-            let p = r.draws.parameters_of(k);
             let Some(value) = r.draws.systematic[k] else {
                 continue;
             };
+            let p: Vec<f64> = r
+                .draws
+                .parameters_of(k)
+                .iter()
+                .map(|p| p.unwrap())
+                .collect();
             let m = Misclass {
                 se: [p[0], p[1]],
                 sp: [p[2], p[3]],

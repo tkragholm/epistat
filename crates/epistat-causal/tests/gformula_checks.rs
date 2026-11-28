@@ -3,13 +3,18 @@
 
 mod gformula_sim;
 
+use epistat_causal::Bootstrap;
 use epistat_causal::gformula::Competing;
 use epistat_causal::gformula::{
     Action, Covariate, CovariateKind, GFormula, GFormulaOptions, History, IntervalMethod,
     Intervention, Otherwise, Outcome, PersonPeriods, Restriction, Rule, Term, gformula,
 };
 use epistat_causal::{Error, Panel};
+use epistat_core::{Classify, ErrorKind};
 use gformula_sim::{A, L, Sim, Z, complete, covariates, flatten, interventions, simulate};
+
+/// The root seed of the simulation and the bootstrap of every run here.
+const SEED: u64 = 20_261_124;
 
 fn run(sim: &Sim, interventions: &[Intervention], options: &GFormulaOptions) -> GFormula {
     let baseline = sim.baseline();
@@ -58,7 +63,7 @@ fn a_rule_that_changes_nothing_is_the_natural_course() {
             }],
         },
     ];
-    let g = run(&sim, &unchanged, &GFormulaOptions::default());
+    let g = run(&sim, &unchanged, &GFormulaOptions::new(SEED));
     for s in 1..=2 {
         assert_eq!(bits(&values(&g, s)), bits(&values(&g, 0)));
         assert_eq!(
@@ -86,7 +91,7 @@ fn a_constant_schedule_is_a_set_value() {
                 }],
             },
         ],
-        &GFormulaOptions::default(),
+        &GFormulaOptions::new(SEED),
     );
     assert_eq!(bits(&values(&g, 1)), bits(&values(&g, 2)));
     assert!(g.strategies[1].intervened_persons > 0.0);
@@ -103,7 +108,7 @@ fn fewer_periods_give_the_first_periods_of_the_longer_run() {
             &interventions(),
             &GFormulaOptions {
                 simulated,
-                ..GFormulaOptions::default()
+                ..GFormulaOptions::new(SEED)
             },
         );
         let short = run(
@@ -112,7 +117,7 @@ fn fewer_periods_give_the_first_periods_of_the_longer_run() {
             &GFormulaOptions {
                 simulated,
                 periods: Some(2),
-                ..GFormulaOptions::default()
+                ..GFormulaOptions::new(SEED)
             },
         );
         assert_eq!(short.periods, vec![0, 1]);
@@ -126,13 +131,13 @@ fn fewer_periods_give_the_first_periods_of_the_longer_run() {
 #[test]
 fn the_seed_moves_only_simulated_values() {
     let sim = simulate(400, 4, 4);
-    let a = run(&sim, &interventions(), &GFormulaOptions::default());
+    let a = run(&sim, &interventions(), &GFormulaOptions::new(SEED));
     let b = run(
         &sim,
         &interventions(),
         &GFormulaOptions {
             seed: 99,
-            ..GFormulaOptions::default()
+            ..GFormulaOptions::new(SEED)
         },
     );
     assert_eq!(
@@ -140,7 +145,7 @@ fn the_seed_moves_only_simulated_values() {
         bits(&flatten(&run(
             &sim,
             &interventions(),
-            &GFormulaOptions::default()
+            &GFormulaOptions::new(SEED)
         )))
     );
     assert_ne!(values(&a, 0), values(&b, 0));
@@ -155,9 +160,9 @@ fn the_seed_moves_only_simulated_values() {
 fn bootstrap_limits_follow_the_method() {
     let sim = simulate(400, 3, 6);
     let options = GFormulaOptions {
-        bootstrap: 30,
+        bootstrap: Some(Bootstrap::new(30, SEED)),
         interval: IntervalMethod::Normal,
-        ..GFormulaOptions::default()
+        ..GFormulaOptions::new(SEED)
     };
     let g = run(&sim, &interventions(), &options);
     let z = epistat_stats::dist::normal::quantile(0.975);
@@ -189,7 +194,7 @@ fn bootstrap_limits_follow_the_method() {
 #[test]
 fn restrictions_fit_only_where_they_apply() {
     let sim = simulate(500, 4, 7);
-    let g = run(&sim, &interventions(), &GFormulaOptions::default());
+    let g = run(&sim, &interventions(), &GFormulaOptions::new(SEED));
     // L is absorbing: its model is fitted to the rows after period 0 whose
     // previous L is 0.
     let absorbing_rows = (1..sim.id.len())
@@ -212,7 +217,7 @@ fn restrictions_fit_only_where_they_apply() {
         &c,
         &sim.survival(),
         &interventions(),
-        &GFormulaOptions::default(),
+        &GFormulaOptions::new(SEED),
     )
     .unwrap();
     let rows = (0..sim.id.len())
@@ -231,7 +236,7 @@ fn an_outcome_at_the_end_reports_one_period() {
         &covariates(),
         &sim.binary_end(),
         &interventions(),
-        &GFormulaOptions::default(),
+        &GFormulaOptions::new(SEED),
     )
     .unwrap();
     assert_eq!(g.periods, vec![2]);
@@ -244,7 +249,8 @@ fn an_outcome_at_the_end_reports_one_period() {
 
 fn expect_input(result: Result<GFormula, Error>, needle: &str) {
     match result {
-        Err(Error::Input(message)) => {
+        Err(error) if error.kind() == ErrorKind::Input => {
+            let message = error.to_string();
             assert!(
                 message.contains(needle),
                 "{message:?} does not mention {needle:?}"
@@ -264,7 +270,7 @@ fn unusable_input_is_refused() {
     let ok = |c: &[Covariate], o: &Outcome<'_>, i: &[Intervention], opt: &GFormulaOptions| {
         gformula(&data, c, o, i, opt)
     };
-    let default = GFormulaOptions::default();
+    let default = GFormulaOptions::new(SEED);
 
     // A model reading a later variable of the same period.
     let mut c = covariates();
@@ -323,7 +329,7 @@ fn unusable_input_is_refused() {
             periods: None,
         }],
     };
-    expect_input(ok(&covariates(), &outcome, &[nan], &default), "gave NaN");
+    expect_input(ok(&covariates(), &outcome, &[nan], &default), "not finite");
     expect_input(
         ok(
             &covariates(),
@@ -393,7 +399,7 @@ fn unusable_input_is_refused() {
     };
     expect_input(
         gformula(&d, &covariates(), &outcome, &[], &default),
-        "not 0",
+        "not at period 0",
     );
     let mut binary = sim.l.clone();
     binary[3] = 0.5;
@@ -404,7 +410,7 @@ fn unusable_input_is_refused() {
     };
     expect_input(
         gformula(&d, &covariates(), &outcome, &[], &default),
-        "not 0 or 1",
+        "{0, 1}",
     );
     let mut v = sim.v.clone();
     let r = (1..v.len()).find(|&r| sim.period[r] == 1).unwrap();
@@ -416,7 +422,7 @@ fn unusable_input_is_refused() {
     };
     expect_input(
         gformula(&d, &covariates(), &outcome, &[], &default),
-        "changes within",
+        "not constant within",
     );
     let mut after = sim.y.clone();
     let r = (0..after.len() - 1)
@@ -458,7 +464,7 @@ fn the_simulated_courses_give_the_estimates() {
         &GFormulaOptions {
             simulated: Some(900),
             keep_simulated: true,
-            ..GFormulaOptions::default()
+            ..GFormulaOptions::new(SEED)
         },
     );
     let plain = run(
@@ -466,7 +472,7 @@ fn the_simulated_courses_give_the_estimates() {
         &interventions(),
         &GFormulaOptions {
             simulated: Some(900),
-            ..GFormulaOptions::default()
+            ..GFormulaOptions::new(SEED)
         },
     );
     assert!(plain.courses.is_none());
@@ -482,7 +488,7 @@ fn the_simulated_courses_give_the_estimates() {
         for (k, want) in values(&plain, s).iter().enumerate() {
             let at: Vec<f64> = (0..c.person.len())
                 .filter(|&r| c.period[r] == i64::try_from(k).unwrap())
-                .map(|r| c.value[r])
+                .map(|r| c.value[r].expect("a survival risk is defined at every period"))
                 .collect();
             let mean = at.iter().sum::<f64>() / at.len() as f64;
             // A mean of 900 values in [0, 1] by two summation orders differs by

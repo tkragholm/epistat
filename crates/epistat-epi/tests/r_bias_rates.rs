@@ -9,7 +9,7 @@
 //! medians and limits of ten runs on each side, in standard errors of their
 //! difference.
 
-use epistat_core::{Estimate, Level};
+use epistat_core::{Bootstrap, Estimate, Level};
 use epistat_epi::PersonTime2;
 use epistat_epi::bias::{
     Dist, Misclass, Pair, ProbOptions, correct_exposure_rates, probabilistic_misclass_rates,
@@ -124,8 +124,7 @@ fn probabilistic_rates_agree_with_a_direct_simulation() {
                 &se,
                 &sp,
                 &ProbOptions {
-                    draws: r.reps,
-                    seed: 5_000 + i as u64,
+                    bootstrap: Bootstrap::new(r.reps, 5_000 + i as u64),
                     random_error: true,
                     level: Level::alpha(0.05).unwrap(),
                 },

@@ -35,6 +35,7 @@
 
 use super::SensitivityError;
 use crate::Error;
+use epistat_core::InputError;
 
 /// A time to an event or to censoring.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -79,12 +80,18 @@ pub fn gehan_scores(
         EventDirection::Later => -1.0,
     };
     sets.iter()
-        .map(|set| {
+        .enumerate()
+        .map(|(row, set)| {
             if set.len() < 2 {
                 return Err(SensitivityError::SetTooSmall.into());
             }
-            if set.iter().any(|u| !u.time.is_finite()) {
-                return Err(SensitivityError::NotFinite.into());
+            if let Some(column) = set.iter().position(|u| !u.time.is_finite()) {
+                return Err(InputError::NotFinite {
+                    what: "sets",
+                    row,
+                    column: Some(column),
+                }
+                .into());
             }
             Ok(set
                 .iter()

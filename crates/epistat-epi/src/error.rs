@@ -1,6 +1,6 @@
 //! The error of every fallible function in the crate.
 
-use epistat_core::{Classify, ErrorKind, InputError};
+use epistat_core::{Classify, ErrorKind, InputError, check};
 
 use crate::bias::BiasError;
 use crate::evalue::EValueError;
@@ -102,19 +102,74 @@ const fn domain(what: &'static str, value: f64, domain: &'static str) -> Error {
     })
 }
 
-const LENGTH: Error = invalid("inputs", "differ in length");
-const STRATA: Error = invalid("strata", "there are none");
+/// A count or person-time `value`, finite and not negative: NaN or an infinity
+/// is [`InputError::NotFinite`] and a negative value [`InputError::Domain`],
+/// at `row` of its column when it has one.
+pub(crate) const fn count(what: &'static str, value: f64, row: Option<usize>) -> Result<(), Error> {
+    if !value.is_finite() {
+        return Err(Error::Input(InputError::NotFinite {
+            what,
+            row: match row {
+                Some(row) => row,
+                None => 0,
+            },
+            column: None,
+        }));
+    }
+    if value < 0.0 {
+        return Err(Error::Input(InputError::Domain {
+            what,
+            value,
+            domain: "[0, inf)",
+            row,
+        }));
+    }
+    Ok(())
+}
+
+/// Every value of the column `what` a count or person-time, as [`count`].
+pub(crate) fn counts(what: &'static str, values: &[f64]) -> Result<(), Error> {
+    values
+        .iter()
+        .enumerate()
+        .try_for_each(|(row, &value)| count(what, value, Some(row)))
+}
+
+/// A number `value` that must be finite, or [`InputError::NotFinite`].
+pub(crate) fn finite_number(what: &'static str, value: f64) -> Result<(), Error> {
+    Ok(check::finite(what, &[value])?)
+}
+
+/// Every value of matched set `row` of `what` finite, or
+/// [`InputError::NotFinite`] at the set and its position in it.
+pub(crate) fn finite_set(what: &'static str, row: usize, set: &[f64]) -> Result<(), Error> {
+    match set.iter().position(|v| !v.is_finite()) {
+        Some(column) => Err(Error::Input(InputError::NotFinite {
+            what,
+            row,
+            column: Some(column),
+        })),
+        None => Ok(()),
+    }
+}
+
+/// Columns of one length with at least one row: the first column is the
+/// reference, and every other one has its length or [`InputError::Length`].
+pub(crate) fn columns(columns: &[(&'static str, usize)]) -> Result<(), Error> {
+    let Some(&(first, rows)) = columns.first() else {
+        return Ok(());
+    };
+    for &(what, found) in &columns[1..] {
+        check::same_length(what, rows, found)?;
+    }
+    Ok(check::non_empty(first, rows)?)
+}
 
 impl From<MhError> for Error {
     fn from(e: MhError) -> Self {
         match e {
-            MhError::Empty => STRATA,
-            MhError::Cell => invalid(
-                "cells",
-                "counts and person-time must be finite and not negative, and events need person-time",
-            ),
+            MhError::Cell => invalid("cells", "events need person-time"),
             MhError::EmptyStratum => invalid("stratum", "has no persons or no person-time"),
-            MhError::Length => LENGTH,
         }
     }
 }
@@ -122,16 +177,9 @@ impl From<MhError> for Error {
 impl From<RateError> for Error {
     fn from(e: RateError) -> Self {
         match e {
-            RateError::Length => LENGTH,
-            RateError::Events => invalid("events", "must be finite and not negative"),
-            RateError::Time => invalid("person-time", "must be finite and not negative"),
-            RateError::Weights => invalid(
-                "weights",
-                "must be finite, not negative and sum to more than 0",
-            ),
-            RateError::Scale => invalid("scale", "must be positive and finite"),
+            RateError::Events => invalid("events", "the exact interval is undefined"),
+            RateError::Weights => invalid("weights", "sum to 0"),
             RateError::NotInteger => invalid("events", "the exact test needs integer counts"),
-            RateError::Empty => STRATA,
         }
     }
 }
@@ -139,15 +187,8 @@ impl From<RateError> for Error {
 impl From<SirError> for Error {
     fn from(e: SirError) -> Self {
         match e {
-            SirError::Observed => invalid("observed", "must be finite and not negative"),
-            SirError::Expected => invalid("expected", "must be finite and not negative"),
-            SirError::Time => invalid(
-                "person-time",
-                "must be finite and not negative, and positive where there are events",
-            ),
-            SirError::Length => LENGTH,
+            SirError::Expected => invalid("expected", "the interval is undefined"),
             SirError::ZeroExpected => Self::ZeroExpected,
-            SirError::Score => invalid("scores", "must be finite"),
         }
     }
 }
@@ -156,7 +197,11 @@ impl From<EValueError> for Error {
     fn from(e: EValueError) -> Self {
         match e {
             EValueError::NotPositive { what, value } => domain(what, value, "(0, inf)"),
-            EValueError::NotFinite { what } => invalid(what, "must be finite"),
+            EValueError::NotFinite { what } => Self::Input(InputError::NotFinite {
+                what,
+                row: 0,
+                column: None,
+            }),
             EValueError::NegativeStandardError => invalid("standard error", "cannot be negative"),
             EValueError::LimitsReversed => invalid("limits", "the lower is above the upper"),
             EValueError::EstimateOutsideInterval => {
@@ -217,28 +262,29 @@ mod tests {
 
     #[test]
     fn errors_have_kinds_and_codes() {
-        let level = Error::from(MhError::Empty);
+        let level = Error::from(MhError::EmptyStratum);
         assert_eq!(level.kind(), ErrorKind::Input);
         assert_eq!(level.code(), "epi.invalid");
-        assert_eq!(level.to_string(), "strata: there are none");
+        assert_eq!(
+            level.to_string(),
+            "stratum: has no persons or no person-time"
+        );
         let gamma = Error::from(SensitivityError::Gamma(0.5));
         assert_eq!(gamma.code(), "input.domain");
         assert_eq!(Error::NoInformation.kind(), ErrorKind::Numerical);
         assert_eq!(Error::TooLarge.kind(), ErrorKind::Unsupported);
-        let codes = [
-            Error::NegativeCell,
-            Error::NoValidDraws { discarded: 1 },
-            Error::NoInformation,
-            Error::ZeroVariance,
-            Error::ZeroScale,
-            Error::ZeroExpected,
-            Error::TooLarge,
-            level,
-        ]
-        .map(|e| e.code());
-        let mut sorted = codes.to_vec();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), codes.len());
+        epistat_testkit::assert_codes_unique(
+            "epi",
+            &[
+                Error::NegativeCell,
+                Error::NoValidDraws { discarded: 1 },
+                Error::NoInformation,
+                Error::ZeroVariance,
+                Error::ZeroScale,
+                Error::ZeroExpected,
+                Error::TooLarge,
+                level,
+            ],
+        );
     }
 }

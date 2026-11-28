@@ -48,7 +48,7 @@
 //! a target so close to the boundary that no weight vector with reasonable
 //! effective sample size balances it. A column that does not vary in the target,
 //! or that is a linear combination of the others in the group, is an
-//! [`Error::Input`], not dropped. No weights are returned from a problem that
+//! error ([`Error::Invalid`] or [`Error::Aliased`]), not dropped. No weights are returned from a problem that
 //! was not solved.
 //!
 //! # Variance
@@ -86,11 +86,13 @@ use epistat_linalg::{
     inverse, matvec_into, weighted_gram, xtv,
 };
 
-use super::{BalanceWeights, Nuisance, check_len, compensated, resolve_weights, summarise};
+use super::{BalanceWeights, Nuisance, compensated, resolve_weights, summarise};
 use epistat_core::Estimand;
 
-use crate::error::{Error, Result};
-use crate::shared::check_estimand;
+use epistat_core::check;
+
+use crate::error::{Error, Model, Result, domain, empty};
+use crate::shared::{check_design, check_estimand, finite_design};
 
 /// The data of [`entropy_balance`].
 #[derive(Debug, Clone, Copy)]
@@ -130,6 +132,7 @@ impl Default for EntropyOptions {
 }
 
 /// The result of [`entropy_balance`].
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct EntropyBalance {
     /// The weights and what the outcome estimates need.
@@ -154,19 +157,17 @@ const MULTIPLIER_LIMIT: f64 = 200.0;
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for `moments` of 0, and a value that is not finite.
+/// [`Error::Input`] for `moments` of 0 and a value that is not finite.
 pub fn balance_columns(
     covariates: MatRef<'_, f64>,
     moments: usize,
     interactions: bool,
 ) -> Result<Mat<f64>> {
     if moments == 0 {
-        return Err(Error::input("moments: at least 1"));
+        return Err(domain("moments", 0.0, "at least 1"));
     }
+    finite_design("covariates", covariates)?;
     let (n, p) = (covariates.nrows(), covariates.ncols());
-    if (0..n).any(|i| (0..p).any(|j| !covariates[(i, j)].is_finite())) {
-        return Err(Error::input("covariates: a value is not finite"));
-    }
     let nf = n as f64;
     let mean: Vec<f64> = (0..p)
         .map(|j| compensated((0..n).map(|i| covariates[(i, j)])) / nf)
@@ -237,7 +238,8 @@ fn evaluate(u: MatRef<'_, f64>, a: &[f64], lambda: &[f64]) -> (f64, Vec<f64>, f6
     (mx + z.ln(), e, z)
 }
 
-fn solve_arm(u: MatRef<'_, f64>, a: &[f64], opts: &EntropyOptions, what: &str) -> Result<Armsolve> {
+fn solve_arm(u: MatRef<'_, f64>, a: &[f64], opts: &EntropyOptions) -> Result<Armsolve> {
+    let model = Model::Balance;
     let p = u.ncols();
     let mut lambda = vec![0.0; p];
     let (mut f, mut e, mut z) = evaluate(u, a, &lambda);
@@ -254,7 +256,7 @@ fn solve_arm(u: MatRef<'_, f64>, a: &[f64], opts: &EntropyOptions, what: &str) -
         if iteration == opts.max_iterations {
             break;
         }
-        let mut h = weighted_gram(u, &e).map_err(|err| Error::input(format!("{what}: {err}")))?;
+        let mut h = weighted_gram(u, &e).map_err(|err| Error::linalg(model, err))?;
         for r in 0..p {
             for c in 0..p {
                 h[(r, c)] = h[(r, c)] / z - g[r] * g[c];
@@ -268,14 +270,16 @@ fn solve_arm(u: MatRef<'_, f64>, a: &[f64], opts: &EntropyOptions, what: &str) -
         ) {
             Ok(s) => s.x,
             Err(_) if iteration == 0 => {
-                return Err(Error::input(format!(
-                    "{what}: the columns are collinear among the persons to weight"
-                )));
+                return Err(Error::invalid(
+                    "covariates",
+                    "the columns are collinear among the persons to weight",
+                ));
             }
             Err(_) => {
-                return Err(Error::Infeasible(format!(
-                    "{what}: the weights have collapsed onto a few persons, so the target is on the boundary of the group"
-                )));
+                return Err(Error::Infeasible {
+                    model,
+                    why: "the weights have collapsed onto a few persons, so the target is on the boundary of the group",
+                });
             }
         };
         let slope: f64 = (0..p).map(|j| g[j] * step[(j, 0)]).sum();
@@ -293,51 +297,44 @@ fn solve_arm(u: MatRef<'_, f64>, a: &[f64], opts: &EntropyOptions, what: &str) -
             t *= 0.5;
         }
         if !accepted {
-            return Err(Error::NoConvergence(format!(
-                "{what}: the line search failed with the largest standardised difference at {gmax:e}"
-            )));
+            return Err(Error::NotConverged {
+                model,
+                iterations: Some(iteration + 1),
+            });
         }
         if lambda.iter().any(|x| x.abs() > MULTIPLIER_LIMIT) {
-            return Err(Error::Infeasible(format!(
-                "{what}: the multipliers grow without bound, so the target cannot be reached with weights on the group"
-            )));
+            return Err(Error::Infeasible {
+                model,
+                why: "the multipliers grow without bound, so the target cannot be reached with weights on the group",
+            });
         }
     }
-    Err(Error::NoConvergence(format!(
-        "{what}: no convergence in {} iterations",
-        opts.max_iterations
-    )))
+    Err(Error::NotConverged {
+        model,
+        iterations: Some(opts.max_iterations),
+    })
 }
 
 /// Entropy balancing of a binary treatment.
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for values of different lengths, a value that is not finite,
-/// a negative sample or base weight, a group or target without persons of
-/// positive weight, a column that does not vary in the target or is collinear
-/// among the persons to weight. [`Error::Infeasible`] when the target moments
-/// cannot be matched, with the column when one is outside the range of the group.
-/// [`Error::NoConvergence`] after the iteration limit or when the line search
-/// fails.
+/// [`Error::Input`] for values of different lengths, a value that is not
+/// finite, a negative sample or base weight and a tolerance that is not
+/// positive; [`Error::Invalid`] for a group or target without persons of
+/// positive weight and a column that does not vary in the target;
+/// [`Error::Aliased`] for a column collinear among the persons to weight.
+/// [`Error::Infeasible`] when the target moments cannot be matched, as when
+/// a target mean is outside the range of the group. [`Error::NotConverged`]
+/// after the iteration limit or when the line search fails.
 pub fn entropy_balance(input: &EntropyInput<'_>, opts: &EntropyOptions) -> Result<EntropyBalance> {
     let n = input.treatment.len();
     if n == 0 {
-        return Err(Error::input("treatment: no persons"));
+        return Err(empty("treatment"));
     }
-    check_len("covariates", input.covariates.nrows(), n)?;
+    check_design("covariates", input.covariates, n)?;
     let p = input.covariates.ncols();
-    if p == 0 {
-        return Err(Error::input("covariates: no columns"));
-    }
-    if !(opts.tolerance > 0.0 && opts.tolerance.is_finite()) {
-        return Err(Error::input("tolerance: must be positive"));
-    }
-    if let Some(i) = (0..n).find(|&i| (0..p).any(|j| !input.covariates[(i, j)].is_finite())) {
-        return Err(Error::input(format!(
-            "covariates: person {i} has a value that is not finite"
-        )));
-    }
+    check::positive("tolerance", opts.tolerance)?;
     check_estimand(opts.estimand)?;
     let s = resolve_weights("sample_weight", input.sample_weight, n)?;
     let q = resolve_weights("base_weight", input.base_weight, n)?;
@@ -352,7 +349,10 @@ pub fn entropy_balance(input: &EntropyInput<'_>, opts: &EntropyOptions) -> Resul
     };
     let target_rows: Vec<usize> = (0..n).filter(|&i| in_target(i)).collect();
     if target_rows.is_empty() {
-        return Err(Error::input("the target population has weight 0"));
+        return Err(Error::invalid(
+            "sample_weight",
+            "the target population has weight 0",
+        ));
     }
     let size = compensated(target_rows.iter().map(|&i| s[i]));
     let c = input.covariates;
@@ -370,9 +370,11 @@ pub fn entropy_balance(input: &EntropyInput<'_>, opts: &EntropyOptions) -> Resul
         })
         .collect();
     if let Some(j) = sd.iter().position(|&x| x == 0.0) {
-        return Err(Error::input(format!(
-            "covariates: column {j} does not vary in the target"
-        )));
+        return Err(Error::invalid_at(
+            "covariate column",
+            j,
+            "does not vary in the target",
+        ));
     }
     let u = Mat::from_fn(n, p, |i, j| (c[(i, j)] - mean[j]) / sd[j]);
 
@@ -396,9 +398,7 @@ pub fn entropy_balance(input: &EntropyInput<'_>, opts: &EntropyOptions) -> Resul
             .filter(|&i| t[i] == arm && s[i] * q[i] > 0.0)
             .collect();
         if rows.is_empty() {
-            return Err(Error::input(format!(
-                "{name}: no persons with positive weight"
-            )));
+            return Err(Error::invalid(name, "has no persons with positive weight"));
         }
         let ug = select_rows(u.as_ref(), &rows);
         for j in 0..p {
@@ -410,35 +410,35 @@ pub fn entropy_balance(input: &EntropyInput<'_>, opts: &EntropyOptions) -> Resul
                 .fold(f64::NEG_INFINITY, f64::max);
             if lo == hi {
                 return Err(if lo == 0.0 {
-                    Error::input(format!(
-                        "{name}: column {j} does not vary and equals the target"
-                    ))
+                    Error::invalid_at(
+                        "covariate column",
+                        j,
+                        "does not vary in the group and equals the target",
+                    )
                 } else {
-                    Error::Infeasible(format!(
-                        "{name}: column {j} is constant at {} and the target mean is {}",
-                        lo * sd[j] + mean[j],
-                        mean[j]
-                    ))
+                    Error::Infeasible {
+                        model: Model::Balance,
+                        why: "a column is constant in the group and the target mean differs",
+                    }
                 });
             }
             if !(lo < 0.0 && hi > 0.0) {
-                return Err(Error::Infeasible(format!(
-                    "{name}: the target mean {} of column {j} is not inside the range [{}, {}] of the group",
-                    mean[j],
-                    lo * sd[j] + mean[j],
-                    hi * sd[j] + mean[j]
-                )));
+                return Err(Error::Infeasible {
+                    model: Model::Balance,
+                    why: "the target mean of a column is not inside the range of the group",
+                });
             }
         }
         let a: Vec<f64> = rows.iter().map(|&i| s[i] * q[i]).collect();
         let keep = independent_columns(ug.as_ref(), &a, None, 1e-8)
-            .map_err(|e| Error::input(format!("{name}: {e}")))?;
-        if let Some(j) = keep.iter().position(|&x| !x) {
-            return Err(Error::input(format!(
-                "{name}: column {j} is collinear with the columns before it among the persons to weight"
-            )));
+            .map_err(|e| Error::linalg(Model::Balance, e))?;
+        if let Some(column) = keep.iter().position(|&x| !x) {
+            return Err(Error::Aliased {
+                model: Model::Balance,
+                column,
+            });
         }
-        let sol = solve_arm(ug.as_ref(), &a, opts, name)?;
+        let sol = solve_arm(ug.as_ref(), &a, opts)?;
         iterations += sol.iterations;
         // The weights of everyone in the group, from the multipliers.
         let eta: Vec<f64> = (0..n)
@@ -464,9 +464,11 @@ pub fn entropy_balance(input: &EntropyInput<'_>, opts: &EntropyOptions) -> Resul
             .collect();
         let b = Mat::from_fn(n, width, &b_of);
         let gram =
-            weighted_gram(b.as_ref(), &total).map_err(|e| Error::input(format!("{name}: {e}")))?;
+            weighted_gram(b.as_ref(), &total).map_err(|e| Error::linalg(Model::Balance, e))?;
         let ginv = inverse(gram.as_ref(), &Attempt::SYMMETRIC)
-            .map_err(|e| Error::input(format!("{name}: {e}")))?
+            .map_err(|_| Error::Singular {
+                model: Model::Balance,
+            })?
             .x;
         for i in 0..n {
             let member = t[i] == arm;

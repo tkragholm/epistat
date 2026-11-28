@@ -74,7 +74,9 @@
 
 use rayon::prelude::*;
 
-use crate::error::{check_symbols, length as length_check};
+use epistat_core::InputError;
+
+use crate::error::{check_symbols, length as length_check, positive};
 use crate::fit::{FitDistance, check_lengths, check_partition, check_types, check_weights, fit};
 use crate::silhouette::{rank_labels, weighted_average};
 use crate::{Attempt, Error, Restarts};
@@ -100,27 +102,29 @@ impl<'a> Panel<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when the length or alphabet is zero, the symbols
-    /// do not divide into sequences of `length`, a symbol is outside the
-    /// alphabet, the cost table is not dense, or there are more than `2^32`
-    /// sequences.
+    /// [`Error::Input`] when the length or alphabet is zero, a symbol is
+    /// outside the alphabet, the cost table is not dense, or there are more
+    /// than `2^32` sequences; [`Error::Ragged`] when the symbols do not divide
+    /// into sequences of `length`.
     pub fn new(
         encoded: &'a [u8],
         length: usize,
         alphabet: usize,
         costs: Option<&'a [f64]>,
     ) -> Result<Self, Error> {
-        if length == 0 || alphabet == 0 {
-            return Err(Error::invalid(
-                "a position-wise panel needs a positive length and alphabet",
-            ));
+        if length == 0 {
+            return Err(positive("length").into());
         }
+        if alphabet == 0 {
+            return Err(positive("alphabet").into());
+        }
+        // A position-wise distance is only defined on a common time axis.
         if !encoded.len().is_multiple_of(length) {
-            return Err(Error::invalid(format!(
-                "{} encoded symbols do not divide into sequences of {length}; a \
-                 position-wise distance is only defined on a common time axis",
-                encoded.len()
-            )));
+            return Err(Error::Ragged {
+                what: "encoded",
+                found: encoded.len(),
+                width: length,
+            });
         }
         check_symbols("encoded", encoded, alphabet)?;
         if let Some(table) = costs {
@@ -132,9 +136,12 @@ impl<'a> Panel<'a> {
         // arrays of them. This is the only place a panel is built, so it is the
         // only place the bound is established.
         if encoded.len() / length > u32::MAX as usize {
-            return Err(Error::invalid(
-                "more than 2^32 sequences; the fit indexes them with 32-bit integers",
-            ));
+            return Err(InputError::TooLarge {
+                what: "sequences",
+                limit: u64::from(u32::MAX),
+                found: (encoded.len() / length) as u64,
+            }
+            .into());
         }
         Ok(Self {
             encoded,
@@ -314,7 +321,9 @@ fn members_by_cluster(labels: &[u32], k: usize) -> Vec<Vec<u32>> {
 /// # Errors
 ///
 /// [`Error::Input`] when the weights do not match the panel one to
-/// one, or `k` is zero or more than the sequences.
+/// one or a weight is negative or not finite, [`Error::Types`] when `k` is
+/// zero or more than the sequences, and [`Error::NoRestarts`] without a
+/// restart.
 pub fn kmedoids(
     panel: &Panel<'_>,
     weights: &[f64],
@@ -322,7 +331,7 @@ pub fn kmedoids(
     restarts: &Restarts,
     max_iterations: usize,
 ) -> Result<Attempt, Error> {
-    check_weights(panel.count, weights.len())?;
+    check_weights(panel.count, weights)?;
     check_types(panel.count, k)?;
     fit(panel, panel.count, weights, k, restarts, max_iterations)
 }
@@ -387,14 +396,15 @@ fn cluster_sums(panel: &Panel, weights: &[f64], labels: &[u32], k: usize) -> Vec
 /// # Errors
 ///
 /// [`Error::Input`] when the weights or labels do not match the panel
-/// one to one, or a label is not below `k`.
+/// one to one, a weight is negative or not finite, or a label is not below
+/// `k`.
 pub fn cluster_distance_sums(
     panel: &Panel<'_>,
     weights: &[f64],
     labels: &[u32],
     k: usize,
 ) -> Result<Vec<f64>, Error> {
-    check_partition(panel.count, weights.len(), labels, k)?;
+    check_partition(panel.count, weights, labels, k)?;
     if k == 0 {
         return Ok(Vec::new());
     }
@@ -411,13 +421,13 @@ pub fn cluster_distance_sums(
 /// # Errors
 ///
 /// [`Error::Input`] when the weights or labels do not match the panel
-/// one to one.
+/// one to one, or a weight is negative or not finite.
 pub fn silhouette(
     panel: &Panel<'_>,
     weights: &[f64],
     labels: &[u32],
 ) -> Result<Option<f64>, Error> {
-    check_lengths(panel.count, weights.len(), labels.len())?;
+    check_lengths(panel.count, weights, labels.len())?;
     let (ranks, k) = rank_labels(labels);
     if k < 2 {
         return Ok(None);

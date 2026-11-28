@@ -22,6 +22,9 @@ use epistat_causal::{Error, Panel};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
+/// The root seed of the simulation and the bootstrap of every run here.
+const SEED: u64 = 20_261_124;
+
 #[derive(Deserialize)]
 #[expect(non_snake_case, reason = "the columns keep the names of the R data")]
 struct Data {
@@ -115,7 +118,7 @@ fn the_models_and_the_weighted_observed_risk_agree_with_gformula() {
             &[],
             &GFormulaOptions {
                 simulated: Some(200),
-                ..GFormulaOptions::default()
+                ..GFormulaOptions::new(SEED)
             },
         )
         .expect("g-formula")
@@ -189,9 +192,9 @@ fn the_models_and_the_weighted_observed_risk_agree_with_gformula() {
             competing: competing.clone(),
             censoring: censoring.clone().map(|c| Censoring { cutoff, ..c }),
         };
-        let result = gformula(&data, &covariates, &cut, &[], &GFormulaOptions::default());
+        let result = gformula(&data, &covariates, &cut, &[], &GFormulaOptions::new(SEED));
         assert!(
-            matches!(result, Err(Error::Input(ref m)) if m.contains("weight cutoff")),
+            matches!(result, Err(Error::Input(ref e)) if e.to_string().contains("weight cutoff")),
             "{cutoff:?}"
         );
     }
@@ -231,7 +234,7 @@ fn a_row_after_censoring_is_an_error() {
             &covariates,
             &outcome,
             &[],
-            &GFormulaOptions::default(),
+            &GFormulaOptions::new(SEED),
         )
         .is_err()
     );

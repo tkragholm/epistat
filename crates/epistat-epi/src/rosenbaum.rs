@@ -155,6 +155,8 @@
 //!    matched observational studies. J Am Stat Assoc. 2009;104(488):1398-405.
 
 use crate::Error;
+use crate::error::finite_set;
+use epistat_core::check;
 use std::fmt::{Display, Formatter};
 
 mod binary;
@@ -305,9 +307,7 @@ impl SignedRanks {
         if differences.is_empty() {
             return Err(SensitivityError::Empty("differences").into());
         }
-        if differences.iter().any(|d| !d.is_finite()) {
-            return Err(SensitivityError::NotFinite.into());
-        }
+        check::finite("differences", differences)?;
         let kept: Vec<f64> = differences.iter().copied().filter(|d| *d != 0.0).collect();
         if kept.is_empty() {
             return Err(SensitivityError::NoInformation.into());
@@ -351,6 +351,10 @@ impl SignedRanks {
 
 /// The sensitivity value: the smallest `gamma` at which `p_upper(gamma)`, the
 /// upper bound of a one-sided p-value, reaches `alpha` \[5\].
+///
+/// `alpha` is the significance level of the one-sided test, not the level of
+/// an interval, so it is a number and not an [`epistat_core::Level`]; the same
+/// holds for the `alpha` of every sensitivity value in this module.
 ///
 /// `p_upper` must not decrease in `gamma`, which holds for every bound in
 /// this module. The search doubles `gamma` from 2 until the bound reaches
@@ -503,9 +507,7 @@ pub fn hodges_lehmann_bounds(
     for g in gammas {
         check_gamma(*g)?;
     }
-    if differences.iter().any(|d| !d.is_finite()) {
-        return Err(SensitivityError::NotFinite.into());
-    }
+    check::finite("differences", differences)?;
     let n = differences.len();
     if n == 0 {
         return Err(SensitivityError::Empty("differences").into());
@@ -556,9 +558,8 @@ pub fn hodges_lehmann_bounds(
 /// As [`hodges_lehmann_bounds`], and [`crate::Error`] for a
 /// `tau0` that is not finite.
 pub fn hodges_lehmann_gamma(differences: &[f64], tau0: f64) -> Result<f64, Error> {
-    if differences.iter().any(|d| !d.is_finite()) || !tau0.is_finite() {
-        return Err(SensitivityError::NotFinite.into());
-    }
+    check::finite("differences", differences)?;
+    check::finite("tau0", &[tau0])?;
     let n = differences.len();
     if n == 0 {
         return Err(SensitivityError::Empty("differences").into());
@@ -763,13 +764,11 @@ pub fn m_scores(sets: &[Vec<f64>], spec: &MScore) -> Result<Vec<Vec<f64>>, Error
     if sets.is_empty() {
         return Err(SensitivityError::Empty("sets").into());
     }
-    for set in sets {
+    for (row, set) in sets.iter().enumerate() {
         if set.len() < 2 {
             return Err(SensitivityError::SetTooSmall.into());
         }
-        if set.iter().any(|v| !v.is_finite()) {
-            return Err(SensitivityError::NotFinite.into());
-        }
+        finite_set("sets", row, set)?;
     }
     let rescale = spec.trim < f64::INFINITY || spec.inner > 0.0;
     let scale = if rescale {
@@ -871,13 +870,11 @@ pub fn set_bounds(scores: &[Vec<f64>], gamma: f64) -> Result<SetBounds, Error> {
     let mut statistic = 0.0;
     let mut expectation = 0.0;
     let mut variance = 0.0;
-    for set in scores {
+    for (row, set) in scores.iter().enumerate() {
         if set.len() < 2 {
             return Err(SensitivityError::SetTooSmall.into());
         }
-        if set.iter().any(|v| !v.is_finite()) {
-            return Err(SensitivityError::NotFinite.into());
-        }
+        finite_set("scores", row, set)?;
         statistic += set[0];
         let mut sorted = set.clone();
         sorted.sort_by(f64::total_cmp);

@@ -56,10 +56,10 @@ fn mtp_public_workflow_produces_effects_and_ppc() {
 
     let effects = counterfactual_effects_summary(samples, &scenario).expect("effects should run");
     assert_eq!(effects.per_period.len(), 4);
-    assert!(effects.cumulative_additive_effect.mean.is_finite());
+    assert!(effects.cumulative_additive_effect.mean.unwrap().is_finite());
 
     let ppc = posterior_predictive_summary(samples, &input, 8).expect("ppc should run");
     assert_eq!(ppc.calibration_bins.len(), 8);
-    assert!(ppc.predicted_mean.mean.is_finite());
-    assert!(ppc.predicted_zero_rate.mean >= 0.0);
+    assert!(ppc.predicted_mean.mean.unwrap().is_finite());
+    assert!(ppc.predicted_zero_rate.mean.unwrap() >= 0.0);
 }

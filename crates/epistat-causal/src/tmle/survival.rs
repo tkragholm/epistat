@@ -112,10 +112,12 @@ use epistat_inference::{ClusterRule, Clusters, Influence};
 use epistat_linalg::{Mat, MatRef};
 
 use super::{PlugIn, PropensityBound, fluctuation_coefficient, logit, plogis};
-use crate::error::{Error, Result};
+use epistat_core::{InputError, check};
+
+use crate::error::{Error, Model, Result, domain, domain_at, empty};
 use crate::shared::{
-    case_weights, check_arms, check_len, clusters, compensated, contrast, fit_glm, glm_data,
-    influence, row_keys, rule,
+    case_weights, check_arms, check_design, check_finite, check_len, clusters, compensated,
+    contrast, fit_glm, glm_data, influence, row_keys, rule,
 };
 
 /// The data and the predictions of [`tmle_survival`]. Column `k - 1` of a
@@ -291,9 +293,12 @@ fn target_arm(c: &Common<'_>, treated: bool) -> Result<Arm> {
             .collect();
         let se = Influence::from_dfbeta_over_rows(influence.clone(), c.rows.clone(), 1, c.rule)
             .and_then(|f| f.variance(c.clusters.as_ref()))
-            .map_err(|e| Error::input(format!("influence function: {e}")))?
+            .map_err(Error::from)?
             .get(0, 0)
-            .ok_or_else(|| Error::input("cluster: the stopping rule needs two clusters"))?
+            .ok_or(Error::invalid(
+                "cluster",
+                "the stopping rule needs two clusters",
+            ))?
             .max(0.0)
             .sqrt();
         let score = compensated((0..n).map(|i| c.w[i] * first[i])) / c.total;
@@ -308,15 +313,15 @@ fn target_arm(c: &Common<'_>, treated: bool) -> Result<Arm> {
             });
         }
         if epsilon.len() == c.max_iterations {
-            return Err(Error::NoConvergence(format!(
-                "targeting: the mean of the influence function is {score:e} after {} rounds",
-                c.max_iterations
-            )));
+            return Err(Error::NotConverged {
+                model: Model::Fluctuation,
+                iterations: Some(c.max_iterations),
+            });
         }
         let design = Mat::from_fn(rows.len(), 1, |r, _| h[rows[r]]);
         let offset: Vec<f64> = rows.iter().map(|&ik| logit(lam[ik])).collect();
         let weights: Vec<f64> = rows.iter().map(|&ik| c.w[ik / t]).collect();
-        let what = "fluctuation";
+        let what = Model::Fluctuation;
         let fit = Glm::new(Family::Binomial, Link::Logit)
             .fit(&glm_data(
                 design.as_ref(),
@@ -325,7 +330,7 @@ fn target_arm(c: &Common<'_>, treated: bool) -> Result<Arm> {
                 Some(&offset),
                 what,
             )?)
-            .map_err(|e| Error::input(format!("{what}: {e}")))?;
+            .map_err(|e| Error::fit(what, e))?;
         let e = fluctuation_coefficient(
             &fit,
             0,
@@ -341,27 +346,32 @@ fn target_arm(c: &Common<'_>, treated: bool) -> Result<Arm> {
 }
 
 fn check_matrix(
-    name: &str,
+    name: &'static str,
     m: MatRef<'_, f64>,
     n: usize,
     columns: usize,
     valid: impl Fn(f64) -> bool,
 ) -> Result<()> {
-    if m.nrows() != n || m.ncols() < columns {
-        return Err(Error::input(format!(
-            "{name}: {} by {} for {n} persons and {columns} intervals",
-            m.nrows(),
-            m.ncols()
-        )));
+    check::same_length(name, n, m.nrows())?;
+    if m.ncols() < columns {
+        return Err(Error::invalid(
+            name,
+            "has fewer columns than the intervals of the horizon",
+        ));
     }
     for i in 0..n {
         for k in 0..columns {
-            if !valid(m[(i, k)]) {
-                return Err(Error::input(format!(
-                    "{name}: person {i}, interval {} has {}",
-                    k + 1,
-                    m[(i, k)]
-                )));
+            let value = m[(i, k)];
+            if !value.is_finite() {
+                return Err(InputError::NotFinite {
+                    what: name,
+                    row: i,
+                    column: Some(k),
+                }
+                .into());
+            }
+            if !valid(value) {
+                return Err(domain_at(name, value, "the range of the prediction", i));
             }
         }
     }
@@ -377,18 +387,19 @@ fn check_matrix(
 ///
 /// [`Error::Input`] for inputs of different lengths, no persons, a horizon of 0,
 /// a follow-up of 0 intervals, predictions outside their ranges (see the module
-/// documentation), a negative or non-finite weight, an arm without persons of
-/// positive weight, options outside their ranges and fewer than two clusters;
-/// [`Error::NoConvergence`] for a fluctuation that does not converge or
-/// targeting that does not meet its rule.
+/// documentation), a negative or non-finite weight and options outside their
+/// ranges; [`Error::Invalid`] for an arm without persons of positive weight,
+/// predictions with fewer columns than the horizon and fewer than two
+/// clusters; [`Error::NotConverged`] for a fluctuation that does not converge
+/// or targeting that does not meet its rule.
 pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Result<SurvivalTmle> {
     let n = input.treatment.len();
     if n == 0 {
-        return Err(Error::input("treatment: no persons"));
+        return Err(empty("treatment"));
     }
     let t = opts.horizon;
     if t == 0 {
-        return Err(Error::input("horizon: 0 intervals"));
+        return Err(domain("horizon", 0.0, "at least 1"));
     }
     check_len("time", input.time.len(), n)?;
     check_len("event", input.event.len(), n)?;
@@ -398,7 +409,7 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
         check_len("cluster", c.len(), n)?;
     }
     if let Some(i) = input.time.iter().position(|&k| k == 0) {
-        return Err(Error::input(format!("time: person {i} has 0 intervals")));
+        return Err(domain_at("time", 0.0, "at least 1 interval", i));
     }
     let open = |x: f64| x > 0.0 && x < 1.0;
     check_matrix("hazard1", input.hazard1, n, t, open)?;
@@ -406,11 +417,9 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
     let censoring = |x: f64| (0.0..1.0).contains(&x);
     check_matrix("censoring1", input.censoring1, n, t - 1, censoring)?;
     check_matrix("censoring0", input.censoring0, n, t - 1, censoring)?;
+    check_finite("propensity", input.propensity)?;
     if let Some(i) = input.propensity.iter().position(|&p| !open(p)) {
-        return Err(Error::input(format!(
-            "propensity: person {i} has {}, outside (0, 1)",
-            input.propensity[i]
-        )));
+        return Err(domain_at("propensity", input.propensity[i], "(0, 1)", i));
     }
     check_arms(&raw, input.treatment)?;
     let bound = match opts.propensity_bound {
@@ -422,9 +431,7 @@ pub fn tmle_survival(input: &SurvivalInput<'_>, opts: &SurvivalOptions) -> Resul
         PropensityBound::At(b) => b,
     };
     if !(0.0..0.5).contains(&bound) {
-        return Err(Error::input(format!(
-            "propensity_bound: {bound} is not in (0, 0.5)"
-        )));
+        return Err(domain("propensity_bound", bound, "[0, 0.5)"));
     }
     let sum = compensated(raw.iter().copied());
     let w: Vec<f64> = raw.iter().map(|&x| x / sum * n as f64).collect();
@@ -552,10 +559,9 @@ pub struct SurvivalTmleGlm {
     pub propensity: Vec<f64>,
 }
 
-fn fit_logistic(x: MatRef<'_, f64>, y: &[f64], w: &[f64], what: &str) -> Result<Vec<f64>> {
+fn fit_logistic(x: MatRef<'_, f64>, y: &[f64], w: &[f64], model: Model) -> Result<Vec<f64>> {
     let glm = Glm::new(Family::Binomial, Link::Logit);
-    let what = &format!("{what} model");
-    Ok(fit_glm(&glm, &glm_data(x, y, Some(w), None, what)?, what)?.1)
+    Ok(fit_glm(&glm, &glm_data(x, y, Some(w), None, model)?, model)?.1)
 }
 
 /// The person-intervals of a hazard model as a design, a response and weights.
@@ -564,10 +570,10 @@ fn intervals(
     rows: &[(usize, usize, bool)],
     treatment: &[bool],
     w: &[f64],
-    what: &str,
+    what: &'static str,
 ) -> Result<(Mat<f64>, Vec<f64>, Vec<f64>)> {
     if design.columns == 0 {
-        return Err(Error::input(format!("{what} design: no columns")));
+        return Err(empty(what));
     }
     let mut x = Mat::<f64>::zeros(rows.len(), design.columns);
     let mut values = vec![0.0; design.columns];
@@ -575,9 +581,12 @@ fn intervals(
         (design.fill)(i, k, treatment[i], &mut values);
         for (j, &v) in values.iter().enumerate() {
             if !v.is_finite() {
-                return Err(Error::input(format!(
-                    "{what} design: person {i}, interval {k} has {v}"
-                )));
+                return Err(InputError::NotFinite {
+                    what,
+                    row: i,
+                    column: Some(j),
+                }
+                .into());
             }
             x[(r, j)] = v;
         }
@@ -617,11 +626,11 @@ fn predictions(
 ///
 /// # Errors
 ///
-/// The errors of [`tmle_survival`], and [`Error::Input`] for inputs of
-/// different lengths, a design without columns or with a value that is not
-/// finite, a person censored before the last interval without a censoring
-/// model, and a model that has an aliased column; [`Error::NoConvergence`] for
-/// a model that does not converge.
+/// The errors of [`tmle_survival`]; [`Error::Input`] for inputs of different
+/// lengths and a design without columns or with a value that is not finite;
+/// [`Error::Invalid`] for a person censored before the last interval without
+/// a censoring model; [`Error::Aliased`] for a model that has an aliased
+/// column and [`Error::NotConverged`] for a model that does not converge.
 pub fn tmle_survival_glm(
     input: &SurvivalGlmInput<'_>,
     opts: &SurvivalOptions,
@@ -630,18 +639,9 @@ pub fn tmle_survival_glm(
     check_len("time", input.time.len(), n)?;
     check_len("event", input.event.len(), n)?;
     let raw = case_weights("weight", input.weight, n)?;
-    if input.propensity.nrows() != n || input.propensity.ncols() == 0 {
-        return Err(Error::input(format!(
-            "propensity design: {} rows and {} columns for {n} persons",
-            input.propensity.nrows(),
-            input.propensity.ncols()
-        )));
-    }
-    if !epistat_linalg::is_finite(input.propensity) {
-        return Err(Error::input("propensity design: a value is not finite"));
-    }
+    check_design("propensity design", input.propensity, n)?;
     if let Some(i) = input.time.iter().position(|&k| k == 0) {
-        return Err(Error::input(format!("time: person {i} has 0 intervals")));
+        return Err(domain_at("time", 0.0, "at least 1 interval", i));
     }
     // The fits take the weights rescaled to mean 1, as the estimator does:
     // the coefficients do not depend on the scale, but the stopping rule of
@@ -662,21 +662,35 @@ pub fn tmle_survival_glm(
             }
         }
     }
-    let (x, y, wr) = intervals(input.hazard, &event_rows, input.treatment, &w, "event")?;
-    let hazard_coefficients = fit_logistic(x.as_ref(), &y, &wr, "event")?;
+    let (x, y, wr) = intervals(
+        input.hazard,
+        &event_rows,
+        input.treatment,
+        &w,
+        "hazard design",
+    )?;
+    let hazard_coefficients = fit_logistic(x.as_ref(), &y, &wr, Model::Hazard)?;
     drop(x);
     let cens_columns = t.saturating_sub(1).max(1);
     let (censoring_coefficients, censoring1, censoring0) = if let Some(design) = input.censoring {
-        let (x, y, wr) = intervals(design, &censoring_rows, input.treatment, &w, "censoring")?;
-        let d = fit_logistic(x.as_ref(), &y, &wr, "censoring")?;
+        let (x, y, wr) = intervals(
+            design,
+            &censoring_rows,
+            input.treatment,
+            &w,
+            "censoring design",
+        )?;
+        let d = fit_logistic(x.as_ref(), &y, &wr, Model::Censoring)?;
         let c1 = predictions(design, &d, n, cens_columns, true);
         let c0 = predictions(design, &d, n, cens_columns, false);
         (d, c1, c0)
     } else {
-        if let Some(&(i, k, _)) = censoring_rows.iter().find(|r| r.2) {
-            return Err(Error::input(format!(
-                "censoring: person {i} is censored after interval {k}, before the last; give a censoring model"
-            )));
+        if let Some(&(i, _, _)) = censoring_rows.iter().find(|r| r.2) {
+            return Err(Error::invalid_at(
+                "person",
+                i,
+                "is censored before the last interval; give a censoring model",
+            ));
         }
         let zero = Mat::<f64>::zeros(n, cens_columns);
         (Vec::new(), zero.clone(), zero)
@@ -686,7 +700,7 @@ pub fn tmle_survival_glm(
         .iter()
         .map(|&b| f64::from(u8::from(b)))
         .collect();
-    let propensity_coefficients = fit_logistic(input.propensity, &a, &w, "propensity")?;
+    let propensity_coefficients = fit_logistic(input.propensity, &a, &w, Model::Propensity)?;
     let z = input.propensity;
     let propensity: Vec<f64> = (0..n)
         .map(|i| {

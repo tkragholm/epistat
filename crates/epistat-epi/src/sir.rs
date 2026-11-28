@@ -79,11 +79,12 @@
 //! 3. Byar's approximation is given in Breslow and Day \[1\], section 2.5.
 
 use crate::Error;
+use crate::error::{count, finite_number};
 use std::fmt;
 
 use crate::exact::poisson_two_sided;
 use crate::limits::interval;
-use epistat_core::{Estimate, Level, Scale};
+use epistat_core::{Estimate, Level, Scale, check};
 use epistat_stats::dist::chi_square::sf as chi_square_sf;
 use epistat_stats::dist::normal;
 use epistat_stats::dist::poisson::{self, Method};
@@ -92,29 +93,17 @@ use epistat_stats::sum::compensated;
 /// Why an SIR was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SirError {
-    /// An observed count is negative, NaN or infinite.
-    Observed,
-    /// An expected count is negative, NaN or infinite.
+    /// The interval of the expected count could not be formed.
     Expected,
-    /// A time or a scale is negative, NaN or infinite, or `per` is not positive.
-    Time,
-    /// The slices differ in length.
-    Length,
     /// A stratum has an expected count of 0.
     ZeroExpected,
-    /// A score is NaN or infinite.
-    Score,
 }
 
 impl fmt::Display for SirError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
-            Self::Observed => "an observed count must be finite and not negative",
-            Self::Expected => "an expected count must be finite and not negative",
-            Self::Time => "the person-time must be finite and not negative, and per positive",
-            Self::Length => "the inputs differ in length",
+            Self::Expected => "the interval of the expected count is undefined",
             Self::ZeroExpected => "a stratum has no expected events, so its ratio is undefined",
-            Self::Score => "a score must be finite",
         })
     }
 }
@@ -146,14 +135,9 @@ pub struct Homogeneity {
     pub p_value: f64,
 }
 
-fn check_count(observed: f64, expected: f64) -> Result<(), Error> {
-    if !(observed.is_finite() && observed >= 0.0) {
-        return Err(SirError::Observed.into());
-    }
-    if !(expected.is_finite() && expected >= 0.0) {
-        return Err(SirError::Expected.into());
-    }
-    Ok(())
+fn check_count(observed: f64, expected: f64, row: Option<usize>) -> Result<(), Error> {
+    count("observed", observed, row)?;
+    count("expected", expected, row)
 }
 
 /// The SIR `observed / expected` with the interval `method` at `level` and
@@ -174,7 +158,7 @@ pub fn sir(
     level: Level,
     method: SirInterval,
 ) -> Result<Option<Estimate>, Error> {
-    check_count(observed, expected)?;
+    check_count(observed, expected, None)?;
     if expected == 0.0 {
         return Ok(None);
     }
@@ -272,11 +256,9 @@ fn profile_limit(o: f64, c: f64, upper: bool) -> f64 {
 }
 
 fn check_strata(observed: &[f64], expected: &[f64]) -> Result<(), Error> {
-    if observed.len() != expected.len() {
-        return Err(SirError::Length.into());
-    }
-    for (&o, &e) in observed.iter().zip(expected) {
-        check_count(o, e)?;
+    check::same_length("expected", observed.len(), expected.len())?;
+    for (row, (&o, &e)) in observed.iter().zip(expected).enumerate() {
+        check_count(o, e, Some(row))?;
         if e == 0.0 {
             return Err(SirError::ZeroExpected.into());
         }
@@ -333,12 +315,8 @@ pub fn sir_trend(
     score: &[f64],
 ) -> Result<Option<Homogeneity>, Error> {
     check_strata(observed, expected)?;
-    if score.len() != observed.len() {
-        return Err(SirError::Length.into());
-    }
-    if score.iter().any(|s| !s.is_finite()) {
-        return Err(SirError::Score.into());
-    }
+    check::same_length("score", observed.len(), score.len())?;
+    check::finite("score", score)?;
     let k = observed.len();
     if k < 2 || score.iter().all(|&s| s == score[0]) {
         return Ok(None);
@@ -439,10 +417,10 @@ pub fn excess_absolute_risk(
     time: f64,
     per: f64,
 ) -> Result<Option<f64>, Error> {
-    check_count(observed, expected)?;
-    if !(time.is_finite() && time >= 0.0 && per.is_finite() && per > 0.0) {
-        return Err(SirError::Time.into());
-    }
+    check_count(observed, expected, None)?;
+    count("time", time, None)?;
+    finite_number("per", per)?;
+    check::positive("per", per)?;
     Ok((time > 0.0).then(|| (observed - expected) / time * per))
 }
 
@@ -477,11 +455,22 @@ mod tests {
         assert_eq!((r.interval, r.se), (None, None));
         assert_eq!(
             sir(-1.0, 1.0, level, SirInterval::Exact),
-            Err(SirError::Observed.into())
+            Err(epistat_core::InputError::Domain {
+                what: "observed",
+                value: -1.0,
+                domain: "[0, inf)",
+                row: None
+            }
+            .into())
         );
         assert_eq!(
             sir(1.0, f64::NAN, level, SirInterval::Exact),
-            Err(SirError::Expected.into())
+            Err(epistat_core::InputError::NotFinite {
+                what: "expected",
+                row: 0,
+                column: None
+            }
+            .into())
         );
         assert_eq!(
             sir_homogeneity(&[1.0, 2.0], &[1.0, 0.0]),

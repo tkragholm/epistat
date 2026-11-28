@@ -386,7 +386,7 @@ fn an_unreachable_target_is_refused_where_weightit_returns_unbalanced_weights() 
     )
     .unwrap_err();
     assert!(
-        matches!(err, epistat_causal::Error::Infeasible(ref m) if m.contains("column 2")),
+        matches!(err, epistat_causal::Error::Infeasible { .. }),
         "{err}"
     );
 }

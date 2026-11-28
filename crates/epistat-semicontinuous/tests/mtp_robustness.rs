@@ -157,14 +157,14 @@ fn mtp_recovers_key_parameters_on_synthetic_data() {
         ("alpha[1]", true_alpha[1], summary.alpha[1]),
         ("beta[1]", true_beta[1], summary.beta[1]),
     ] {
-        let deviation = (parameter.mean - truth).abs();
+        let (mean, sd) = (parameter.mean.unwrap(), parameter.std_dev.unwrap());
+        let deviation = (mean - truth).abs();
         assert!(
-            deviation < 4.0 * parameter.std_dev,
-            "{name}: truth {truth} is {deviation} from the posterior mean, posterior sd {}",
-            parameter.std_dev
+            deviation < 4.0 * sd,
+            "{name}: truth {truth} is {deviation} from the posterior mean, posterior sd {sd}"
         );
     }
-    let omega_mean = summary.omega_sq.expect("omega summary").mean;
+    let omega_mean = summary.omega_sq.expect("omega summary").mean.unwrap();
     assert!(omega_mean.is_finite());
     assert!(omega_mean > 0.05);
     assert!(omega_mean < 3.0);
@@ -206,9 +206,9 @@ fn mtp_stays_stable_under_extreme_zero_inflation() {
     assert!(model.posterior_summary.is_some());
 
     let ppc = posterior_predictive_summary(posterior, &input.data(), 10).expect("ppc should run");
-    assert!(ppc.predicted_zero_rate.mean.is_finite());
-    assert!(ppc.predicted_zero_rate.mean > 0.75);
-    assert!(ppc.predicted_mean.mean.is_finite());
+    assert!(ppc.predicted_zero_rate.mean.unwrap().is_finite());
+    assert!(ppc.predicted_zero_rate.mean.unwrap() > 0.75);
+    assert!(ppc.predicted_mean.mean.unwrap().is_finite());
 }
 
 #[test]
@@ -231,10 +231,18 @@ fn mtp_stays_stable_under_highly_skewed_positive_tail() {
         .posterior_summary
         .as_ref()
         .expect("posterior summary should be present");
-    assert!(summary.omega_sq.as_ref().expect("omega summary").mean > 0.5);
+    assert!(
+        summary
+            .omega_sq
+            .as_ref()
+            .expect("omega summary")
+            .mean
+            .unwrap()
+            > 0.5
+    );
 
     let ppc =
         posterior_predictive_summary(draws(&model), &input.data(), 10).expect("ppc should run");
-    assert!(ppc.predicted_mean.mean.is_finite());
-    assert!(ppc.brier_score.mean.is_finite());
+    assert!(ppc.predicted_mean.mean.unwrap().is_finite());
+    assert!(ppc.brier_score.mean.unwrap().is_finite());
 }

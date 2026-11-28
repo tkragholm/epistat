@@ -24,43 +24,36 @@ use epistat_core::{Contrast, Estimand, Estimate, Interval, Level, Scale};
 use epistat_glm::{Fit, Glm, GlmData};
 use epistat_inference::{ClusterRule, Clusters, Influence};
 
-use crate::error::{Error, Result};
+use epistat_core::check;
+
+use crate::error::{Error, Model, Result};
 
 pub(crate) fn compensated(values: impl IntoIterator<Item = f64>) -> f64 {
     epistat_stats::sum::compensated(values)
 }
 
 /// `found` values where `n` are needed.
-pub(crate) fn check_len(name: &str, found: usize, n: usize) -> Result<()> {
-    if found == n {
-        Ok(())
-    } else {
-        Err(Error::input(format!(
-            "{name}: {found} values for {n} persons"
-        )))
-    }
+pub(crate) fn check_len(name: &'static str, found: usize, n: usize) -> Result<()> {
+    Ok(check::same_length(name, n, found)?)
 }
 
 /// Every value finite.
-pub(crate) fn check_finite(name: &str, values: &[f64]) -> Result<()> {
-    match values.iter().position(|x| !x.is_finite()) {
-        Some(i) => Err(Error::input(format!("{name}: value {i} is not finite"))),
-        None => Ok(()),
-    }
+pub(crate) fn check_finite(name: &'static str, values: &[f64]) -> Result<()> {
+    Ok(check::finite(name, values)?)
 }
 
 /// The case weights, or 1 for each of `n` persons, checked to be finite and
 /// non-negative.
-pub(crate) fn case_weights(name: &str, given: Option<&[f64]>, n: usize) -> Result<Vec<f64>> {
+pub(crate) fn case_weights(
+    name: &'static str,
+    given: Option<&[f64]>,
+    n: usize,
+) -> Result<Vec<f64>> {
     match given {
         None => Ok(vec![1.0; n]),
         Some(w) => {
             check_len(name, w.len(), n)?;
-            if let Some(i) = w.iter().position(|&x| !(x.is_finite() && x >= 0.0)) {
-                return Err(Error::input(format!(
-                    "{name}: value {i} is negative or not finite"
-                )));
-            }
+            check::weights(name, w)?;
             Ok(w.to_vec())
         }
     }
@@ -78,7 +71,10 @@ pub(crate) fn check_arms(weights: &[f64], treatment: &[bool]) -> Result<()> {
     if treated && controls {
         Ok(())
     } else {
-        Err(Error::input("treatment: both groups need persons"))
+        Err(Error::invalid(
+            "treatment",
+            "both groups need persons of positive weight",
+        ))
     }
 }
 
@@ -87,44 +83,45 @@ pub(crate) fn check_arms(weights: &[f64], treatment: &[bool]) -> Result<()> {
 pub(crate) fn check_estimand(estimand: Estimand) -> Result<()> {
     match estimand {
         Estimand::Ate | Estimand::Att | Estimand::Atc => Ok(()),
-        other => Err(Error::input(format!(
-            "estimand: {other} is not estimated; the estimands are ATE, ATT and ATC"
-        ))),
+        _ => Err(Error::invalid(
+            "estimand",
+            "is not estimated; the estimands are ATE, ATT and ATC",
+        )),
     }
 }
 
 /// The design has a row per person, a column and finite values.
-pub(crate) fn check_design(name: &str, m: epistat_linalg::MatRef<'_, f64>, n: usize) -> Result<()> {
-    if m.nrows() != n {
-        return Err(Error::input(format!(
-            "{name}: {} rows for {n} persons",
-            m.nrows()
-        )));
-    }
-    if m.ncols() == 0 {
-        return Err(Error::input(format!("{name}: no columns")));
-    }
-    if !epistat_linalg::is_finite(m) {
-        return Err(Error::input(format!("{name}: a value is not finite")));
+pub(crate) fn check_design(
+    name: &'static str,
+    m: epistat_linalg::MatRef<'_, f64>,
+    n: usize,
+) -> Result<()> {
+    check::same_length(name, n, m.nrows())?;
+    check::non_empty(name, m.ncols())?;
+    finite_design(name, m)
+}
+
+/// Every value of the design `m` finite, or [`epistat_core::InputError::NotFinite`]
+/// at the first that is not, by column.
+pub(crate) fn finite_design(name: &'static str, m: epistat_linalg::MatRef<'_, f64>) -> Result<()> {
+    for j in 0..m.ncols() {
+        if let Some(row) = (0..m.nrows()).find(|&i| !m[(i, j)].is_finite()) {
+            return Err(epistat_core::InputError::NotFinite {
+                what: name,
+                row,
+                column: Some(j),
+            }
+            .into());
+        }
     }
     Ok(())
 }
 
 /// A fit of a nuisance model that converged and has no aliased column, with
 /// its coefficients.
-pub(crate) fn fit_glm(glm: &Glm, data: &GlmData<'_>, what: &str) -> Result<(Fit, Vec<f64>)> {
-    let fit = glm
-        .fit(data)
-        .map_err(|e| Error::input(format!("{what}: {e}")))?;
-    let coefficients = fit.full_rank().map_err(|e| match e {
-        epistat_glm::Error::NotConverged { iterations, .. } => Error::NoConvergence(format!(
-            "{what}: no convergence after {iterations} iterations"
-        )),
-        epistat_glm::Error::Aliased { column } => {
-            Error::input(format!("{what}: design column {column} is aliased"))
-        }
-        other => Error::input(format!("{what}: {other}")),
-    })?;
+pub(crate) fn fit_glm(glm: &Glm, data: &GlmData<'_>, model: Model) -> Result<(Fit, Vec<f64>)> {
+    let fit = glm.fit(data).map_err(|e| Error::fit(model, e))?;
+    let coefficients = fit.full_rank().map_err(|e| Error::fit(model, e))?;
     Ok((fit, coefficients))
 }
 
@@ -134,7 +131,7 @@ pub(crate) fn glm_data<'a>(
     y: &'a [f64],
     weights: Option<&'a [f64]>,
     offset: Option<&'a [f64]>,
-    what: &str,
+    model: Model,
 ) -> Result<GlmData<'a>> {
     let mut builder = GlmData::builder(x, y);
     if let Some(w) = weights {
@@ -143,9 +140,7 @@ pub(crate) fn glm_data<'a>(
     if let Some(o) = offset {
         builder = builder.offset(o);
     }
-    builder
-        .build()
-        .map_err(|e| Error::input(format!("{what}: {e}")))
+    builder.build().map_err(|e| Error::fit(model, e))
 }
 
 /// A fitted propensity of exactly 0 or 1 to within ten ulps of 1, which a
@@ -156,10 +151,10 @@ pub(crate) fn check_separation(propensity: &[f64]) -> Result<()> {
         .iter()
         .position(|&p| p < eps10 || p > 1.0 - eps10)
     {
-        Some(i) => Err(Error::input(format!(
-            "propensity model: person {i} has fitted probability {} (separation)",
-            propensity[i]
-        ))),
+        Some(row) => Err(Error::Separation {
+            model: Model::Propensity,
+            row,
+        }),
         None => Ok(()),
     }
 }
@@ -168,13 +163,16 @@ pub(crate) fn check_separation(propensity: &[f64]) -> Result<()> {
 pub(crate) fn row_keys(rows: impl IntoIterator<Item = usize>) -> Result<Vec<u32>> {
     rows.into_iter()
         .map(|i| {
-            u32::try_from(i).map_err(|_| Error::input(format!("more than {} persons", u32::MAX)))
+            u32::try_from(i).map_err(|_| {
+                epistat_core::InputError::TooLarge {
+                    what: "persons",
+                    limit: u64::from(u32::MAX),
+                    found: i as u64,
+                }
+                .into()
+            })
         })
         .collect()
-}
-
-fn inference_error(e: &epistat_inference::Error) -> Error {
-    Error::input(format!("influence function: {e}"))
 }
 
 /// The clusters of every person keyed by row, for an influence function over
@@ -184,9 +182,7 @@ pub(crate) fn clusters(cluster: Option<&[u32]>, n: usize) -> Result<Option<Clust
         return Ok(None);
     };
     check_len("cluster", cluster.len(), n)?;
-    Clusters::per_row(cluster)
-        .map(Some)
-        .map_err(|e| inference_error(&e))
+    Clusters::per_row(cluster).map(Some).map_err(Error::from)
 }
 
 /// The rule of a reference with the `n` divisor without clusters and the
@@ -207,14 +203,12 @@ pub(crate) fn influence(d: [&[f64]; 2], rows: Vec<u32>, rule: ClusterRule) -> Re
     let mut values = Vec::with_capacity(2 * rows.len());
     values.extend_from_slice(d[0]);
     values.extend_from_slice(d[1]);
-    Influence::from_dfbeta_over_rows(values, rows, 2, rule).map_err(|e| inference_error(&e))
+    Influence::from_dfbeta_over_rows(values, rows, 2, rule).map_err(Error::from)
 }
 
 /// The variance of `influence`, which has one column.
 fn variance_of(influence: &Influence, clusters: Option<&Clusters>) -> Result<Option<f64>> {
-    let v = influence
-        .variance(clusters)
-        .map_err(|e| inference_error(&e))?;
+    let v = influence.variance(clusters).map_err(Error::from)?;
     Ok(v.get(0, 0))
 }
 
@@ -224,9 +218,7 @@ pub(crate) fn combined_variance(
     weights: &[f64],
     clusters: Option<&Clusters>,
 ) -> Result<Option<f64>> {
-    let combined = influence
-        .combine(weights)
-        .map_err(|e| inference_error(&e))?;
+    let combined = influence.combine(weights).map_err(Error::from)?;
     variance_of(&combined, clusters)
 }
 
@@ -264,9 +256,7 @@ pub(crate) fn contrast(
     clusters: Option<&Clusters>,
     level: Level,
 ) -> Result<Contrast> {
-    let covariance = influence
-        .variance(clusters)
-        .map_err(|e| inference_error(&e))?;
+    let covariance = influence.variance(clusters).map_err(Error::from)?;
     let mean1 = wald(theta[0], covariance.get(0, 0), level);
     let mean0 = wald(theta[1], covariance.get(1, 1), level);
     let difference = wald(

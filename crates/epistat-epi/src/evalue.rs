@@ -180,7 +180,8 @@ pub enum Outcome {
 }
 
 fn positive(what: &'static str, value: f64) -> Result<f64, Error> {
-    if value.is_finite() && value > 0.0 {
+    crate::error::finite_number(what, value)?;
+    if value > 0.0 {
         Ok(value)
     } else {
         Err(EValueError::NotPositive { what, value }.into())
@@ -577,17 +578,7 @@ pub fn evalues_rd(
     true_rd: f64,
     level: Level,
 ) -> Result<RdEValues, Error> {
-    if [
-        t.exposed_cases,
-        t.unexposed_cases,
-        t.exposed_noncases,
-        t.unexposed_noncases,
-    ]
-    .iter()
-    .any(|x| !x.is_finite() || *x < 0.0)
-    {
-        return Err(EValueError::Table("cells must be finite and not negative").into());
-    }
+    t.check_cells()?;
     let (n1, n0) = (
         t.exposed_cases + t.exposed_noncases,
         t.unexposed_cases + t.unexposed_noncases,

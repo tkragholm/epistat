@@ -146,7 +146,7 @@ use epistat_inference::{ClusterRule, Influence};
 use epistat_linalg::{Mat, MatRef};
 
 use crate::aipw::{AipwInput, GlmInput, fitted_mean};
-use crate::error::{Error, Result};
+use crate::error::{Error, Model, Result, domain, domain_at, empty};
 use crate::shared::{
     case_weights, check_arms, check_design, check_estimand, check_finite, check_len,
     check_separation, clusters, compensated, contrast, fit_glm, glm_data, influence, row_keys,
@@ -361,7 +361,7 @@ fn prepare<'a>(
 ) -> Result<Prepared<'a>> {
     let n = treatment.len();
     if n == 0 {
-        return Err(Error::input("treatment: no persons"));
+        return Err(empty("treatment"));
     }
     check_estimand(opts.estimand)?;
     check_len("outcome", outcome.len(), n)?;
@@ -369,16 +369,10 @@ fn prepare<'a>(
         check_len("cluster", c.len(), n)?;
     }
     if !(opts.outcome_bound > 0.0 && opts.outcome_bound < 0.5) {
-        return Err(Error::input(format!(
-            "outcome_bound: {} is not in (0, 0.5)",
-            opts.outcome_bound
-        )));
+        return Err(domain("outcome_bound", opts.outcome_bound, "(0, 0.5)"));
     }
     if !(opts.step.is_finite() && opts.step > 0.0) {
-        return Err(Error::input(format!(
-            "step: {} is not positive and finite",
-            opts.step
-        )));
+        return Err(domain("step", opts.step, "(0, inf)"));
     }
     check_finite("outcome", outcome)?;
     let raw = case_weights("weight", weight, n)?;
@@ -390,23 +384,22 @@ fn prepare<'a>(
             let lo = outcome.iter().copied().fold(f64::INFINITY, f64::min);
             let hi = outcome.iter().copied().fold(f64::NEG_INFINITY, f64::max);
             if lo >= hi {
-                return Err(Error::input(
-                    "outcome: one value, so the observed range is empty",
+                return Err(Error::invalid(
+                    "outcome",
+                    "has one value, so the observed range is empty",
                 ));
             }
             (lo, hi)
         }
         OutcomeRange::Known { lower, upper } => {
             if !(lower.is_finite() && upper.is_finite() && lower < upper) {
-                return Err(Error::input(format!(
-                    "range: ({lower}, {upper}) is not a range with lower < upper"
-                )));
+                return Err(Error::invalid(
+                    "range",
+                    "the limits must be finite with lower < upper",
+                ));
             }
             if let Some(i) = outcome.iter().position(|&y| y < lower || y > upper) {
-                return Err(Error::input(format!(
-                    "outcome: value {i} is {}, outside the range ({lower}, {upper})",
-                    outcome[i]
-                )));
+                return Err(domain_at("outcome", outcome[i], "the known range", i));
             }
             (lower, upper)
         }
@@ -419,17 +412,16 @@ fn prepare<'a>(
             let m = n as f64;
             let b = 5.0 / m.sqrt() / m.ln();
             if !(b > 0.0 && b < 0.5) {
-                return Err(Error::input(format!(
-                    "propensity_bound: tmle's bound 5 / (sqrt(n) ln n) is {b} for {n} persons, not in (0, 0.5)"
-                )));
+                return Err(Error::invalid(
+                    "propensity_bound",
+                    "tmle's bound 5 / (sqrt(n) ln n) is not in (0, 0.5) for this number of persons",
+                ));
             }
             b
         }
         PropensityBound::At(b) => {
             if !(b > 0.0 && b < 0.5) {
-                return Err(Error::input(format!(
-                    "propensity_bound: {b} is not in (0, 0.5)"
-                )));
+                return Err(domain("propensity_bound", b, "(0, 0.5)"));
             }
             b
         }
@@ -448,11 +440,9 @@ fn prepare<'a>(
 }
 
 fn check_propensity(g: &[f64]) -> Result<()> {
+    check_finite("propensity", g)?;
     match g.iter().position(|&p| !(p > 0.0 && p < 1.0)) {
-        Some(i) => Err(Error::input(format!(
-            "propensity: person {i} has {}, outside (0, 1)",
-            g[i]
-        ))),
+        Some(i) => Err(domain_at("propensity", g[i], "(0, 1)", i)),
         None => Ok(()),
     }
 }
@@ -466,12 +456,13 @@ pub(crate) fn fluctuation_coefficient(
     j: usize,
     column: impl IntoIterator<Item = f64>,
     weights: impl IntoIterator<Item = f64>,
-    what: &str,
+    model: Model,
 ) -> Result<f64> {
     if !fit.converged {
-        return Err(Error::NoConvergence(format!(
-            "{what}: the logistic fit did not converge"
-        )));
+        return Err(Error::NotConverged {
+            model,
+            iterations: Some(fit.iterations),
+        });
     }
     if let Some(e) = fit.coefficients[j] {
         return Ok(e);
@@ -483,9 +474,7 @@ pub(crate) fn fluctuation_coefficient(
     {
         Ok(0.0)
     } else {
-        Err(Error::input(format!(
-            "{what}: the coefficient of clever covariate {j} is aliased"
-        )))
+        Err(Error::Aliased { model, column: j })
     }
 }
 
@@ -545,23 +534,23 @@ fn population(
             &p.ystar,
             Some(&p.w),
             Some(&offset),
-            "fluctuation",
+            Model::Fluctuation,
         )?)
-        .map_err(|e| Error::input(format!("fluctuation: {e}")))?;
+        .map_err(|e| Error::fit(Model::Fluctuation, e))?;
     let weights = || p.w.iter().copied();
     let e0 = fluctuation_coefficient(
         &fit,
         0,
         (0..n).map(|i| clever(i, 0)),
         weights(),
-        "fluctuation",
+        Model::Fluctuation,
     )?;
     let e1 = fluctuation_coefficient(
         &fit,
         1,
         (0..n).map(|i| clever(i, 1)),
         weights(),
-        "fluctuation",
+        Model::Fluctuation,
     )?;
     let back = |x: f64| x * p.width + p.lower;
     let s1: Vec<f64> = (0..n).map(|i| back(plogis(l1[i] + e1 / g1[i]))).collect();
@@ -657,7 +646,7 @@ fn support(
                     x.as_ref(),
                     &ar,
                     &wr,
-                    "propensity (support)",
+                    Model::Propensity,
                 )?
             }
         }
@@ -670,10 +659,10 @@ fn support(
 fn intercept(rows: &[usize], a: &[f64], g: &[f64]) -> Result<Vec<f64>> {
     let offset: Vec<f64> = rows.iter().map(|&i| logit(g[i])).collect();
     let ones = Mat::from_fn(rows.len(), 1, |_, _| 1.0);
-    let what = "propensity recalibration";
+    let what = Model::Propensity;
     let fit = Glm::new(Family::Binomial, Link::Logit)
         .fit(&glm_data(ones.as_ref(), a, None, Some(&offset), what)?)
-        .map_err(|e| Error::input(format!("{what}: {e}")))?;
+        .map_err(|e| Error::fit(what, e))?;
     let c = fluctuation_coefficient(
         &fit,
         0,
@@ -747,9 +736,10 @@ fn one_step(
     let h = if derivative > 0.0 { -step } else { step };
     let mut loss_current = loss(&current.q, &current.g1, &current.g0);
     if !loss_current.is_finite() {
-        return Err(Error::input(
-            "one-step: the loss at the start is not finite",
-        ));
+        return Err(Error::Infeasible {
+            model: Model::OneStep,
+            why: "the loss at the start is not finite",
+        });
     }
     let mut loss_previous = f64::INFINITY;
     let limit = (2.0 / step).max(1000.0);
@@ -789,9 +779,10 @@ fn one_step(
         k += 1;
     }
     if loss_previous > loss_current {
-        return Err(Error::NoConvergence(format!(
-            "one-step: the loss still falls after {k} steps of {step}"
-        )));
+        return Err(Error::NotConverged {
+            model: Model::OneStep,
+            iterations: Some(k),
+        });
     }
     Ok(OneStep {
         state: previous,
@@ -963,10 +954,11 @@ fn finish(
 ///
 /// [`Error::Input`] for inputs of different lengths, no persons, a value that is
 /// not finite, a negative weight, a propensity outside `(0, 1)`, an outcome
-/// outside the known range or with one value, options outside their ranges, an
-/// estimand other than the ATE, ATT and ATC, a group without persons of
-/// positive weight and an aliased fluctuation coefficient (see the module
-/// documentation); [`Error::NoConvergence`] for a fluctuation, a recalibration
+/// outside the known range and options outside their ranges;
+/// [`Error::Invalid`] for an outcome with one value, an estimand other than
+/// the ATE, ATT and ATC and a group without persons of positive weight;
+/// [`Error::Aliased`] for an aliased fluctuation coefficient (see the module
+/// documentation); [`Error::NotConverged`] for a fluctuation, a recalibration
 /// or a one-step path that does not converge.
 pub fn tmle(input: &TmleInput<'_>, opts: &TmleOptions) -> Result<Tmle> {
     let p = prepare(
@@ -1006,11 +998,13 @@ pub fn tmle(input: &TmleInput<'_>, opts: &TmleOptions) -> Result<Tmle> {
 ///
 /// # Errors
 ///
-/// The errors of [`tmle`], and [`Error::Input`] for a design with another number
-/// of rows than the data or without columns, a family other than the two above,
-/// a model that has an aliased column, and a propensity model whose fitted
-/// probabilities are numerically 0 or 1; [`Error::NoConvergence`] for a model
-/// that does not converge.
+/// The errors of [`tmle`]; [`Error::Input`] for a design with another number
+/// of rows than the data, without columns or with a value that is not finite;
+/// [`Error::Invalid`] for a family other than the two above;
+/// [`Error::Aliased`] for a model that has an aliased column;
+/// [`Error::Separation`] for a propensity model whose fitted probabilities are
+/// numerically 0 or 1; [`Error::NotConverged`] for a model that does not
+/// converge.
 pub fn tmle_glm(input: &GlmInput<'_>, family: Family, opts: &TmleOptions) -> Result<Tmle> {
     let p = prepare(
         input.outcome,
@@ -1026,8 +1020,9 @@ pub fn tmle_glm(input: &GlmInput<'_>, family: Family, opts: &TmleOptions) -> Res
         Family::Binomial => Link::Logit,
         Family::Gaussian => Link::Identity,
         _ => {
-            return Err(Error::input(
-                "family: the outcome model is binomial or Gaussian",
+            return Err(Error::invalid(
+                "family",
+                "the outcome model is binomial or Gaussian",
             ));
         }
     };
@@ -1038,7 +1033,7 @@ pub fn tmle_glm(input: &GlmInput<'_>, family: Family, opts: &TmleOptions) -> Res
         z,
         &a,
         &p.w,
-        "propensity",
+        Model::Propensity,
     )?;
     check_separation(&propensity)?;
     let glm = Glm::new(family, link);
@@ -1047,7 +1042,7 @@ pub fn tmle_glm(input: &GlmInput<'_>, family: Family, opts: &TmleOptions) -> Res
         OutcomeModel::Pooled => {
             let k = x.ncols();
             let design = Mat::from_fn(n, k + 1, |i, j| if j < k { x[(i, j)] } else { a[i] });
-            let what = "outcome model";
+            let what = Model::Outcome;
             let (_, beta) = fit_glm(
                 &glm,
                 &glm_data(design.as_ref(), &p.ystar, Some(&p.w), None, what)?,
@@ -1070,8 +1065,8 @@ pub fn tmle_glm(input: &GlmInput<'_>, family: Family, opts: &TmleOptions) -> Res
                     })
                     .collect()
             };
-            let m1 = fitted_mean(&glm, x, &p.ystar, &arm(true), "outcome (treated)")?;
-            let m0 = fitted_mean(&glm, x, &p.ystar, &arm(false), "outcome (controls)")?;
+            let m1 = fitted_mean(&glm, x, &p.ystar, &arm(true), Model::Outcome)?;
+            let m0 = fitted_mean(&glm, x, &p.ystar, &arm(false), Model::Outcome)?;
             (m1, m0)
         }
     };
@@ -1097,7 +1092,7 @@ mod tests {
         let column: Vec<f64> = x.iter().map(|&v| second(v)).collect();
         let design = Mat::from_fn(x.len(), 2, |i, j| if j == 0 { x[i] } else { column[i] });
         let fit = Glm::new(Family::Binomial, Link::Logit)
-            .fit(&glm_data(design.as_ref(), &y, None, None, "test").unwrap())
+            .fit(&glm_data(design.as_ref(), &y, None, None, Model::Fluctuation).unwrap())
             .unwrap();
         assert!(fit.converged && fit.coefficients[1].is_none());
         (fit, column)
@@ -1107,20 +1102,23 @@ mod tests {
     fn an_aliased_fluctuation_coefficient_is_an_error_unless_its_covariate_is_zero() {
         let ones = || std::iter::repeat_n(1.0, 40);
         let (fit, column) = aliased_fit(|v| v);
-        let refused = fluctuation_coefficient(&fit, 1, column.iter().copied(), ones(), "test");
-        assert!(matches!(refused, Err(Error::Input(m)) if m.contains("aliased")));
+        let refused =
+            fluctuation_coefficient(&fit, 1, column.iter().copied(), ones(), Model::Fluctuation);
+        assert!(matches!(refused, Err(Error::Aliased { column: 1, .. })));
         let (fit, column) = aliased_fit(|_| 0.0);
-        let zero = fluctuation_coefficient(&fit, 1, column.iter().copied(), ones(), "test");
+        let zero =
+            fluctuation_coefficient(&fit, 1, column.iter().copied(), ones(), Model::Fluctuation);
         assert_eq!(zero.unwrap(), 0.0);
         // A covariate that is not 0 only where the weight is 0 counts as 0.
         let weights = (0..40).map(|i| if i == 5 { 0.0 } else { 1.0 });
         let covariate = (0..40).map(|i| if i == 5 { 1.0 } else { 0.0 });
         assert_eq!(
-            fluctuation_coefficient(&fit, 1, covariate, weights, "test").unwrap(),
+            fluctuation_coefficient(&fit, 1, covariate, weights, Model::Fluctuation).unwrap(),
             0.0
         );
         assert_eq!(
-            fluctuation_coefficient(&fit, 0, column.iter().copied(), ones(), "test").unwrap(),
+            fluctuation_coefficient(&fit, 0, column.iter().copied(), ones(), Model::Fluctuation)
+                .unwrap(),
             fit.coefficients[0].unwrap()
         );
     }

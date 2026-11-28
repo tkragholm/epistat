@@ -27,6 +27,9 @@ use epistat_causal::gformula::{
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
+/// The root seed of the simulation and the bootstrap of every run here.
+const SEED: u64 = 20_261_124;
+
 #[derive(Deserialize)]
 #[expect(non_snake_case, reason = "the columns keep the names of the R data")]
 struct Data {
@@ -117,7 +120,7 @@ fn a_categorical_covariate_agrees_with_gformula() {
         &GFormulaOptions {
             simulated: Some(200_000),
             periods: Some(2),
-            ..GFormulaOptions::default()
+            ..GFormulaOptions::new(SEED)
         },
     )
     .expect("g-formula");
@@ -166,7 +169,7 @@ fn a_class_outside_the_levels_is_an_error() {
             &covariates,
             &outcome,
             &[],
-            &GFormulaOptions::default(),
+            &GFormulaOptions::new(SEED),
         )
         .is_err()
     );

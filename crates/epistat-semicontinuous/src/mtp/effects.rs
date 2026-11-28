@@ -24,6 +24,7 @@ pub struct CounterfactualScenario {
 }
 
 /// Per-period effect estimates.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub struct PeriodEffect {
     /// The period, in the order of the input's times.
@@ -41,6 +42,7 @@ pub struct PeriodEffect {
 }
 
 /// Counterfactual effects across all periods in a scenario.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct CounterfactualEffects {
     /// The effects in each period.
@@ -50,6 +52,7 @@ pub struct CounterfactualEffects {
 }
 
 /// Posterior summaries for period-specific effects.
+#[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct PeriodEffectSummary {
     /// The period, in the order of the input's times.
@@ -67,6 +70,7 @@ pub struct PeriodEffectSummary {
 }
 
 /// Posterior summaries for all counterfactual effects.
+#[non_exhaustive]
 #[derive(Debug, Clone, Default)]
 pub struct CounterfactualEffectsSummary {
     /// The posterior summaries in each period.
@@ -417,10 +421,10 @@ mod tests {
         let summary =
             counterfactual_effects_summary(&samples, &scenario).expect("summary should compute");
         assert_eq!(summary.per_period.len(), 2);
-        assert!(summary.cumulative_additive_effect.mean.is_finite());
+        assert!(summary.cumulative_additive_effect.mean.unwrap().is_finite());
         assert!(
-            summary.per_period[0].additive_effect.q975
-                >= summary.per_period[0].additive_effect.q025
+            summary.per_period[0].additive_effect.q975.unwrap()
+                >= summary.per_period[0].additive_effect.q025.unwrap()
         );
     }
 }

@@ -328,9 +328,11 @@ fn simulate_person(
                     Action::Dynamic(f) => f(&h, x),
                 };
                 if !set.is_finite() {
-                    return Err(Error::input(format!(
-                        "intervention {s}: the rule for variable {v} gave {set} at period {k}"
-                    )));
+                    return Err(Error::invalid_at(
+                        "intervention",
+                        s,
+                        "a rule gave a value that is not finite",
+                    ));
                 }
                 changed |= set.to_bits() != x.to_bits();
                 x = set;
@@ -380,9 +382,10 @@ fn simulate_person(
             for (v, column) in c.values.iter_mut().enumerate() {
                 column.push(values[k * w + v]);
             }
-            c.outcome_probability.push(py);
-            c.competing_probability.push(pd);
-            c.value.push(risk);
+            let defined = |x: f64| (!x.is_nan()).then_some(x);
+            c.outcome_probability.push(defined(py));
+            c.competing_probability.push(defined(pd));
+            c.value.push(defined(risk));
         }
     }
     Ok(intervened)

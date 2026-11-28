@@ -545,7 +545,8 @@ fn mtp(out: &mut Vec<(&'static str, u64)>) {
                 parameter.q50,
                 parameter.q975,
             ] {
-                h.f(value);
+                // Every summary of these fits is defined.
+                h.f(value.expect("a defined summary"));
             }
         }
     }

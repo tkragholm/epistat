@@ -11,6 +11,7 @@ use epistat_causal::balance::{
     CbpsInput, CbpsOptions, EntropyInput, EntropyOptions, Identification, WeightVariance,
     balance_columns, cbps, entropy_balance,
 };
+use epistat_core::{Classify, ErrorKind};
 use epistat_linalg::Mat;
 
 fn weighted_mean(col: impl Fn(usize) -> f64, rows: &[usize], s: &[f64], w: &[f64]) -> f64 {
@@ -114,10 +115,7 @@ fn entropy_balancing_refuses_an_unreachable_target() {
         },
     )
     .unwrap_err();
-    assert!(
-        matches!(err, Error::Infeasible(ref m) if m.contains("column 2")),
-        "{err}"
-    );
+    assert!(matches!(err, Error::Infeasible { .. }), "{err}");
 }
 
 #[test]
@@ -150,7 +148,7 @@ fn entropy_balancing_refuses_a_hull_problem_without_a_marginal_cause() {
         },
     )
     .unwrap_err();
-    assert!(matches!(err, Error::Infeasible(_)), "{err}");
+    assert!(matches!(err, Error::Infeasible { .. }), "{err}");
 }
 
 #[test]
@@ -165,7 +163,7 @@ fn entropy_balancing_refuses_constant_and_collinear_columns() {
         &EntropyOptions::default(),
     );
     assert!(
-        matches!(r, Err(Error::Input(ref m)) if m.contains("column 1")),
+        matches!(r, Err(Error::Invalid { index: Some(1), .. })),
         "{r:?}"
     );
     let collinear = Mat::from_fn(300, 2, |i, j| {
@@ -178,10 +176,7 @@ fn entropy_balancing_refuses_constant_and_collinear_columns() {
         },
         &EntropyOptions::default(),
     );
-    assert!(
-        matches!(r, Err(Error::Input(ref m)) if m.contains("collinear")),
-        "{r:?}"
-    );
+    assert!(matches!(r, Err(Error::Aliased { column: 1, .. })), "{r:?}");
 }
 
 #[test]
@@ -195,7 +190,10 @@ fn entropy_balancing_refuses_bad_inputs() {
         },
         &EntropyOptions::default(),
     );
-    assert!(matches!(r, Err(Error::Input(_))));
+    assert!(
+        matches!(r, Err(ref e) if e.kind() == ErrorKind::Input),
+        "{r:?}"
+    );
     let neg: Vec<f64> = (0..100).map(|i| if i == 3 { -1.0 } else { 1.0 }).collect();
     let r = entropy_balance(
         &EntropyInput {
@@ -204,7 +202,10 @@ fn entropy_balancing_refuses_bad_inputs() {
         },
         &EntropyOptions::default(),
     );
-    assert!(matches!(r, Err(Error::Input(_))));
+    assert!(
+        matches!(r, Err(ref e) if e.kind() == ErrorKind::Input),
+        "{r:?}"
+    );
     let all_treated = vec![true; 100];
     let r = entropy_balance(
         &EntropyInput {
@@ -408,10 +409,7 @@ fn cbps_refuses_what_it_cannot_fit() {
         },
         &CbpsOptions::default(),
     );
-    assert!(
-        matches!(r, Err(Error::Input(ref m)) if m.contains("aliased")),
-        "{r:?}"
-    );
+    assert!(matches!(r, Err(Error::Aliased { .. })), "{r:?}");
     let all = vec![true; 200];
     let r = cbps(
         &CbpsInput {
@@ -421,7 +419,10 @@ fn cbps_refuses_what_it_cannot_fit() {
         },
         &CbpsOptions::default(),
     );
-    assert!(matches!(r, Err(Error::Input(_))));
+    assert!(
+        matches!(r, Err(ref e) if e.kind() == ErrorKind::Input),
+        "{r:?}"
+    );
     // Perfect separation: no solution of the balance conditions.
     let sep: Vec<bool> = (0..200).map(|i| sim.x[(i, 1)] > 0.0).collect();
     let r = cbps(

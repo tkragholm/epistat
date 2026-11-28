@@ -27,6 +27,7 @@
 
 use std::collections::BTreeMap;
 
+use epistat_causal::Bootstrap as Replicates;
 use epistat_causal::Panel;
 use epistat_causal::gformula::{
     Action, Competing, Covariate, CovariateKind, GFormula, GFormulaOptions, History, Intervention,
@@ -36,6 +37,9 @@ use epistat_testkit::{
     Tolerance, assert_close, assert_within_standard_errors, load_json, na_f64_vec,
 };
 use serde::Deserialize;
+
+/// The root seed of the simulation and the bootstrap of every run here.
+const SEED: u64 = 20_261_124;
 
 #[derive(Deserialize)]
 struct Reference {
@@ -333,7 +337,7 @@ fn main_models_and_observed_risk_match_gformula() {
         main_outcome_terms(),
         main_competing_terms(),
         &main_interventions(),
-        &GFormulaOptions::default(),
+        &GFormulaOptions::new(SEED),
         |g| {
             for (name, j) in [("L1", 0), ("L2", 1), ("A", 2)] {
                 let fit = g.models.covariates[j].as_ref().expect("fitted");
@@ -360,7 +364,7 @@ fn main_risks_agree_within_monte_carlo_error() {
     let m = &r.main;
     let options = GFormulaOptions {
         simulated: Some(4 * m.simulated),
-        ..GFormulaOptions::default()
+        ..GFormulaOptions::new(SEED)
     };
     with_main(
         m,
@@ -447,7 +451,7 @@ fn deterministic_risks_match_gformula() {
         ],
         vec![Intercept, Lag(0, 1), Baseline(W), Period],
         &static_strategies(m.periods),
-        &GFormulaOptions::default(),
+        &GFormulaOptions::new(SEED),
         |g| check_exact(&g, &m.exact1, 6),
     );
     // With baseline lags and four periods: Y ~ A + lag1_A + lag2_A +
@@ -469,7 +473,7 @@ fn deterministic_risks_match_gformula() {
         &GFormulaOptions {
             baseline_lags: true,
             periods: Some(4),
-            ..GFormulaOptions::default()
+            ..GFormulaOptions::new(SEED)
         },
         |g| check_exact(&g, &m.exact2, 4),
     );
@@ -500,8 +504,8 @@ fn bootstrap_matches_gformula_and_covers_the_truth() {
     let m = &r.main;
     let b = m.bootstrap.replicates;
     let options = GFormulaOptions {
-        bootstrap: b,
-        ..GFormulaOptions::default()
+        bootstrap: Some(Replicates::new(b, SEED)),
+        ..GFormulaOptions::new(SEED)
     };
     with_main(
         m,
@@ -616,7 +620,7 @@ fn eof_run(e: &Eof, binary: bool, simulated: Option<usize>) -> GFormula {
     };
     let options = GFormulaOptions {
         simulated,
-        ..GFormulaOptions::default()
+        ..GFormulaOptions::new(SEED)
     };
     gformula(&data, &covariates, &outcome, &interventions, &options).expect("g-formula")
 }
@@ -709,7 +713,7 @@ fn deterministic_end_of_follow_up_matches_gformula() {
             &covariates,
             &outcome,
             &interventions,
-            &GFormulaOptions::default(),
+            &GFormulaOptions::new(SEED),
         )
         .unwrap();
         let z = g.models.covariates[0].as_ref().unwrap();
@@ -778,7 +782,7 @@ fn two_periods_match_the_exact_g_formula() {
         &interventions,
         &GFormulaOptions {
             simulated: Some(400_000),
-            ..GFormulaOptions::default()
+            ..GFormulaOptions::new(SEED)
         },
     )
     .unwrap();
