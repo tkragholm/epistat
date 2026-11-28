@@ -35,6 +35,7 @@ use epistat_matching::sensitivity::{
     censored_sensitivity_value, m_statistic_bounds, m_statistic_interval,
     m_statistic_sensitivity_value, wilcoxon_bounds, wilcoxon_sensitivity_value,
 };
+use epistat_testkit::{Tolerance, assert_close_to};
 use r_reference::{Versions, assert_r_version, reference as load_reference};
 use serde::Deserialize;
 
@@ -190,20 +191,13 @@ fn censored_sets(r: &Reference) -> Vec<CensoredSet> {
         .collect()
 }
 
-fn close(got: f64, expected: f64, rel: f64, abs: f64, what: &str) {
-    assert!(
-        (got - expected).abs() <= rel * expected.abs() + abs,
-        "{what}: {got} against {expected}"
-    );
-}
-
 /// The value against R's root, after checking that the bound rises by at
 /// least 0.01 a unit of gamma at the crossing.
 fn check_value(got: f64, expected: f64, bound: impl Fn(f64) -> f64, what: &str) {
     let h = 1e-4;
     let slope = (bound(got + h) - bound(got - h)) / (2.0 * h);
     assert!(slope > 0.01, "{what}: slope {slope}");
-    close(got, expected, 0.0, 1e-10, what);
+    assert_close_to(what, got, expected, Tolerance::exact().abs(1e-10));
 }
 
 #[test]
@@ -238,7 +232,12 @@ fn sensitivity_values_agree_with_uniroot() {
     );
     // The exact signed rank bound of 0-1 pairs is the same binomial tail.
     let w = wilcoxon_sensitivity_value(&bp, r.alpha, WilcoxonDistribution::Exact).unwrap();
-    close(w, r.binom_value, 0.0, 1e-10, "signed rank of binary pairs");
+    assert_close_to(
+        "signed rank of binary pairs",
+        w,
+        r.binom_value,
+        Tolerance::exact().abs(1e-10),
+    );
 
     let b13 = binary_sets(&r);
     let v = binary_sensitivity_value(&b13, r.alpha, BinaryDistribution::Exact).unwrap();
@@ -269,14 +268,23 @@ fn binary_pairs_give_the_binomial_tail() {
         assert_eq!(b.informative, 45);
         // pbinom is accurate to a few units in the last place, and ours sums
         // 46 terms: 1e-13 relative.
-        close(b.p_upper, r.binom_tail.upper[i], 1e-13, 0.0, "upper");
-        close(b.p_lower, r.binom_tail.lower[i], 1e-13, 0.0, "lower");
-        close(
+        assert_close_to(
+            "upper",
+            b.p_upper,
+            r.binom_tail.upper[i],
+            Tolerance::exact().rel(1e-13),
+        );
+        assert_close_to(
+            "lower",
+            b.p_lower,
+            r.binom_tail.lower[i],
+            Tolerance::exact().rel(1e-13),
+        );
+        assert_close_to(
+            "signed rank",
             exact[i].p_upper,
             r.binom_tail.upper[i],
-            1e-13,
-            0.0,
-            "signed rank",
+            Tolerance::exact().rel(1e-13),
         );
     }
 }
@@ -290,40 +298,35 @@ fn check_binary(
     for ((b, n), e) in got.iter().zip(normal).zip(expected) {
         assert_eq!(b.gamma.to_bits(), e.gamma.to_bits());
         assert_eq!(b.statistic, e.statistic, "{what}");
-        close(
+        assert_close_to(
+            &format!("{what} upper {}", e.gamma),
             b.p_upper,
             e.p_upper,
-            1e-12,
-            1e-14,
-            &format!("{what} upper {}", e.gamma),
+            Tolerance::exact().abs(1e-12 * (e.p_upper).abs() + 1e-14),
         );
-        close(
+        assert_close_to(
+            &format!("{what} lower {}", e.gamma),
             b.p_lower,
             e.p_lower,
-            1e-12,
-            1e-14,
-            &format!("{what} lower {}", e.gamma),
+            Tolerance::exact().abs(1e-12 * (e.p_lower).abs() + 1e-14),
         );
-        close(
+        assert_close_to(
+            &format!("{what} mean"),
             n.expectation,
             e.ls_expectation,
-            1e-12,
-            0.0,
-            &format!("{what} mean"),
+            Tolerance::exact().rel(1e-12),
         );
-        close(
+        assert_close_to(
+            &format!("{what} variance"),
             n.variance,
             e.ls_variance,
-            1e-12,
-            0.0,
-            &format!("{what} variance"),
+            Tolerance::exact().rel(1e-12),
         );
-        close(
+        assert_close_to(
+            &format!("{what} normal"),
             n.p_upper,
             e.ls_p_upper,
-            0.0,
-            1e-14,
-            &format!("{what} normal"),
+            Tolerance::exact().abs(1e-14),
         );
     }
 }
@@ -367,9 +370,19 @@ fn censored_bounds_agree_with_separable1v_on_gehan_scores() {
     for (b, e) in got.iter().zip(&r.censored_bounds) {
         assert_eq!(b.gamma.to_bits(), e.gamma.to_bits());
         assert_eq!(b.statistic.to_bits(), e.statistic.to_bits());
-        close(b.expectation, e.expectation, 1e-12, 1e-13, "expectation");
-        close(b.variance, e.variance, 1e-12, 0.0, "variance");
-        close(b.p_upper, e.pval, 0.0, 1e-14, "p");
+        assert_close_to(
+            "expectation",
+            b.expectation,
+            e.expectation,
+            Tolerance::exact().abs(1e-12 * (e.expectation).abs() + 1e-13),
+        );
+        assert_close_to(
+            "variance",
+            b.variance,
+            e.variance,
+            Tolerance::exact().rel(1e-12),
+        );
+        assert_close_to("p", b.p_upper, e.pval, Tolerance::exact().abs(1e-14));
     }
     // The other direction negates the scores and so the statistic.
     let later = censored_bounds(&cs, &[1.0], EventDirection::Later).unwrap();
@@ -405,24 +418,32 @@ fn the_interval_agrees_with_senmw_ci() {
         let level = Level::alpha(r.alpha).unwrap();
         let got = m_statistic_interval(&mw, case.gamma, &spec, level, sides).unwrap();
         let slack = 2.0 * case.tol;
-        close(
+        assert_close_to(
+            "estimate lower",
             got.estimate_lower,
             case.estimate[0],
-            0.0,
-            slack,
-            "estimate lower",
+            Tolerance::exact().abs(slack),
         );
-        close(
+        assert_close_to(
+            "estimate upper",
             got.estimate_upper,
             case.estimate[1],
-            0.0,
-            slack,
-            "estimate upper",
+            Tolerance::exact().abs(slack),
         );
         let lower = got.interval.lower.unwrap();
-        close(lower, case.limits[0].unwrap(), 0.0, slack, "lower");
+        assert_close_to(
+            "lower",
+            lower,
+            case.limits[0].unwrap(),
+            Tolerance::exact().abs(slack),
+        );
         match case.limits[1] {
-            Some(upper) => close(got.interval.upper.unwrap(), upper, 0.0, slack, "upper"),
+            Some(upper) => assert_close_to(
+                "upper",
+                got.interval.upper.unwrap(),
+                upper,
+                Tolerance::exact().abs(slack),
+            ),
             None => assert_eq!(got.interval.upper, None),
         }
     }

@@ -124,12 +124,12 @@
 //! 4. Ahuja, R. K., Magnanti, T. L. and Orlin, J. B. (1993). *Network Flows:
 //!    Theory, Algorithms, and Applications.* Prentice Hall. Chapter 9.
 
-use super::constraints::ConstraintGroup;
 use super::optimal::{
     Edge, OptimalRequest, Stratum, StratumPairs, pair_outcome, with_strata_pairs,
 };
 use super::records::MatchingRecord;
 use crate::Error;
+use crate::constraints::ConstraintGroup;
 use crate::types::MatchOutcome;
 use epistat_optim::Error as OptimError;
 use epistat_optim::min_cost_flow::{Basis, FlowSolution, MinCostFlow};
@@ -2507,7 +2507,7 @@ mod tests {
             Key, LevelData, costs, level_data, option_error, to_i64,
         };
         use crate::Error;
-        use crate::matching::constraints::ConstraintGroup;
+        use crate::constraints::ConstraintGroup;
         use crate::matching::optimal::{OptimalRequest, StrataEdges, pair_outcome, strata_edges};
         use crate::matching::records::MatchingRecord;
         use epistat_optim::Error as OptimError;

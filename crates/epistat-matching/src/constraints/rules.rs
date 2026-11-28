@@ -1,5 +1,5 @@
-use super::distance::DistanceMetric;
-use super::records::MatchingRecord;
+use crate::matching::DistanceMetric;
+use crate::matching::MatchingRecord;
 use crate::types::{ControlIdx, MatchingCriteria, UniqueValueId};
 use chrono::NaiveDate;
 use rapidhash::RapidHashMap;
@@ -145,8 +145,6 @@ pub(crate) fn caliper_allows(
 pub struct StatusRule<'a, R>(pub(crate) StatusRuleKind<'a, R>);
 
 pub(crate) enum StatusRuleKind<'a, R> {
-    /// Allows every pair.
-    AllowsAll,
     /// Refuses a control, for `reason`, on every index date from the date
     /// `source` gives for it, and allows it before. A control with no date is
     /// never refused.
@@ -177,7 +175,6 @@ fn push_status_rule<'s, R: MatchingRecord, C: Constraint<R> + ?Sized>(
 ) -> bool {
     match constraint.status_rule() {
         None => false,
-        Some(StatusRule(StatusRuleKind::AllowsAll)) => true,
         Some(rule) => {
             rules.push(rule);
             true
@@ -424,6 +421,36 @@ where
     }
 }
 
+/// A constraint that may be absent: `None` allows every pair.
+impl<R: MatchingRecord, C> ConstraintGroup<R> for Option<C>
+where
+    C: Constraint<R>,
+{
+    fn allows_at_risk(&self, case: &R, control: &R) -> bool {
+        self.as_ref()
+            .is_none_or(|constraint| constraint.allows_at_risk(case, control))
+    }
+
+    fn status_rules<'s>(&'s self, rules: &mut Vec<StatusRule<'s, R>>) -> bool {
+        self.as_ref()
+            .is_none_or(|constraint| push_status_rule(constraint, rules))
+    }
+
+    fn check(&self) -> Result<(), crate::Error> {
+        self.as_ref().map_or(Ok(()), Constraint::check)
+    }
+
+    fn first_blocking_reason(
+        &self,
+        case: &R,
+        control: &R,
+        ctx: &ConstraintContext<'_>,
+    ) -> Option<&'static str> {
+        let constraint = self.as_ref()?;
+        (!constraint.allows(case, control, ctx)).then_some(constraint.reason())
+    }
+}
+
 impl<R: MatchingRecord, G, C> ConstraintGroup<R> for (G, C)
 where
     G: ConstraintGroup<R>,
@@ -561,53 +588,101 @@ impl<R: MatchingRecord> Constraint<R> for NoSelfMatchConstraint {
     }
 }
 
-/// Requires the case and the control to agree on every required stratum of the criteria.
-pub struct ExactMatchConstraint;
+/// Requires the case and the control to agree on a stratum, as `exact` in
+/// `matchit()`.
+///
+/// [`Self::REQUIRED_STRATA`] is the rule a job adds for the required strata
+/// of its criteria (`with_exact_match`): the pair agrees on every one of
+/// them, and a unit without a value agrees only with a unit without one.
+/// [`Self::on_key`] is the rule on one key of the strata map, which refuses a
+/// pair where either unit has no value unless [`Self::allowing_unknown`] is
+/// set. Equal sex is `on_key("sex")`:
+///
+/// ```
+/// use epistat_matching::constraints::ExactMatchConstraint;
+///
+/// let same_sex = ExactMatchConstraint::on_key("sex").with_reason("gender_mismatch");
+/// let same_sex_or_unknown = ExactMatchConstraint::on_key("sex").allowing_unknown();
+/// # let _ = (same_sex, same_sex_or_unknown);
+/// ```
+///
+/// A refused pair is counted under `strata_mismatch` unless
+/// [`Self::with_reason`] names another reason.
+pub struct ExactMatchConstraint {
+    strata: ExactStrata,
+    reason: &'static str,
+}
+
+enum ExactStrata {
+    Required,
+    Key { key: String, allow_unknown: bool },
+}
+
+impl ExactMatchConstraint {
+    /// Agreement on every required stratum of the job's criteria.
+    pub const REQUIRED_STRATA: Self = Self {
+        strata: ExactStrata::Required,
+        reason: "strata_mismatch",
+    };
+
+    /// Agreement on the value of `key` in the strata map. A pair where either
+    /// unit has no value is refused.
+    #[must_use]
+    pub fn on_key(key: impl Into<String>) -> Self {
+        Self {
+            strata: ExactStrata::Key {
+                key: key.into(),
+                allow_unknown: false,
+            },
+            reason: "strata_mismatch",
+        }
+    }
+
+    /// As before, but a pair where either unit has no value of the key is
+    /// allowed. The required strata of the criteria are not changed by it.
+    #[must_use]
+    pub fn allowing_unknown(mut self) -> Self {
+        if let ExactStrata::Key { allow_unknown, .. } = &mut self.strata {
+            *allow_unknown = true;
+        }
+        self
+    }
+
+    crate::impl_with_reason!();
+}
+
+/// Whether `case` and `control` agree on `key`; a missing value agrees when
+/// `allow_unknown`.
+pub(crate) fn key_agrees<R: MatchingRecord>(
+    case: &R,
+    control: &R,
+    key: &str,
+    allow_unknown: bool,
+) -> bool {
+    match (case.stratum(key), control.stratum(key)) {
+        (Some(c), Some(ctrl)) => c == ctrl,
+        _ => allow_unknown,
+    }
+}
 
 impl<R: MatchingRecord> Constraint<R> for ExactMatchConstraint {
     fn reason(&self) -> &'static str {
-        "strata_mismatch"
+        self.reason
     }
 
     fn allows(&self, case: &R, control: &R, ctx: &ConstraintContext<'_>) -> bool {
-        strata_match_fast(
-            case,
-            control,
-            &ctx.criteria.required_strata,
-            ctx.case_strata_values,
-            ctx.control_strata_values,
-        )
-    }
-}
-
-/// The birth-date window of the criteria, as a constraint, for a job whose
-/// distance is not the birth date. With no window it allows every pair.
-pub struct BirthWindowConstraint {
-    days: Option<i64>,
-}
-
-impl BirthWindowConstraint {
-    pub(crate) fn new(days: Option<i32>) -> Self {
-        Self {
-            days: days.map(i64::from),
+        match &self.strata {
+            ExactStrata::Required => strata_match_fast(
+                case,
+                control,
+                &ctx.criteria.required_strata,
+                ctx.case_strata_values,
+                ctx.control_strata_values,
+            ),
+            ExactStrata::Key { key, allow_unknown } => {
+                key_agrees(case, control, key, *allow_unknown)
+            }
         }
-    }
-}
-
-impl<R: MatchingRecord> Constraint<R> for BirthWindowConstraint {
-    fn reason(&self) -> &'static str {
-        "date_window_mismatch"
-    }
-
-    fn allows(&self, case: &R, control: &R, _ctx: &ConstraintContext<'_>) -> bool {
-        self.days
-            .is_none_or(|days| (control.birth_date() - case.birth_date()).num_days().abs() <= days)
-    }
-
-    fn status_rule(&self) -> Option<StatusRule<'_, R>> {
-        self.days
-            .is_none()
-            .then_some(StatusRule(StatusRuleKind::AllowsAll))
     }
 }
 
@@ -837,7 +912,7 @@ mod tests {
             None,
             None,
         );
-        assert!(!ExactMatchConstraint.allows(&case, &control, &ctx));
+        assert!(!ExactMatchConstraint::REQUIRED_STRATA.allows(&case, &control, &ctx));
 
         let case_vals = build_strata_values(&case, &criteria.required_strata);
         let control_vals = build_strata_values(&case, &criteria.required_strata);
@@ -850,7 +925,7 @@ mod tests {
             Some(&case_vals),
             Some(&control_vals),
         );
-        assert!(ExactMatchConstraint.allows(&case, &control, &ctx));
+        assert!(ExactMatchConstraint::REQUIRED_STRATA.allows(&case, &control, &ctx));
     }
 
     #[test]

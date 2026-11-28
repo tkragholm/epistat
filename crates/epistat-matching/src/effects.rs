@@ -81,10 +81,11 @@
 //! [`bootstrap`] resamples the pairs or subclasses with replacement, the
 //! cluster bootstrap that Austin and Small \[1\] recommend, keeps every row of a
 //! drawn pair with its weight and refits the model. A pair drawn twice enters
-//! twice. Replicate `r` draws its pair numbers from the stream seeded with
-//! `replicate_seed(seed, r)` of `epistat_rng`, so the replicates do not depend
-//! on the number of threads or on their order. [`cluster_resamples`] returns
-//! the draws. The bootstrap standard error is the standard deviation of the
+//! twice. Replicate `r` counts how often each pair is drawn with
+//! `epistat_rng::resample_counts` from the stream seeded with
+//! `replicate_seed(seed, r)`, so the replicates do not depend on the number of
+//! threads or on their order, and its rows are those of the pairs in pair
+//! order, each repeated as often as it was drawn. The bootstrap standard error is the standard deviation of the
 //! replicates, the normal interval is the estimate plus and minus the normal
 //! quantile times that error, and the percentile interval uses R's type 7
 //! quantiles of the replicates. The replicates of a statistic that is
@@ -124,7 +125,7 @@ use epistat_inference::Clusters;
 use epistat_inference::interval::{self, Percentile};
 use epistat_inference::sandwich::{meat, sandwich};
 use epistat_linalg::{Attempt, Mat, row_scaled_gram};
-use epistat_rng::{Stream, replicate_seed};
+use epistat_rng::{Stream, replicate_seed, resample_counts};
 use rayon::prelude::*;
 
 use crate::output::{LongMatches, MatchData};
@@ -803,6 +804,13 @@ pub fn estimate_effects(
 /// The pair draws of a bootstrap: `bootstrap.replicates` lists of
 /// `n_clusters` indices in `0..n_clusters`, the list of replicate `r` drawn
 /// from the stream seeded with `replicate_seed(bootstrap.seed, r)`.
+///
+/// [`bootstrap`] reads the same draws as counts, which
+/// `epistat_rng::resample_counts` gives.
+#[deprecated(
+    note = "use epistat_rng::resample_counts(n_clusters, epistat_rng::replicate_seed(seed, r)), \
+            the same draws as counts"
+)]
 #[must_use]
 pub fn cluster_resamples(n_clusters: usize, bootstrap: Bootstrap) -> Vec<Vec<usize>> {
     (0..bootstrap.replicates)
@@ -905,14 +913,17 @@ pub fn bootstrap(
         members[c].push(row);
     }
     let observed = point_contrasts(sample, spec)?;
-    let draws = cluster_resamples(g, settings.bootstrap);
-    let points: Vec<Contrasts> = draws
-        .par_iter()
-        .enumerate()
-        .map(|(index, draw)| {
-            let rows: Vec<usize> = draw
+    let seed = settings.bootstrap.seed;
+    let points: Vec<Contrasts> = (0..settings.bootstrap.replicates)
+        .into_par_iter()
+        .map(|index| {
+            let counts = resample_counts(g, replicate_seed(seed, index as u64));
+            let rows: Vec<usize> = counts
                 .iter()
-                .flat_map(|&c| members[c].iter().copied())
+                .zip(&members)
+                .flat_map(|(&count, rows)| {
+                    std::iter::repeat_n(rows, count as usize).flatten().copied()
+                })
                 .collect();
             point_contrasts(&sample.select(&rows), spec).map_err(|e| Error::Replicate {
                 index,
@@ -1069,11 +1080,21 @@ mod tests {
     }
 
     #[test]
-    fn resamples_are_reproducible_and_within_range() {
+    #[expect(
+        deprecated,
+        reason = "the released draws are checked against the counts"
+    )]
+    fn resamples_are_the_draws_the_counts_tally() {
         let a = cluster_resamples(5, Bootstrap::new(20, 3));
         assert_eq!(a, cluster_resamples(5, Bootstrap::new(20, 3)));
         assert_ne!(a, cluster_resamples(5, Bootstrap::new(20, 4)));
-        assert!(a.iter().all(|d| d.len() == 5 && d.iter().all(|&c| c < 5)));
+        for (r, draw) in a.iter().enumerate() {
+            let mut counts = vec![0_u32; 5];
+            for &c in draw {
+                counts[c] += 1;
+            }
+            assert_eq!(counts, resample_counts(5, replicate_seed(3, r as u64)));
+        }
     }
 
     #[test]

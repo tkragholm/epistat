@@ -1,10 +1,9 @@
 use crate::Error;
-use crate::matching::constraints::BirthWindowConstraint;
+use crate::constraints::{Chained, Constraint, ConstraintGroup, DateWindow};
 use crate::matching::engine::{StandardMatchRequest, match_standard};
 use crate::matching::{
-    Assignment, Chained, Constraint, ConstraintGroup, DistanceConfig, MatchOrder, MatchingRecord,
-    NearestSelection, RandomSelection, ResidentAtIndexRecord, RoleIndexedRecord, Rounds,
-    SelectionStrategy,
+    Assignment, DistanceConfig, MatchOrder, MatchingRecord, NearestSelection, RandomSelection,
+    ResidentAtIndexRecord, RoleIndexedRecord, Rounds, SelectionStrategy,
 };
 use crate::role_transition::{
     DefaultRiskSetPolicy, IdOrder, RiskSetPolicy, TransitionMatchRequest, match_transition_ordered,
@@ -351,14 +350,16 @@ where
 
     /// Add a gender match constraint.
     ///
-    /// Adds a [`GenderMatch`](crate::constraints::GenderMatch) constraint on
-    /// the "sex" strata key.
+    /// Adds [`ExactMatchConstraint::on_key`](crate::constraints::ExactMatchConstraint::on_key)
+    /// on the "sex" strata key, whose refusals are counted under
+    /// `gender_mismatch`.
     #[must_use]
     pub fn with_gender_match(
         self,
-    ) -> MatchJob<Mode, R, S, (G, crate::constraints::GenderMatch), P> {
-        use crate::constraints::GenderMatch;
-        self.with_constraint(GenderMatch::on_key("sex"))
+    ) -> MatchJob<Mode, R, S, (G, crate::constraints::ExactMatchConstraint), P> {
+        self.with_constraint(
+            crate::constraints::ExactMatchConstraint::on_key("sex").with_reason("gender_mismatch"),
+        )
     }
 }
 
@@ -618,9 +619,9 @@ where
     {
         matched_estimand(self.criteria.estimand, "matching")?;
         self.constraints.check()?;
-        let window = BirthWindowConstraint::new(
-            (self.mode.birth_window_set && self.mode.distance_config.is_some())
-                .then_some(self.criteria.birth_date_window_days),
+        let window = birth_window(
+            self.mode.birth_window_set && self.mode.distance_config.is_some(),
+            &self.criteria,
         );
         reject_invalid(match_transition_ordered(
             self.mode.cohort,
@@ -628,7 +629,10 @@ where
                 criteria: &self.criteria,
                 options: &self.mode.options,
                 strategy: self.strategy,
-                constraints: &(&self.constraints, window),
+                constraints: &Chained {
+                    first: &self.constraints,
+                    second: window,
+                },
                 distance_config: self.mode.distance_config.as_ref(),
                 risk_set_policy: &self.risk_set_policy,
             },
@@ -681,9 +685,9 @@ where
     {
         matched_estimand(self.criteria.estimand, "matching")?;
         self.constraints.check()?;
-        let window = BirthWindowConstraint::new(
-            (self.mode.birth_window_set && self.mode.distance_config.is_some())
-                .then_some(self.criteria.birth_date_window_days),
+        let window = birth_window(
+            self.mode.birth_window_set && self.mode.distance_config.is_some(),
+            &self.criteria,
         );
         reject_invalid(match_standard(
             self.mode.anchors,
@@ -691,12 +695,29 @@ where
             StandardMatchRequest {
                 criteria: &self.criteria,
                 strategy: self.strategy,
-                constraints: &(&self.constraints, window),
+                constraints: &Chained {
+                    first: &self.constraints,
+                    second: window,
+                },
                 ratio_fallback: &self.mode.ratio_fallback,
                 distance_config: self.mode.distance_config.as_ref(),
             },
         ))
     }
+}
+
+/// The birth-date window of `criteria` as a constraint, for a job whose
+/// distance is not the birth date (`applies`), and no constraint otherwise.
+fn birth_window<R: MatchingRecord>(
+    applies: bool,
+    criteria: &MatchingCriteria,
+) -> Option<DateWindow<R, impl Fn(&R) -> Option<chrono::NaiveDate> + Send + Sync + use<R>>> {
+    applies.then(|| {
+        DateWindow::on(
+            |record: &R| Some(record.birth_date()),
+            i64::from(criteria.birth_date_window_days),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -1158,7 +1179,7 @@ mod tests {
 
     #[test]
     fn with_constraints_takes_a_list_of_boxed_constraints() {
-        use crate::constraints::{GenderMatch, caliper_on_field};
+        use crate::constraints::{ExactMatchConstraint, caliper_on_field};
         use crate::types::RoleTransitionRecord;
 
         // The nameable form, and the only one that mixes constraint kinds in a
@@ -1185,7 +1206,7 @@ mod tests {
             .insert("sex".to_string(), "F".to_string());
 
         let rules: Vec<Rule> = vec![
-            Box::new(GenderMatch::on_key("sex")),
+            Box::new(ExactMatchConstraint::on_key("sex").with_reason("gender_mismatch")),
             Box::new(caliper_on_field::<RoleTransitionRecord<BaseRecord>>(
                 "mother_birth_year",
                 1.0,
