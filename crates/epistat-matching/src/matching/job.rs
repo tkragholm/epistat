@@ -637,7 +637,7 @@ where
         self.constraints.check()?;
         let cohort = self.mode.cohort;
         let cases = cohort.iter().filter(|record| record.event_date().is_some());
-        require_keys(&self.required_keys, cases, cohort.iter())?;
+        require_keys(&self.required_keys, &cases, &cohort.iter())?;
         let window = birth_window(
             self.mode.birth_window_set && self.mode.distance_config.is_some(),
             &self.criteria,
@@ -706,8 +706,8 @@ where
         self.constraints.check()?;
         require_keys(
             &self.required_keys,
-            self.mode.anchors.iter(),
-            self.mode.candidates.iter(),
+            &self.mode.anchors.iter(),
+            &self.mode.candidates.iter(),
         )?;
         let window = birth_window(
             self.mode.birth_window_set && self.mode.distance_config.is_some(),
@@ -734,8 +734,8 @@ where
 /// `keys`: every pair would be refused on it.
 fn require_keys<'r, R: MatchingRecord + 'r>(
     keys: &[&'static str],
-    cases: impl Iterator<Item = &'r R> + Clone,
-    controls: impl Iterator<Item = &'r R> + Clone,
+    cases: &(impl Iterator<Item = &'r R> + Clone),
+    controls: &(impl Iterator<Item = &'r R> + Clone),
 ) -> Result<(), Error> {
     for &key in keys {
         let carried = |record: &R| record.stratum(key).is_some();
