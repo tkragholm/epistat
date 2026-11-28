@@ -1,0 +1,71 @@
+# Changelog
+
+## [0.4.0] - unreleased
+
+Confidence levels, bootstrap settings and errors now use the shared types of `epistat-core`. The crate adds influence functions with clustered variances, p-value adjustment, a contrast curve with simultaneous bands, and pooling of vectors and transformed estimates.
+
+### Breaking changes
+
+- `InferenceError` is replaced by `epistat_inference::Error`, a non-exhaustive enum with the variants `Input` (wrapping `epistat_core::InputError`), `NotFinite`, `NotSymmetric`, `Imputations`, `KeyMismatch` and `Solve`. The old `Empty`, `Length` and `NanReplicate` are now `Error::Input`, and `Alpha` is gone because `Level` checks its value. Match on `Error` or read `code()` through `epistat_core::Classify`.
+- `bootstrap::multiplier(estimate, psi, bootstrap)` and `bootstrap::cluster_totals(columns, bootstrap)` take an `epistat_core::Bootstrap` in place of `replicates` and `seed`: write `Bootstrap::new(replicates, seed)`. `multiplier` refuses a non-finite `psi`.
+- `interval::normal(estimate, se, level)` takes a `Level` and returns an `Interval`, not a `Result` of a pair. `percentile`, `trimmed_percentile` and `bias_corrected` take a `Level` where they took `alpha`, and return `Result<Interval, Error>`. Write `Level::alpha(0.05)?` for the old `0.05`.
+- `Percentile` is `#[non_exhaustive]`.
+- `simultaneous::sup_t_from_covariance(covariance, level, draws)` and `multiplier_bands(influence, clusters, level, bootstrap)` take a `Level` and a `Bootstrap`. `multiplier_bands` takes the influence functions as a faer `MatRef` with one row per cluster and one column per estimate, in place of `&[&[f64]]`. `MultiplierBands::at_least_pointwise` takes no argument and `MultiplierBands` has a new field `level`. `MultiplierBands` is `#[non_exhaustive]`. Both functions refuse non-finite input.
+- `pooling::Pooled::interval(level)` takes a `Level` and returns an `Interval`. `Pooled` is `#[non_exhaustive]`.
+- `wald::Wald` is `#[non_exhaustive]`.
+- `epistat_linalg::SolveError` inside `Error::Solve` is now `epistat_linalg::Error`.
+- The minimum supported Rust version is 1.89, up from 1.85. The crate depends on `epistat-core`, and on `epistat-linalg` 0.4, `epistat-rng` 0.2 and `epistat-stats` 0.3.
+
+### Added
+
+- `Influence`, the influence function of one or more estimates, with `ClusterRule` for the small-sample rule, `variance` and `variance_with` for the clustered covariance, and `combine`, `select` and `with_values`. It is keyed either by unit codes (`Influence::new`, `from_dfbeta`) or by rows (`over_rows`, `from_dfbeta_over_rows`), and `KeyedBy` names which.
+- `Clusters::per_unit` and `Clusters::per_row`, which key clusters by unit codes or by rows, `Clusters::from_codes`, `for_keys`, `keys` and `keyed_by`. `Influence::variance` refuses clusters keyed the other way with `Error::KeyMismatch`. Clusters given by position work with either.
+- `Clusters::from_labels_first_seen`, the numbering of `from_labels` under a name that states its order.
+- `sandwich::SmallSample`, with `factor`, and `sandwich::scaled`, for the small-sample factors of a sandwich covariance, and `sandwich::meat_from`, the meat from a vector of residuals.
+- `curve::contrast_curve` and `curve::ContrastCurve`, the contrast of a spline term against a reference value, with pointwise or simultaneous (sup-t) bands, chosen by `curve::Band`.
+- `multiplicity::adjust` with `Adjustment`, the p-value adjustments of Bonferroni, Holm, Hochberg, Hommel, Benjamini-Hochberg and Benjamini-Yekutieli.
+- `pooling::rubin_vector` and `PooledVector`, `pooling::d1`, `d2` and `d3` with `MultiMethod`, `NegativeRiv` and `MultiTest`, `pooling::rubin_transformed` with `Transform` and `PooledOnScale`, `dfcom_residual` and `dfcom_events`, and `Pooled::p_value`.
+- `interval::percentile_sorted`, the percentile interval of replicates that are already sorted.
+- `bootstrap::unit_counts_of`, the resampling counts of one replicate.
+- `Error`, which implements `Classify`.
+
+### Deprecated
+
+Deprecated items are removed in the next release that breaks the API.
+
+- `InferenceError`, use `Error`.
+- `Clusters::from_labels`, use `Clusters::from_labels_first_seen`, which gives the same numbering, or `Clusters::from_sorted_labels` for the order of `Codes::from_labels`.
+- `influence::standard_error`, use `Influence::variance_with` with `ClusterRule::NoSmallSample`.
+- `influence::clustered_variance`, `clustered_standard_error` and `clustered_covariance`, use `Influence::variance`, which centres the influence function.
+
+### Results
+
+- `influence::standard_error`, `clustered_variance`, `clustered_standard_error`, `clustered_covariance` and `bootstrap::cluster_totals`: in the last bits, because sums and dot products run over eight fixed lanes. Inputs shorter than 8 terms are unchanged.
+- `simultaneous::multiplier_bands` and `sup_t_from_covariance`: in the last bits, for the same reason, where a sum has 8 or more terms.
+- `Pooled::interval`, `Pooled::p_value`, `pooling::d1` and the other t and F tail results: in the last bits, at most about 1e-15 relative, because the incomplete beta function in `epistat-stats` is evaluated differently. The change is larger for 2,000 or more degrees of freedom, where the old tail lost accuracy.
+
+## [0.3.2] - 2026-11-22
+
+- Added Rubin's rules with Barnard-Rubin degrees of freedom.
+- Added `sandwich_with_inverse`, and the sandwich is formed correctly for a bread that is not symmetric.
+- faer types are taken from `epistat-linalg`.
+
+## [0.3.1] - 2026-11-19
+
+- Added simultaneous inference: sup-t critical values and multiplier-bootstrap bands.
+
+## [0.3.0] - 2026-11-19
+
+- Undefined results are returned as `None`, and invalid weights are refused.
+
+## [0.2.0] - 2026-11-19
+
+- Follows `epistat-linalg`, whose factorisation attempts can refuse small pivots and are non-exhaustive.
+
+## [0.1.1] - 2026-11-19
+
+- Added the Wald test.
+
+## [0.1.0] - 2026-11-19
+
+- First release: influence-function and cluster-robust standard errors, the multiplier and cluster bootstrap, normal, percentile and bias-corrected intervals, and sandwich covariances.
