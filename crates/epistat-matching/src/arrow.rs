@@ -97,7 +97,7 @@ use arrow_array::{
     Array, Date32Array, Float64Array, Int32Array, Int64Array, LargeStringArray, RecordBatch,
     StringArray, UInt32Array, UInt64Array,
 };
-use chrono::{Days, NaiveDate};
+use chrono::NaiveDate;
 
 use crate::cohort::{Cohort, CohortBuilder};
 use crate::types::{BalanceRecord, BaseRecord, CovariateValue, RoleTransitionRecord};
@@ -251,12 +251,9 @@ impl<'a> Dates<'a> {
             return Ok(None);
         }
         let days = self.array.value(row);
-        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).expect("the epoch is a date");
-        let date = if days >= 0 {
-            epoch.checked_add_days(Days::new(u64::from(days.unsigned_abs())))
-        } else {
-            epoch.checked_sub_days(Days::new(u64::from(days.unsigned_abs())))
-        };
+        let date = days
+            .checked_add(crate::UNIX_EPOCH_DAYS_FROM_CE)
+            .and_then(NaiveDate::from_num_days_from_ce_opt);
         date.map(Some).ok_or_else(|| Error::DateOutOfRange {
             column: self.name.to_string(),
             row,

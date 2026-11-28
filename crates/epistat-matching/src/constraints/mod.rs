@@ -528,6 +528,61 @@ impl ResidenceSpell {
     pub fn contains(&self, date: NaiveDate) -> bool {
         self.from.is_none_or(|from| from <= date) && self.to.is_none_or(|to| date < to)
     }
+
+    /// The periods of each person of a register's residence spells, for
+    /// [`MustBeResidentInSpells`].
+    ///
+    /// The register's days count from 1970-01-01 and its last day of a spell
+    /// is a day of residence, so a spell from day `a` to day `b` is the period
+    /// from `a` up to but not including `b + 1`. A person with no spell is
+    /// resident on every date in the register, so their entry is `None`, not
+    /// an empty list, which would refuse them on every date.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`](crate::Error::Input) when the offsets are not a layout
+    /// of the spells or `to` is not as long as `from`, and
+    /// [`Error::DateOutOfRange`](crate::Error::DateOutOfRange) for a day that
+    /// is not a calendar date, naming the column and the spell.
+    pub fn from_register(
+        spells: &epistat_register::residence::Spells,
+    ) -> Result<Vec<Option<Vec<Self>>>, crate::Error> {
+        let rows = spells.from.len();
+        epistat_core::check::same_length("to", rows, spells.to.len())?;
+        epistat_core::check::csr_offsets("person offsets", &spells.person_offsets, rows)?;
+        let date = |column: &str, row: usize, day: i64, shift: i64| {
+            day.checked_add(shift)
+                .and_then(|day| i32::try_from(day).ok())
+                .and_then(|day| day.checked_add(crate::UNIX_EPOCH_DAYS_FROM_CE))
+                .and_then(NaiveDate::from_num_days_from_ce_opt)
+                .ok_or_else(|| crate::Error::DateOutOfRange {
+                    column: column.to_string(),
+                    row,
+                })
+        };
+        spells
+            .person_offsets
+            .windows(2)
+            .map(|range| {
+                if range[0] == range[1] {
+                    return Ok(None);
+                }
+                (range[0]..range[1])
+                    .map(|row| {
+                        Ok(Self {
+                            from: spells.from[row]
+                                .map(|day| date("from", row, day, 0))
+                                .transpose()?,
+                            to: spells.to[row]
+                                .map(|day| date("to", row, day, 1))
+                                .transpose()?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(Some)
+            })
+            .collect()
+    }
 }
 
 /// Constraint that ensures the control is resident at the case's index date,
@@ -602,6 +657,64 @@ mod tests {
     use rustc_hash::FxHashSet;
 
     use crate::{date, record};
+
+    #[test]
+    fn register_spells_become_half_open_periods() {
+        let mut spells = epistat_register::residence::Spells::default();
+        spells.person_offsets = vec![0, 2, 2, 3];
+        spells.from = vec![None, Some(10), Some(-1)];
+        spells.to = vec![Some(4), None, Some(-1)];
+        let periods = ResidenceSpell::from_register(&spells).unwrap();
+        let day = |d: i64| {
+            NaiveDate::from_ymd_opt(1970, 1, 1)
+                .unwrap()
+                .checked_add_signed(chrono::TimeDelta::days(d))
+                .unwrap()
+        };
+        assert_eq!(
+            periods,
+            vec![
+                Some(vec![
+                    ResidenceSpell {
+                        from: None,
+                        to: Some(day(5)),
+                    },
+                    ResidenceSpell {
+                        from: Some(day(10)),
+                        to: None,
+                    },
+                ]),
+                None,
+                Some(vec![ResidenceSpell {
+                    from: Some(day(-1)),
+                    to: Some(day(0)),
+                }]),
+            ]
+        );
+        let first = periods[0].as_deref().unwrap();
+        assert!(first.iter().any(|s| s.contains(day(4))));
+        assert!(!first.iter().any(|s| s.contains(day(5))));
+
+        let mut bad = epistat_register::residence::Spells::default();
+        bad.person_offsets = vec![0, 2];
+        bad.from = vec![None];
+        bad.to = vec![None];
+        assert!(matches!(
+            ResidenceSpell::from_register(&bad),
+            Err(crate::Error::Input(_))
+        ));
+        let mut far = epistat_register::residence::Spells::default();
+        far.person_offsets = vec![0, 1];
+        far.from = vec![Some(i64::MAX)];
+        far.to = vec![None];
+        assert_eq!(
+            ResidenceSpell::from_register(&far),
+            Err(crate::Error::DateOutOfRange {
+                column: "from".into(),
+                row: 0
+            })
+        );
+    }
 
     #[test]
     fn exact_match_on_a_key_requires_equal_values() {

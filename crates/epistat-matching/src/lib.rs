@@ -215,6 +215,10 @@ macro_rules! delegate_covariate_record {
     };
 }
 
+/// `NaiveDate::num_days_from_ce` of 1970-01-01, the day 0 of Arrow's
+/// `Date32` and of `epistat_register`'s days.
+pub(crate) const UNIX_EPOCH_DAYS_FROM_CE: i32 = 719_163;
+
 pub mod abadie_imbens;
 #[cfg(feature = "arrow")]
 pub mod arrow;
