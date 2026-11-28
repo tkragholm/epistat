@@ -17,6 +17,8 @@ This release gives the crate one `Error`, a smaller public surface, case and con
 - `MatchingRecord::stratum` is required, and `strata` defaults to an empty map. Use `delegate_matching_record!` in a wrapper type to forward every method.
 - Options are plain structs with public fields and `Default`. The `bon` builders of the estimation configs, `MatchingCriteria` and `BalanceReportOptions` are removed: use struct update syntax, `BalanceReportOptions { .. Default::default() }`.
 - Sequential trials take a `TrialPanel` keyed by `epistat_core::Panel`. `expand_trial_columns`, `matched_trial_columns` and `match_trials` take it, and `ExpandedRow`, `expand_trials`, `PanelColumns`, `TrialPerson` and `TrialPeriod` are removed.
+- `SpecInput` is `#[non_exhaustive]`, so a `match` on it outside the crate needs a wildcard arm. Its variants are still built as before. `MatchSpec` stays exhaustive.
+- Subclassification refuses the ATM with `Error::UnsupportedEstimand`, as `AbadieImbens` does, where it gave the ATM the subclass weights of the ATE.
 - 72 result and reason types are `#[non_exhaustive]`, among them `MatchDiagnostics`, the outcome, balance, subclass, weight, genetic, cardinality, propensity and trial types. Build a `MatchOutcome` from pairs made elsewhere with `MatchOutcome::from_pairs(pairs, estimand)`.
 - The unused `reporting` module and feature, `KsTest` and the two-sample Kolmogorov-Smirnov test (it is in `epistat-epi`), and the projected balance rows are removed.
 - The minimum supported Rust version is 1.89. The `nightly` feature is removed.

@@ -502,7 +502,7 @@ mod tests {
     fn bands_follow_their_definition_to_the_bit() {
         let reference = reference();
         let influence = columns(&reference.influence);
-        let clusters = Clusters::from_sorted_labels(&reference.clusters);
+        let clusters = Clusters::from_sorted_labels(&reference.clusters).unwrap();
         for clusters in [None, Some(&clusters)] {
             let got = multiplier_bands(
                 by_unit(&influence).as_ref(),
@@ -534,7 +534,7 @@ mod tests {
         let influence = columns(&reference.influence);
         let units = influence[0].len();
         let n = units as f64;
-        let clusters = Clusters::from_sorted_labels(&reference.clusters);
+        let clusters = Clusters::from_sorted_labels(&reference.clusters).unwrap();
         let runs = [
             (None, &reference.plain),
             (Some(&clusters), &reference.clustered),
@@ -587,7 +587,7 @@ mod tests {
     fn bands_do_not_depend_on_threads() {
         let reference = reference();
         let influence = columns(&reference.influence);
-        let clusters = Clusters::from_sorted_labels(&reference.clusters);
+        let clusters = Clusters::from_sorted_labels(&reference.clusters).unwrap();
         assert_same_on_threads(|| {
             let mut out = Vec::new();
             for clusters in [None, Some(&clusters)] {
@@ -644,7 +644,7 @@ mod tests {
         assert!(matches!(
             multiplier_bands(
                 by_unit(&[&column]).as_ref(),
-                Some(&Clusters::singletons(2)),
+                Some(&Clusters::singletons(2).unwrap()),
                 level,
                 ten
             ),

@@ -3,13 +3,12 @@
 //! cross-fitting, the simulation design of the paper, and the errors.
 
 use epistat_core::InputError;
+use epistat_did::missing::{self, cross_fit_folds};
 use epistat_did::two_period::{self, Estimator, NuisanceOptions, TwoPeriodOptions, nuisance};
 use epistat_did::{
-    Error, MissingAssumption, MissingFolds, MissingModels, MissingOptions, MissingPreData,
-    MissingPredictions, TwoPeriodData, att_missing_pre, att_missing_pre_from_predictions,
-    missing_cross_fit_folds,
+    Error, MissingAssumption, MissingAtt, MissingData, MissingFolds, MissingOptions,
+    MissingPredictions, NuisanceModels, TwoPeriodData,
 };
-use epistat_inference::Clusters;
 use epistat_linalg::Mat;
 use epistat_linalg::MatRef;
 use epistat_rng::Stream;
@@ -84,23 +83,35 @@ fn simulate(n: usize, seed: u64, assumption: MissingAssumption) -> Sim {
 }
 
 impl Sim {
-    fn data(&self) -> MissingPreData<'_> {
-        MissingPreData {
-            treated: &self.treated,
-            outcome_pre: &self.y0,
-            outcome_post: &self.y1,
-            clusters: None,
-        }
+    fn data(&self) -> MissingData<'_> {
+        MissingData::builder(&self.treated, &self.y0, &self.y1)
+            .covariates(self.z.as_ref())
+            .build()
+            .unwrap()
     }
 }
 
-const ALL: [usize; 4] = [0, 1, 2, 3];
-const MODELS: MissingModels<'static> = MissingModels {
-    propensity: &ALL,
-    missingness: &ALL,
-    outcome: &ALL,
-    nested: &ALL,
-};
+/// The data of `sim` with the covariates `x`.
+fn with<'a>(sim: &'a Sim, x: &'a Mat<f64>) -> MissingData<'a> {
+    MissingData::builder(&sim.treated, &sim.y0, &sim.y1)
+        .covariates(x.as_ref())
+        .build()
+        .unwrap()
+}
+
+/// The estimate under `assumption` with `folds`, every covariate in every
+/// model.
+fn fit(data: &MissingData<'_>, assumption: MissingAssumption, folds: MissingFolds) -> MissingAtt {
+    missing::estimate(
+        data,
+        &MissingOptions {
+            assumption,
+            folds,
+            ..MissingOptions::default()
+        },
+    )
+    .unwrap()
+}
 
 /// Three strata of a discrete covariate, every pre-treatment outcome
 /// observed. A saturated propensity model then fits the share treated in
@@ -192,25 +203,11 @@ fn complete_data_with_a_saturated_covariate_is_the_panel_dr_estimate() {
     let rounding = 64.0 * nf * U * size * (1.0 + w_max) * nf / n1;
 
     // This crate's estimator, with the dummies as every model's covariates.
-    let mine = att_missing_pre(
-        &MissingPreData {
-            treated: &d.treated,
-            outcome_pre: &d.y0,
-            outcome_post: &d.y1,
-            clusters: None,
-        },
-        d.dummies.as_ref(),
-        MissingAssumption::MarX,
-        &MissingModels {
-            propensity: &[0, 1],
-            missingness: &[0, 1],
-            outcome: &[0, 1],
-            nested: &[],
-        },
-        MissingFolds::None,
-        &MissingOptions::default(),
-    )
-    .unwrap();
+    let data = MissingData::builder(&d.treated, &d.y0, &d.y1)
+        .covariates(d.dummies.as_ref())
+        .build()
+        .unwrap();
+    let mine = fit(&data, MissingAssumption::MarX, MissingFolds::None);
     assert_eq!(mine.nuisance.gamma_treated, vec![1.0; n]);
     assert_eq!(mine.nuisance.gamma_control, vec![1.0; n]);
     // Its nuisance errors: the control weights and the regression of the
@@ -239,7 +236,10 @@ fn complete_data_with_a_saturated_covariate_is_the_panel_dr_estimate() {
             let w = p / (1.0 - p);
             nf / n1 * ((w - odds[d.stratum[i]]).abs() * r.abs() + w * dm[i].abs())
         } + rounding;
-        assert!((mine.influence[i] - phi[i]).abs() <= bound, "unit {i}");
+        assert!(
+            (mine.influence.column(0)[i] - phi[i]).abs() <= bound,
+            "unit {i}"
+        );
     }
 
     // The panel DR-DiD estimator of the same data, without its ridge.
@@ -353,14 +353,10 @@ fn complete_data_is_the_panel_dr_estimate_with_unnormalised_control_weights() {
     // Its nuisance as predictions: gamma 1, the change regression as
     // `mu1(X, 0) - mu0(X, 0)` with `mu0` zero.
     let zeros = vec![0.0; n];
-    let mine = att_missing_pre_from_predictions(
-        &MissingPreData {
-            treated: &sim.treated,
-            outcome_pre: &complete,
-            outcome_post: &sim.y1,
-            clusters: None,
-        },
-        MissingAssumption::MarX,
+    let mine = missing::from_predictions(
+        &MissingData::builder(&sim.treated, &complete, &sim.y1)
+            .build()
+            .unwrap(),
         &MissingPredictions {
             propensity: &fit.propensity_scores,
             gamma_treated: &ones,
@@ -406,28 +402,17 @@ fn complete_data_is_the_panel_dr_estimate_with_unnormalised_control_weights() {
 #[test]
 fn singleton_clusters_give_the_unclustered_standard_error() {
     let sim = simulate(2000, 3, MissingAssumption::MarX);
-    let plain = att_missing_pre(
-        &sim.data(),
-        sim.z.as_ref(),
+    let plain = fit(&sim.data(), MissingAssumption::MarX, MissingFolds::None);
+    let singletons: Vec<u32> = (0..2000).collect();
+    let clustered = fit(
+        &MissingData::builder(&sim.treated, &sim.y0, &sim.y1)
+            .covariates(sim.z.as_ref())
+            .clusters(&singletons)
+            .build()
+            .unwrap(),
         MissingAssumption::MarX,
-        &MODELS,
         MissingFolds::None,
-        &MissingOptions::default(),
-    )
-    .unwrap();
-    let clusters = Clusters::singletons(sim.treated.len());
-    let clustered = att_missing_pre(
-        &MissingPreData {
-            clusters: Some(&clusters),
-            ..sim.data()
-        },
-        sim.z.as_ref(),
-        MissingAssumption::MarX,
-        &MODELS,
-        MissingFolds::None,
-        &MissingOptions::default(),
-    )
-    .unwrap();
+    );
     assert_eq!(
         plain.estimate.estimate.to_bits(),
         clustered.estimate.estimate.to_bits()
@@ -451,22 +436,17 @@ fn cross_fitting_keeps_a_cluster_in_one_fold() {
     let treated: Vec<bool> = (0..n).map(|i| base.treated[i / 2]).collect();
     let y0: Vec<Option<f64>> = (0..n).map(|i| base.y0[i / 2]).collect();
     let y1: Vec<f64> = (0..n).map(|i| base.y1[i / 2]).collect();
-    let labels: Vec<usize> = (0..n).map(|i| i / 2).collect();
-    let clusters = Clusters::from_labels_first_seen(&labels);
-    let est = att_missing_pre(
-        &MissingPreData {
-            treated: &treated,
-            outcome_pre: &y0,
-            outcome_post: &y1,
-            clusters: Some(&clusters),
-        },
-        z.as_ref(),
+    let labels: Vec<u32> = (0..3000).map(|i| i / 2).collect();
+    let data = MissingData::builder(&treated, &y0, &y1)
+        .covariates(z.as_ref())
+        .clusters(&labels)
+        .build()
+        .unwrap();
+    let est = fit(
+        &data,
         MissingAssumption::MarXY1,
-        &MODELS,
         MissingFolds::CrossFit { folds: 4, seed: 4 },
-        &MissingOptions::default(),
-    )
-    .unwrap();
+    );
     assert_eq!(est.folds, 4);
     let nu = &est.nuisance;
     let nested = nu.nested_control.as_ref().unwrap();
@@ -485,20 +465,7 @@ fn cross_fitting_keeps_a_cluster_in_one_fold() {
     }
     // And the folds differ: the copies' predictions are not those of a fit
     // on all units.
-    let all = att_missing_pre(
-        &MissingPreData {
-            treated: &treated,
-            outcome_pre: &y0,
-            outcome_post: &y1,
-            clusters: Some(&clusters),
-        },
-        z.as_ref(),
-        MissingAssumption::MarXY1,
-        &MODELS,
-        MissingFolds::None,
-        &MissingOptions::default(),
-    )
-    .unwrap();
+    let all = fit(&data, MissingAssumption::MarXY1, MissingFolds::None);
     assert_ne!(all.nuisance.propensity, nu.propensity);
 }
 
@@ -507,7 +474,8 @@ fn cross_fitting_keeps_a_cluster_in_one_fold() {
 /// cluster lies in one fold and one half.
 #[test]
 fn the_folds_are_balanced_and_keep_clusters_whole() {
-    let plain = missing_cross_fit_folds(1003, None, 5, 7).unwrap();
+    let sim = simulate(1003, 7, MissingAssumption::MarX);
+    let plain = cross_fit_folds(&sim.data(), 5, 7).unwrap();
     let mut sizes = [0_usize; 5];
     let mut halves = [[0_usize; 2]; 5];
     for (f, h) in plain.fold.iter().zip(&plain.nested_half) {
@@ -518,14 +486,15 @@ fn the_folds_are_balanced_and_keep_clusters_whole() {
     for h in halves {
         assert!(h[0].abs_diff(h[1]) <= 1);
     }
-    assert_ne!(
-        plain.fold,
-        missing_cross_fit_folds(1003, None, 5, 8).unwrap().fold
-    );
+    assert_ne!(plain.fold, cross_fit_folds(&sim.data(), 5, 8).unwrap().fold);
 
-    let labels: Vec<usize> = (0..1000).map(|i| (i * 7) % 100).collect();
-    let clusters = Clusters::from_labels_first_seen(&labels);
-    let grouped = missing_cross_fit_folds(1000, Some(&clusters), 4, 7).unwrap();
+    let sim = simulate(1000, 7, MissingAssumption::MarX);
+    let labels: Vec<u32> = (0..1000).map(|i| (i * 7) % 100).collect();
+    let data = MissingData::builder(&sim.treated, &sim.y0, &sim.y1)
+        .clusters(&labels)
+        .build()
+        .unwrap();
+    let grouped = cross_fit_folds(&data, 4, 7).unwrap();
     for i in 0..1000 {
         for j in 0..1000 {
             if labels[i] == labels[j] {
@@ -534,25 +503,26 @@ fn the_folds_are_balanced_and_keep_clusters_whole() {
             }
         }
     }
-    assert!(missing_cross_fit_folds(1000, Some(&clusters), 101, 7).is_err());
-    assert!(missing_cross_fit_folds(999, Some(&clusters), 4, 7).is_err());
+    assert!(cross_fit_folds(&data, 101, 7).is_err());
+    assert!(
+        MissingData::builder(&sim.treated, &sim.y0, &sim.y1)
+            .clusters(&labels[..999])
+            .build()
+            .is_err()
+    );
 }
 
 #[test]
 fn cross_fitting_does_not_depend_on_the_number_of_threads() {
     let sim = simulate(3000, 21, MissingAssumption::MarXY1);
     assert_same_on_threads(|| {
-        let est = att_missing_pre(
+        let est = fit(
             &sim.data(),
-            sim.z.as_ref(),
             MissingAssumption::MarXY1,
-            &MODELS,
             MissingFolds::CrossFit { folds: 5, seed: 9 },
-            &MissingOptions::default(),
-        )
-        .unwrap();
+        );
         let mut out = vec![est.estimate.estimate, est.estimate.se.unwrap()];
-        out.extend(est.influence);
+        out.extend_from_slice(est.influence.column(0));
         out.extend(est.nuisance.nested_control.unwrap());
         out
     });
@@ -572,15 +542,7 @@ fn the_estimate_recovers_the_att_of_the_paper_design() {
             MissingFolds::None,
             MissingFolds::CrossFit { folds: 5, seed: 1 },
         ] {
-            let est = att_missing_pre(
-                &sim.data(),
-                sim.z.as_ref(),
-                assumption,
-                &MODELS,
-                folds,
-                &MissingOptions::default(),
-            )
-            .unwrap();
+            let est = fit(&sim.data(), assumption, folds);
             assert!(
                 (est.estimate.estimate - 5.0).abs() < 4.0 * est.estimate.se.unwrap(),
                 "{assumption:?} {folds:?}: {} se {}",
@@ -591,8 +553,8 @@ fn the_estimate_recovers_the_att_of_the_paper_design() {
                 est.estimate.lower().unwrap() < est.estimate.estimate
                     && est.estimate.estimate < est.estimate.upper().unwrap()
             );
-            let total = neumaier(est.influence.iter().copied());
-            let size: f64 = est.influence.iter().map(|v| v.abs()).sum();
+            let total = neumaier(est.influence.column(0).iter().copied());
+            let size: f64 = est.influence.column(0).iter().map(|v| v.abs()).sum();
             assert!(total.abs() <= 4.0 * 20_000.0 * U * size);
         }
     }
@@ -613,8 +575,15 @@ fn invalid_input_is_an_error() {
         nested_control: None,
     };
     let config = MissingOptions::default();
-    let run = |p: &MissingPredictions<'_>, a, config: &MissingOptions| {
-        att_missing_pre_from_predictions(&sim.data(), a, p, config)
+    let run = |p: &MissingPredictions<'_>, assumption, config: &MissingOptions| {
+        missing::from_predictions(
+            &sim.data(),
+            p,
+            &MissingOptions {
+                assumption,
+                ..config.clone()
+            },
+        )
     };
     assert!(run(&p, MissingAssumption::MarX, &config).is_ok());
     assert_eq!(
@@ -632,7 +601,7 @@ fn invalid_input_is_an_error() {
     // A gamma at the caller's floor, for a unit whose Y0 is observed.
     let floor = MissingOptions {
         gamma_floor: 0.5,
-        ..config
+        ..config.clone()
     };
     assert!(matches!(
         run(&p, MissingAssumption::MarX, &floor),
@@ -641,7 +610,7 @@ fn invalid_input_is_an_error() {
     // A propensity at the ceiling, for a control.
     let ceiling = MissingOptions {
         propensity_ceiling: 0.5,
-        ..config
+        ..config.clone()
     };
     assert!(matches!(
         run(&p, MissingAssumption::MarX, &ceiling),
@@ -659,26 +628,34 @@ fn invalid_input_is_an_error() {
         Err(Error::Input(InputError::NotFinite { row: 3, .. }))
     ));
 
-    let fit = |data: &MissingPreData<'_>, x: &Mat<f64>, models: &MissingModels<'_>, folds| {
-        att_missing_pre(
+    let fit = |data: &MissingData<'_>, models: NuisanceModels, folds| {
+        missing::estimate(
             data,
-            x.as_ref(),
-            MissingAssumption::MarX,
-            models,
-            folds,
-            &config,
+            &MissingOptions {
+                models,
+                folds,
+                ..config.clone()
+            },
         )
+    };
+    let every = || NuisanceModels::default();
+    let first_four = || Some(vec![0, 1, 2, 3]);
+    let four = || NuisanceModels {
+        propensity: first_four(),
+        missingness: first_four(),
+        outcome: first_four(),
+        nested: first_four(),
     };
     // No control with Y0 observed.
     let y0: Vec<Option<f64>> = (0..n)
         .map(|i| if sim.treated[i] { sim.y0[i] } else { None })
         .collect();
-    let data = MissingPreData {
-        outcome_pre: &y0,
-        ..sim.data()
-    };
+    let data = MissingData::builder(&sim.treated, &y0, &sim.y1)
+        .covariates(sim.z.as_ref())
+        .build()
+        .unwrap();
     assert_eq!(
-        fit(&data, &sim.z, &MODELS, MissingFolds::None).unwrap_err(),
+        fit(&data, every(), MissingFolds::None).unwrap_err(),
         Error::NoObservedPre { treated: false }
     );
     // A constant covariate, two that are proportional, and one that does
@@ -686,11 +663,10 @@ fn invalid_input_is_an_error() {
     let mut x = Mat::from_fn(n, 5, |i, j| if j < 4 { sim.z[(i, j)] } else { 1.0 });
     assert!(matches!(
         fit(
-            &sim.data(),
-            &x,
-            &MissingModels {
-                propensity: &[0, 4],
-                ..MODELS
+            &with(&sim, &x),
+            NuisanceModels {
+                propensity: Some(vec![0, 4]),
+                ..four()
             },
             MissingFolds::None
         ),
@@ -701,11 +677,10 @@ fn invalid_input_is_an_error() {
     }
     assert!(matches!(
         fit(
-            &sim.data(),
-            &x,
-            &MissingModels {
-                outcome: &[0, 4],
-                ..MODELS
+            &with(&sim, &x),
+            NuisanceModels {
+                outcome: Some(vec![0, 4]),
+                ..four()
             },
             MissingFolds::None
         ),
@@ -713,11 +688,10 @@ fn invalid_input_is_an_error() {
     ));
     assert!(matches!(
         fit(
-            &sim.data(),
-            &x,
-            &MissingModels {
-                outcome: &[9],
-                ..MODELS
+            &with(&sim, &x),
+            NuisanceModels {
+                outcome: Some(vec![9]),
+                ..four()
             },
             MissingFolds::None
         ),
@@ -729,8 +703,7 @@ fn invalid_input_is_an_error() {
     assert!(matches!(
         fit(
             &sim.data(),
-            &sim.z,
-            &MODELS,
+            every(),
             MissingFolds::CrossFit { folds: 1, seed: 0 }
         ),
         Err(Error::Input(InputError::Domain { what: "folds", .. }))

@@ -275,7 +275,7 @@ fn independence_is_glm_with_the_clustered_sandwich() {
     let x = matrix(&case.x);
     let model = Glm::new(Family::Binomial, Link::Logit);
     let glm = model.fit5(x.as_ref(), &case.y, None, None, None).unwrap();
-    let clusters = Clusters::from_labels_first_seen(&case.cluster);
+    let clusters = Clusters::from_labels_first_seen(&case.cluster).unwrap();
     let own = robust_covariance(
         &model,
         &glm,

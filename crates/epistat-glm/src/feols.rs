@@ -801,7 +801,7 @@ impl FeolsFit {
                     let clusters = if members.len() == 1 {
                         Clusters::from_codes(&singles[members[0]].0)
                     } else {
-                        intersection(fe.rows(), ways, &members)
+                        intersection(fe.rows(), ways, &members)?
                     };
                     let g = clusters.count();
                     let middle = meat(design, score, Some(&clusters))?;
@@ -868,7 +868,11 @@ impl FeolsFit {
 
 /// Clusters by the intersection of the values of the cluster variables
 /// `members`, on the rows `rows`.
-fn intersection(rows: &[usize], ways: &[&[u32]], members: &[usize]) -> Clusters {
+fn intersection(
+    rows: &[usize],
+    ways: &[&[u32]],
+    members: &[usize],
+) -> Result<Clusters, epistat_inference::Error> {
     if members.len() == 2 {
         let (a, b) = (ways[members[0]], ways[members[1]]);
         let labels: Vec<u64> = rows

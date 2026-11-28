@@ -11,13 +11,13 @@
 //!    the two computations. Under the outcome-dependent assumption the
 //!    reference's nested regression is the one of its code, fitted on all
 //!    units.
-//! 2. The nuisance fits: the predictions of `att_missing_pre`'s logistic and
+//! 2. The nuisance fits: the predictions of `missing::estimate`'s logistic and
 //!    least-squares models agree with the reference's, within the
 //!    reference's solver gap and the forward error of the normal equations.
 //!    The nested regression is compared with the paper's, fitted among the
 //!    controls, which the script adds.
 //! 3. The estimate, influence function and standard error of
-//!    `att_missing_pre` against those of the estimator on the reference
+//!    `missing::estimate` against those of the estimator on the reference
 //!    predictions, within the propagation of the tolerances of check 2. Under
 //!    the outcome-independent assumption the reference code is the paper's
 //!    estimator, so this is compared with its estimate directly.
@@ -27,9 +27,10 @@
 
 use std::collections::HashMap;
 
+use epistat_did::missing::{self, from_predictions};
 use epistat_did::{
-    MissingAssumption, MissingAtt, MissingFolds, MissingModels, MissingOptions, MissingPreData,
-    MissingPredictions, NestedOutcome, att_missing_pre, att_missing_pre_from_predictions,
+    MissingAssumption, MissingAtt, MissingData, MissingOptions, MissingPredictions, NestedOutcome,
+    NuisanceModels,
 };
 use epistat_linalg::Mat;
 use epistat_testkit::{Tolerance, load_json};
@@ -111,12 +112,17 @@ impl Case {
         })
     }
 
-    fn data(&self) -> MissingPreData<'_> {
-        MissingPreData {
-            treated: &self.treated,
-            outcome_pre: &self.y0,
-            outcome_post: &self.y1,
-            clusters: None,
+    fn data(&self) -> MissingData<'_> {
+        MissingData::builder(&self.treated, &self.y0, &self.y1)
+            .build()
+            .unwrap()
+    }
+
+    /// The options of the reference's assumption.
+    fn options(&self) -> MissingOptions {
+        MissingOptions {
+            assumption: self.assumption(),
+            ..MissingOptions::default()
         }
     }
 
@@ -280,17 +286,24 @@ fn check(
     for i in 0..phi.len() {
         let a = if treated[i] { 1.0 } else { 0.0 };
         let bound = n / n1 * (term_bounds[i] + a * theta_bound)
-            + 8.0 * U * phi[i].abs().max(got.influence[i].abs());
-        let diff = (got.influence[i] - phi[i]).abs();
+            + 8.0 * U * phi[i].abs().max(got.influence.column(0)[i].abs());
+        let diff = (got.influence.column(0)[i] - phi[i]).abs();
         assert!(
             diff <= bound,
             "{what}: influence {i} {} vs {}, bound {bound:e}",
-            got.influence[i],
+            got.influence.column(0)[i],
             phi[i]
         );
         squared += bound * bound;
     }
-    let uncentred = got.influence.iter().map(|v| v * v).sum::<f64>().sqrt() / n;
+    let uncentred = got
+        .influence
+        .column(0)
+        .iter()
+        .map(|v| v * v)
+        .sum::<f64>()
+        .sqrt()
+        / n;
     let se_bound =
         (got.estimate.se.unwrap() - uncentred).abs() + squared.sqrt() / n + 4.0 * n * U * se;
     assert!(
@@ -309,13 +322,7 @@ fn the_estimator_on_the_reference_predictions_is_the_reference_code() {
         for spec in &case.specs {
             let what = format!("{} {}", case.assumption, name(spec));
             let p = case.predictions(spec, "eta_all_units");
-            let got = att_missing_pre_from_predictions(
-                &case.data(),
-                case.assumption(),
-                &p,
-                &MissingOptions::default(),
-            )
-            .unwrap();
+            let got = from_predictions(&case.data(), &p, &case.options()).unwrap();
             let s = sensitivity(case, &p);
             let (theta_bound, term_bounds) = rounding_bound(&s, n_treated);
             let phi = reference_influence(case, spec, n_treated);
@@ -333,7 +340,7 @@ fn the_estimator_on_the_reference_predictions_is_the_reference_code() {
     }
 }
 
-/// The bound on the difference between `att_missing_pre`'s prediction of a
+/// The bound on the difference between `missing::estimate`'s prediction of a
 /// nuisance and the reference's, per unit.
 ///
 /// The reference's own error is its recorded gap. The crate solves the normal
@@ -399,29 +406,26 @@ fn the_nuisance_fits_and_the_estimate_agree_with_the_reference() {
         let extra = usize::from(mar_xy1);
         for spec in &case.specs {
             let what = format!("{} {}", case.assumption, name(spec));
-            let models = MissingModels {
-                propensity: cols(spec.pi),
-                missingness: cols(spec.gamma),
-                outcome: cols(spec.mu),
-                nested: cols(spec.eta),
+            let models = NuisanceModels {
+                propensity: Some(cols(spec.pi).to_vec()),
+                missingness: Some(cols(spec.gamma).to_vec()),
+                outcome: Some(cols(spec.mu).to_vec()),
+                nested: Some(cols(spec.eta).to_vec()),
             };
             let config = MissingOptions {
+                models,
                 nested_outcome: if spec.augmentation {
                     NestedOutcome::Augmented
                 } else {
                     NestedOutcome::Plain
                 },
-                ..MissingOptions::default()
+                ..case.options()
             };
-            let got = att_missing_pre(
-                &case.data(),
-                covariates.as_ref(),
-                case.assumption(),
-                &models,
-                MissingFolds::None,
-                &config,
-            )
-            .unwrap();
+            let data = MissingData::builder(&case.treated, &case.y0, &case.y1)
+                .covariates(covariates.as_ref())
+                .build()
+                .unwrap();
+            let got = missing::estimate(&data, &config).unwrap();
             assert_eq!(got.folds, 1);
 
             // Check 2: the predictions, model by model.
@@ -518,14 +522,12 @@ fn the_nuisance_fits_and_the_estimate_agree_with_the_reference() {
                 .collect();
             let theta_bound = term_bounds.iter().sum::<f64>() / n_treated + rounding;
             if mar_xy1 {
-                let on_reference =
-                    att_missing_pre_from_predictions(&case.data(), case.assumption(), &p, &config)
-                        .unwrap();
+                let on_reference = from_predictions(&case.data(), &p, &config).unwrap();
                 check(
                     &what,
                     &got,
                     on_reference.estimate.estimate,
-                    &on_reference.influence,
+                    on_reference.influence.column(0),
                     on_reference.estimate.se.unwrap(),
                     theta_bound,
                     &term_bounds,
@@ -565,11 +567,10 @@ fn the_reference_code_and_the_paper_differ_in_the_nested_regression() {
         .unwrap();
     let mut largest: f64 = 0.0;
     for spec in &case.specs {
-        let paper = att_missing_pre_from_predictions(
+        let paper = from_predictions(
             &case.data(),
-            case.assumption(),
             &case.predictions(spec, "eta_controls"),
-            &MissingOptions::default(),
+            &case.options(),
         )
         .unwrap();
         largest = largest.max((paper.estimate.estimate - spec.estimate).abs());

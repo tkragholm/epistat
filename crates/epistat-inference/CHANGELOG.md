@@ -13,6 +13,7 @@ Confidence levels, bootstrap settings and errors now use the shared types of `ep
 - `simultaneous::sup_t_from_covariance(covariance, level, draws)` and `multiplier_bands(influence, clusters, level, bootstrap)` take a `Level` and a `Bootstrap`. `multiplier_bands` takes the influence functions as a faer `MatRef` with one row per cluster and one column per estimate, in place of `&[&[f64]]`. `MultiplierBands::at_least_pointwise` takes no argument and `MultiplierBands` has a new field `level`. `MultiplierBands` is `#[non_exhaustive]`. Both functions refuse non-finite input.
 - `pooling::Pooled::interval(level)` takes a `Level` and returns an `Interval`. `Pooled` is `#[non_exhaustive]`.
 - `wald::Wald` is `#[non_exhaustive]`.
+- `Clusters` numbers clusters as `u32`, like the codes they come from: `Clusters::of` returns `&[u32]` in place of `&[usize]`. `from_labels_first_seen`, `from_sorted_labels`, `singletons` and the deprecated `from_labels` return `Result<Clusters, Error>` and refuse more than `u32::MAX` clusters with `InputError::TooLarge` (code `input.too_large`); add `?`. `from_codes`, `per_unit`, `per_row` and `for_keys` cannot exceed the limit and are unchanged.
 - `epistat_linalg::SolveError` inside `Error::Solve` is now `epistat_linalg::Error`.
 - The minimum supported Rust version is 1.89, up from 1.85. The crate depends on `epistat-core`, and on `epistat-linalg` 0.4, `epistat-rng` 0.2 and `epistat-stats` 0.3.
 

@@ -69,7 +69,7 @@
 //! by the factor `sum (1 - A) pi / (1 - pi) / sum A` on the control term,
 //! which tends to 1 when the propensity model is right.
 //!
-//! [`att_missing_pre`] fits the nuisance models itself:
+//! [`estimate`] fits the nuisance models itself:
 //!
 //! - `pi`: logistic regression of `A` on the propensity covariates, all units;
 //! - `gamma(., a)`: logistic regression of `R0` on the missingness covariates,
@@ -113,27 +113,29 @@
 //! also deals every unit to one of two halves, `mu0(., Y1, 0)` and
 //! `gamma(., Y1, 0)` of the pseudo-outcome are fitted on the first, and
 //! `eta0` on the controls of the second. The models that enter `phi` are
-//! fitted on all the training units. [`missing_cross_fit_folds`] gives the
+//! fitted on all the training units. [`cross_fit_folds`] gives the
 //! folds and halves. Without cross-fitting every model, `eta0` included, is
 //! fitted on all units, as in the authors' simulations.
 //!
-//! [`att_missing_pre_from_predictions`] takes the predictions of any learner
+//! [`from_predictions`] takes the predictions of any learner
 //! instead, which is how random forests or other flexible models enter. For
 //! the inference to hold, each unit's predictions must come from models that
 //! were not fitted on that unit, by cross-fitting: split the units into `K`
 //! folds, fit every model on the other folds, predict for the fold, and pass
 //! the out-of-fold predictions of all units. Under `MarXY1` the nested
 //! regression needs its own split within the training folds, as above. The
-//! documentation of [`att_missing_pre_from_predictions`] lists the steps.
+//! documentation of [`from_predictions`] lists the steps.
 //!
 //! # Variance
 //!
 //! The influence function returned is `phi_i` with `E[A]` replaced by the
-//! share treated, which sums to zero over the units at the estimate. The
+//! share treated, which sums to zero over the units at the estimate, as an
+//! [`Influence`] keyed by row under [`ClusterRule::NoSmallSample`]. The
 //! standard error is the standard deviation of the `phi_i` (divisor `n`)
 //! over `sqrt(n)`, the paper's `V[phi] / n`. With clusters it is the norm of
 //! the cluster sums of [`did_cluster_sums`](crate::did_cluster_sums), as for
-//! the other estimators of the crate. The variance takes the nuisance
+//! the other estimators of the crate, and [`Influence::variance`] with the
+//! same clusters gives it to rounding. The variance takes the nuisance
 //! predictions as fixed, so it is the efficient variance; it is the right one
 //! for cross-fitted predictions and for parametric models that are all
 //! correctly specified. With parametric models fitted on the same data and
@@ -164,7 +166,7 @@
 //! every model on all units, as [`MissingFolds::None`] does, without the
 //! cross-fitting the paper's theory assumes. On the reference's own
 //! predictions the estimate, influence function and standard error of
-//! [`att_missing_pre_from_predictions`] agree with the code's to rounding.
+//! [`from_predictions`] agree with the code's to rounding.
 //!
 //! # References
 //!
@@ -180,8 +182,8 @@
 
 mod fit;
 
-use epistat_core::{Estimate, InputError, Level};
-use epistat_inference::Clusters;
+use epistat_core::{Estimate, InputError, Level, check};
+use epistat_inference::{ClusterRule, Clusters, Influence};
 use epistat_linalg::MatRef;
 
 use crate::error::Error;
@@ -190,16 +192,221 @@ use crate::inference::{estimate_from, normal_interval, standard_error_from_influ
 
 /// The missing-at-random assumption for the pre-treatment outcome.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MissingAssumption {
-    /// Whether `Y0` is observed depends on the covariates and the treatment.
+    /// Whether `Y0` is observed depends on the covariates and the treatment,
+    /// the default.
+    #[default]
     MarX,
     /// Whether `Y0` is observed depends on the covariates, the treatment and
     /// the post-treatment outcome.
     MarXY1,
 }
 
-/// The outcomes and treatment of each unit.
+/// A validated sample of units, one entry per unit: the treatment, both
+/// outcomes, and optionally covariates and clusters.
+///
+/// [`MissingData::builder`] takes the required columns, the builder's
+/// methods add the optional ones, and [`MissingDataBuilder::build`] checks
+/// every column once:
+///
+/// | column | check |
+/// |---|---|
+/// | every column | one entry per unit, at least one unit, at most `u32::MAX` units |
+/// | `outcome_post` | finite |
+/// | `outcome_pre` | finite where observed |
+/// | `covariates` | finite |
+///
+/// The covariates are given without an intercept: every nuisance model adds
+/// it. Cluster codes, when given, cluster the standard error and are dealt
+/// to the folds of cross-fitting whole; they are numbered in increasing code
+/// ([`Clusters::from_codes`]).
+///
+/// ```
+/// use epistat_did::missing::{self, MissingData, MissingOptions, NuisanceModels};
+/// use epistat_linalg::MatRef;
+///
+/// let treated = [true, true, true, false, false, false, false, false];
+/// let pre = [Some(1.0), None, Some(1.4), Some(0.9), Some(1.1), None, Some(1.0), Some(1.3)];
+/// let post = [3.2, 2.9, 3.6, 1.0, 1.3, 1.2, 1.1, 1.5];
+/// let age = [41.0, 37.0, 45.0, 40.0, 38.0, 44.0, 39.0, 43.0];
+/// let data = MissingData::builder(&treated, &pre, &post)
+///     .covariates(MatRef::from_column_major_slice(&age, 8, 1))
+///     .build()?;
+/// // Age in the propensity and outcome models, the missingness by arm only.
+/// let options = MissingOptions {
+///     models: NuisanceModels {
+///         missingness: Some(vec![]),
+///         ..NuisanceModels::default()
+///     },
+///     ..MissingOptions::default()
+/// };
+/// let fit = missing::estimate(&data, &options)?;
+/// assert!(fit.estimate.estimate > 1.0);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone)]
+pub struct MissingData<'a> {
+    treated: &'a [bool],
+    outcome_pre: &'a [Option<f64>],
+    outcome_post: &'a [f64],
+    covariates: Option<MatRef<'a, f64>>,
+    clusters: Option<Clusters>,
+}
+
+/// The builder of a [`MissingData`].
+#[derive(Debug, Clone, Copy)]
+#[must_use]
+pub struct MissingDataBuilder<'a> {
+    treated: &'a [bool],
+    outcome_pre: &'a [Option<f64>],
+    outcome_post: &'a [f64],
+    covariates: Option<MatRef<'a, f64>>,
+    clusters: Option<&'a [u32]>,
+}
+
+impl<'a> MissingData<'a> {
+    /// Whether each unit is treated, its pre-treatment outcome (`None` where
+    /// it is missing) and its post-treatment outcome, which is observed for
+    /// every unit.
+    pub const fn builder(
+        treated: &'a [bool],
+        outcome_pre: &'a [Option<f64>],
+        outcome_post: &'a [f64],
+    ) -> MissingDataBuilder<'a> {
+        MissingDataBuilder {
+            treated,
+            outcome_pre,
+            outcome_post,
+            covariates: None,
+            clusters: None,
+        }
+    }
+
+    /// Whether each unit is treated.
+    #[must_use]
+    pub const fn treated(&self) -> &'a [bool] {
+        self.treated
+    }
+
+    /// The pre-treatment outcome, `None` where it is missing.
+    #[must_use]
+    pub const fn outcome_pre(&self) -> &'a [Option<f64>] {
+        self.outcome_pre
+    }
+
+    /// The post-treatment outcome.
+    #[must_use]
+    pub const fn outcome_post(&self) -> &'a [f64] {
+        self.outcome_post
+    }
+
+    /// The covariates, without the intercept the models add; `None` without
+    /// covariates.
+    #[must_use]
+    pub const fn covariates(&self) -> Option<MatRef<'a, f64>> {
+        self.covariates
+    }
+
+    /// The clusters of the units, numbered in increasing code; `None` when
+    /// each unit is its own cluster.
+    #[must_use]
+    pub const fn clusters(&self) -> Option<&Clusters> {
+        self.clusters.as_ref()
+    }
+
+    /// The number of units.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.treated.len()
+    }
+
+    /// Whether there are no units, which the builder refuses, so always false.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.treated.is_empty()
+    }
+
+    /// The covariates, or a matrix without columns.
+    pub(crate) fn covariate_matrix(&self) -> MatRef<'a, f64> {
+        self.covariates
+            .unwrap_or_else(|| MatRef::from_column_major_slice(&[], self.len(), 0))
+    }
+}
+
+impl<'a> MissingDataBuilder<'a> {
+    /// Covariates, one row per unit, without an intercept: the models add it.
+    pub const fn covariates(mut self, covariates: MatRef<'a, f64>) -> Self {
+        self.covariates = Some(covariates);
+        self
+    }
+
+    /// Cluster codes, one per unit.
+    pub const fn clusters(mut self, clusters: &'a [u32]) -> Self {
+        self.clusters = Some(clusters);
+        self
+    }
+
+    /// The validated data.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] for the first check of [`MissingData`] that fails:
+    /// [`InputError::Empty`] without units, [`InputError::TooLarge`] for more
+    /// units than `u32` numbers, [`InputError::Length`] for a column of the
+    /// wrong length and [`InputError::NotFinite`] for an outcome or covariate
+    /// that is not finite.
+    pub fn build(self) -> Result<MissingData<'a>, Error> {
+        let n = self.treated.len();
+        check::non_empty("treated", n)?;
+        check::fits_u32("units", n)?;
+        check::same_length("outcome_pre", n, self.outcome_pre.len())?;
+        check::same_length("outcome_post", n, self.outcome_post.len())?;
+        check::finite("outcome_post", self.outcome_post)?;
+        if let Some(row) = self
+            .outcome_pre
+            .iter()
+            .position(|v| v.is_some_and(|v| !v.is_finite()))
+        {
+            return Err(InputError::NotFinite {
+                what: "outcome_pre",
+                row,
+                column: None,
+            }
+            .into());
+        }
+        if let Some(x) = self.covariates {
+            check::same_length("covariates", n, x.nrows())?;
+            for j in 0..x.ncols() {
+                if let Some(row) = (0..n).find(|&i| !x[(i, j)].is_finite()) {
+                    return Err(InputError::NotFinite {
+                        what: "covariates",
+                        row,
+                        column: Some(j),
+                    }
+                    .into());
+                }
+            }
+        }
+        if let Some(codes) = self.clusters {
+            check::same_length("clusters", n, codes.len())?;
+        }
+        Ok(MissingData {
+            treated: self.treated,
+            outcome_pre: self.outcome_pre,
+            outcome_post: self.outcome_post,
+            covariates: self.covariates,
+            clusters: self.clusters.map(Clusters::from_codes),
+        })
+    }
+}
+
+/// The outcomes and treatment of each unit, as [`att_missing_pre`] took
+/// them.
+#[deprecated(
+    since = "0.1.0",
+    note = "use MissingData::builder, with the covariates and cluster codes in the data"
+)]
 #[derive(Debug, Clone, Copy)]
 pub struct MissingPreData<'a> {
     /// Whether each unit is treated.
@@ -214,9 +421,25 @@ pub struct MissingPreData<'a> {
 }
 
 /// The covariates of each nuisance model, as column indices into the
-/// covariate matrix. Every model also has an intercept, and under
-/// [`MissingAssumption::MarXY1`] the missingness model and the regression of
-/// `Y0` also have `Y1`.
+/// covariates of [`MissingData`]. Every model also has an intercept, and
+/// under [`MissingAssumption::MarXY1`] the missingness model and the
+/// regression of `Y0` also have `Y1`. `None`, the default for every model,
+/// is every covariate; `Some(vec![])` is the intercept alone.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct NuisanceModels {
+    /// The propensity score `pi(x)`.
+    pub propensity: Option<Vec<usize>>,
+    /// The probability `gamma` that `Y0` is observed, one model per arm.
+    pub missingness: Option<Vec<usize>>,
+    /// The outcome regressions `mu0(., 1)`, `mu1(., 0)` and `mu0(., 0)`.
+    pub outcome: Option<Vec<usize>>,
+    /// The nested regression `eta0`, used under
+    /// [`MissingAssumption::MarXY1`] only.
+    pub nested: Option<Vec<usize>>,
+}
+
+/// The covariates of each nuisance model, as [`att_missing_pre`] took them.
+#[deprecated(since = "0.1.0", note = "use NuisanceModels in MissingOptions::models")]
 #[derive(Debug, Clone, Copy)]
 pub struct MissingModels<'a> {
     /// The propensity score `pi(x)`.
@@ -232,9 +455,11 @@ pub struct MissingModels<'a> {
 
 /// Whether and how the nuisance models are cross-fitted.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MissingFolds {
-    /// Every model is fitted on all units.
+    /// Every model is fitted on all units, the default, as in the authors'
+    /// simulations.
+    #[default]
     None,
     /// The models are fitted on all folds but one and predict for that one.
     CrossFit {
@@ -259,8 +484,17 @@ pub enum NestedOutcome {
 
 /// What the estimator does besides the data, built with
 /// `..MissingOptions::default()`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MissingOptions {
+    /// The missing-at-random assumption, default [`MissingAssumption::MarX`].
+    pub assumption: MissingAssumption,
+    /// The covariates of each nuisance model that [`estimate`] fits, by
+    /// default every covariate in every model. Not used by
+    /// [`from_predictions`].
+    pub models: NuisanceModels,
+    /// Whether [`estimate`] cross-fits its models, by default not. Not used
+    /// by [`from_predictions`].
+    pub folds: MissingFolds,
     /// The level of the confidence interval, default 95%.
     pub level: Level,
     /// A `gamma` at or below this, for a unit whose `Y0` is observed, is an
@@ -280,6 +514,9 @@ pub struct MissingOptions {
 impl Default for MissingOptions {
     fn default() -> Self {
         Self {
+            assumption: MissingAssumption::MarX,
+            models: NuisanceModels::default(),
+            folds: MissingFolds::None,
             level: Level::default(),
             gamma_floor: 0.0,
             propensity_ceiling: 1.0,
@@ -290,8 +527,7 @@ impl Default for MissingOptions {
     }
 }
 
-/// Nuisance predictions for every unit, as [`att_missing_pre_from_predictions`]
-/// takes them. Every value must be finite; the ranges are checked only where a
+/// Nuisance predictions for every unit, as [`from_predictions`] takes them. Every value must be finite; the ranges are checked only where a
 /// value enters the estimator.
 #[derive(Debug, Clone, Copy)]
 pub struct MissingPredictions<'a> {
@@ -344,8 +580,11 @@ pub struct MissingAtt {
     /// clusters, the normal interval at [`MissingOptions::level`] and the
     /// normal p-value; a part that is not finite is `None`.
     pub estimate: Estimate,
-    /// `phi_i` of every unit; see the module documentation for the scale.
-    pub influence: Vec<f64>,
+    /// `phi_i` of every unit on the per-unit scale, keyed by row, under
+    /// [`ClusterRule::NoSmallSample`], the rule of the standard error: its
+    /// variance with the clusters of the data (or none) gives the standard
+    /// error to rounding. See the module documentation.
+    pub influence: Influence,
     /// The number of treated units.
     pub n_treated: usize,
     /// The number of controls.
@@ -368,7 +607,7 @@ pub struct MissingAtt {
     pub nuisance: MissingNuisance,
 }
 
-/// The folds of cross-fitting, as [`missing_cross_fit_folds`] deals them.
+/// The folds of cross-fitting, as [`cross_fit_folds`] deals them.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrossFitFolds {
@@ -381,57 +620,47 @@ pub struct CrossFitFolds {
     pub nested_half: Vec<bool>,
 }
 
-/// The folds that [`att_missing_pre`] uses with [`MissingFolds::CrossFit`]:
-/// the units, or the clusters, are put in a random order from `seed` and
-/// dealt to the folds in turn, and within each fold alternately to the two
-/// halves of the nested regression. For cross-fitting other learners on the
-/// same folds before [`att_missing_pre_from_predictions`].
+/// The folds that [`estimate`] uses with [`MissingFolds::CrossFit`]: the
+/// units, or the clusters, are put in a random order from `seed` and dealt
+/// to the folds in turn, and within each fold alternately to the two halves
+/// of the nested regression. For cross-fitting other learners on the same
+/// folds before [`from_predictions`].
 ///
 /// # Errors
 ///
 /// [`Error::Input`] for fewer than 2 folds or more folds than units (or
-/// clusters), and for clusters of another length.
-pub fn missing_cross_fit_folds(
-    units: usize,
-    clusters: Option<&Clusters>,
+/// clusters).
+pub fn cross_fit_folds(
+    data: &MissingData<'_>,
     folds: usize,
     seed: u64,
 ) -> Result<CrossFitFolds, Error> {
-    let (fold, nested_half) = fit::fold_assignment(units, clusters, folds, seed)?;
+    let (fold, nested_half) = fit::fold_assignment(data.len(), data.clusters(), folds, seed)?;
     Ok(CrossFitFolds { fold, nested_half })
 }
 
 /// The ATT with nuisance models fitted here: logistic regressions for the
 /// propensity and the missingness, least squares for the outcome regressions
-/// and the nested regression, with or without cross-fitting. See the module
-/// documentation.
+/// and the nested regression, with or without cross-fitting, under
+/// [`MissingOptions::assumption`]. See the module documentation.
 ///
-/// `covariates` holds one row per unit and no intercept; `models` picks the
-/// columns of each model.
+/// [`MissingOptions::models`] picks the covariates of each model.
 ///
 /// # Errors
 ///
-/// - [`Error::Input`] for data or options that are invalid, and a model
-///   column outside the covariates.
+/// - [`Error::Input`] for options that are invalid, and a model column
+///   outside the covariates.
 /// - [`Error::NoTreated`] and [`Error::NoComparison`] for an arm without
 ///   units, and [`Error::NoObservedPre`] for an arm without `Y0`.
 /// - [`Error::ConstantCovariate`] for a model covariate that does not vary.
 /// - [`Error::NuisanceFit`] for a nuisance model that cannot be fitted.
 /// - [`Error::PropensityRange`] and [`Error::MissingnessRange`] for fitted
 ///   predictions out of range.
-pub fn att_missing_pre(
-    data: &MissingPreData<'_>,
-    covariates: MatRef<'_, f64>,
-    assumption: MissingAssumption,
-    models: &MissingModels<'_>,
-    folds: MissingFolds,
-    options: &MissingOptions,
-) -> Result<MissingAtt, Error> {
+/// - [`Error::NotFinite`] for an influence function that is not finite.
+pub fn estimate(data: &MissingData<'_>, options: &MissingOptions) -> Result<MissingAtt, Error> {
     validate_options(options)?;
-    let n = validate_data(data)?;
-    epistat_core::check::same_length("covariates", n, covariates.nrows())?;
-    let (nuisance, fold_count) =
-        fit::fit_nuisance(data, covariates, assumption, models, folds, options)?;
+    check_arms(data)?;
+    let (nuisance, fold_count) = fit::fit_nuisance(data, options)?;
     let predictions = MissingPredictions {
         propensity: &nuisance.propensity,
         gamma_treated: &nuisance.gamma_treated,
@@ -441,17 +670,17 @@ pub fn att_missing_pre(
         pre_control: &nuisance.pre_control,
         nested_control: nuisance.nested_control.as_deref(),
     };
-    let core = estimate(data, assumption, &predictions, options)?;
-    Ok(core.finish(fold_count, nuisance))
+    let core = estimate_core(data, &predictions, options)?;
+    core.finish(fold_count, nuisance)
 }
 
 /// The ATT from nuisance predictions made elsewhere, for instance out-of-fold
-/// predictions of random forests. [`MissingPredictions`] lists what enters
-/// where.
+/// predictions of random forests, under [`MissingOptions::assumption`].
+/// [`MissingPredictions`] lists what enters where.
 ///
 /// For the standard error to hold, the predictions of a unit must come from
-/// models that did not see it. With folds from [`missing_cross_fit_folds`]
-/// (or any other split into `K` folds), for each fold `k`:
+/// models that did not see it. With folds from [`cross_fit_folds`] (or any
+/// other split into `K` folds), for each fold `k`:
 ///
 /// ```text
 /// train = units not in fold k
@@ -477,7 +706,7 @@ pub fn att_missing_pre(
 ///
 /// # Errors
 ///
-/// - [`Error::Input`] for data, predictions or options that are invalid.
+/// - [`Error::Input`] for predictions or options that are invalid.
 /// - [`Error::NoTreated`] and [`Error::NoComparison`] for an arm without
 ///   units.
 /// - [`Error::NestedRegression`] for a nested regression given under
@@ -485,15 +714,15 @@ pub fn att_missing_pre(
 ///   [`MissingAssumption::MarXY1`].
 /// - [`Error::PropensityRange`] and [`Error::MissingnessRange`] for
 ///   predictions out of range.
-pub fn att_missing_pre_from_predictions(
-    data: &MissingPreData<'_>,
-    assumption: MissingAssumption,
+/// - [`Error::NotFinite`] for an influence function that is not finite.
+pub fn from_predictions(
+    data: &MissingData<'_>,
     predictions: &MissingPredictions<'_>,
     options: &MissingOptions,
 ) -> Result<MissingAtt, Error> {
     validate_options(options)?;
-    validate_data(data)?;
-    let core = estimate(data, assumption, predictions, options)?;
+    check_arms(data)?;
+    let core = estimate_core(data, predictions, options)?;
     let nuisance = MissingNuisance {
         propensity: predictions.propensity.to_vec(),
         gamma_treated: predictions.gamma_treated.to_vec(),
@@ -503,7 +732,103 @@ pub fn att_missing_pre_from_predictions(
         pre_control: predictions.pre_control.to_vec(),
         nested_control: predictions.nested_control.map(<[f64]>::to_vec),
     };
-    Ok(core.finish(1, nuisance))
+    core.finish(1, nuisance)
+}
+
+/// The view of the old data, with the clusters given by their numbers, which
+/// [`Clusters::from_codes`] numbers again unchanged.
+#[expect(deprecated, reason = "the deprecated entry points take the old data")]
+fn view<'a>(
+    data: &MissingPreData<'a>,
+    covariates: Option<MatRef<'a, f64>>,
+) -> Result<MissingData<'a>, Error> {
+    let builder = MissingData::builder(data.treated, data.outcome_pre, data.outcome_post);
+    let builder = match covariates {
+        Some(x) => builder.covariates(x),
+        None => builder,
+    };
+    let built = match data.clusters {
+        Some(clusters) => builder.clusters(clusters.of()).build()?,
+        None => builder.build()?,
+    };
+    Ok(built)
+}
+
+/// The folds of [`att_missing_pre`] with [`MissingFolds::CrossFit`].
+///
+/// # Errors
+///
+/// [`Error::Input`] for fewer than 2 folds or more folds than units (or
+/// clusters), and for clusters of another length.
+#[deprecated(since = "0.1.0", note = "use missing::cross_fit_folds")]
+pub fn missing_cross_fit_folds(
+    units: usize,
+    clusters: Option<&Clusters>,
+    folds: usize,
+    seed: u64,
+) -> Result<CrossFitFolds, Error> {
+    let (fold, nested_half) = fit::fold_assignment(units, clusters, folds, seed)?;
+    Ok(CrossFitFolds { fold, nested_half })
+}
+
+/// [`estimate`] with the covariates, the assumption, the models and the
+/// folds as arguments; the same fields of `options` are not read.
+///
+/// # Errors
+///
+/// As [`estimate`], and [`Error::Input`] for data that are invalid.
+#[deprecated(
+    since = "0.1.0",
+    note = "use missing::estimate, with the covariates in MissingData and the assumption, \
+            models and folds in MissingOptions"
+)]
+#[expect(deprecated, reason = "the deprecated entry point takes the old data")]
+pub fn att_missing_pre(
+    data: &MissingPreData<'_>,
+    covariates: MatRef<'_, f64>,
+    assumption: MissingAssumption,
+    models: &MissingModels<'_>,
+    folds: MissingFolds,
+    options: &MissingOptions,
+) -> Result<MissingAtt, Error> {
+    let data = view(data, Some(covariates))?;
+    let options = MissingOptions {
+        assumption,
+        models: NuisanceModels {
+            propensity: Some(models.propensity.to_vec()),
+            missingness: Some(models.missingness.to_vec()),
+            outcome: Some(models.outcome.to_vec()),
+            nested: Some(models.nested.to_vec()),
+        },
+        folds,
+        ..options.clone()
+    };
+    estimate(&data, &options)
+}
+
+/// [`from_predictions`] with the assumption as an argument; the field of
+/// `options` is not read.
+///
+/// # Errors
+///
+/// As [`from_predictions`], and [`Error::Input`] for data that are invalid.
+#[deprecated(
+    since = "0.1.0",
+    note = "use missing::from_predictions, with the assumption in MissingOptions"
+)]
+#[expect(deprecated, reason = "the deprecated entry point takes the old data")]
+pub fn att_missing_pre_from_predictions(
+    data: &MissingPreData<'_>,
+    assumption: MissingAssumption,
+    predictions: &MissingPredictions<'_>,
+    options: &MissingOptions,
+) -> Result<MissingAtt, Error> {
+    let data = view(data, None)?;
+    let options = MissingOptions {
+        assumption,
+        ..options.clone()
+    };
+    from_predictions(&data, predictions, &options)
 }
 
 fn domain(what: &'static str, value: f64, domain: &'static str) -> Error {
@@ -536,34 +861,16 @@ fn validate_options(options: &MissingOptions) -> Result<(), Error> {
     Ok(())
 }
 
-/// Checks lengths and values, and that both arms have units; returns `n`.
-fn validate_data(data: &MissingPreData<'_>) -> Result<usize, Error> {
-    let n = data.treated.len();
-    epistat_core::check::non_empty("treated", n)?;
-    epistat_core::check::same_length("outcome_pre", n, data.outcome_pre.len())?;
-    epistat_core::check::same_length("outcome_post", n, data.outcome_post.len())?;
-    epistat_core::check::same_length("clusters", n, data.clusters.map_or(n, Clusters::len))?;
-    epistat_core::check::finite("outcome_post", data.outcome_post)?;
-    if let Some(row) = data
-        .outcome_pre
-        .iter()
-        .position(|v| v.is_some_and(|v| !v.is_finite()))
-    {
-        return Err(InputError::NotFinite {
-            what: "outcome_pre",
-            row,
-            column: None,
-        }
-        .into());
-    }
+/// Checks that both arms have units.
+fn check_arms(data: &MissingData<'_>) -> Result<(), Error> {
     let treated = data.treated.iter().filter(|&&a| a).count();
     if treated == 0 {
         return Err(Error::NoTreated);
     }
-    if treated == n {
+    if treated == data.len() {
         return Err(Error::NoComparison);
     }
-    Ok(n)
+    Ok(())
 }
 
 /// The estimate before the fold count and the nuisance are attached.
@@ -576,10 +883,17 @@ struct Core {
 }
 
 impl Core {
-    fn finish(self, folds: usize, nuisance: MissingNuisance) -> MissingAtt {
-        MissingAtt {
+    fn finish(self, folds: usize, nuisance: MissingNuisance) -> Result<MissingAtt, Error> {
+        if self.influence.iter().any(|value| !value.is_finite()) {
+            return Err(Error::NotFinite);
+        }
+        let rows = (0..self.influence.len())
+            .map(|i| check::fits_u32("units", i))
+            .collect::<Result<_, _>>()?;
+        let influence = Influence::over_rows(self.influence, rows, 1, ClusterRule::NoSmallSample)?;
+        Ok(MissingAtt {
             estimate: self.estimate,
-            influence: self.influence,
+            influence,
             n_treated: self.counts[0],
             n_control: self.counts[1],
             observed_pre_treated: self.counts[2],
@@ -589,7 +903,7 @@ impl Core {
             gamma_control_range: self.gamma_ranges[1],
             folds,
             nuisance,
-        }
+        })
     }
 }
 
@@ -616,14 +930,13 @@ fn widen(range: &mut Option<(f64, f64)>, value: f64) {
 
 /// The estimator of equations 12 and 13 on given predictions, with the
 /// influence function and its standard error.
-fn estimate(
-    data: &MissingPreData<'_>,
-    assumption: MissingAssumption,
+fn estimate_core(
+    data: &MissingData<'_>,
     p: &MissingPredictions<'_>,
     options: &MissingOptions,
 ) -> Result<Core, Error> {
     let n = data.treated.len();
-    let nested = match (assumption, p.nested_control) {
+    let nested = match (options.assumption, p.nested_control) {
         (MissingAssumption::MarX, None) => None,
         (MissingAssumption::MarXY1, Some(eta)) => Some(eta),
         _ => return Err(Error::NestedRegression),
@@ -704,7 +1017,7 @@ fn estimate(
         .zip(data.treated)
         .map(|(&t, &a)| scale * (if a { t - att } else { t }))
         .collect();
-    let se = match data.clusters {
+    let se = match data.clusters() {
         None => standard_error_from_influence(&influence),
         Some(clusters) => clustered_standard_error(&influence, clusters),
     };

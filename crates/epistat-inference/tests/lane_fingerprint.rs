@@ -60,7 +60,7 @@ fn fingerprint() -> u64 {
         }
         h = h.f64(standard_error(&x).unwrap());
         let clusters =
-            Clusters::from_labels_first_seen(&(0..n).map(|i| i % 11).collect::<Vec<_>>());
+            Clusters::from_labels_first_seen(&(0..n).map(|i| i % 11).collect::<Vec<_>>()).unwrap();
         h = h.option_f64(clustered_variance(&x, &clusters).unwrap());
         if let Some(cov) = clustered_covariance(&[&x, &w], &clusters).unwrap() {
             h = h.f64s(&cov);

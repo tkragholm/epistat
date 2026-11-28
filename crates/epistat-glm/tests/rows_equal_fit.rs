@@ -93,7 +93,12 @@ fn problem(n: usize, family: Family, aliased: bool, scattered: bool, seed: u64) 
             i / 5
         });
     }
-    let cluster = Clusters::from_labels_first_seen(&labels).of().to_vec();
+    let cluster = Clusters::from_labels_first_seen(&labels)
+        .unwrap()
+        .of()
+        .iter()
+        .map(|&c| c as usize)
+        .collect();
     Held { x, y, w, cluster }
 }
 
@@ -136,7 +141,7 @@ fn same(model: Glm, held: &Held) {
         flatten_covariance(&rows.covariance),
         flatten_covariance(&fit.covariance)
     );
-    let clusters = Clusters::from_labels_first_seen(&held.cluster);
+    let clusters = Clusters::from_labels_first_seen(&held.cluster).unwrap();
     for (clustered, kind) in [
         (false, SandwichType::Hc0),
         (false, SandwichType::Hc1),

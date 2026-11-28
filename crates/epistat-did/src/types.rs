@@ -253,7 +253,7 @@ pub(crate) struct DrDidEstimate {
     /// Lower end of the confidence interval: `att - z se` at the configured
     /// level, or the multiplier-bootstrap percentile when
     /// [`DrDidConfig::bootstrap_reps`] is positive. The improved estimators
-    /// return `att - 1.96 * se` whatever the configuration.
+    /// always return the normal interval.
     pub ci_low: f64,
     /// Upper end of the confidence interval, as `ci_low`.
     pub ci_high: f64,

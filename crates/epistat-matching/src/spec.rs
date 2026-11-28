@@ -926,7 +926,39 @@ impl Default for FullSpec {
 }
 
 /// The units a spec is run on.
+///
+/// New kinds of input may be added, so a `match` on it outside this crate
+/// needs a wildcard arm:
+///
+/// ```compile_fail
+/// use epistat_matching::{BaseRecord, SpecInput};
+///
+/// fn kind(input: SpecInput<'_, BaseRecord>) -> &'static str {
+///     match input {
+///         SpecInput::Standard { .. } => "standard",
+///         SpecInput::RiskSet { .. } => "risk set",
+///         SpecInput::Trials { .. } => "trials",
+///     }
+/// }
+/// ```
+///
+/// With the wildcard arm it compiles:
+///
+/// ```
+/// use epistat_matching::{BaseRecord, SpecInput};
+///
+/// fn kind(input: SpecInput<'_, BaseRecord>) -> &'static str {
+///     match input {
+///         SpecInput::Standard { .. } => "standard",
+///         SpecInput::RiskSet { .. } => "risk set",
+///         SpecInput::Trials { .. } => "trials",
+///         _ => "other",
+///     }
+/// }
+/// assert_eq!(kind(SpecInput::Standard { cases: &[], controls: &[] }), "standard");
+/// ```
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub enum SpecInput<'a, R> {
     /// Cases and controls, for [`MatchMode::Standard`].
     Standard {

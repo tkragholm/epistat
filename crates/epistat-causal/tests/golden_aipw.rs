@@ -11,8 +11,8 @@
 
 mod sim;
 
-use epistat_causal::Estimand;
 use epistat_causal::aipw::{AipwInput, AipwOptions, aipw, aipw_glm};
+use epistat_causal::{Estimand, ProbabilityBounds};
 use epistat_glm::Family;
 use epistat_testkit::Fingerprint;
 
@@ -57,7 +57,7 @@ fn outputs() -> Vec<(String, Vec<f64>)> {
         &AipwOptions {
             estimand: Estimand::Ate,
             ..AipwOptions {
-                truncation: Some((0.05, 0.95)),
+                truncation: Some(ProbabilityBounds::new(0.05, 0.95).unwrap()),
                 ..AipwOptions::default()
             }
         },

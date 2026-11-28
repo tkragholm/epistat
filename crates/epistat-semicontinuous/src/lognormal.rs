@@ -349,7 +349,7 @@ fn robust_covariance(
     clusters: Option<&[u32]>,
     xtx: &Mat<f64>,
 ) -> Result<RobustCovarianceResult, Error> {
-    let (meat, cluster_count) = score_meat(x.as_ref(), |i| residuals[(i, 0)], clusters);
+    let (meat, cluster_count) = score_meat(x.as_ref(), |i| residuals[(i, 0)], clusters)?;
     let cov = sandwich(xtx.as_ref(), meat.as_ref()).ok_or(Error::Singular)?;
     Ok((Some(cov), cluster_count.is_some(), cluster_count))
 }

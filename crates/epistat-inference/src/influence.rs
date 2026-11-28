@@ -459,7 +459,7 @@ impl Influence {
         let sizes: Option<Vec<f64>> = clusters.map(|c| {
             let mut sizes = vec![0.0; c.count()];
             for &g in c.of() {
-                sizes[g] += 1.0;
+                sizes[g as usize] += 1.0;
             }
             sizes
         });
@@ -659,7 +659,9 @@ mod tests {
         for rule in [ClusterRule::SmallSample, ClusterRule::NoSmallSample] {
             let influence = one(&psi, rule);
             let plain = influence.variance(None).unwrap();
-            let singletons = influence.variance(Some(&Clusters::singletons(5))).unwrap();
+            let singletons = influence
+                .variance(Some(&Clusters::singletons(5).unwrap()))
+                .unwrap();
             assert_eq!(plain, singletons);
         }
     }
@@ -933,7 +935,7 @@ mod tests {
         ));
         let influence = one(&[1.0, 2.0], rule);
         assert!(matches!(
-            influence.variance(Some(&Clusters::singletons(3))),
+            influence.variance(Some(&Clusters::singletons(3).unwrap())),
             Err(Error::Input(InputError::Length { .. }))
         ));
         assert!(matches!(
@@ -946,11 +948,11 @@ mod tests {
     #[expect(deprecated, reason = "the 0.3 functions keep their bits")]
     fn the_earlier_functions_keep_their_rules() {
         let psi = [1.0, -2.0, 0.5, 0.5];
-        let variance = clustered_variance(&psi, &Clusters::singletons(4))
+        let variance = clustered_variance(&psi, &Clusters::singletons(4).unwrap())
             .unwrap()
             .unwrap();
         assert!((variance - 4.0 / 3.0 * 5.5 / 16.0).abs() < 1e-15);
-        let one_cluster = Clusters::from_labels_first_seen(&[7, 7]);
+        let one_cluster = Clusters::from_labels_first_seen(&[7, 7]).unwrap();
         assert_eq!(clustered_variance(&psi[..2], &one_cluster), Ok(None));
         assert_eq!(clustered_standard_error(&psi[..2], &one_cluster), Ok(None));
         assert_eq!(
@@ -959,7 +961,7 @@ mod tests {
         );
         let a = [1.0, -2.0, 0.5, 0.5, 3.0];
         let b = [0.0, 1.0, -1.0, 2.0, 0.5];
-        let clusters = Clusters::from_labels_first_seen(&[1, 1, 2, 3, 3]);
+        let clusters = Clusters::from_labels_first_seen(&[1, 1, 2, 3, 3]).unwrap();
         let covariance = clustered_covariance(&[&a, &b], &clusters).unwrap().unwrap();
         assert_eq!(
             covariance[0].to_bits(),
@@ -973,7 +975,7 @@ mod tests {
             Err(Error::Input(InputError::Empty { .. }))
         ));
         assert!(matches!(
-            clustered_variance(&[1.0], &Clusters::singletons(2)),
+            clustered_variance(&[1.0], &Clusters::singletons(2).unwrap()),
             Err(Error::Input(InputError::Length { .. }))
         ));
     }

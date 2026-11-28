@@ -98,7 +98,7 @@ fn modified_poisson_matches_sandwich() {
         let clusters = case
             .cluster
             .as_ref()
-            .map(|c| Clusters::from_labels_first_seen(c));
+            .map(|c| Clusters::from_labels_first_seen(c).unwrap());
         // The bread and the meat are sums of at most 1589 terms over the same
         // rows as R's, in a fixed order, and both fits stop at the same
         // iteration, so the covariances agree to the rounding of the sums,
@@ -145,7 +145,7 @@ fn risk_regression_is_modified_poisson_with_its_diagnostics() {
     let reference = reference();
     let case = &reference.cases[1];
     let x = matrix(&case.x);
-    let clusters = Clusters::from_labels_first_seen(case.cluster.as_ref().unwrap());
+    let clusters = Clusters::from_labels_first_seen(case.cluster.as_ref().unwrap()).unwrap();
     let fit = risk_regression(
         RiskScale::Ratio,
         &glm_data(x.as_ref(), &case.y, None, None, None).unwrap(),
@@ -191,7 +191,7 @@ fn risk_regression_is_modified_poisson_with_its_diagnostics() {
 fn risk_difference_matches_binomial_identity() {
     let d = &reference().difference;
     let x = matrix(&d.x);
-    let clusters = Clusters::from_labels_first_seen(&d.cluster);
+    let clusters = Clusters::from_labels_first_seen(&d.cluster).unwrap();
     for (kind, want, with_clusters) in [
         (SandwichType::Hc0, &d.hc0, false),
         (SandwichType::Hc1, &d.hc1, false),
@@ -227,7 +227,7 @@ fn covariance_bits() -> Vec<f64> {
     let reference = reference();
     let case = &reference.cases[2];
     let x = matrix(&case.x);
-    let clusters = Clusters::from_labels_first_seen(case.cluster.as_ref().unwrap());
+    let clusters = Clusters::from_labels_first_seen(case.cluster.as_ref().unwrap()).unwrap();
     let fit = risk_regression(
         RiskScale::Ratio,
         &glm_data(
