@@ -51,12 +51,11 @@ use crate::error::Error;
 /// // rows of unit 0 come first.
 /// let units = Codes::from_labels(&county)?;
 /// let order = epistat_core::Panel::sort_order(units.codes(), &year)?;
-/// let pick = |i: &u32| *i as usize;
-/// let unit: Vec<u32> = order.iter().map(|i| units.codes()[pick(i)]).collect();
-/// let period: Vec<i64> = order.iter().map(|i| year[pick(i)]).collect();
-/// let cohort: Vec<Option<i64>> = order.iter().map(|i| first_treated[pick(i)]).collect();
-/// let outcome: Vec<f64> = order.iter().map(|i| y[pick(i)]).collect();
-/// let cluster: Vec<u32> = order.iter().map(|i| state[pick(i)]).collect();
+/// let unit = order.apply(units.codes())?;
+/// let period = order.apply(&year)?;
+/// let cohort = order.apply(&first_treated)?;
+/// let outcome = order.apply(&y)?;
+/// let cluster = order.apply(&state)?;
 ///
 /// let panel = StaggeredPanel::builder(&unit, &period, &cohort, &outcome)
 ///     .clusters(&cluster)

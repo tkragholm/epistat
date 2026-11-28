@@ -16,6 +16,7 @@
 //! | [`Estimand`] | the population an average treatment effect is averaged over |
 //! | [`Codes`] | labels as dense `u32` codes in sorted order, and back |
 //! | [`Panel`] | the validated unit-and-period key of person-period data |
+//! | [`Permutation`] | a reordering of rows, applied to each column alike |
 //! | [`day`], [`Day`] | civil dates as `i64` days since 1970-01-01, and one such date |
 //! | [`check`], [`InputError`] | the input checks every estimator shares |
 //! | [`ErrorKind`], [`Classify`] | what kind of failure an error is, and its stable code |
@@ -41,6 +42,7 @@ pub mod event_study;
 mod format;
 pub mod level;
 pub mod panel;
+pub mod permutation;
 
 pub use bootstrap::{Bootstrap, Seed};
 pub use check::InputError;
@@ -53,3 +55,4 @@ pub use estimate::{Contrast, Coverage, Estimate, Interval, Scale};
 pub use event_study::EventStudy;
 pub use level::Level;
 pub use panel::Panel;
+pub use permutation::Permutation;
