@@ -31,6 +31,9 @@ suboptimal_flops = "allow"
 # A local exception is `#[expect(.., reason = "..")]`, never `#[allow]`, so an
 # exception that no longer applies is itself a warning.
 allow_attributes = "warn"
+# Iteration over a hash map or set follows the hasher's seed, random per
+# process. Rayon's order-dependent reductions are refused in clippy.toml.
+iter_over_hash_type = "warn"
 
 # The profile CI runs the tests in: debug assertions and overflow checks as in
 # `dev`, but optimised, so the numerical suites take minutes instead of an hour.
