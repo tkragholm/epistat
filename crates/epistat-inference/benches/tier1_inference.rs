@@ -92,11 +92,11 @@ fn main() {
         lines.push("scalar_total", r.0.total);
         lines.push_opt("scalar_df", r.0.df);
         lines.push_all("vector_estimate", &r.1.estimate);
-        lines.push("d1_statistic", r.2.statistic);
-        lines.push("d1_df2", r.2.df2);
-        lines.push_opt("d1_p", r.2.p_value);
-        lines.push("d2_statistic", r.3.statistic);
-        lines.push("d2_df2", r.3.df2);
+        lines.push("d1_statistic", r.2.test.statistic.unwrap());
+        lines.push("d1_df2", r.2.df2());
+        lines.push_opt("d1_p", r.2.test.p_value);
+        lines.push("d2_statistic", r.3.test.statistic.unwrap());
+        lines.push("d2_df2", r.3.df2());
         times
     } else {
         panic!("unknown method {method}")

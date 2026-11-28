@@ -29,7 +29,7 @@ Confidence levels, bootstrap settings and errors now use the shared types of `ep
 - `sandwich::SandwichAdjustment` (`None`, `ClusterCount`, `Hc1`), with `factor`, and `sandwich::scaled`, for the small-sample factors of a sandwich covariance, each listed in the module against the call of R's `sandwich` package and of Stata that applies it, and `sandwich::meat_from`, the meat from a vector of residuals.
 - `curve::contrast_curve` and `curve::ContrastCurve`, the contrast of a spline term against a reference value, with pointwise or simultaneous (sup-t) bands, chosen by `curve::Band`.
 - `multiplicity::adjust` with `Adjustment`, the p-value adjustments of Bonferroni, Holm, Hochberg, Hommel, Benjamini-Hochberg and Benjamini-Yekutieli.
-- `pooling::rubin_vector` and `PooledVector`, `pooling::d1`, `d2` and `d3` with `MultiMethod`, `NegativeRiv` and `MultiTest`, `pooling::rubin_transformed` with `Transform` and `PooledOnScale`, `dfcom_residual` and `dfcom_events`, and `Pooled::p_value`.
+- `pooling::rubin_vector` and `PooledVector`, `pooling::d1`, `d2` and `d3` with `MultiMethod`, `NegativeRiv` and `MultiTest`, whose F test is an `epistat_core::Test` with the denominator degrees of freedom in `Reference::F` and in `MultiTest::df2`, `pooling::rubin_transformed` with `Transform` and `PooledOnScale`, `dfcom_residual` and `dfcom_events`, and `Pooled::p_value`.
 - `interval::percentile_sorted`, the percentile interval of replicates that are already sorted.
 - `bootstrap::unit_counts_of`, the resampling counts of one replicate.
 - `Error`, which implements `Classify`.
