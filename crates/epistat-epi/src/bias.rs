@@ -1560,6 +1560,7 @@ fn draw_confounding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use epistat_testkit::Tolerance;
 
     const TRUE: Counts2x2 = Counts2x2 {
         exposed_cases: 300.0,
@@ -1568,9 +1569,8 @@ mod tests {
         unexposed_noncases: 3500.0,
     };
 
-    fn close(x: f64, y: f64) -> bool {
-        (x - y).abs() <= 1e-12 * x.abs().max(y.abs()).max(1.0)
-    }
+    /// Agreement to `1e-12`, absolute below 1 and relative above.
+    const CLOSE: Tolerance = Tolerance::exact().abs(1e-12).rel(1e-12);
 
     /// Observed exposure counts when each exposed person is classified with
     /// sensitivity `se` and each unexposed with specificity `sp`.
@@ -1612,12 +1612,9 @@ mod tests {
             TRUE.exposed_noncases,
             TRUE.unexposed_noncases,
         ]) {
-            assert!(close(got, want), "{got} {want}");
+            assert!(CLOSE.accepts(got, want), "{got} {want}");
         }
-        assert!(close(
-            corrected.odds_ratio.unwrap(),
-            TRUE.odds_ratio().unwrap()
-        ));
+        assert!(CLOSE.accepts(corrected.odds_ratio.unwrap(), TRUE.odds_ratio().unwrap()));
     }
 
     #[test]
@@ -1655,7 +1652,7 @@ mod tests {
             TRUE.exposed_noncases,
             TRUE.unexposed_noncases,
         ]) {
-            assert!(close(got, want), "{got} {want}");
+            assert!(CLOSE.accepts(got, want), "{got} {want}");
         }
     }
 
@@ -1750,11 +1747,8 @@ mod tests {
         let rd_observed = observed.risk_difference().unwrap();
         let corrected = correct_exposure(&observed, &m).unwrap();
         let factor = (1.0 - p) / (1.0 - p / se);
-        assert!(close(
-            corrected.risk_difference.unwrap(),
-            rd_observed * factor
-        ));
-        assert!(close(corrected.risk_difference.unwrap(), r1 - r0));
+        assert!(CLOSE.accepts(corrected.risk_difference.unwrap(), rd_observed * factor));
+        assert!(CLOSE.accepts(corrected.risk_difference.unwrap(), r1 - r0));
     }
 
     #[test]
@@ -1762,7 +1756,7 @@ mod tests {
         let s = [[0.9, 0.7], [0.8, 0.95]];
         let corrected = correct_selection(&TRUE, &s).unwrap();
         let factor = selection_bias_factor(&s).unwrap();
-        assert!(close(
+        assert!(CLOSE.accepts(
             corrected.odds_ratio.unwrap(),
             TRUE.odds_ratio().unwrap() * factor
         ));
@@ -1779,12 +1773,12 @@ mod tests {
         };
         let adjusted = adjust_confounding(&TRUE, ConfoundingMeasure::RiskRatio, &c).unwrap();
         let factor = confounding_bias_factor(0.4, 0.2, 2.0).unwrap();
-        assert!(close(factor, 1.4 / 1.2));
-        assert!(close(adjusted.crude / factor, adjusted.adjusted_mh));
-        assert!(close(adjusted.adjusted_smr.unwrap(), adjusted.adjusted_mh));
+        assert!(CLOSE.accepts(factor, 1.4 / 1.2));
+        assert!(CLOSE.accepts(adjusted.crude / factor, adjusted.adjusted_mh));
+        assert!(CLOSE.accepts(adjusted.adjusted_smr.unwrap(), adjusted.adjusted_mh));
         // A confounder with no association or equal prevalence changes nothing.
-        assert!(close(confounding_bias_factor(0.3, 0.3, 5.0).unwrap(), 1.0));
-        assert!(close(confounding_bias_factor(0.4, 0.2, 1.0).unwrap(), 1.0));
+        assert!(CLOSE.accepts(confounding_bias_factor(0.3, 0.3, 5.0).unwrap(), 1.0));
+        assert!(CLOSE.accepts(confounding_bias_factor(0.4, 0.2, 1.0).unwrap(), 1.0));
         assert!(confounding_bias_factor(1.2, 0.2, 2.0).is_err());
         assert!(confounding_bias_factor(0.2, 0.2, 0.0).is_err());
     }
@@ -1927,7 +1921,7 @@ mod tests {
         )
         .unwrap();
         let rr = r.risk_ratio.unwrap();
-        assert!(close(rr.estimate, simple.risk_ratio.unwrap()));
+        assert!(CLOSE.accepts(rr.estimate, simple.risk_ratio.unwrap()));
         assert_eq!(rr.lower().unwrap().to_bits(), rr.upper().unwrap().to_bits());
         assert_eq!((r.n_draws_used, r.n_discarded), (50, 0));
         assert!(r.risk_ratio_total.is_none());
@@ -2061,7 +2055,7 @@ mod tests {
             TRUE.exposed_noncases,
             TRUE.unexposed_noncases,
         ]) {
-            assert!(close(got, want), "{got} {want}");
+            assert!(CLOSE.accepts(got, want), "{got} {want}");
         }
         // The positive predictive value and the sensitivity give the true
         // cases as well, and agree with the correction by Se and Sp.
@@ -2070,14 +2064,14 @@ mod tests {
             .cells
             .unwrap();
         assert!(
-            close(by_ppv.exposed_cases, TRUE.exposed_cases)
-                && close(by_ppv.unexposed_cases, TRUE.unexposed_cases)
+            CLOSE.accepts(by_ppv.exposed_cases, TRUE.exposed_cases)
+                && CLOSE.accepts(by_ppv.unexposed_cases, TRUE.unexposed_cases)
         );
         let by_se_sp = correct_outcome(&observed, &m).unwrap().cells.unwrap();
-        assert!(close(by_ppv.exposed_cases, by_se_sp.exposed_cases));
+        assert!(CLOSE.accepts(by_ppv.exposed_cases, by_se_sp.exposed_cases));
         // With the same PPV and Se in both groups the risk ratio is kept.
         let same = correct_outcome_ppv(&TRUE, [0.9, 0.9], [0.8, 0.8]).unwrap();
-        assert!(close(same.risk_ratio.unwrap(), TRUE.risk_ratio().unwrap()));
+        assert!(CLOSE.accepts(same.risk_ratio.unwrap(), TRUE.risk_ratio().unwrap()));
         assert!(correct_outcome_ppv(&TRUE, [0.9, 0.9], [0.0, 0.8]).is_err());
     }
 
@@ -2097,12 +2091,12 @@ mod tests {
             .cells
             .unwrap();
         assert!(
-            close(cells.exposed_cases, TRUE.exposed_cases)
-                && close(cells.exposed_noncases, TRUE.exposed_noncases)
+            CLOSE.accepts(cells.exposed_cases, TRUE.exposed_cases)
+                && CLOSE.accepts(cells.exposed_noncases, TRUE.exposed_noncases)
         );
         assert!(
-            close(cells.unexposed_cases, TRUE.unexposed_cases)
-                && close(cells.unexposed_noncases, TRUE.unexposed_noncases)
+            CLOSE.accepts(cells.unexposed_cases, TRUE.unexposed_cases)
+                && CLOSE.accepts(cells.unexposed_noncases, TRUE.unexposed_noncases)
         );
     }
 

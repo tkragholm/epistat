@@ -26,7 +26,9 @@ use epistat_honestdid::honest::{
     Restriction, RmBound, Target,
 };
 use epistat_honestdid::pretrends::{self, PretrendOptions, Violation};
-use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes, load_json};
+use epistat_testkit::{
+    BadInput, Tolerance, absent, assert_rejects_bad_input_with_codes, load_json,
+};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -86,10 +88,6 @@ fn bc_study() -> EventStudy {
     study(r.betahat, &r.sigma, r.pre_indices.len())
 }
 
-fn close(ours: Option<f64>, theirs: f64, tolerance: f64) -> bool {
-    ours.is_some_and(|v| (v - theirs).abs() <= tolerance)
-}
-
 #[test]
 fn relative_magnitude_matches_the_package_on_the_average_effect() {
     let study = bc_study();
@@ -97,8 +95,16 @@ fn relative_magnitude_matches_the_package_on_the_average_effect() {
     let target = Target::Weights(r.l_vec.clone());
 
     let original = honest::original(&study, &target, Level::default()).expect("original");
-    assert!(close(original.lower(), r.original.lb, 1e-8));
-    assert!(close(original.upper(), r.original.ub, 1e-8));
+    assert!(
+        Tolerance::exact()
+            .abs(1e-8)
+            .accepts(absent(original.lower()), r.original.lb)
+    );
+    assert!(
+        Tolerance::exact()
+            .abs(1e-8)
+            .accepts(absent(original.upper()), r.original.ub)
+    );
     let averaged = honest::original(
         &study,
         &Target::Average { first: 0, last: 3 },
@@ -139,19 +145,31 @@ fn relative_magnitude_matches_the_package_on_the_average_effect() {
         assert_eq!(row.method, Method::ConditionalLeastFavorable);
         assert_eq!(row.method.label(), "C-LF");
         assert!(
-            close(row.interval.lower, reference.lb, 5e-3),
+            Tolerance::exact()
+                .abs(5e-3)
+                .accepts(absent(row.interval.lower), reference.lb),
             "Mbar {}",
             reference.mbar
         );
         assert!(
-            close(row.interval.upper, reference.ub, 5e-3),
+            Tolerance::exact()
+                .abs(5e-3)
+                .accepts(absent(row.interval.upper), reference.ub),
             "Mbar {}",
             reference.mbar
         );
         let lp = 1e-6 * (1.0 + reference.id_lb.abs().max(reference.id_ub.abs()));
         let id = row.identified.expect("identified set");
-        assert!(close(id.lower, reference.id_lb, lp));
-        assert!(close(id.upper, reference.id_ub, lp));
+        assert!(
+            Tolerance::exact()
+                .abs(lp)
+                .accepts(absent(id.lower), reference.id_lb)
+        );
+        assert!(
+            Tolerance::exact()
+                .abs(lp)
+                .accepts(absent(id.upper), reference.id_ub)
+        );
         assert_eq!(set.identified, row.identified);
         assert_eq!(set.interval.lower, id.lower);
     }
@@ -214,8 +232,20 @@ fn smoothness_identified_sets_match_the_package() {
             let set = summary.rows[0].identified.expect("identified set");
             if case.identified.feasible {
                 let lp = 1e-6 * (1.0 + case.identified.lb.abs().max(case.identified.ub.abs()));
-                assert!(close(set.lower, case.identified.lb, lp), "{}", dataset.name);
-                assert!(close(set.upper, case.identified.ub, lp), "{}", dataset.name);
+                assert!(
+                    Tolerance::exact()
+                        .abs(lp)
+                        .accepts(absent(set.lower), case.identified.lb),
+                    "{}",
+                    dataset.name
+                );
+                assert!(
+                    Tolerance::exact()
+                        .abs(lp)
+                        .accepts(absent(set.upper), case.identified.ub),
+                    "{}",
+                    dataset.name
+                );
             } else {
                 assert_eq!((set.lower, set.upper), (None, None), "{}", dataset.name);
             }

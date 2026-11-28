@@ -240,6 +240,7 @@ mod tests {
     use super::*;
     use crate::bias::Dist;
     use epistat_core::{Bootstrap, Level};
+    use epistat_testkit::Tolerance;
 
     const TRUE: PersonTime2 = PersonTime2 {
         exposed_events: 120.0,
@@ -248,9 +249,8 @@ mod tests {
         unexposed_time: 90_000.0,
     };
 
-    fn close(x: f64, y: f64) -> bool {
-        (x - y).abs() <= 1e-12 * x.abs().max(y.abs()).max(1.0)
-    }
+    /// Agreement to `1e-12`, absolute below 1 and relative above.
+    const CLOSE: Tolerance = Tolerance::exact().abs(1e-12).rel(1e-12);
 
     #[test]
     fn the_correction_inverts_the_misclassification() {
@@ -274,20 +274,17 @@ mod tests {
         };
         let corrected = correct_exposure_rates(&observed, &m).unwrap();
         let t = corrected.table.unwrap();
-        assert!(close(t.exposed_events, TRUE.exposed_events));
-        assert!(close(t.unexposed_time, TRUE.unexposed_time));
-        assert!(close(
-            corrected.rate_ratio.unwrap(),
-            TRUE.rate_ratio().unwrap()
-        ));
+        assert!(CLOSE.accepts(t.exposed_events, TRUE.exposed_events));
+        assert!(CLOSE.accepts(t.unexposed_time, TRUE.unexposed_time));
+        assert!(CLOSE.accepts(corrected.rate_ratio.unwrap(), TRUE.rate_ratio().unwrap()));
     }
 
     #[test]
     fn equal_ppv_and_sensitivity_leave_the_rate_ratio() {
         let c = correct_outcome_rates_ppv(&TRUE, [0.9, 0.9], [0.8, 0.8]).unwrap();
-        assert!(close(c.rate_ratio.unwrap(), TRUE.rate_ratio().unwrap()));
+        assert!(CLOSE.accepts(c.rate_ratio.unwrap(), TRUE.rate_ratio().unwrap()));
         let d = correct_outcome_rates_ppv(&TRUE, [0.9, 0.9], [0.9, 0.75]).unwrap();
-        assert!(close(
+        assert!(CLOSE.accepts(
             d.rate_ratio.unwrap(),
             TRUE.rate_ratio().unwrap() * 0.75 / 0.9
         ));

@@ -32,7 +32,7 @@ use epistat_did::{
     MissingPredictions, NestedOutcome, att_missing_pre, att_missing_pre_from_predictions,
 };
 use epistat_linalg::Mat;
-use epistat_testkit::load_json;
+use epistat_testkit::{Tolerance, load_json};
 use serde::Deserialize;
 
 const U: f64 = f64::EPSILON / 2.0;
@@ -378,9 +378,10 @@ fn prediction_bound(fit: &Fit, logistic: bool, fit_rows: &[bool], p: usize) -> f
 type Check<'a> = (&'static str, &'a [f64], bool, Vec<bool>, usize);
 
 fn assert_close_each(what: &str, got: &[f64], expected: &[f64], bound: f64) {
-    for (i, (g, e)) in got.iter().zip(expected).enumerate() {
+    assert_eq!(got.len(), expected.len(), "{what}: lengths differ");
+    for (i, (&g, &e)) in got.iter().zip(expected).enumerate() {
         assert!(
-            (g - e).abs() <= bound,
+            Tolerance::exact().abs(bound).accepts(g, e),
             "{what}: unit {i}: {g} vs {e}, bound {bound:e}"
         );
     }

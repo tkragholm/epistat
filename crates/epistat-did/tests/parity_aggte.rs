@@ -25,7 +25,7 @@ use epistat_did::att_gt::{
 };
 use epistat_inference::Clusters;
 use epistat_rng::Stream;
-use epistat_testkit::{assert_same_on_threads, load_json};
+use epistat_testkit::{Tolerance, assert_same_on_threads, load_json};
 use rows::{Obs, Summary};
 use serde::Deserialize;
 
@@ -205,7 +205,10 @@ const INFLUENCE: f64 = 1e-6;
 
 fn close(got: f64, want: f64, tolerance: f64, label: &str) {
     assert!(
-        (got - want).abs() <= tolerance * want.abs().max(1.0),
+        Tolerance::exact()
+            .abs(tolerance)
+            .rel(tolerance)
+            .accepts(got, want),
         "{label}: {got} vs R {want}"
     );
 }

@@ -33,7 +33,7 @@ mod switching;
 
 use epistat_did::{DcdhEffectsEqual, DcdhOptions, DcdhSwitchers, DcdhTerm, dcdh};
 use epistat_linalg::{Attempt, Mat, Method, solve};
-use epistat_testkit::load_json;
+use epistat_testkit::{Tolerance, load_json};
 use serde::Deserialize;
 use switching::{Columns, Row};
 
@@ -185,7 +185,10 @@ fn close(what: &str, got: f64, want: f64, scale: f64, tol: f64) {
     let bound = tol * want.abs().max(scale);
     WORST.with(|w| w.set(w.get().max((got - want).abs() / bound)));
     assert!(
-        (got - want).abs() <= bound,
+        Tolerance::exact()
+            .abs(tol * scale)
+            .rel(tol)
+            .accepts(got, want),
         "{what}: {got} against R's {want} (difference {:e}, bound {bound:e})",
         (got - want).abs()
     );

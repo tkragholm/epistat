@@ -641,6 +641,7 @@ pub fn clustered_covariance(
 mod tests {
     use super::*;
     use epistat_core::Classify;
+    use epistat_testkit::Tolerance;
 
     fn one(values: &[f64], rule: ClusterRule) -> Influence {
         let units = (0..u32::try_from(values.len()).unwrap()).collect();
@@ -650,9 +651,7 @@ mod tests {
     /// A relative tolerance for sums of a handful of exactly representable
     /// terms: each operation rounds once, by at most half an ulp, so a few
     /// ulps bound the difference between two orders of evaluation.
-    fn close(a: f64, b: f64) -> bool {
-        (a - b).abs() <= 16.0 * f64::EPSILON * b.abs()
-    }
+    const CLOSE: Tolerance = Tolerance::exact().rel(16.0 * f64::EPSILON);
 
     #[test]
     fn singleton_clusters_give_the_unclustered_variance() {
@@ -675,17 +674,19 @@ mod tests {
         let none = one(&psi, ClusterRule::NoSmallSample)
             .variance(None)
             .unwrap();
-        assert!(close(small.get(0, 0).unwrap(), ss / (n - 1.0) / n));
-        assert!(close(none.get(0, 0).unwrap(), ss / n / n));
+        assert!(CLOSE.accepts(small.get(0, 0).unwrap(), ss / (n - 1.0) / n));
+        assert!(CLOSE.accepts(none.get(0, 0).unwrap(), ss / n / n));
         let rule = ClusterRule::SmallSample;
-        assert!(close(
-            one(&psi, rule)
-                .variance_with(None, ClusterRule::NoSmallSample)
-                .unwrap()
-                .get(0, 0)
-                .unwrap(),
-            ss / n / n
-        ));
+        assert!(
+            CLOSE.accepts(
+                one(&psi, rule)
+                    .variance_with(None, ClusterRule::NoSmallSample)
+                    .unwrap()
+                    .get(0, 0)
+                    .unwrap(),
+                ss / n / n
+            )
+        );
     }
 
     #[test]
@@ -700,7 +701,7 @@ mod tests {
         let mean = 3.0 / 5.0;
         let d = [0.5 - mean, 3.5 - 2.0 * mean, -1.0 - 2.0 * mean];
         let want = 1.5 * (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) / 25.0;
-        assert!(close(v, want));
+        assert!(CLOSE.accepts(v, want));
     }
 
     #[test]
@@ -889,7 +890,7 @@ mod tests {
         );
         let direct = combined.variance(None).unwrap().get(0, 0).unwrap();
         let quadratic = both.variance(None).unwrap().quadratic(&w).unwrap();
-        assert!(close(direct, quadratic));
+        assert!(CLOSE.accepts(direct, quadratic));
     }
 
     #[test]

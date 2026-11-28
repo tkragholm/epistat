@@ -26,7 +26,7 @@ use epistat_did::att_gt::{
     AggteOptions, AggteType, AggteWeights, AttGt, AttGtCell, AttGtOptions, EfficientWeights,
     Estimator,
 };
-use epistat_testkit::load_json;
+use epistat_testkit::{Tolerance, load_json};
 use rows::Obs;
 use serde::Deserialize;
 
@@ -193,7 +193,7 @@ fn largest(values: &[f64]) -> f64 {
 
 fn assert_within(label: &str, got: f64, want: f64, bound: f64) {
     assert!(
-        (got - want).abs() <= bound,
+        Tolerance::exact().abs(bound).accepts(got, want),
         "{label}: {got} against {want}, off by {:e} with bound {bound:e}",
         (got - want).abs()
     );

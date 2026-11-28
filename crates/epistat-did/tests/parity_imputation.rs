@@ -69,7 +69,7 @@ use epistat_did::{
 };
 use epistat_glm::Absorb;
 use epistat_linalg::Mat;
-use epistat_testkit::load_json;
+use epistat_testkit::{Tolerance, load_json};
 use serde::Deserialize;
 
 const EPS: f64 = f64::EPSILON;
@@ -306,7 +306,7 @@ impl Bounds {
 
 fn close(got: f64, want: f64, tol: f64, what: &str) {
     assert!(
-        (got - want).abs() <= tol,
+        Tolerance::exact().abs(tol).accepts(got, want),
         "{what}: {got:e} against {want:e}, difference {:e} above {tol:e}",
         (got - want).abs()
     );
