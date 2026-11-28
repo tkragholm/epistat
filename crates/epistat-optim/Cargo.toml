@@ -4,12 +4,19 @@ description = "BFGS, Nelder-Mead, simplex methods, branch and bound and minimum-
 keywords = ["optimization", "bfgs", "simplex", "nelder-mead", "statistics"]
 categories = ["mathematics", "science"]
 readme = "README.md"
+# The R references, and the scripts that write them, are read only by this
+# repository's tests, so they stay out of the package.
+exclude = ["tests/data/"]
 version = "0.2.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 rayon = ["dep:rayon"]

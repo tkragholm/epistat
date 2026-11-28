@@ -4,15 +4,19 @@ description = "Survival analysis for follow-up data: Cox regression, Fine-Gray, 
 keywords = ["statistics", "survival", "cox", "competing-risks", "multi-state"]
 categories = ["mathematics", "science"]
 readme = "README.md"
-# The R references are 20 MB of JSON that only this repository's tests read;
-# the R scripts that write them stay in the package as their provenance.
-exclude = ["tests/data/*.json"]
+# The R references, and the scripts that write them, are read only by this
+# repository's tests, so they stay out of the package.
+exclude = ["tests/data/"]
 version = "0.4.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 # Build `SurvData` from Apache Arrow arrays without copying, see `epistat_survival::arrow`.
