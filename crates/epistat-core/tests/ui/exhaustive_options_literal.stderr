@@ -1,0 +1,5 @@
+error[E0063]: missing field `_extensible` in initializer of `FitOptions`
+  --> tests/ui/exhaustive_options_literal.rs:14:13
+   |
+14 |     let _ = FitOptions {
+   |             ^^^^^^^^^^ missing `_extensible`

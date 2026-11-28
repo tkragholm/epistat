@@ -55,6 +55,10 @@ fn same_base(a: &BaseRecord, b: &BaseRecord) {
     assert_eq!(a.birth_date, b.birth_date);
     assert_eq!(a.strata, b.strata);
     assert_eq!(a.numerics.len(), b.numerics.len());
+    #[expect(
+        clippy::iter_over_hash_type,
+        reason = "each entry is asserted on its own"
+    )]
     for (name, value) in &a.numerics {
         assert_eq!(value.to_bits(), b.numerics[name].to_bits(), "{name}");
     }
@@ -194,6 +198,10 @@ fn balance_records_equal_the_builder() {
             .build();
         same_base(&want.core, &got[i].core);
         assert_eq!(want.covariates.len(), got[i].covariates.len());
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "each entry is asserted on its own"
+        )]
         for (key, value) in &want.covariates {
             same_covariate(value, &got[i].covariates[key]);
         }

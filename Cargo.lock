@@ -588,6 +588,7 @@ dependencies = [
  "epistat-testkit",
  "serde",
  "serde_json",
+ "trybuild",
 ]
 
 [[package]]

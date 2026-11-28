@@ -560,6 +560,10 @@ fn unit_weights_and_sample_sizes_agree_with_matchit() {
                     for group in &groups {
                         let ours: f64 = group.values().sum();
                         let theirs: f64 = group.keys().map(|id| r_weight(id)).sum();
+                        #[expect(
+                            clippy::iter_over_hash_type,
+                            reason = "each entry is asserted on its own"
+                        )]
                         for (id, weight) in group {
                             assert!(
                                 tolerance().accepts(*weight * theirs / ours, r_weight(id)),
@@ -670,6 +674,10 @@ fn squares_and_interactions_agree_with_matchit() {
             compared += 1;
         }
         // Every MatchIt term that involves only numeric covariates is reported.
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "each entry is asserted on its own"
+        )]
         for (key, r_name) in &r_rows {
             let only_numeric = key.split(" * ").all(|part| {
                 numeric

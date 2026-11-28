@@ -351,6 +351,10 @@ fn coefficients_covariances_and_fixed_effects_match_fixest() {
                     .sum::<f64>());
         let bread = fit.bread();
 
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "each variance is checked on its own, so the order only decides which failure is reported"
+        )]
         for (label, spec) in &case.vcov {
             let ways: Vec<&[u32]> = spec
                 .vars
