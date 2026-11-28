@@ -5,14 +5,16 @@
 //! `1 + |dense value|`, and `LOGIT_AGREEMENT` for the logit part. The dense path with
 //! caller-held buffers is compared bit for bit with the dense path without them.
 
-use epistat_core::InputError;
+use epistat_core::{CaseWeights, Covariance, InputError};
 use epistat_linalg::Mat;
 use epistat_semicontinuous::prepared::{
     PreparedGammaDesign, PreparedPredictionDesign, PreparedScratch, PreparedTwoPartDesign,
 };
 use epistat_semicontinuous::tweedie::{TweedieOptions, TweedieScratch};
-use epistat_semicontinuous::two_part::{Regularization, TwoPartOptions, TwoPartWarmStart};
-use epistat_semicontinuous::{CostData, Error, FitStrategy, tweedie, two_part};
+use epistat_semicontinuous::two_part::{
+    Regularization, Separation, TwoPartOptions, TwoPartWarmStart,
+};
+use epistat_semicontinuous::{CostData, Error, FitStrategy, Variance, tweedie, two_part};
 
 /// Largest accepted move between the compact and the dense fit of one weight column.
 const AGREEMENT: f64 = 1e-8;
@@ -86,10 +88,10 @@ fn close(label: &str, compact: f64, dense: f64) {
     );
 }
 
-fn close_columns(label: &str, compact: &Mat<f64>, dense: &Mat<f64>) {
-    assert_eq!(compact.nrows(), dense.nrows(), "{label}");
-    for j in 0..dense.nrows() {
-        close(&format!("{label}[{j}]"), compact[(j, 0)], dense[(j, 0)]);
+fn close_columns(label: &str, compact: &[f64], dense: &[f64]) {
+    assert_eq!(compact.len(), dense.len(), "{label}");
+    for (j, (&compact, &dense)) in compact.iter().zip(dense).enumerate() {
+        close(&format!("{label}[{j}]"), compact, dense);
     }
 }
 
@@ -99,14 +101,14 @@ fn close_columns(label: &str, compact: &Mat<f64>, dense: &Mat<f64>) {
 fn close_predictors(
     label: &str,
     x: &Mat<f64>,
-    compact: &Mat<f64>,
-    dense: &Mat<f64>,
+    compact: &[f64],
+    dense: &[f64],
     tolerance: f64,
 ) {
     let mut largest = 0.0_f64;
     for i in 0..x.nrows() {
         let difference: f64 = (0..x.ncols())
-            .map(|j| x[(i, j)] * (compact[(j, 0)] - dense[(j, 0)]))
+            .map(|j| x[(i, j)] * (compact[j] - dense[j]))
             .sum();
         largest = largest.max(difference.abs());
     }
@@ -122,9 +124,13 @@ fn gamma_options() -> TweedieOptions {
 
 fn two_part_options() -> TwoPartOptions {
     TwoPartOptions {
-        compute_covariance: false,
+        variance: Variance::None,
         ..TwoPartOptions::default()
     }
+}
+
+fn case_weights(weights: &[f64]) -> CaseWeights<'_> {
+    CaseWeights::new(weights).expect("weights")
 }
 
 fn data<'a>(x: &'a Mat<f64>, y: &'a [f64]) -> CostData<'a> {
@@ -133,23 +139,20 @@ fn data<'a>(x: &'a Mat<f64>, y: &'a [f64]) -> CostData<'a> {
 
 fn weighted<'a>(x: &'a Mat<f64>, y: &'a [f64], weights: &'a [f64]) -> CostData<'a> {
     CostData::builder(x.as_ref(), y)
-        .weights(weights)
+        .weights(case_weights(weights))
         .build()
         .expect("data")
 }
 
-fn gamma_warm(x: &Mat<f64>, y: &[f64]) -> Mat<f64> {
+fn gamma_warm(x: &Mat<f64>, y: &[f64]) -> Vec<f64> {
     tweedie::fit(&data(x, y), 2.0, &gamma_options(), None, None)
         .expect("point fit")
-        .beta
+        .coefficients
 }
 
-fn two_part_warm(x: &Mat<f64>, y: &[f64]) -> TwoPartWarmStart {
-    let model = two_part::fit(&data(x, y), &two_part_options(), None).expect("point");
-    TwoPartWarmStart {
-        beta_logit: model.beta_logit,
-        beta_gamma: model.beta_gamma,
-    }
+fn two_part_warm(x: &Mat<f64>, y: &[f64], options: &TwoPartOptions) -> TwoPartWarmStart {
+    let model = two_part::fit(&data(x, y), options, None).expect("point");
+    TwoPartWarmStart::from(&model)
 }
 
 #[test]
@@ -170,9 +173,9 @@ fn a_gamma_fit_agrees_with_the_dense_fit() {
         )
         .expect("dense");
         let compact = prepared
-            .fit(&weights, &warm, &gamma_options(), &mut scratch)
+            .fit(case_weights(&weights), &warm, &gamma_options(), &mut scratch)
             .expect("compact");
-        close_columns("beta", &compact.beta, &dense.beta);
+        close_columns("beta", &compact.coefficients, &dense.coefficients);
         assert!(compact.iterations.abs_diff(dense.report.meta.iterations) <= 1);
     }
 }
@@ -196,16 +199,21 @@ fn a_ridge_gamma_fit_agrees_with_the_dense_fit() {
     )
     .expect("dense");
     let compact = prepared
-        .fit(&weights, &warm, &options, &mut PreparedScratch::default())
+        .fit(
+            case_weights(&weights),
+            &warm,
+            &options,
+            &mut PreparedScratch::default(),
+        )
         .expect("compact");
-    close_columns("beta", &compact.beta, &dense.beta);
+    close_columns("beta", &compact.coefficients, &dense.coefficients);
 }
 
 #[test]
 fn a_two_part_fit_agrees_with_the_dense_fit() {
     for (zero_share, n) in [(0.35, 20_000), (0.02, 20_000)] {
         let (x, y) = design(n, zero_share, 3);
-        let warm = two_part_warm(&x, &y);
+        let warm = two_part_warm(&x, &y, &two_part_options());
         let prepared = PreparedTwoPartDesign::new(x.as_ref(), &y).expect("design");
         assert_eq!(prepared.nrows(), n);
         assert!(prepared.positive_nrows() < n);
@@ -218,26 +226,40 @@ fn a_two_part_fit_agrees_with_the_dense_fit() {
                 Some(&warm),
             )
             .expect("dense");
-            let report = &dense.report;
             let compact = prepared
-                .fit(&weights, &warm, &two_part_options(), &mut scratch)
+                .fit(
+                    case_weights(&weights),
+                    &warm,
+                    &two_part_options(),
+                    &mut scratch,
+                )
                 .expect("compact");
             close_predictors(
                 "logit",
                 &x,
-                &compact.beta_logit,
-                &dense.beta_logit,
+                &compact.logit,
+                &dense.logit.coefficients,
                 LOGIT_AGREEMENT,
             );
             close_predictors(
                 "gamma",
                 &x,
-                &compact.beta_gamma,
-                &dense.beta_gamma,
+                &compact.gamma,
+                &dense.gamma.coefficients,
                 AGREEMENT,
             );
-            assert!(compact.iterations_logit.abs_diff(report.iterations_logit) <= 1);
-            assert!(compact.iterations_gamma.abs_diff(report.iterations_gamma) <= 1);
+            assert!(
+                compact
+                    .iterations_logit
+                    .abs_diff(dense.logit.meta.iterations)
+                    <= 1
+            );
+            assert!(
+                compact
+                    .iterations_gamma
+                    .abs_diff(dense.gamma.meta.iterations)
+                    <= 1
+            );
         }
     }
 }
@@ -245,42 +267,58 @@ fn a_two_part_fit_agrees_with_the_dense_fit() {
 #[test]
 fn a_rare_outcome_class_gives_the_intercept_only_logit_of_the_dense_fit() {
     let (x, mut y) = design(6_000, 0.0, 4);
-    // Fewer zeros than columns, so the dense logit takes the prevalence model.
+    // Fewer zeros than columns, so the logit is separable.
     for i in 0..5 {
         y[i * 100] = 0.0;
     }
-    let warm = two_part_warm(&x, &y);
+    let options = TwoPartOptions {
+        separation: Separation::InterceptOnly,
+        ..two_part_options()
+    };
+    let warm = two_part_warm(&x, &y, &options);
     let prepared = PreparedTwoPartDesign::new(x.as_ref(), &y).expect("design");
     let weights = replicate_weights(6_000, 9);
-    let dense = two_part::fit(
-        &weighted(&x, &y, &weights),
-        &two_part_options(),
-        Some(&warm),
-    )
-    .expect("dense");
+    let dense = two_part::fit(&weighted(&x, &y, &weights), &options, Some(&warm)).expect("dense");
     let compact = prepared
         .fit(
-            &weights,
+            case_weights(&weights),
             &warm,
-            &two_part_options(),
+            &options,
             &mut PreparedScratch::default(),
         )
         .expect("compact");
     assert_eq!(compact.iterations_logit, 0);
-    close_columns("logit", &compact.beta_logit, &dense.beta_logit);
+    assert_eq!(compact.logit_intercept_only, dense.report.logit_intercept_only);
+    close_columns("logit", &compact.logit, &dense.logit.coefficients);
     close_predictors(
         "gamma",
         &x,
-        &compact.beta_gamma,
-        &dense.beta_gamma,
+        &compact.gamma,
+        &dense.gamma.coefficients,
         AGREEMENT,
+    );
+
+    // Both paths refuse the separable logit by default.
+    let refused = prepared
+        .fit(
+            case_weights(&weights),
+            &warm,
+            &two_part_options(),
+            &mut PreparedScratch::default(),
+        )
+        .map(|_| ())
+        .unwrap_err();
+    assert!(matches!(refused, Error::Separation { .. }));
+    assert_eq!(
+        two_part::fit(&weighted(&x, &y, &weights), &two_part_options(), None).unwrap_err(),
+        refused
     );
 }
 
 #[test]
 fn a_ridge_two_part_fit_agrees_with_the_dense_fit() {
     let (x, y) = design(8_000, 0.3, 5);
-    let warm = two_part_warm(&x, &y);
+    let warm = two_part_warm(&x, &y, &two_part_options());
     let options = TwoPartOptions {
         regularization: Regularization::Ridge {
             lambda: 1e-2,
@@ -292,20 +330,25 @@ fn a_ridge_two_part_fit_agrees_with_the_dense_fit() {
     let weights = replicate_weights(8_000, 11);
     let dense = two_part::fit(&weighted(&x, &y, &weights), &options, Some(&warm)).expect("dense");
     let compact = prepared
-        .fit(&weights, &warm, &options, &mut PreparedScratch::default())
+        .fit(
+            case_weights(&weights),
+            &warm,
+            &options,
+            &mut PreparedScratch::default(),
+        )
         .expect("compact");
     close_predictors(
         "logit",
         &x,
-        &compact.beta_logit,
-        &dense.beta_logit,
+        &compact.logit,
+        &dense.logit.coefficients,
         LOGIT_AGREEMENT,
     );
     close_predictors(
         "gamma",
         &x,
-        &compact.beta_gamma,
-        &dense.beta_gamma,
+        &compact.gamma,
+        &dense.gamma.coefficients,
         AGREEMENT,
     );
 }
@@ -339,7 +382,7 @@ fn predictions_average_as_the_models_do() {
         .collect();
     close(
         "gamma",
-        prediction.mean_gamma(&gamma_model.beta, &weights),
+        prediction.mean_gamma(&gamma_model.coefficients, &weights),
         gamma_model
             .predict_mean(x.as_ref(), Some(&weights))
             .expect("mean"),
@@ -347,8 +390,8 @@ fn predictions_average_as_the_models_do() {
     close(
         "two-part",
         prediction.mean_two_part(
-            &two_part_model.beta_logit,
-            &two_part_model.beta_gamma,
+            &two_part_model.logit.coefficients,
+            &two_part_model.gamma.coefficients,
             &weights,
         ),
         two_part_model
@@ -370,7 +413,7 @@ fn a_prediction_design_may_hold_a_constant_column() {
         "mean",
         PreparedPredictionDesign::new(x.as_ref())
             .expect("design")
-            .mean_gamma(&model.beta, &weights),
+            .mean_gamma(&model.coefficients, &weights),
         model
             .predict_mean(x.as_ref(), Some(&weights))
             .expect("mean"),
@@ -440,27 +483,32 @@ fn a_fit_refuses_what_it_cannot_answer_reliably() {
     let mut scratch = PreparedScratch::default();
     let prepared = PreparedGammaDesign::new(x.as_ref(), &y).expect("design");
     let good = vec![1.0; 6_000];
-
-    let mut bad = good.clone();
-    bad[3] = 0.0;
     let error = |result: Result<(), Error>| result.unwrap_err();
+
+    // A weight of 0 takes its row out of the fit, as in the dense fit.
+    let mut zero = good.clone();
+    zero[3] = 0.0;
+    let compact = prepared
+        .fit(case_weights(&zero), &warm, &gamma_options(), &mut scratch)
+        .expect("a zero weight");
+    let dense = tweedie::fit(
+        &weighted(&x, &y, &zero),
+        2.0,
+        &gamma_options(),
+        Some(&warm),
+        None,
+    )
+    .expect("dense");
+    close_columns("beta", &compact.coefficients, &dense.coefficients);
     assert_eq!(
         error(
             prepared
-                .fit(&bad, &warm, &gamma_options(), &mut scratch)
-                .map(|_| ())
-        ),
-        Error::Input(InputError::Domain {
-            what: "weights",
-            value: 0.0,
-            domain: "(0, inf)",
-            row: None,
-        })
-    );
-    assert_eq!(
-        error(
-            prepared
-                .fit(&good[1..], &warm, &gamma_options(), &mut scratch)
+                .fit(
+                    case_weights(&good[1..]),
+                    &warm,
+                    &gamma_options(),
+                    &mut scratch
+                )
                 .map(|_| ())
         ),
         Error::Input(InputError::Length {
@@ -472,7 +520,12 @@ fn a_fit_refuses_what_it_cannot_answer_reliably() {
     assert_eq!(
         error(
             prepared
-                .fit(&good, &Mat::zeros(3, 1), &gamma_options(), &mut scratch)
+                .fit(
+                    case_weights(&good),
+                    &[0.0; 3],
+                    &gamma_options(),
+                    &mut scratch
+                )
                 .map(|_| ())
         ),
         Error::Input(InputError::Length {
@@ -490,7 +543,7 @@ fn a_fit_refuses_what_it_cannot_answer_reliably() {
     assert_eq!(
         error(
             prepared
-                .fit(&good, &warm, &no_iterations, &mut scratch)
+                .fit(case_weights(&good), &warm, &no_iterations, &mut scratch)
                 .map(|_| ())
         ),
         Error::NotConverged { iterations: 0 }
@@ -502,15 +555,20 @@ fn a_fit_refuses_what_it_cannot_answer_reliably() {
         duplicated[(i, 9)] = duplicated[(i, 8)];
     }
     let warm_zero = {
-        let mut beta = Mat::zeros(16, 1);
-        beta[(0, 0)] = 9.0;
+        let mut beta = vec![0.0; 16];
+        beta[0] = 9.0;
         beta
     };
     let prepared_duplicated = PreparedGammaDesign::new(duplicated.as_ref(), &y).expect("design");
     assert_eq!(
         error(
             prepared_duplicated
-                .fit(&good, &warm_zero, &gamma_options(), &mut scratch)
+                .fit(
+                    case_weights(&good),
+                    &warm_zero,
+                    &gamma_options(),
+                    &mut scratch
+                )
                 .map(|_| ())
         ),
         Error::IllConditioned
@@ -527,7 +585,12 @@ fn a_fit_refuses_what_it_cannot_answer_reliably() {
     assert_eq!(
         error(
             prepared_nearly_all
-                .fit(&tiny, &warm_zero, &gamma_options(), &mut scratch)
+                .fit(
+                    case_weights(&tiny),
+                    &warm_zero,
+                    &gamma_options(),
+                    &mut scratch
+                )
                 .map(|_| ())
         ),
         Error::IllConditioned
@@ -539,7 +602,12 @@ fn a_fit_refuses_what_it_cannot_answer_reliably() {
     assert_eq!(
         error(
             prepared_hot
-                .fit(&good, &warm_zero, &gamma_options(), &mut scratch)
+                .fit(
+                    case_weights(&good),
+                    &warm_zero,
+                    &gamma_options(),
+                    &mut scratch
+                )
                 .map(|_| ())
         ),
         Error::Saturated
@@ -549,7 +617,7 @@ fn a_fit_refuses_what_it_cannot_answer_reliably() {
 #[test]
 fn a_two_part_fit_refuses_what_it_cannot_answer_reliably() {
     let (x, y) = design(6_000, 0.3, 10);
-    let warm = two_part_warm(&x, &y);
+    let warm = two_part_warm(&x, &y, &two_part_options());
     let mut scratch = PreparedScratch::default();
     let prepared = PreparedTwoPartDesign::new(x.as_ref(), &y).expect("design");
     let good = vec![1.0; 6_000];
@@ -558,7 +626,7 @@ fn a_two_part_fit_refuses_what_it_cannot_answer_reliably() {
                 warm: &TwoPartWarmStart,
                 scratch: &mut PreparedScratch| {
         prepared
-            .fit(weights, warm, &options, scratch)
+            .fit(case_weights(weights), warm, &options, scratch)
             .map(|_| ())
             .unwrap_err()
     };
@@ -598,14 +666,23 @@ fn a_two_part_fit_refuses_what_it_cannot_answer_reliably() {
             what: "an elastic net or a ridge on the intercept in a compact design"
         }
     );
+    // A weight that is not finite is refused when the weights are built.
     let mut bad = good.clone();
     bad[0] = f64::NAN;
     assert_eq!(
-        code(two_part_options(), &bad, &warm, &mut scratch),
-        Error::Input(InputError::NotFinite {
+        CaseWeights::new(&bad),
+        Err(InputError::NotFinite {
             what: "weights",
             row: 0,
             column: None
+        })
+    );
+    assert_eq!(
+        code(two_part_options(), &good[1..], &warm, &mut scratch),
+        Error::Input(InputError::Length {
+            what: "weights",
+            expected: 6_000,
+            found: 5_999,
         })
     );
     assert_eq!(
@@ -613,8 +690,8 @@ fn a_two_part_fit_refuses_what_it_cannot_answer_reliably() {
             two_part_options(),
             &good,
             &TwoPartWarmStart {
-                beta_logit: Mat::zeros(2, 1),
-                beta_gamma: Mat::zeros(16, 1),
+                logit: vec![0.0; 2],
+                gamma: vec![0.0; 16],
             },
             &mut scratch
         ),
@@ -643,7 +720,7 @@ fn a_compact_result_does_not_depend_on_what_the_scratch_held() {
     let (x, y) = design(6_000, 0.0, 11);
     let (x_two, y_two) = design(7_000, 0.3, 12);
     let warm = gamma_warm(&x, &y);
-    let warm_two = two_part_warm(&x_two, &y_two);
+    let warm_two = two_part_warm(&x_two, &y_two, &two_part_options());
     let gamma = PreparedGammaDesign::new(x.as_ref(), &y).expect("gamma");
     let two_part = PreparedTwoPartDesign::new(x_two.as_ref(), &y_two).expect("two");
     let weights = replicate_weights(6_000, 300);
@@ -651,7 +728,7 @@ fn a_compact_result_does_not_depend_on_what_the_scratch_held() {
 
     let fresh_gamma = gamma
         .fit(
-            &weights,
+            case_weights(&weights),
             &warm,
             &gamma_options(),
             &mut PreparedScratch::default(),
@@ -659,7 +736,7 @@ fn a_compact_result_does_not_depend_on_what_the_scratch_held() {
         .expect("gamma");
     let fresh_two = two_part
         .fit(
-            &weights_two,
+            case_weights(&weights_two),
             &warm_two,
             &two_part_options(),
             &mut PreparedScratch::default(),
@@ -669,38 +746,39 @@ fn a_compact_result_does_not_depend_on_what_the_scratch_held() {
     let mut shared = PreparedScratch::default();
     for _ in 0..2 {
         let used_two = two_part
-            .fit(&weights_two, &warm_two, &two_part_options(), &mut shared)
+            .fit(
+                case_weights(&weights_two),
+                &warm_two,
+                &two_part_options(),
+                &mut shared,
+            )
             .expect("two-part");
         let used_gamma = gamma
-            .fit(&weights, &warm, &gamma_options(), &mut shared)
+            .fit(case_weights(&weights), &warm, &gamma_options(), &mut shared)
             .expect("gamma");
-        for j in 0..16 {
-            assert_eq!(
-                fresh_gamma.beta[(j, 0)].to_bits(),
-                used_gamma.beta[(j, 0)].to_bits()
-            );
-            assert_eq!(
-                fresh_two.beta_logit[(j, 0)].to_bits(),
-                used_two.beta_logit[(j, 0)].to_bits()
-            );
-            assert_eq!(
-                fresh_two.beta_gamma[(j, 0)].to_bits(),
-                used_two.beta_gamma[(j, 0)].to_bits()
-            );
-        }
+        assert_same_bits("gamma", &fresh_gamma.coefficients, &used_gamma.coefficients);
+        assert_same_bits("logit", &fresh_two.logit, &used_two.logit);
+        assert_same_bits("two-part gamma", &fresh_two.gamma, &used_two.gamma);
     }
 }
 
-fn assert_same_bits(label: &str, a: &Mat<f64>, b: &Mat<f64>) {
-    assert_eq!((a.nrows(), a.ncols()), (b.nrows(), b.ncols()), "{label}");
-    for j in 0..a.ncols() {
-        for i in 0..a.nrows() {
-            assert_eq!(
-                a[(i, j)].to_bits(),
-                b[(i, j)].to_bits(),
-                "{label} ({i}, {j})"
-            );
+fn assert_same_bits(label: &str, a: &[f64], b: &[f64]) {
+    assert_eq!(a.len(), b.len(), "{label}");
+    for (i, (a, b)) in a.iter().zip(b).enumerate() {
+        assert_eq!(a.to_bits(), b.to_bits(), "{label} [{i}]");
+    }
+}
+
+fn assert_same_covariance(label: &str, a: Option<&Covariance>, b: Option<&Covariance>) {
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            let bits = |c: &Covariance| -> Vec<Option<u64>> {
+                c.as_slice().iter().map(|v| v.map(f64::to_bits)).collect()
+            };
+            assert_eq!(bits(a), bits(b), "{label}");
         }
+        (None, None) => {}
+        _ => panic!("{label}: one fit has a covariance"),
     }
 }
 
@@ -737,7 +815,7 @@ fn a_tweedie_fit_with_a_scratch_is_bit_identical_to_one_without() {
                 "ridge/robust",
                 TweedieOptions {
                     l2_penalty: 1e-3,
-                    robust_se: true,
+                    variance: Variance::Sandwich,
                     ..gamma_options()
                 },
             ),
@@ -747,16 +825,12 @@ fn a_tweedie_fit_with_a_scratch_is_bit_identical_to_one_without() {
             let held =
                 tweedie::fit(&input, power, &options, None, Some(&mut scratch)).expect("held");
             let name = format!("power {power} {label}");
-            assert_same_bits(&name, &plain.beta, &held.beta);
+            assert_same_bits(&name, &plain.coefficients, &held.coefficients);
             assert_eq!(
                 plain.report.meta.iterations, held.report.meta.iterations,
                 "{name}"
             );
-            match (&plain.report.cov, &held.report.cov) {
-                (Some(a), Some(b)) => assert_same_bits(&name, a, b),
-                (None, None) => {}
-                _ => panic!("{name}: one fit has a covariance"),
-            }
+            assert_same_covariance(&name, plain.covariance.as_ref(), held.covariance.as_ref());
 
             // Another shape reallocates; the next fit is unaffected by it.
             let outcome_small: Vec<f64> = y_small
@@ -773,7 +847,7 @@ fn a_tweedie_fit_with_a_scratch_is_bit_identical_to_one_without() {
             let plain_small = tweedie::fit(&small, power, &options, None, None).expect("plain");
             let held_small =
                 tweedie::fit(&small, power, &options, None, Some(&mut scratch)).expect("held");
-            assert_same_bits(&name, &plain_small.beta, &held_small.beta);
+            assert_same_bits(&name, &plain_small.coefficients, &held_small.coefficients);
         }
     }
 }
@@ -803,7 +877,7 @@ fn a_scratch_serves_an_uncentred_fit_after_a_centred_one() {
     let plain = tweedie::fit(&uncentred, 2.0, &gamma_options(), None, None);
     let held = tweedie::fit(&uncentred, 2.0, &gamma_options(), None, Some(&mut scratch));
     match (plain, held) {
-        (Ok(a), Ok(b)) => assert_same_bits("uncentred", &a.beta, &b.beta),
+        (Ok(a), Ok(b)) => assert_same_bits("uncentred", &a.coefficients, &b.coefficients),
         (Err(a), Err(b)) => assert_eq!(a.to_string(), b.to_string()),
         (a, b) => panic!("one fit failed: {:?} {:?}", a.err(), b.err()),
     }

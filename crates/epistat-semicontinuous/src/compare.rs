@@ -1318,7 +1318,7 @@ mod tests {
     use crate::utils::usize_to_f64;
     use epistat_core::InputError;
 
-    const SEED: u64 = 42;
+    const SEED: Seed = Seed(42);
 
     struct Sample {
         x: Mat<f64>,
@@ -1379,7 +1379,7 @@ mod tests {
         // error is orders of magnitude past the outcome scale did not produce a
         // score and must not be ranked as though it merely came last.
         let ranked = build_cv_ranking(&[
-            score(Candidate::LogNormal, 2.7e11, -1.1e13),
+            score(Candidate::Tweedie { power: 1.2 }, 2.7e11, -1.1e13),
             score(Candidate::Tweedie { power: 1.5 }, 276_867.0, -3.71),
             score(Candidate::TwoPartElasticNet, 149_339.0, -0.06),
             score(Candidate::TwoPart, 144_962.0, 0.009),
@@ -1391,22 +1391,23 @@ mod tests {
                 Candidate::TwoPart,
                 Candidate::TwoPartElasticNet,
                 Candidate::Tweedie { power: 1.5 },
-                Candidate::LogNormal
+                Candidate::Tweedie { power: 1.2 }
             ]
         );
     }
 
     #[test]
     fn cv_ties_break_on_label_not_construction_order() {
+        let tweedie = Candidate::Tweedie { power: 1.5 };
         let one = build_cv_ranking(&[
             score(Candidate::TwoPart, 1.0, 0.5),
-            score(Candidate::LogNormal, 1.0, 0.5),
+            score(tweedie, 1.0, 0.5),
         ]);
         let other = build_cv_ranking(&[
-            score(Candidate::LogNormal, 1.0, 0.5),
+            score(tweedie, 1.0, 0.5),
             score(Candidate::TwoPart, 1.0, 0.5),
         ]);
-        assert_eq!(one[0].candidate, Candidate::LogNormal);
+        assert_eq!(one[0].candidate, tweedie);
         assert_eq!(one[0].candidate, other[0].candidate);
     }
 
@@ -1425,6 +1426,39 @@ mod tests {
         assert_ne!(report.information_criteria.len(), 0);
         assert_ne!(report.cv_summary.len(), 0);
         assert!(report.models.two_part.is_some());
+        assert_eq!(report.fold_rule, FoldRule::Rows);
+        // The log-normal model predicts E[y | y > 0] and is scored apart, on
+        // the positive rows, with criteria of its own likelihood.
+        let lognormal = report.lognormal.expect("log-normal scores");
+        assert!(lognormal.cross_validated.is_some());
+        let rows: Vec<usize> = (0..s.y.len()).filter(|&r| s.y[r] > 0.0).collect();
+        let positives: Vec<f64> = rows.iter().map(|&r| s.y[r]).collect();
+        let model = report.models.lognormal.as_ref().expect("log-normal model");
+        let x_pos = select_rows_ref(s.x.as_ref(), &rows);
+        let expected = compute_model_fit_metrics(
+            column(&positives),
+            &model.predict(x_pos.as_ref()).expect("predict").mean_positive,
+            None,
+        )
+        .expect("metrics");
+        assert_eq!(lognormal.in_sample, expected);
+        for rows in [&report.in_sample, &report.cv_summary, &report.cv_ranking] {
+            assert!(rows.iter().all(|row| row.candidate != Candidate::LogNormal));
+        }
+        let ic = report
+            .information_criteria
+            .iter()
+            .find(|row| row.candidate == Candidate::LogNormal)
+            .expect("log-normal criteria");
+        assert_eq!(ic.likelihood, Likelihood::LogNormalPositive);
+        for row in &report.information_criteria {
+            let expected = match row.candidate {
+                Candidate::TwoPart | Candidate::TwoPartElasticNet => Likelihood::TwoPart,
+                Candidate::Tweedie { .. } => Likelihood::TweedieQuasi,
+                Candidate::LogNormal => Likelihood::LogNormalPositive,
+            };
+            assert_eq!(row.likelihood, expected);
+        }
     }
 
     #[test]
@@ -1436,22 +1470,11 @@ mod tests {
         };
         let report = compare(&s.data(), &options).expect("comparison");
         let lognormal = |c: &Candidate| *c == Candidate::LogNormal;
-        assert!(!report.in_sample.iter().any(|row| lognormal(&row.candidate)));
+        assert!(report.lognormal.is_none());
+        assert!(report.models.lognormal.is_none());
         assert!(
             !report
                 .information_criteria
-                .iter()
-                .any(|row| lognormal(&row.candidate))
-        );
-        assert!(
-            !report
-                .cv_summary
-                .iter()
-                .any(|row| lognormal(&row.candidate))
-        );
-        assert!(
-            !report
-                .cv_ranking
                 .iter()
                 .any(|row| lognormal(&row.candidate))
         );
@@ -1525,14 +1548,37 @@ mod tests {
     }
 
     #[test]
-    fn selection_refuses_weights() {
-        let s = sample(20, 10.0, 6, 1.0, 0.2);
-        let w = vec![1.0; 20];
-        let data = s.data().with_weights(&w).expect("weights");
-        assert!(matches!(
-            select(&data, &[1.5]),
-            Err(Error::Unsupported { .. })
-        ));
+    fn selection_recommends_only_tweedie_powers() {
+        let s = sample(60, 10.0, 6, 1.0, 0.2);
+        let result = select(&s.data(), &[1.2, 1.5, 1.8]).expect("selection");
+        for recommended in [result.recommended_by_aic, result.recommended_by_bic] {
+            assert!(matches!(recommended, Some(Candidate::Tweedie { .. })));
+        }
+        let lognormal = result.lognormal_candidate.expect("log-normal fit");
+        assert!(lognormal.metrics.is_some());
+    }
+
+    #[test]
+    fn selection_uses_weights() {
+        let s = sample(40, 10.0, 6, 1.0, 0.2);
+        let w: Vec<f64> = (0..40).map(|i| 1.0 + usize_to_f64(i % 3)).collect();
+        let data = s.data().with_weights(CaseWeights::new(&w).expect("weights")).expect("data");
+        let weighted = select(&data, &[1.5]).expect("weighted selection");
+        let unweighted = select(&s.data(), &[1.5]).expect("selection");
+        assert_eq!(weighted.tweedie_candidates.len(), 1);
+        let expected = tweedie::fit(&data, 1.5, &TweedieOptions::default(), None, None)
+            .expect("weighted fit");
+        assert_eq!(
+            weighted.tweedie_candidates[0].model.coefficients,
+            expected.coefficients
+        );
+        assert_ne!(
+            weighted.tweedie_candidates[0].model.coefficients,
+            unweighted.tweedie_candidates[0].model.coefficients
+        );
+        let lognormal = weighted.lognormal_candidate.expect("log-normal fit");
+        let expected = lognormal::fit(&data, &LogNormalOptions::default()).expect("weighted fit");
+        assert_eq!(lognormal.model.coefficients, expected.coefficients);
     }
 
     #[test]
@@ -1548,7 +1594,7 @@ mod tests {
     #[test]
     fn compute_metrics_refuses_a_dimension_mismatch() {
         let y = [0.0, 1.0];
-        let mu = Mat::from_fn(3, 1, |_, _| 1.0);
+        let mu = [1.0; 3];
         assert!(matches!(
             compute_model_fit_metrics(column(&y), &mu, None),
             Err(Error::Input(InputError::Length { .. }))
@@ -1606,7 +1652,7 @@ mod tests {
         let s = sample(40, 8.0, 6, 1.0, 0.0);
         let options = CrossValidationOptions {
             folds: 4,
-            ..CrossValidationOptions::new(12345)
+            ..CrossValidationOptions::new(Seed(12345))
         };
         let first = cross_validate(&s.data(), &[1.2, 1.5], &options).expect("first run");
         let second = cross_validate(&s.data(), &[1.2, 1.5], &options).expect("second run");
@@ -1635,7 +1681,7 @@ mod tests {
     #[test]
     fn a_constant_outcome_has_no_r2() {
         let y = [3.0, 3.0, 3.0];
-        let mu = Mat::from_fn(3, 1, |i, _| usize_to_f64(i));
+        let mu = [0.0, 1.0, 2.0];
         let metrics = compute_model_fit_metrics(column(&y), &mu, None).unwrap();
         assert_eq!(metrics.r2, None);
         assert!(metrics.rmse > 0.0);
@@ -1669,7 +1715,7 @@ mod tests {
         assert_eq!(mean.r2, Some(-2800.0));
         assert!(!cv_score_is_comparable(&mean));
         let ranked = build_cv_ranking(&[
-            score_with(Candidate::LogNormal, mean.rmse, mean.r2),
+            score_with(Candidate::Tweedie { power: 1.5 }, mean.rmse, mean.r2),
             score(Candidate::TwoPart, 1.0e8, 0.1),
         ]);
         assert_eq!(ranked[0].candidate, Candidate::TwoPart);
@@ -1710,7 +1756,7 @@ mod tests {
         let options = CrossValidationOptions {
             folds,
             include_lognormal: false,
-            ..CrossValidationOptions::new(seed)
+            ..CrossValidationOptions::new(Seed(seed))
         };
         let cv = cross_validate(&s.data(), &[1.5], &options).expect("cv");
         assert_eq!(cv.constant_folds, 1);
@@ -1722,7 +1768,7 @@ mod tests {
             &CompareOptions {
                 folds,
                 include_lognormal: false,
-                ..CompareOptions::new(seed)
+                ..CompareOptions::new(Seed(seed))
             },
         )
         .expect("comparison");
@@ -1749,5 +1795,99 @@ mod tests {
         assert_eq!(metrics.r2, None);
         assert!(metrics.rmse.is_finite());
         assert!(cv_score_is_comparable(&metrics));
+    }
+
+    /// Sixty rows in ten clusters of six, every fourth outcome zero.
+    fn clustered_sample() -> (Sample, Vec<u32>) {
+        let s = sample(60, 10.0, 4, 1.0, 0.2);
+        let clusters = (0..60).map(|i| u32::try_from(i / 6).expect("small")).collect();
+        (s, clusters)
+    }
+
+    #[test]
+    fn folds_of_clustered_data_hold_whole_clusters() {
+        let (s, clusters) = clustered_sample();
+        let data = CostData::builder(s.x.as_ref(), &s.y)
+            .clusters(&clusters)
+            .build()
+            .expect("data");
+        let (rule, sets) = fold_rows(&data, 5, FoldRule::Clusters, SEED).expect("folds");
+        assert_eq!(rule, FoldRule::Clusters);
+        assert_eq!(sets.len(), 5);
+        // Every row is held out once, and a cluster's rows all in one fold,
+        // so no cluster is in both a training and a test set.
+        let mut fold_of_row = vec![None; 60];
+        for (fold, rows) in sets.iter().enumerate() {
+            for &row in rows {
+                assert_eq!(fold_of_row[row], None, "row {row} held out twice");
+                fold_of_row[row] = Some(fold);
+            }
+        }
+        assert!(fold_of_row.iter().all(Option::is_some));
+        for i in 0..60 {
+            for j in 0..60 {
+                if clusters[i] == clusters[j] {
+                    assert_eq!(fold_of_row[i], fold_of_row[j], "cluster {} split", clusters[i]);
+                }
+            }
+        }
+
+        // Folds of rows split the clusters of this sample.
+        let (rule, sets) = fold_rows(&data, 5, FoldRule::Rows, SEED).expect("folds");
+        assert_eq!(rule, FoldRule::Rows);
+        let split = (0..10_u32).any(|cluster| {
+            let folds: BTreeSet<usize> = sets
+                .iter()
+                .enumerate()
+                .filter(|(_, rows)| rows.iter().any(|&i| clusters[i] == cluster))
+                .map(|(fold, _)| fold)
+                .collect();
+            folds.len() > 1
+        });
+        assert!(split);
+    }
+
+    #[test]
+    fn cross_validation_reports_its_fold_rule_and_refuses_more_folds_than_clusters() {
+        let (s, clusters) = clustered_sample();
+        let clustered = CostData::builder(s.x.as_ref(), &s.y)
+            .clusters(&clusters)
+            .build()
+            .expect("data");
+        let options = CrossValidationOptions::new(SEED);
+        let cv = cross_validate(&clustered, &[1.5], &options).expect("cv");
+        assert_eq!(cv.fold_rule, FoldRule::Clusters);
+        assert_eq!(cv.folds_used, 5);
+        let cv = cross_validate(&s.data(), &[1.5], &options).expect("cv");
+        assert_eq!(cv.fold_rule, FoldRule::Rows);
+        let rows = CrossValidationOptions {
+            fold_rule: FoldRule::Rows,
+            ..options
+        };
+        let cv = cross_validate(&clustered, &[1.5], &rows).expect("cv");
+        assert_eq!(cv.fold_rule, FoldRule::Rows);
+
+        // Ten clusters allow ten folds and no more, though there are sixty
+        // rows.
+        let too_many = CrossValidationOptions {
+            folds: 11,
+            ..options
+        };
+        assert!(matches!(
+            cross_validate(&clustered, &[1.5], &too_many),
+            Err(Error::Input(_))
+        ));
+        assert!(cross_validate(&clustered.without_clusters(), &[1.5], &too_many).is_ok());
+        let as_many = CrossValidationOptions {
+            folds: 10,
+            include_lognormal: false,
+            ..options
+        };
+        assert_eq!(
+            cross_validate(&clustered, &[1.5], &as_many)
+                .expect("cv")
+                .folds_used,
+            10
+        );
     }
 }

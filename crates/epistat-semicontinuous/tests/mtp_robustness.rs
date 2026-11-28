@@ -1,4 +1,5 @@
 use epistat_linalg::Mat;
+use epistat_core::Seed;
 use epistat_rng::Stream;
 use epistat_semicontinuous::LongitudinalData;
 use epistat_semicontinuous::mtp::{
@@ -143,7 +144,7 @@ fn mtp_recovers_key_parameters_on_synthetic_data() {
             adaptation_interval: 40,
             ..MtpProposalTuning::default()
         },
-        ..MtpOptions::new(42)
+        ..MtpOptions::new(Seed(42))
     });
 
     let model = mtp::fit(&input.data(), &options).expect("fit should run");
@@ -176,7 +177,7 @@ fn mtp_recovers_key_parameters_on_synthetic_data() {
 #[test]
 fn mtp_split_rhat_below_threshold_on_synthetic_data() {
     let input = simulate_mtp_panel(120, 4, [-0.35, 0.8], [1.2, 0.55], 0.45, 42);
-    let model = mtp::fit(&input.data(), &MtpOptions::new(42)).expect("fit should run");
+    let model = mtp::fit(&input.data(), &MtpOptions::new(Seed(42))).expect("fit should run");
     let convergence = model.convergence.expect("convergence");
     for (name, rhat) in [
         ("alpha[1]", convergence.alpha_split_rhat[1]),
@@ -197,7 +198,7 @@ fn mtp_stays_stable_under_extreme_zero_inflation() {
     let options = one_chain(MtpOptions {
         iterations: 320,
         burn_in: 80,
-        ..MtpOptions::new(42)
+        ..MtpOptions::new(Seed(42))
     });
 
     let model = mtp::fit(&input.data(), &options).expect("fit should run");
@@ -223,7 +224,7 @@ fn mtp_stays_stable_under_highly_skewed_positive_tail() {
             log_omega_draw_scale: 0.02,
             ..MtpProposalTuning::default()
         },
-        ..MtpOptions::new(42)
+        ..MtpOptions::new(Seed(42))
     });
 
     let model = mtp::fit(&input.data(), &options).expect("fit should run");

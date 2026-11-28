@@ -5,12 +5,12 @@
 //! These tests compare two paths of the same binary, so unlike `fit_golden` they hold on
 //! every target.
 
-use epistat_core::InputError;
+use epistat_core::{CaseWeights, Covariance, InputError};
 use epistat_linalg::Mat;
 use epistat_semicontinuous::lognormal::LogNormalOptions;
 use epistat_semicontinuous::tweedie::{TweedieModel, TweedieOptions};
 use epistat_semicontinuous::two_part::{TwoPartModel, TwoPartOptions, TwoPartWarmStart};
-use epistat_semicontinuous::{CostData, Error, Model, lognormal, tweedie, two_part};
+use epistat_semicontinuous::{CostData, Error, Model, Variance, lognormal, tweedie, two_part};
 
 const N_COLS: usize = 8;
 
@@ -61,40 +61,54 @@ fn replicate_weights(n: usize, replicate: u64) -> Vec<f64> {
     (0..n).map(|_| 0.2 + 2.0 * stream.uniform()).collect()
 }
 
-fn same(a: &Mat<f64>, b: &Mat<f64>) {
-    assert_eq!((a.nrows(), a.ncols()), (b.nrows(), b.ncols()));
-    for j in 0..a.ncols() {
-        for i in 0..a.nrows() {
-            assert_eq!(a[(i, j)].to_bits(), b[(i, j)].to_bits(), "entry ({i}, {j})");
-        }
+/// Checked weights of a column known to be valid.
+fn case_weights(weights: &[f64]) -> CaseWeights<'_> {
+    CaseWeights::new(weights).expect("weights")
+}
+
+fn same(a: &[f64], b: &[f64]) {
+    assert_eq!(a.len(), b.len());
+    for (i, (a, b)) in a.iter().zip(b).enumerate() {
+        assert_eq!(a.to_bits(), b.to_bits(), "entry {i}");
     }
 }
 
-fn same_opt(a: Option<&Mat<f64>>, b: Option<&Mat<f64>>) {
+fn same_opt(a: &[Option<f64>], b: &[Option<f64>]) {
+    assert_eq!(a.len(), b.len());
+    for (i, (a, b)) in a.iter().zip(b).enumerate() {
+        assert_eq!(a.map(f64::to_bits), b.map(f64::to_bits), "entry {i}");
+    }
+}
+
+fn same_cov(a: Option<&Covariance>, b: Option<&Covariance>) {
     match (a, b) {
-        (Some(a), Some(b)) => same(a, b),
+        (Some(a), Some(b)) => same_opt(a.as_slice(), b.as_slice()),
         (None, None) => {}
-        _ => panic!("one side has the matrix and the other does not"),
+        _ => panic!("one side has the covariance and the other does not"),
     }
 }
 
 fn same_two_part(a: &TwoPartModel, b: &TwoPartModel) {
-    same(&a.beta_logit, &b.beta_logit);
-    same(&a.beta_gamma, &b.beta_gamma);
-    same_opt(a.report.se_logit.as_ref(), b.report.se_logit.as_ref());
-    same_opt(a.report.se_gamma.as_ref(), b.report.se_gamma.as_ref());
-    same_opt(a.report.cov_logit.as_ref(), b.report.cov_logit.as_ref());
-    same_opt(a.report.cov_gamma.as_ref(), b.report.cov_gamma.as_ref());
-    assert_eq!(a.report.iterations_logit, b.report.iterations_logit);
-    assert_eq!(a.report.iterations_gamma, b.report.iterations_gamma);
+    for (a, b) in [(&a.logit, &b.logit), (&a.gamma, &b.gamma)] {
+        same(&a.coefficients, &b.coefficients);
+        same_opt(&a.se, &b.se);
+        same_cov(a.covariance.as_ref(), b.covariance.as_ref());
+        assert_eq!(a.meta.iterations, b.meta.iterations);
+        assert_eq!(
+            a.dispersion.map(f64::to_bits),
+            b.dispersion.map(f64::to_bits)
+        );
+    }
+    assert_eq!(a.report.variance, b.report.variance);
     assert_eq!(a.report.cluster_count, b.report.cluster_count);
 }
 
 fn same_tweedie(a: &TweedieModel, b: &TweedieModel) {
-    same(&a.beta, &b.beta);
-    same_opt(a.report.se.as_ref(), b.report.se.as_ref());
-    same_opt(a.report.cov.as_ref(), b.report.cov.as_ref());
+    same(&a.coefficients, &b.coefficients);
+    same_opt(&a.se, &b.se);
+    same_cov(a.covariance.as_ref(), b.covariance.as_ref());
     assert_eq!(a.report.meta.iterations, b.report.meta.iterations);
+    assert_eq!(a.report.variance, b.report.variance);
     assert_eq!(a.report.cluster_count, b.report.cluster_count);
 }
 
@@ -117,7 +131,7 @@ fn views<'a>(
     let builder = |weights: Option<&'a [f64]>| {
         let mut builder = CostData::builder(x.as_ref(), y);
         if let Some(weights) = weights {
-            builder = builder.weights(weights);
+            builder = builder.weights(case_weights(weights));
         }
         if let Some(clusters) = clusters {
             builder = builder.clusters(clusters);
@@ -125,8 +139,12 @@ fn views<'a>(
         builder.build().expect("data")
     };
     let built = builder(Some(weights));
-    let derived = builder(None).with_weights(weights).expect("weights");
-    let reweighted = builder(Some(other)).with_weights(weights).expect("weights");
+    let derived = builder(None)
+        .with_weights(case_weights(weights))
+        .expect("weights");
+    let reweighted = builder(Some(other))
+        .with_weights(case_weights(weights))
+        .expect("weights");
     [built, derived, reweighted]
 }
 
@@ -136,30 +154,25 @@ fn two_part_reweighted_view_matches_built_view() {
     let (x, y) = sample(n, 11);
     let cluster_ids = clusters(n);
     let options = [
-        TwoPartOptions::default(),
-        TwoPartOptions {
-            robust_se: true,
-            ..TwoPartOptions::default()
-        },
-        TwoPartOptions {
-            compute_covariance: false,
-            ..TwoPartOptions::default()
-        },
-    ];
+        Variance::ModelBased,
+        Variance::Sandwich,
+        Variance::None,
+    ]
+    .map(|variance| TwoPartOptions {
+        variance,
+        ..TwoPartOptions::default()
+    });
     let full_weights = replicate_weights(n, 0);
     let full = two_part::fit(
         &CostData::builder(x.as_ref(), &y)
-            .weights(&full_weights)
+            .weights(case_weights(&full_weights))
             .build()
             .expect("data"),
         &TwoPartOptions::default(),
         None,
     )
     .expect("full-sample fit");
-    let warm = TwoPartWarmStart {
-        beta_logit: full.beta_logit.clone(),
-        beta_gamma: full.beta_gamma.clone(),
-    };
+    let warm = TwoPartWarmStart::from(&full);
 
     for options in options {
         for replicate in 1..=3_u64 {
@@ -186,7 +199,7 @@ fn two_part_view_without_weights_matches_unweighted_view() {
     let weights = replicate_weights(n, 1);
     let plain = CostData::builder(x.as_ref(), &y).build().expect("data");
     let weighted = CostData::builder(x.as_ref(), &y)
-        .weights(&weights)
+        .weights(case_weights(&weights))
         .build()
         .expect("data");
     let options = TwoPartOptions::default();
@@ -203,7 +216,7 @@ fn tweedie_reweighted_view_matches_built_view() {
     let full_weights = replicate_weights(n, 0);
     let full = tweedie::fit(
         &CostData::builder(x.as_ref(), &y)
-            .weights(&full_weights)
+            .weights(case_weights(&full_weights))
             .build()
             .expect("data"),
         2.0,
@@ -216,7 +229,7 @@ fn tweedie_reweighted_view_matches_built_view() {
         for options in [
             TweedieOptions::default(),
             TweedieOptions {
-                robust_se: true,
+                variance: Variance::Sandwich,
                 ..TweedieOptions::default()
             },
         ] {
@@ -226,7 +239,7 @@ fn tweedie_reweighted_view_matches_built_view() {
                     let clusters = with_clusters.then_some(cluster_ids.as_slice());
                     let [built, derived, reweighted] =
                         views(&x, &y, &weights, &full_weights, clusters);
-                    for warm in [None, Some(&full.beta)] {
+                    for warm in [None, Some(full.coefficients.as_slice())] {
                         let a = tweedie::fit(&built, power, &options, warm, None).expect("built");
                         let b =
                             tweedie::fit(&derived, power, &options, warm, None).expect("derived");
@@ -257,12 +270,14 @@ fn row_subset_gathered_once_matches_rebuilt_subset() {
         let all = replicate_weights(n, replicate);
         let weights: Vec<f64> = rows.iter().map(|&i| all[i]).collect();
         let rebuilt = CostData::builder(x_subset.as_ref(), &y_subset)
-            .weights(&weights)
+            .weights(case_weights(&weights))
             .build()
             .expect("data");
         let a = two_part::fit(&rebuilt, &TwoPartOptions::default(), None).expect("rebuilt");
         let b = two_part::fit(
-            &design.with_weights(&weights).expect("weights"),
+            &design
+                .with_weights(case_weights(&weights))
+                .expect("weights"),
             &TwoPartOptions::default(),
             None,
         )
@@ -277,25 +292,35 @@ fn with_weights_checks_the_weights_and_build_the_clusters() {
     let (x, y) = sample(n, 15);
     let data = CostData::builder(x.as_ref(), &y).build().expect("data");
     let mut weights = replicate_weights(n, 1);
+    // A weight of 0 takes its row out of the fit and is accepted.
     weights[3] = 0.0;
+    let zero = data
+        .with_weights(case_weights(&weights))
+        .expect("a zero weight");
+    assert_eq!(zero.weights().map(|w| w.n_positive()), Some(n - 1));
+    // The weights refuse a negative or non-finite value when they are built.
+    weights[3] = -1.0;
     assert!(matches!(
-        data.with_weights(&weights),
-        Err(Error::Input(InputError::Domain {
+        CaseWeights::new(&weights),
+        Err(InputError::Domain {
             what: "weights",
+            row: Some(3),
             ..
-        }))
+        })
     ));
     weights[3] = f64::NAN;
     assert!(matches!(
-        data.with_weights(&weights),
-        Err(Error::Input(InputError::NotFinite {
+        CaseWeights::new(&weights),
+        Err(InputError::NotFinite {
             what: "weights",
             row: 3,
             column: None
-        }))
+        })
     ));
+    // The view refuses weights of another length.
+    weights[3] = 1.0;
     assert!(matches!(
-        data.with_weights(&weights[..n - 1]),
+        data.with_weights(case_weights(&weights[..n - 1])),
         Err(Error::Input(InputError::Length {
             what: "weights",
             ..
@@ -319,15 +344,21 @@ fn build_refuses_each_kind_of_bad_column() {
     let mut nan_x = x.clone();
     nan_x[(4, 3)] = f64::NAN;
     let weights: Vec<f64> = (0..50).map(|i| if i == 7 { 0.0 } else { 1.0 }).collect();
+    let long: Vec<f64> = vec![1.0; 51];
     let short = vec![1_u32; 49];
     let cases = [
         CostData::builder(x.as_ref(), &y).build(),
         CostData::builder(x.as_ref(), &bad_y).build(),
         CostData::builder(nan_x.as_ref(), &y).build(),
-        CostData::builder(x.as_ref(), &y).weights(&weights).build(),
+        CostData::builder(x.as_ref(), &y)
+            .weights(case_weights(&weights))
+            .build(),
+        CostData::builder(x.as_ref(), &y)
+            .weights(case_weights(&long))
+            .build(),
         CostData::builder(x.as_ref(), &y).clusters(&short).build(),
     ];
-    let expected: [Result<(), InputError>; 5] = [
+    let expected: [Result<(), InputError>; 6] = [
         Ok(()),
         Err(InputError::Domain {
             what: "y",
@@ -340,11 +371,12 @@ fn build_refuses_each_kind_of_bad_column() {
             row: 4,
             column: None,
         }),
-        Err(InputError::Domain {
+        // A weight of 0 is allowed: its row leaves the fit.
+        Ok(()),
+        Err(InputError::Length {
             what: "weights",
-            value: 0.0,
-            domain: "(0, inf)",
-            row: None,
+            expected: 50,
+            found: 51,
         }),
         Err(InputError::Length {
             what: "clusters",
@@ -374,17 +406,17 @@ fn weights_with_zeros(n: usize) -> Vec<f64> {
 
 /// The mean as the downstream takes it: a plain sum over the rows, or the sum of the
 /// weighted rows with the nonzero weights, in row order.
-fn reference_mean(values: &Mat<f64>, weights: Option<&[f64]>) -> f64 {
+fn reference_mean(values: &[f64], weights: Option<&[f64]>) -> f64 {
     match weights {
         None => {
-            let sum: f64 = (0..values.nrows()).map(|i| values[(i, 0)]).sum();
-            sum / values.nrows() as f64
+            let sum: f64 = values.iter().sum();
+            sum / values.len() as f64
         }
         Some(weights) => {
-            let (sum, total) = (0..values.nrows())
+            let (sum, total) = (0..values.len())
                 .filter(|&i| weights[i] != 0.0)
                 .fold((0.0, 0.0), |(sum, total), i| {
-                    (sum + weights[i] * values[(i, 0)], total + weights[i])
+                    (sum + weights[i] * values[i], total + weights[i])
                 });
             sum / total
         }
@@ -410,7 +442,7 @@ fn predict_mean_matches_the_mean_of_the_full_prediction() {
             assert_eq!(
                 two_part.predict_mean(x, weights).expect("mean").to_bits(),
                 reference_mean(
-                    &two_part.predict(x).expect("prediction").expected_outcome,
+                    &two_part.predict(x).expect("prediction").mean,
                     weights
                 )
                 .to_bits(),
@@ -423,7 +455,11 @@ fn predict_mean_matches_the_mean_of_the_full_prediction() {
             );
             assert_eq!(
                 lognormal.predict_mean(x, weights).expect("mean").to_bits(),
-                reference_mean(&lognormal.predict(x).expect("prediction").mean, weights).to_bits(),
+                reference_mean(
+                    &lognormal.predict(x).expect("prediction").mean_positive,
+                    weights
+                )
+                .to_bits(),
                 "log-normal, n = {n}"
             );
         }

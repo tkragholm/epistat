@@ -1053,6 +1053,26 @@ fn stabilized_sandwich(information: &Mat<f64>, meat: &Mat<f64>) -> Result<Mat<f6
 mod tests {
     use super::*;
     use crate::utils::usize_to_f64;
+    use epistat_core::CaseWeights;
+
+    /// The fit of `x` and the outcome column `y` with the public entry
+    /// point, clustered when `clusters` is given.
+    fn fit_tweedie(
+        x: MatRef<'_, f64>,
+        y: MatRef<'_, f64>,
+        clusters: Option<&[u32]>,
+        power: f64,
+        options: TweedieOptions,
+    ) -> Result<TweedieModel, Error> {
+        let y: Vec<f64> = (0..y.nrows()).map(|i| y[(i, 0)]).collect();
+        let builder = CostData::builder(x, &y);
+        let data = match clusters {
+            Some(clusters) => builder.clusters(clusters),
+            None => builder,
+        }
+        .build()?;
+        fit(&data, power, &options, None, None)
+    }
 
     #[test]
     fn fit_tweedie_runs() {
@@ -1072,14 +1092,14 @@ mod tests {
         let model =
             fit_tweedie(x.as_ref(), y.as_ref(), None, 1.5, TweedieOptions::default()).expect("fit");
         let pred = model.predict(x.as_ref()).expect("predict");
-        assert_eq!(pred.mean.nrows(), n);
-        let dev = deviance(y.as_ref(), &pred.mean, 1.5);
+        assert_eq!(pred.mean.len(), n);
+        let dev = deviance(y.as_ref(), &column_mat(&pred.mean), 1.5);
         assert!(dev.is_finite());
     }
 
-    // Mean of a single-column prediction matrix (the g-computation counterfactual mean).
-    fn mean_of(pred: &Mat<f64>) -> f64 {
-        (0..pred.nrows()).map(|i| pred[(i, 0)]).sum::<f64>() / pred.nrows() as f64
+    // Mean of the predictions (the g-computation counterfactual mean).
+    fn mean_of(pred: &[f64]) -> f64 {
+        pred.iter().sum::<f64>() / pred.len() as f64
     }
 
     // Set the exposure column (index 1) to a constant `value` for the whole design — the
@@ -1132,7 +1152,7 @@ mod tests {
                 .mean,
         );
         let ratio = mean_exposed / mean_unexposed;
-        let expected = model.beta[(1, 0)].exp();
+        let expected = model.coefficients[1].exp();
 
         assert!(
             (ratio - expected).abs() / expected < 1e-6,
@@ -1167,7 +1187,7 @@ mod tests {
         let model =
             fit_tweedie(x.as_ref(), y.as_ref(), None, 2.0, TweedieOptions::default()).expect("fit");
 
-        let max_abs_eta = max_abs_linear_predictor(x.as_ref(), &model.beta);
+        let max_abs_eta = max_abs_linear_predictor(x.as_ref(), &column_mat(&model.coefficients));
         assert!(
             max_abs_eta < LINEAR_PREDICTOR_CLIP,
             "linear predictor reached the clamp: max|eta| = {max_abs_eta}"
@@ -1216,17 +1236,16 @@ mod tests {
             .map(|i| u32::try_from(i / 4).expect("small"))
             .collect();
         let options = TweedieOptions {
-            robust_se: true,
+            variance: Variance::Sandwich,
             ..TweedieOptions::default()
         };
         let model =
             fit_tweedie(x.as_ref(), y.as_ref(), Some(&clusters), 1.5, options).expect("fit");
         let pred = model.predict(x.as_ref()).expect("predict");
-        assert_eq!(pred.mean.nrows(), n);
-        let report = model.report;
-        assert!(report.robust);
-        assert!(report.clustered);
-        assert!(report.se.is_some());
+        assert_eq!(pred.mean.len(), n);
+        assert_eq!(model.report.variance, Some(VarianceKind::Robust));
+        assert_eq!(model.report.cluster_count, Some(10));
+        assert!(model.se.iter().all(Option::is_some));
     }
 
     #[test]
@@ -1252,10 +1271,10 @@ mod tests {
             .collect();
         let slope_se = |scale: f64| {
             let options = TweedieOptions {
-                robust_se: true,
+                variance: Variance::Sandwich,
                 ..TweedieOptions::default()
             };
-            let report = fit_tweedie(
+            fit_tweedie(
                 x.as_ref(),
                 make_y(scale).as_ref(),
                 Some(&clusters),
@@ -1263,8 +1282,8 @@ mod tests {
                 options,
             )
             .expect("fit")
-            .report;
-            report.se.expect("se")[(1, 0)]
+            .se[1]
+            .expect("se")
         };
         let se_base = slope_se(1.0);
         let se_scaled = slope_se(1000.0);
@@ -1326,14 +1345,14 @@ mod tests {
 
         // Intercept -> ln(10); slope -> ln(30) - ln(10) = ln(3).
         assert!(
-            (model.beta[(0, 0)] - 10f64.ln()).abs() < 1e-4,
+            (model.coefficients[0] - 10f64.ln()).abs() < 1e-4,
             "intercept = {}",
-            model.beta[(0, 0)]
+            model.coefficients[0]
         );
         assert!(
-            (model.beta[(1, 0)] - 3f64.ln()).abs() < 1e-4,
+            (model.coefficients[1] - 3f64.ln()).abs() < 1e-4,
             "slope = {}",
-            model.beta[(1, 0)]
+            model.coefficients[1]
         );
         assert!(model.report.meta.converged);
     }
@@ -1356,15 +1375,15 @@ mod tests {
             .collect();
         let w: Vec<f64> = (0..n).map(|i| if i % 2 == 0 { 3.0 } else { 1.0 }).collect();
         let data = CostData::builder(x.as_ref(), &y)
-            .weights(&w)
+            .weights(CaseWeights::new(&w).expect("weights"))
             .build()
             .expect("data");
 
         let model =
             fit(&data, 2.0, &TweedieOptions::default(), None, None).expect("weighted power-2 fit");
         assert_eq!(model.deviance(&data).map(f64::is_finite), Ok(true));
-        assert!((model.beta[(0, 0)] - 5f64.ln()).abs() < 1e-4);
-        assert!((model.beta[(1, 0)] - (50f64.ln() - 5f64.ln())).abs() < 1e-4);
+        assert!((model.coefficients[0] - 5f64.ln()).abs() < 1e-4);
+        assert!((model.coefficients[1] - (50f64.ln() - 5f64.ln())).abs() < 1e-4);
     }
 
     #[test]
@@ -1382,24 +1401,111 @@ mod tests {
         let cold = fit(&data, 2.0, &options, None, None).expect("cold fit");
         let mut scratch = TweedieScratch::default();
         let warm =
-            fit(&data, 2.0, &options, Some(&cold.beta), Some(&mut scratch)).expect("warm fit");
+            fit(&data, 2.0, &options, Some(&cold.coefficients), Some(&mut scratch)).expect("warm fit");
         let (cold_report, warm_report) = (&cold.report, &warm.report);
 
         // Same optimum to the IRLS convergence tolerance. (IRLS stops on a small STEP,
         // so cold and warm both land within tolerance of the unique MLE but not at the
         // identical point — they agree to ~the step tolerance, far below any reported
         // precision, which is exactly the warm-start guarantee.)
-        for i in 0..cold.beta.nrows() {
+        for (i, (c, w)) in cold.coefficients.iter().zip(&warm.coefficients).enumerate() {
             assert!(
-                (cold.beta[(i, 0)] - warm.beta[(i, 0)]).abs() < 1e-3,
-                "coefficient {i} diverged: cold={} warm={}",
-                cold.beta[(i, 0)],
-                warm.beta[(i, 0)]
+                (c - w).abs() < 1e-3,
+                "coefficient {i} diverged: cold={c} warm={w}"
             );
         }
         // Starting at the converged solution converges essentially immediately, and
         // never in more iterations than the cold start.
         assert!(warm_report.meta.iterations <= cold_report.meta.iterations);
         assert!(warm_report.meta.iterations <= 2);
+    }
+
+    fn tidy_sample() -> (Mat<f64>, Vec<f64>) {
+        let n = 60;
+        let x = Mat::from_fn(
+            n,
+            2,
+            |i, j| if j == 0 { 1.0 } else { usize_to_f64(i) / 20.0 },
+        );
+        let y = (0..n)
+            .map(|i| {
+                if i % 5 == 0 {
+                    0.0
+                } else {
+                    0.2f64.mul_add(usize_to_f64(i), 2.0) * [0.7, 1.0, 1.3][i % 3]
+                }
+            })
+            .collect();
+        (x, y)
+    }
+
+    #[test]
+    fn the_table_carries_the_coefficients_and_standard_errors() {
+        let (x, y) = tidy_sample();
+        let data = CostData::builder(x.as_ref(), &y).build().expect("data");
+        let model = fit(&data, 1.5, &TweedieOptions::default(), None, None).expect("fit");
+        assert_eq!(model.report.variance, Some(VarianceKind::ModelBased));
+        assert_eq!(model.default_variance(), VarianceKind::ModelBased);
+        let level = Level::alpha(0.05).expect("level");
+        let table = model
+            .coefficients(level, VarianceKind::ModelBased)
+            .expect("table");
+        assert_eq!(table.effect(), EffectScale::LogMeanRatio);
+        assert_eq!(table.len(), model.coefficients.len());
+        for (j, term) in table.terms().iter().enumerate() {
+            let estimate = term.estimate.expect("estimated");
+            assert_eq!(estimate.estimate, model.coefficients[j]);
+            assert_eq!(estimate.se, model.se[j]);
+            assert!(estimate.se.is_some());
+        }
+        assert_eq!(
+            model
+                .coefficients(level, VarianceKind::Robust)
+                .expect_err("no sandwich"),
+            Error::NoCovariance {
+                asked: VarianceKind::Robust
+            }
+        );
+
+        let without = fit(
+            &data,
+            1.5,
+            &TweedieOptions {
+                variance: Variance::None,
+                ..TweedieOptions::default()
+            },
+            None,
+            None,
+        )
+        .expect("fit");
+        assert!(without.covariance.is_none());
+        assert!(without.se.iter().all(Option::is_none));
+        assert_eq!(without.coefficients, model.coefficients);
+        assert_eq!(
+            without.tidy().expect_err("no covariance"),
+            Error::NoCovariance {
+                asked: VarianceKind::ModelBased
+            }
+        );
+    }
+
+    #[test]
+    fn a_model_based_covariance_with_sampling_weights_is_refused() {
+        let (x, y) = tidy_sample();
+        let w: Vec<f64> = (0..y.len()).map(|i| 1.0 + usize_to_f64(i % 4)).collect();
+        let data = CostData::builder(x.as_ref(), &y)
+            .weights(CaseWeights::sampling(&w).expect("weights"))
+            .build()
+            .expect("data");
+        let model_based = TweedieOptions {
+            variance: Variance::ModelBased,
+            ..TweedieOptions::default()
+        };
+        assert!(matches!(
+            fit(&data, 1.5, &model_based, None, None),
+            Err(Error::Unsupported { .. })
+        ));
+        let auto = fit(&data, 1.5, &TweedieOptions::default(), None, None).expect("auto");
+        assert_eq!(auto.report.variance, Some(VarianceKind::Robust));
     }
 }

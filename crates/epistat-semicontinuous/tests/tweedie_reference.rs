@@ -2,12 +2,14 @@
 //! link.power = 0))` at powers 1.2, 1.5 and 1.8, on a design with exact zeros, with and
 //! without prior weights. The fixture comes from `tests/r/tweedie_reference.R`.
 //!
-//! The crate reports no model-based covariance. Its standard errors are the sandwich
-//! covariance with bread `X'diag(w mu^(2-p))X` and meat from the quasi-score
-//! `w (y - mu) mu^(1-p) x`, so the reference standard errors are that same sandwich
-//! computed in R from the glm fit's fitted means.
+//! The standard errors checked are the sandwich covariance with bread
+//! `X'diag(w mu^(2-p))X` and meat from the quasi-score `w (y - mu) mu^(1-p) x`, so the
+//! reference standard errors are that same sandwich computed in R from the glm fit's
+//! fitted means.
 
+use epistat_core::CaseWeights;
 use epistat_linalg::Mat;
+use epistat_semicontinuous::Variance;
 use epistat_semicontinuous::CostData;
 use epistat_semicontinuous::tweedie::{self, TweedieOptions};
 use serde::Deserialize;
@@ -58,20 +60,19 @@ fn tweedie_matches_statmod_glm() {
         assert!(case.converged);
         let mut input = CostData::builder(x.as_ref(), &fixture.y);
         if case.weighted {
-            input = input.weights(&fixture.weights);
+            input = input.weights(CaseWeights::new(&fixture.weights).expect("weights"));
         }
         let input = input.build().expect("data");
         let options = TweedieOptions {
             max_iterations: 200,
             tolerance: 1e-16,
-            robust_se: true,
+            variance: Variance::Sandwich,
             ..TweedieOptions::default()
         };
         let model = tweedie::fit(&input, case.power, &options, None, None).expect("tweedie fit");
-        let se = model.report.se.as_ref().expect("robust standard errors");
         for j in 0..3 {
-            let beta_dev = rel(model.beta[(j, 0)], case.beta[j]);
-            let se_dev = rel(se[(j, 0)], case.se_robust[j]);
+            let beta_dev = rel(model.coefficients[j], case.beta[j]);
+            let se_dev = rel(model.se[j].expect("robust standard error"), case.se_robust[j]);
             worst_beta = worst_beta.max(beta_dev);
             worst_se = worst_se.max(se_dev);
         }

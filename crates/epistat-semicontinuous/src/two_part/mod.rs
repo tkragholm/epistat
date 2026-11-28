@@ -765,12 +765,35 @@ mod tests {
     use super::*;
     use crate::utils::usize_to_f64;
     use approx::assert_relative_eq;
-    use epistat_core::{Bootstrap, Seed};
+    use epistat_core::{Bootstrap, CaseWeights, Matrix, Seed};
     use rstest::rstest;
 
     fn fitted(x: &Mat<f64>, y: &[f64], options: TwoPartOptions) -> TwoPartModel {
         let data = CostData::builder(x.as_ref(), y).build().expect("data");
         fit(&data, &options, None).expect("fit")
+    }
+
+    fn intercept_only() -> TwoPartOptions {
+        TwoPartOptions {
+            separation: Separation::InterceptOnly,
+            ..TwoPartOptions::default()
+        }
+    }
+
+    /// A design of an intercept and `i / scale`, with every third outcome
+    /// zero and the others rising with `i`.
+    fn linear_sample(n: usize, scale: f64) -> (Mat<f64>, Vec<f64>) {
+        let x = Mat::from_fn(n, 2, |i, j| if j == 0 { 1.0 } else { usize_to_f64(i) / scale });
+        let y = (0..n)
+            .map(|i| {
+                if i % 3 == 0 {
+                    0.0
+                } else {
+                    1.0 + usize_to_f64(i)
+                }
+            })
+            .collect();
+        (x, y)
     }
 
     #[test]
@@ -792,18 +815,18 @@ mod tests {
         }
 
         let model = fitted(&x, &y, TwoPartOptions::default());
-        let report = &model.report;
-        assert!(report.iterations_logit > 0);
-        assert!(report.iterations_gamma > 0);
-        assert!(report.logit_intercept_only.is_none());
-        assert!(report.se_logit.is_some());
-        assert!(report.se_gamma.is_some());
+        assert!(model.logit.meta.iterations > 0);
+        assert!(model.gamma.meta.iterations > 0);
+        assert!(model.report.logit_intercept_only.is_none());
+        assert_eq!(model.report.variance, Some(VarianceKind::ModelBased));
+        assert!(model.logit.se.iter().all(Option::is_some));
+        assert!(model.gamma.se.iter().all(Option::is_some));
 
         let prediction = model.predict(x.as_ref()).expect("predict");
-        assert_eq!(prediction.expected_outcome.nrows(), n);
+        assert_eq!(prediction.mean.len(), n);
         assert_relative_eq!(
-            prediction.expected_outcome[(0, 0)],
-            prediction.prob_positive[(0, 0)] * prediction.mean_positive[(0, 0)]
+            prediction.mean[0],
+            prediction.prob_positive[0] * prediction.mean_positive[0]
         );
         assert!(
             model
@@ -814,9 +837,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::ridge(Regularization::Ridge { lambda: 0.1, exclude_intercept: true }, true)]
-    #[case::elastic_net(Regularization::ElasticNet { lambda: 0.1, alpha: 0.5, exclude_intercept: true }, false)]
-    fn test_two_part_regularization_options(#[case] reg: Regularization, #[case] robust_se: bool) {
+    #[case::ridge(Regularization::Ridge { lambda: 0.1, exclude_intercept: true }, Variance::Sandwich)]
+    #[case::elastic_net(Regularization::ElasticNet { lambda: 0.1, alpha: 0.5, exclude_intercept: true }, Variance::Auto)]
+    fn test_two_part_regularization_options(
+        #[case] reg: Regularization,
+        #[case] variance: Variance,
+    ) {
         let n = 50;
         let x = Mat::from_fn(
             n,
@@ -834,15 +860,35 @@ mod tests {
             .collect();
         let options = TwoPartOptions {
             regularization: reg,
-            robust_se,
+            variance,
             ..TwoPartOptions::default()
         };
-        let report = fitted(&x, &y, options).report;
-        assert!(report.iterations_logit > 0 || report.iterations_gamma > 0);
-        if robust_se {
-            assert!(report.se_logit.is_some());
-            assert!(report.se_gamma.is_some());
+        let model = fitted(&x, &y, options);
+        assert!(model.logit.meta.iterations > 0 || model.gamma.meta.iterations > 0);
+        if variance == Variance::Sandwich {
+            assert_eq!(model.report.variance, Some(VarianceKind::Robust));
+            assert!(model.logit.se.iter().all(Option::is_some));
+            assert!(model.gamma.se.iter().all(Option::is_some));
         }
+    }
+
+    #[rstest]
+    #[case::alpha_above_one(Regularization::ElasticNet { lambda: 0.1, alpha: 1.5, exclude_intercept: true })]
+    #[case::alpha_below_zero(Regularization::ElasticNet { lambda: 0.1, alpha: -0.1, exclude_intercept: true })]
+    #[case::elastic_net_negative_lambda(Regularization::ElasticNet { lambda: -0.1, alpha: 0.5, exclude_intercept: true })]
+    #[case::ridge_negative_lambda(Regularization::Ridge { lambda: -1.0, exclude_intercept: true })]
+    #[case::ridge_infinite_lambda(Regularization::Ridge { lambda: f64::INFINITY, exclude_intercept: true })]
+    fn a_penalty_outside_its_domain_is_refused(#[case] reg: Regularization) {
+        let (x, y) = linear_sample(30, 10.0);
+        let data = CostData::builder(x.as_ref(), &y).build().expect("data");
+        let options = TwoPartOptions {
+            regularization: reg,
+            ..TwoPartOptions::default()
+        };
+        assert!(matches!(
+            fit(&data, &options, None),
+            Err(Error::Input(_))
+        ));
     }
 
     #[test]
@@ -854,17 +900,34 @@ mod tests {
             |i, j| if j == 0 { 1.0 } else { usize_to_f64(i) / 10.0 },
         );
         let y: Vec<f64> = (0..n).map(|i| 1.0 + usize_to_f64(i) / 100.0).collect();
-        let report = fitted(&x, &y, TwoPartOptions::default()).report;
-        assert_eq!(report.iterations_logit, 0);
+        let model = fitted(&x, &y, intercept_only());
+        assert_eq!(model.logit.meta.iterations, 0);
         assert_eq!(
-            report.logit_intercept_only,
+            model.report.logit_intercept_only,
             Some(InterceptOnly::AllPositive)
         );
-        assert!(report.iterations_gamma > 0);
+        assert!(model.gamma.meta.iterations > 0);
     }
 
     #[test]
-    fn a_separable_logit_is_reported() {
+    fn all_positive_outcomes_are_refused_by_default() {
+        let n = 40;
+        let x = Mat::from_fn(
+            n,
+            2,
+            |i, j| if j == 0 { 1.0 } else { usize_to_f64(i) / 10.0 },
+        );
+        let y: Vec<f64> = (0..n).map(|i| 1.0 + usize_to_f64(i) / 100.0).collect();
+        let data = CostData::builder(x.as_ref(), &y).build().expect("data");
+        assert_eq!(
+            fit(&data, &TwoPartOptions::default(), None).expect_err("constant indicator"),
+            Error::Separation {
+                reason: InterceptOnly::AllPositive
+            }
+        );
+    }
+
+    fn separable_sample() -> (Mat<f64>, Vec<f64>) {
         let n = 30;
         let x = Mat::from_fn(n, 3, |i, j| match j {
             0 => 1.0,
@@ -874,13 +937,34 @@ mod tests {
         let y: Vec<f64> = (0..n)
             .map(|i| if i < 2 { 0.0 } else { 5.0 + usize_to_f64(i) })
             .collect();
-        let report = fitted(&x, &y, TwoPartOptions::default()).report;
+        (x, y)
+    }
+
+    #[test]
+    fn a_separable_logit_is_reported() {
+        let (x, y) = separable_sample();
+        let report = fitted(&x, &y, intercept_only()).report;
         assert_eq!(
             report.logit_intercept_only,
             Some(InterceptOnly::Separable {
                 minority: 2,
                 columns: 3
             })
+        );
+    }
+
+    #[test]
+    fn a_separable_logit_is_refused_by_default() {
+        let (x, y) = separable_sample();
+        let data = CostData::builder(x.as_ref(), &y).build().expect("data");
+        assert_eq!(
+            fit(&data, &TwoPartOptions::default(), None).expect_err("separable"),
+            Error::Separation {
+                reason: InterceptOnly::Separable {
+                    minority: 2,
+                    columns: 3
+                }
+            }
         );
     }
 
@@ -932,15 +1016,19 @@ mod tests {
             },
         );
         let y: Vec<f64> = (0..n).map(|i| 10.0 + usize_to_f64(i)).collect();
-        let model = fitted(&x, &y, TwoPartOptions::stable_defaults());
+        let options = TwoPartOptions {
+            separation: Separation::InterceptOnly,
+            ..TwoPartOptions::stable_defaults()
+        };
+        let model = fitted(&x, &y, options);
 
         let x_extreme = Mat::from_fn(1, 2, |_, j| if j == 0 { 1.0 } else { 1.0e6 });
         let prediction = model.predict(x_extreme.as_ref()).expect("predict");
         assert!(
-            prediction.mean_positive[(0, 0)].is_finite(),
+            prediction.mean_positive[0].is_finite(),
             "clamp must keep exp(eta) finite at extreme covariates"
         );
-        assert!(prediction.expected_outcome[(0, 0)].is_finite());
+        assert!(prediction.mean[0].is_finite());
     }
 
     #[test]
@@ -968,20 +1056,293 @@ mod tests {
     }
 
     #[test]
-    fn wald_intervals_from_covariance() {
-        let beta = Mat::from_fn(2, 1, |i, _| if i == 0 { 1.0 } else { -0.5 });
-        let cov = Mat::from_fn(2, 2, |i, j| {
-            if i == j {
-                if i == 0 { 0.04 } else { 0.01 }
-            } else {
-                0.0
-            }
-        });
+    fn the_tables_of_the_parts_carry_their_coefficients_and_standard_errors() {
+        let (x, y) = linear_sample(60, 20.0);
+        let model = fitted(&x, &y, TwoPartOptions::default());
         let level = Level::alpha(0.05).expect("level");
-        let ci = wald_intervals(&beta, &cov, level).expect("intervals");
-        assert_eq!(ci.len(), 2);
-        assert!(ci[0].upper > ci[0].lower);
-        assert_eq!(ci[0].level, level);
+        for (part, effect) in [
+            (&model.logit, EffectScale::LogOddsRatio),
+            (&model.gamma, EffectScale::LogMeanRatio),
+        ] {
+            assert_eq!(part.default_variance(), VarianceKind::ModelBased);
+            let table = part
+                .coefficients(level, VarianceKind::ModelBased)
+                .expect("model-based table");
+            assert_eq!(table.effect(), effect);
+            assert_eq!(table.len(), part.coefficients.len());
+            for (j, term) in table.terms().iter().enumerate() {
+                let estimate = term.estimate.expect("estimated");
+                assert_eq!(estimate.estimate, part.coefficients[j]);
+                assert_eq!(estimate.se, part.se[j]);
+                let interval = estimate.interval.expect("interval");
+                assert!(interval.upper > interval.lower);
+            }
+            assert_eq!(
+                part.tidy().expect("tidy"),
+                part.coefficients(Level::default(), VarianceKind::ModelBased)
+                    .expect("table at the default level")
+            );
+            assert_eq!(
+                part.coefficients(level, VarianceKind::Robust)
+                    .expect_err("no sandwich"),
+                Error::NoCovariance {
+                    asked: VarianceKind::Robust
+                }
+            );
+        }
+
+        let without = fitted(
+            &x,
+            &y,
+            TwoPartOptions {
+                variance: Variance::None,
+                ..TwoPartOptions::default()
+            },
+        );
+        for part in [&without.logit, &without.gamma] {
+            assert_eq!(
+                part.coefficients(level, VarianceKind::ModelBased)
+                    .expect_err("no covariance"),
+                Error::NoCovariance {
+                    asked: VarianceKind::ModelBased
+                }
+            );
+        }
+    }
+
+    /// The inverse of a symmetric positive-definite 2 x 2 matrix in closed
+    /// form, with its condition number in the 2-norm.
+    fn inverse_2x2(a: [[f64; 2]; 2]) -> ([[f64; 2]; 2], f64) {
+        let det = a[0][0].mul_add(a[1][1], -(a[0][1] * a[1][0]));
+        let inverse = [
+            [a[1][1] / det, -a[0][1] / det],
+            [-a[1][0] / det, a[0][0] / det],
+        ];
+        let half_trace = 0.5 * (a[0][0] + a[1][1]);
+        let root = half_trace.mul_add(half_trace, -det).sqrt();
+        let condition = (half_trace + root) / (half_trace - root);
+        (inverse, condition)
+    }
+
+    #[test]
+    fn the_model_based_gamma_covariance_is_the_dispersion_times_the_inverse_information() {
+        let (x, y) = linear_sample(60, 20.0);
+        let model = fitted(&x, &y, TwoPartOptions::default());
+        let positive: Vec<usize> = (0..y.len()).filter(|&i| y[i] > 0.0).collect();
+
+        // X' W X on the positive rows: the gamma part with log link has
+        // working weight 1 at unit dispersion, so W holds the prior weights,
+        // here all 1.
+        let mut information = [[0.0; 2]; 2];
+        for &i in &positive {
+            for (a, row) in information.iter_mut().enumerate() {
+                for (b, entry) in row.iter_mut().enumerate() {
+                    *entry += x[(i, a)] * x[(i, b)];
+                }
+            }
+        }
+        let (inverse, condition) = inverse_2x2(information);
+
+        // The Pearson dispersion of the positive rows, R's summary.glm.
+        let beta = &model.gamma.coefficients;
+        let pearson: f64 = positive
+            .iter()
+            .map(|&i| {
+                let mu = beta[0].mul_add(x[(i, 0)], beta[1] * x[(i, 1)]).exp();
+                ((y[i] - mu) / mu).powi(2)
+            })
+            .sum::<f64>()
+            / (usize_to_f64(positive.len()) - 2.0);
+        let phi = model.gamma.dispersion.expect("dispersion");
+        // The library and the test sum the same squared residuals in
+        // possibly different orders from linear predictors that can differ in
+        // the last bit; a relative bound of 1e3 eps covers the 40 terms with
+        // room for the exp amplification of an eta rounding.
+        assert_relative_eq!(phi, pearson, max_relative = 1e3 * f64::EPSILON);
+
+        // A backward-stable solve for the inverse has relative error of
+        // order condition * eps on its entries, and the closed form has the
+        // same order through its determinant; a factor of 16 covers the
+        // dimension and the products of the factorisation, relative to the
+        // largest entry since the off-diagonal one can be small.
+        let covariance = model.gamma.covariance.as_ref().expect("covariance");
+        let scale = inverse
+            .iter()
+            .flatten()
+            .fold(0.0_f64, |m, v| m.max(v.abs()))
+            * phi;
+        let tolerance = 16.0 * condition * f64::EPSILON * scale;
+        for a in 0..2 {
+            for b in 0..2 {
+                let expected = phi * inverse[a][b];
+                let actual = covariance.get(a, b).expect("defined");
+                assert!(
+                    (actual - expected).abs() <= tolerance,
+                    "entry ({a}, {b}): {actual} against {expected}, tolerance {tolerance}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn clustered_data_get_the_sandwich_unless_the_model_based_covariance_is_asked_for() {
+        let (x, y) = linear_sample(60, 20.0);
+        let clusters: Vec<u32> = (0..60).map(|i| u32::try_from(i / 6).expect("small")).collect();
+        let data = CostData::builder(x.as_ref(), &y)
+            .clusters(&clusters)
+            .build()
+            .expect("data");
+        let auto = fit(&data, &TwoPartOptions::default(), None).expect("auto");
+        assert_eq!(auto.report.variance, Some(VarianceKind::Robust));
+        assert_eq!(auto.report.cluster_count, Some(10));
+        let model_based = fit(
+            &data,
+            &TwoPartOptions {
+                variance: Variance::ModelBased,
+                ..TwoPartOptions::default()
+            },
+            None,
+        )
+        .expect("model-based");
+        assert_eq!(model_based.report.variance, Some(VarianceKind::ModelBased));
+        assert_eq!(model_based.report.cluster_count, None);
+        // The clusters change the covariance and not the coefficients.
+        assert_eq!(auto.gamma.coefficients, model_based.gamma.coefficients);
+        let plain = fitted(&x, &y, TwoPartOptions::default());
+        assert_eq!(
+            plain.gamma.covariance.as_ref().map(Covariance::as_slice),
+            model_based.gamma.covariance.as_ref().map(Covariance::as_slice)
+        );
+    }
+
+    #[test]
+    fn a_model_based_covariance_with_sampling_weights_is_refused() {
+        let (x, y) = linear_sample(30, 10.0);
+        let w: Vec<f64> = (0..30).map(|i| 1.0 + usize_to_f64(i % 3)).collect();
+        let data = CostData::builder(x.as_ref(), &y)
+            .weights(CaseWeights::sampling(&w).expect("weights"))
+            .build()
+            .expect("data");
+        let options = TwoPartOptions {
+            variance: Variance::ModelBased,
+            ..TwoPartOptions::default()
+        };
+        assert!(matches!(
+            fit(&data, &options, None),
+            Err(Error::Unsupported { .. })
+        ));
+        let auto = fit(&data, &TwoPartOptions::default(), None).expect("auto");
+        assert_eq!(auto.report.variance, Some(VarianceKind::Robust));
+    }
+
+    #[test]
+    fn a_row_with_weight_zero_leaves_the_fit() {
+        let (x, y) = linear_sample(60, 20.0);
+        // Rows 5, 6, 17 and 40 leave: one zero outcome (6) and three positive.
+        let dropped = [5, 6, 17, 40];
+        let w: Vec<f64> = (0..60)
+            .map(|i| if dropped.contains(&i) { 0.0 } else { 1.0 })
+            .collect();
+        let data = CostData::builder(x.as_ref(), &y)
+            .weights(CaseWeights::new(&w).expect("weights"))
+            .build()
+            .expect("data");
+        let weighted = fit(&data, &TwoPartOptions::default(), None).expect("weighted");
+
+        let kept: Vec<usize> = (0..60).filter(|i| !dropped.contains(i)).collect();
+        let x_kept = Mat::from_fn(kept.len(), 2, |i, j| x[(kept[i], j)]);
+        let y_kept: Vec<f64> = kept.iter().map(|&i| y[i]).collect();
+        let removed = fitted(&x_kept, &y_kept, TwoPartOptions::default());
+
+        // A zero weight multiplies its row's terms to exact zeros, and the
+        // positive rows of weight 0 are not passed to the gamma part, so the
+        // two fits sum the same terms, though in blocks of other bounds and
+        // so in another order. Each sum of the m = 56 rows that enter then
+        // differs by at most gamma_m = m eps / (1 - m eps) relative to the
+        // sum of its absolute terms, and the solve of a system of condition
+        // kappa moves its solution by at most 2 kappa gamma_m relative to its
+        // norm, at most sqrt(2) times the largest coefficient. The final
+        // IRLS step contracts the differences of the earlier iterates, so
+        // that bound holds for the coefficients. The covariances invert the
+        // information at those coefficients: a change of b by d moves the
+        // information by at most |x|_1 d relative, |x|_1 <= 1 + 59 / 20,
+        // and the inverse by kappa times that, plus its own 2 kappa gamma_m.
+        let kept_rows: Vec<usize> = (0..60).filter(|i| !dropped.contains(i)).collect();
+        let condition = |beta: &[f64], positive_only: bool| {
+            let mut information = [[0.0; 2]; 2];
+            for &i in &kept_rows {
+                if positive_only && y[i] <= 0.0 {
+                    continue;
+                }
+                let weight = if positive_only {
+                    1.0
+                } else {
+                    let prob = 1.0 / (1.0 + (-beta[0].mul_add(x[(i, 0)], beta[1] * x[(i, 1)])).exp());
+                    prob * (1.0 - prob)
+                };
+                for (a, row) in information.iter_mut().enumerate() {
+                    for (b, entry) in row.iter_mut().enumerate() {
+                        *entry += weight * x[(i, a)] * x[(i, b)];
+                    }
+                }
+            }
+            inverse_2x2(information).1
+        };
+        let m = usize_to_f64(kept_rows.len());
+        let gamma_m = m * f64::EPSILON / (1.0 - m * f64::EPSILON);
+        for (name, a, b, positive_only) in [
+            ("logit", &weighted.logit, &removed.logit, false),
+            ("gamma", &weighted.gamma, &removed.gamma, true),
+        ] {
+            let kappa = condition(&b.coefficients, positive_only);
+            let largest = b.coefficients.iter().fold(0.0_f64, |acc, v| acc.max(v.abs()));
+            let coefficient_tolerance = 2.0 * kappa * gamma_m * 2.0_f64.sqrt() * largest;
+            for (u, v) in a.coefficients.iter().zip(&b.coefficients) {
+                assert!(
+                    (u - v).abs() <= coefficient_tolerance,
+                    "{name} coefficient {u} against {v}, tolerance {coefficient_tolerance}"
+                );
+            }
+            let relative = kappa * (3.95 * coefficient_tolerance + 2.0 * gamma_m);
+            for (u, v) in a.se.iter().zip(&b.se) {
+                let (u, v) = (u.expect("se"), v.expect("se"));
+                assert!(
+                    (u - v).abs() <= relative * v,
+                    "{name} se {u} against {v}, relative tolerance {relative}"
+                );
+            }
+            assert_eq!(a.df_residual, b.df_residual);
+            assert_eq!(a.n_used, b.n_used);
+        }
+        assert_eq!(weighted.logit.n, 60);
+        assert_eq!(weighted.logit.n_used, 56);
+        assert_eq!(weighted.gamma.n, removed.gamma.n);
+        // The dispersion is sum r_i^2 / df over the Pearson residuals
+        // r_i = y_i / mu_i - 1 of the positive rows. A change d of the
+        // coefficients moves eta_i by at most |x_i|_1 d <= 3.95 d and r_i by
+        // (y_i / mu_i) times that to first order, so the sum moves by at most
+        // sum 2 |r_i| (y_i / mu_i) 3.95 d, plus gamma_m of its own rounding.
+        let beta = &removed.gamma.coefficients;
+        let kappa = condition(beta, true);
+        let largest = beta.iter().fold(0.0_f64, |acc, v| acc.max(v.abs()));
+        let d = 2.0 * kappa * gamma_m * 2.0_f64.sqrt() * largest;
+        let (mut squares, mut moved) = (0.0, 0.0);
+        for &i in kept_rows.iter().filter(|&&i| y[i] > 0.0) {
+            let ratio = y[i] / beta[0].mul_add(x[(i, 0)], beta[1] * x[(i, 1)]).exp();
+            let r = ratio - 1.0;
+            squares += r * r;
+            moved += 2.0 * r.abs() * ratio * 3.95 * d;
+        }
+        let df = removed.gamma.df_residual.expect("df");
+        let tolerance = gamma_m.mul_add(squares, moved) / df;
+        let (phi_a, phi_b) = (
+            weighted.gamma.dispersion.expect("dispersion"),
+            removed.gamma.dispersion.expect("dispersion"),
+        );
+        assert!(
+            (phi_a - phi_b).abs() <= tolerance,
+            "dispersion {phi_a} against {phi_b}, tolerance {tolerance}"
+        );
     }
 
     #[test]
@@ -1009,10 +1370,10 @@ mod tests {
             Some(50),
         )
         .expect("bootstrap");
-        assert_eq!(result.betas_logit.len(), 10);
-        assert_eq!(result.betas_gamma.len(), 10);
+        assert_eq!(result.logit.shape(), (10, 2));
+        assert_eq!(result.gamma.shape(), (10, 2));
 
-        let ci = percentile_intervals(&result.betas_logit, Level::alpha(0.1).expect("level"));
+        let ci = percentile_intervals(&result.logit, Level::alpha(0.1).expect("level"));
         assert_eq!(ci.len(), x.ncols());
     }
 
@@ -1040,30 +1401,38 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn bootstrap_summary_produces_mean_and_ci() {
-        let betas = vec![
-            Mat::from_fn(2, 1, |i, _| if i == 0 { 1.0 } else { 0.5 }),
-            Mat::from_fn(2, 1, |i, _| if i == 0 { 1.2 } else { 0.4 }),
-            Mat::from_fn(2, 1, |i, _| if i == 0 { 0.8 } else { 0.6 }),
-        ];
-        let summary = summary(&betas, Level::alpha(0.1).expect("level"));
-        assert_eq!(summary.mean.nrows(), 2);
-        assert_eq!(summary.se.nrows(), 2);
-        assert_eq!(summary.intervals.len(), 2);
+    /// Draws with one row per replicate.
+    fn draws(rows: &[Vec<f64>]) -> Matrix {
+        Matrix::from_rows(rows).expect("draws")
     }
 
-    fn bootstrap_percentile_ci_sorted_reference(betas: &[Mat<f64>], alpha: f64) -> Vec<(f64, f64)> {
-        let n = betas[0].nrows();
-        let mut intervals = Vec::with_capacity(n);
-        for col in 0..n {
-            let mut values = betas.iter().map(|b| b[(col, 0)]).collect::<Vec<_>>();
-            values.sort_by(f64::total_cmp);
-            let lower = epistat_stats::quantile::type7(&values, alpha / 2.0).unwrap();
-            let upper = epistat_stats::quantile::type7(&values, 1.0 - alpha / 2.0).unwrap();
-            intervals.push((lower, upper));
-        }
-        intervals
+    #[test]
+    fn bootstrap_summary_produces_mean_and_ci() {
+        let betas = draws(&[vec![1.0, 0.5], vec![1.2, 0.4], vec![0.8, 0.6]]);
+        let summary = summary(&betas, Level::alpha(0.1).expect("level"));
+        assert_eq!(summary.mean.len(), 2);
+        assert_eq!(summary.se.len(), 2);
+        assert_eq!(summary.intervals.len(), 2);
+        assert_relative_eq!(summary.mean[0], 1.0, max_relative = 4.0 * f64::EPSILON);
+        // sd(c(1, 1.2, 0.8)) = 0.2
+        assert_relative_eq!(
+            summary.se[0].expect("two draws or more"),
+            0.2,
+            max_relative = 16.0 * f64::EPSILON
+        );
+    }
+
+    fn bootstrap_percentile_ci_sorted_reference(betas: &Matrix, alpha: f64) -> Vec<(f64, f64)> {
+        betas
+            .columns()
+            .map(|column| {
+                let mut values = column.collect::<Vec<_>>();
+                values.sort_by(f64::total_cmp);
+                let lower = epistat_stats::quantile::type7(&values, alpha / 2.0).unwrap();
+                let upper = epistat_stats::quantile::type7(&values, 1.0 - alpha / 2.0).unwrap();
+                (lower, upper)
+            })
+            .collect()
     }
 
     #[test]
@@ -1072,10 +1441,7 @@ mod tests {
         //    quantile(x, c(0.025, 0.975), type = 7)  # -0.875  5.5
         //    quantile(x, c(0.1, 0.9), type = 7)      # -0.5    4.0
         let x = [2.5, -1.0, 4.0, 0.5, 3.0, 1.5, -0.5, 6.0, 2.0, 1.0, 3.5];
-        let betas = x
-            .iter()
-            .map(|&v| Mat::from_fn(1, 1, |_, _| v))
-            .collect::<Vec<_>>();
+        let betas = Matrix::new(x.len(), 1, x.to_vec()).expect("draws");
         for (alpha, lower, upper) in [(0.05, -0.875, 5.5), (0.2, -0.5, 4.0)] {
             let ci = percentile_intervals(&betas, Level::alpha(alpha).expect("level"));
             assert!(
@@ -1092,16 +1458,12 @@ mod tests {
     #[test]
     fn bootstrap_percentile_ci_matches_sorted_reference() {
         for reps in [5usize, 19, 200, 999] {
-            let betas = (0..reps)
-                .map(|draw| {
-                    Mat::from_fn(4, 1, |coef, _| {
-                        let d = usize_to_f64(draw);
-                        let c = usize_to_f64(coef);
-                        0.001f64
-                            .mul_add(-d, 0.05f64.mul_add(c, (0.17f64.mul_add(d, 0.31 * c)).sin()))
-                    })
-                })
-                .collect::<Vec<_>>();
+            let betas = Matrix::from_fn(reps, 4, |draw, coef| {
+                let d = usize_to_f64(draw);
+                let c = usize_to_f64(coef);
+                0.001f64.mul_add(-d, 0.05f64.mul_add(c, (0.17f64.mul_add(d, 0.31 * c)).sin()))
+            })
+            .expect("draws");
             for alpha in [0.01, 0.05, 0.10, 0.20] {
                 let expected = bootstrap_percentile_ci_sorted_reference(&betas, alpha);
                 let actual = percentile_intervals(&betas, Level::alpha(alpha).expect("level"));
@@ -1124,10 +1486,11 @@ mod tests {
 
     #[test]
     fn bootstrap_summary_handles_empty_input() {
-        let summary = summary(&[], Level::default());
-        assert_eq!(summary.mean.nrows(), 0);
-        assert_eq!(summary.se.nrows(), 0);
-        assert_eq!(summary.intervals, []);
+        let empty = Matrix::new(0, 0, Vec::new()).expect("empty");
+        let summary = summary(&empty, Level::default());
+        assert!(summary.mean.is_empty());
+        assert!(summary.se.is_empty());
+        assert!(summary.intervals.is_empty());
     }
 
     #[test]
@@ -1151,101 +1514,65 @@ mod tests {
             })
             .collect();
         let options = TwoPartOptions {
-            robust_se: true,
+            variance: Variance::Sandwich,
             ..TwoPartOptions::default()
         };
         let data = CostData::builder(x.as_ref(), &y)
             .clusters(&clusters)
             .build()
             .expect("data");
-        let report = fit(&data, &options, None).expect("fit").report;
-        assert!(report.clustered);
-        assert_eq!(report.cluster_count, Some(6));
-        assert!(report.se_logit.is_some());
-        assert!(report.se_gamma.is_some());
+        let model = fit(&data, &options, None).expect("fit");
+        assert_eq!(model.report.variance, Some(VarianceKind::Robust));
+        assert_eq!(model.report.cluster_count, Some(6));
+        assert!(model.logit.se.iter().all(Option::is_some));
+        assert!(model.gamma.se.iter().all(Option::is_some));
     }
 
     #[test]
-    fn compute_covariance_false_keeps_coefficients_and_drops_ses() {
+    fn variance_none_keeps_coefficients_and_drops_ses() {
         // A bootstrap replicate turns the covariance off; the coefficients must not
         // change.
-        let n = 60;
-        let x = Mat::from_fn(
-            n,
-            2,
-            |i, j| if j == 0 { 1.0 } else { usize_to_f64(i) / 20.0 },
-        );
-        let y: Vec<f64> = (0..n)
-            .map(|i| {
-                if i % 3 == 0 {
-                    0.0
-                } else {
-                    1.0 + usize_to_f64(i)
-                }
-            })
-            .collect();
+        let (x, y) = linear_sample(60, 20.0);
         let without_cov = TwoPartOptions {
-            compute_covariance: false,
+            variance: Variance::None,
             ..TwoPartOptions::default()
         };
         let model_a = fitted(&x, &y, TwoPartOptions::default());
         let model_b = fitted(&x, &y, without_cov);
-        for j in 0..model_a.beta_logit.nrows() {
-            assert_eq!(
-                model_a.beta_logit[(j, 0)].to_bits(),
-                model_b.beta_logit[(j, 0)].to_bits()
-            );
-            assert_eq!(
-                model_a.beta_gamma[(j, 0)].to_bits(),
-                model_b.beta_gamma[(j, 0)].to_bits()
-            );
-        }
-        assert!(model_a.report.se_logit.is_some() && model_a.report.se_gamma.is_some());
-        assert!(model_b.report.se_logit.is_none() && model_b.report.se_gamma.is_none());
-        assert!(model_b.report.cov_logit.is_none() && model_b.report.cov_gamma.is_none());
+        assert_eq!(model_a.logit.coefficients, model_b.logit.coefficients);
+        assert_eq!(model_a.gamma.coefficients, model_b.gamma.coefficients);
+        assert!(model_a.logit.se.iter().all(Option::is_some));
+        assert!(model_a.gamma.se.iter().all(Option::is_some));
+        assert!(model_b.logit.se.iter().all(Option::is_none));
+        assert!(model_b.gamma.se.iter().all(Option::is_none));
+        assert!(model_b.logit.covariance.is_none() && model_b.gamma.covariance.is_none());
+        assert_eq!(model_b.report.variance, None);
     }
 
     #[test]
     fn two_part_warm_start_matches_cold_start() {
-        let n = 80;
-        let x = Mat::from_fn(
-            n,
-            2,
-            |i, j| if j == 0 { 1.0 } else { usize_to_f64(i) / 20.0 },
-        );
-        let y: Vec<f64> = (0..n)
-            .map(|i| {
-                if i % 3 == 0 {
-                    0.0
-                } else {
-                    1.0 + usize_to_f64(i)
-                }
-            })
-            .collect();
-        let w = vec![1.0; n];
+        let (x, y) = linear_sample(80, 20.0);
+        let w = vec![1.0; 80];
         let data = CostData::builder(x.as_ref(), &y)
-            .weights(&w)
+            .weights(CaseWeights::new(&w).expect("weights"))
             .build()
             .expect("data");
         let options = TwoPartOptions::default();
 
         let cold = fit(&data, &options, None).expect("cold fit");
-        let warm_start = TwoPartWarmStart {
-            beta_logit: cold.beta_logit.clone(),
-            beta_gamma: cold.beta_gamma.clone(),
-        };
+        let warm_start = TwoPartWarmStart::from(&cold);
         let warm = fit(&data, &options, Some(&warm_start)).expect("warm fit");
 
         // Both loops converge to the same optimum, to the step tolerance of 1e-6
         // times the few iterations a cold start takes.
-        for i in 0..cold.beta_logit.nrows() {
-            assert!((cold.beta_logit[(i, 0)] - warm.beta_logit[(i, 0)]).abs() < 1e-3);
+        for (c, w) in cold.logit.coefficients.iter().zip(&warm.logit.coefficients) {
+            assert!((c - w).abs() < 1e-3);
         }
-        for i in 0..cold.beta_gamma.nrows() {
-            assert!((cold.beta_gamma[(i, 0)] - warm.beta_gamma[(i, 0)]).abs() < 1e-3);
+        for (c, w) in cold.gamma.coefficients.iter().zip(&warm.gamma.coefficients) {
+            assert!((c - w).abs() < 1e-3);
         }
-        assert!(warm.report.iterations_logit <= cold.report.iterations_logit);
-        assert!(warm.report.iterations_gamma <= cold.report.iterations_gamma);
+        assert!(warm.logit.meta.iterations <= cold.logit.meta.iterations);
+        assert!(warm.gamma.meta.iterations <= cold.gamma.meta.iterations);
     }
 
     #[test]
@@ -1254,10 +1581,12 @@ mod tests {
         let data = CostData::builder(x.as_ref(), &[0.0; 6])
             .build()
             .expect("data");
-        assert_eq!(
-            fit(&data, &TwoPartOptions::default(), None).expect_err("no positives"),
-            Error::NoPositiveOutcome
-        );
+        for options in [TwoPartOptions::default(), intercept_only()] {
+            assert_eq!(
+                fit(&data, &options, None).expect_err("no positives"),
+                Error::NoPositiveOutcome
+            );
+        }
     }
 
     #[test]

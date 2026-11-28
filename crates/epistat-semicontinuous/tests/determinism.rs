@@ -7,11 +7,12 @@
 //! rayon pools of 1, 2 and 8 threads, and compare every coefficient and every
 //! standard error bit for bit.
 
+use epistat_core::CaseWeights;
 use epistat_linalg::Mat;
 use epistat_semicontinuous::lognormal::LogNormalOptions;
 use epistat_semicontinuous::tweedie::TweedieOptions;
 use epistat_semicontinuous::two_part::TwoPartOptions;
-use epistat_semicontinuous::{CostData, lognormal, tweedie, two_part};
+use epistat_semicontinuous::{CostData, Variance, lognormal, tweedie, two_part};
 use epistat_testkit::on_threads;
 
 const N_ROWS: usize = 12_000;
@@ -50,7 +51,7 @@ impl Fixture {
     fn data(&self) -> CostData<'_> {
         let mut data = CostData::builder(self.x.as_ref(), &self.y).clusters(&self.clusters);
         if let Some(weights) = &self.weights {
-            data = data.weights(weights);
+            data = data.weights(CaseWeights::new(weights).expect("weights"));
         }
         data.build().expect("data")
     }
@@ -93,44 +94,46 @@ fn fixture(weighted: bool) -> Fixture {
     }
 }
 
-fn bits(values: &[&Mat<f64>]) -> Vec<u64> {
-    values
+/// The bits of the coefficients and of the standard errors, each defined.
+fn bits(coefficients: &[&[f64]], se: &[&[Option<f64>]]) -> Vec<u64> {
+    coefficients
         .iter()
-        .flat_map(|m| (0..m.nrows()).map(move |i| m[(i, 0)].to_bits()))
+        .flat_map(|values| values.iter().map(|v| v.to_bits()))
+        .chain(
+            se.iter()
+                .flat_map(|values| values.iter().map(|v| v.expect("standard error").to_bits())),
+        )
         .collect()
 }
 
 fn two_part_bits(data: &CostData<'_>) -> Vec<u64> {
     let options = TwoPartOptions {
-        robust_se: true,
+        variance: Variance::Sandwich,
         ..TwoPartOptions::default()
     };
     let model = two_part::fit(data, &options, None).expect("two-part fit");
-    let report = &model.report;
-    bits(&[
-        &model.beta_logit,
-        &model.beta_gamma,
-        report.se_logit.as_ref().expect("logit SE"),
-        report.se_gamma.as_ref().expect("gamma SE"),
-    ])
+    bits(
+        &[&model.logit.coefficients, &model.gamma.coefficients],
+        &[&model.logit.se, &model.gamma.se],
+    )
 }
 
 fn tweedie_bits(data: &CostData<'_>, power: f64) -> Vec<u64> {
     let options = TweedieOptions {
-        robust_se: true,
+        variance: Variance::Sandwich,
         ..TweedieOptions::default()
     };
     let model = tweedie::fit(data, power, &options, None, None).expect("tweedie fit");
-    bits(&[&model.beta, model.report.se.as_ref().expect("tweedie SE")])
+    bits(&[&model.coefficients], &[&model.se])
 }
 
 fn lognormal_bits(data: &CostData<'_>) -> Vec<u64> {
     let options = LogNormalOptions {
-        robust_se: true,
+        variance: Variance::Sandwich,
         ..LogNormalOptions::default()
     };
     let model = lognormal::fit(data, &options).expect("lognormal fit");
-    bits(&[&model.beta, model.report.se.as_ref().expect("lognormal SE")])
+    bits(&[&model.coefficients], &[&model.se])
 }
 
 fn assert_reproducible(label: &str, fit: impl Fn() -> Vec<u64> + Sync) {
@@ -170,9 +173,11 @@ fn tweedie_fits_are_bit_identical() {
 
 #[test]
 fn lognormal_fits_are_bit_identical() {
-    let fixture = fixture(false);
-    let clustered = fixture.data();
-    let plain = clustered.without_clusters();
-    assert_reproducible("lognormal clustered", || lognormal_bits(&clustered));
-    assert_reproducible("lognormal", || lognormal_bits(&plain));
+    for weighted in [false, true] {
+        let fixture = fixture(weighted);
+        let clustered = fixture.data();
+        let plain = clustered.without_clusters();
+        assert_reproducible("lognormal clustered", || lognormal_bits(&clustered));
+        assert_reproducible("lognormal", || lognormal_bits(&plain));
+    }
 }

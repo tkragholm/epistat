@@ -1,4 +1,5 @@
 use approx::assert_relative_eq;
+use epistat_core::CaseWeights;
 use epistat_linalg::Mat;
 use epistat_semicontinuous::CostData;
 use epistat_semicontinuous::tweedie::{self, TweedieOptions};
@@ -19,7 +20,7 @@ fn tweedie_input_uses_sample_weights_for_intercept_only_gamma_fit() {
         .sum::<f64>()
         / row_weights.iter().sum::<f64>();
     let input = CostData::builder(x.as_ref(), &y)
-        .weights(&weights)
+        .weights(CaseWeights::new(&weights).expect("weights"))
         .build()
         .expect("data");
 
@@ -30,5 +31,5 @@ fn tweedie_input_uses_sample_weights_for_intercept_only_gamma_fit() {
     };
     let model = tweedie::fit(&input, 2.0, &options, None, None).expect("weighted gamma fit");
 
-    assert_relative_eq!(model.beta[(0, 0)].exp(), weighted_mean, epsilon = 1e-6);
+    assert_relative_eq!(model.coefficients[0].exp(), weighted_mean, epsilon = 1e-6);
 }

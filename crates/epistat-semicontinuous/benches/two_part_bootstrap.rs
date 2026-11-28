@@ -1,38 +1,32 @@
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
-use epistat_core::Level;
-use epistat_linalg::Mat;
+use epistat_core::{Level, Matrix};
 use epistat_semicontinuous::two_part::percentile_intervals;
 
 fn usize_to_f64(value: usize) -> f64 {
     f64::from(u32::try_from(value).expect("benchmark size fits u32"))
 }
 
-fn bootstrap_percentile_ci_sorted_reference(betas: &[Mat<f64>], alpha: f64) -> Vec<(f64, f64)> {
-    if betas.is_empty() {
-        return Vec::new();
-    }
-    let n = betas[0].nrows();
-    let mut intervals = Vec::with_capacity(n);
-    for col in 0..n {
-        let mut values = betas.iter().map(|b| b[(col, 0)]).collect::<Vec<_>>();
-        values.sort_by(f64::total_cmp);
-        let lower = epistat_stats::quantile::type7(&values, alpha / 2.0).unwrap();
-        let upper = epistat_stats::quantile::type7(&values, 1.0 - alpha / 2.0).unwrap();
-        intervals.push((lower, upper));
-    }
-    intervals
-}
-
-fn build_betas(reps: usize, coefficients: usize) -> Vec<Mat<f64>> {
-    (0..reps)
-        .map(|draw| {
-            Mat::from_fn(coefficients, 1, |coef, _| {
-                let d = usize_to_f64(draw);
-                let c = usize_to_f64(coef);
-                0.001f64.mul_add(-d, 0.05f64.mul_add(c, (0.17f64.mul_add(d, 0.31 * c)).sin()))
-            })
+fn bootstrap_percentile_ci_sorted_reference(betas: &Matrix, alpha: f64) -> Vec<(f64, f64)> {
+    betas
+        .columns()
+        .map(|column| {
+            let mut values = column.collect::<Vec<_>>();
+            values.sort_by(f64::total_cmp);
+            let lower = epistat_stats::quantile::type7(&values, alpha / 2.0).unwrap();
+            let upper = epistat_stats::quantile::type7(&values, 1.0 - alpha / 2.0).unwrap();
+            (lower, upper)
         })
         .collect()
+}
+
+/// Draws with one row per replicate and one column per coefficient.
+fn build_betas(reps: usize, coefficients: usize) -> Matrix {
+    Matrix::from_fn(reps, coefficients, |draw, coef| {
+        let d = usize_to_f64(draw);
+        let c = usize_to_f64(coef);
+        0.001f64.mul_add(-d, 0.05f64.mul_add(c, (0.17f64.mul_add(d, 0.31 * c)).sin()))
+    })
+    .expect("finite draws")
 }
 
 fn bench_two_part_bootstrap_percentile_ci(criterion: &mut Criterion) {

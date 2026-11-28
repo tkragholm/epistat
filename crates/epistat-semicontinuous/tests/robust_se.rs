@@ -4,12 +4,17 @@
 //! computed in R from `glm` fits on the same rows (tests/r/robust_se_reference.R),
 //! and a clustered fit with one row per cluster must reproduce the unclustered
 //! sandwich.
+//!
+//! The R model-based standard errors are at a dispersion fixed at 1. The crate
+//! scales the model-based covariance of a gamma or Tweedie fit by the Pearson
+//! dispersion `phi`, as `summary.glm` does, so its standard errors divided by
+//! `sqrt(phi)` are compared with them.
 
-use epistat_linalg::{Attempt, Mat, Method, inverse};
+use epistat_linalg::Mat;
 use epistat_rng::{Stream, replicate_seed};
-use epistat_semicontinuous::tweedie::TweedieOptions;
-use epistat_semicontinuous::two_part::TwoPartOptions;
-use epistat_semicontinuous::{CostData, tweedie, two_part};
+use epistat_semicontinuous::tweedie::{TweedieModel, TweedieOptions};
+use epistat_semicontinuous::two_part::{PartFit, TwoPartOptions};
+use epistat_semicontinuous::{CostData, Variance, tweedie, two_part};
 use epistat_testkit::{Tolerance, assert_close};
 
 const N_ROWS: usize = 20_000;
@@ -46,29 +51,21 @@ fn positive_rows(x: &Mat<f64>, y: &[f64]) -> (Mat<f64>, Vec<f64>) {
     )
 }
 
-/// Model-based standard errors of a log-link Tweedie fit with unit dispersion,
-/// `sqrt(diag((X' diag(mu^(2 - power)) X)^-1))`. The crate reports no model-based
-/// covariance for Tweedie fits, so the test forms it here.
-fn tweedie_model_based_se(x: &Mat<f64>, beta: &Mat<f64>, power: f64) -> Vec<f64> {
-    let p = x.ncols();
-    let mut information = Mat::<f64>::zeros(p, p);
-    for i in 0..x.nrows() {
-        let eta: f64 = (0..p).map(|j| x[(i, j)] * beta[(j, 0)]).sum();
-        let weight = eta.exp().powf(2.0 - power);
-        for j in 0..p {
-            for k in 0..p {
-                information[(j, k)] += weight * x[(i, j)] * x[(i, k)];
-            }
-        }
-    }
-    let inverse = inverse(information.as_ref(), &[Attempt::plain(Method::Cholesky)])
-        .expect("positive-definite information")
-        .x;
-    (0..p).map(|j| inverse[(j, j)].sqrt()).collect()
+/// The standard errors of a fit, each defined.
+fn standard_errors(se: &[Option<f64>]) -> Vec<f64> {
+    se.iter().map(|se| se.expect("standard error")).collect()
 }
 
-fn column(m: &Mat<f64>) -> Vec<f64> {
-    (0..m.nrows()).map(|i| m[(i, 0)]).collect()
+/// The standard errors of a part at unit dispersion.
+fn unit_dispersion_se(part: &PartFit) -> Vec<f64> {
+    let root = part.dispersion.expect("dispersion").sqrt();
+    standard_errors(&part.se).iter().map(|se| se / root).collect()
+}
+
+/// The model-based standard errors of a Tweedie fit at unit dispersion.
+fn tweedie_unit_dispersion_se(model: &TweedieModel) -> Vec<f64> {
+    let root = model.dispersion.expect("dispersion").sqrt();
+    standard_errors(&model.se).iter().map(|se| se / root).collect()
 }
 
 /// HC0 standard errors from R 4 on the rows of `two_part_fixture`:
@@ -104,19 +101,17 @@ const R_TOLERANCE: f64 = 1e-8;
 fn two_part_standard_errors_match_r() {
     let (x, y) = two_part_fixture();
     let data = CostData::builder(x.as_ref(), &y).build().expect("data");
-    let model_based = two_part::fit(&data, &TwoPartOptions::default(), None)
-        .expect("fit")
-        .report;
+    let model_based = two_part::fit(&data, &TwoPartOptions::default(), None).expect("fit");
     let robust_options = TwoPartOptions {
-        robust_se: true,
+        variance: Variance::Sandwich,
         ..TwoPartOptions::default()
     };
-    let robust = two_part::fit(&data, &robust_options, None)
-        .expect("fit")
-        .report;
+    let robust = two_part::fit(&data, &robust_options, None).expect("fit");
 
-    let model_se = column(model_based.se_logit.as_ref().expect("model-based SE"));
-    let robust_se = column(robust.se_logit.as_ref().expect("robust SE"));
+    // The logit part has dispersion 1.
+    assert_eq!(model_based.logit.dispersion, Some(1.0));
+    let model_se = standard_errors(&model_based.logit.se);
+    let robust_se = standard_errors(&robust.logit.se);
     assert_close(
         &model_se,
         &R_MODEL_LOGIT,
@@ -128,12 +123,12 @@ fn two_part_standard_errors_match_r() {
         Tolerance::exact().rel(R_TOLERANCE),
     );
     assert_close(
-        &column(robust.se_gamma.as_ref().expect("robust SE")),
+        &standard_errors(&robust.gamma.se),
         &R_HC0_GAMMA,
         Tolerance::exact().rel(R_TOLERANCE),
     );
     assert_close(
-        &column(model_based.se_gamma.as_ref().expect("model-based SE")),
+        &unit_dispersion_se(&model_based.gamma),
         &R_MODEL_GAMMA,
         Tolerance::exact().rel(R_TOLERANCE),
     );
@@ -146,28 +141,25 @@ fn two_part_singleton_clusters_reproduce_the_unclustered_sandwich() {
         .map(|i| u32::try_from(i).expect("small"))
         .collect();
     let options = TwoPartOptions {
-        robust_se: true,
+        variance: Variance::Sandwich,
         ..TwoPartOptions::default()
     };
     let data = CostData::builder(x.as_ref(), &y).build().expect("data");
-    let plain = two_part::fit(&data, &options, None)
-        .expect("unclustered fit")
-        .report;
+    let plain = two_part::fit(&data, &options, None).expect("unclustered fit");
     let clustered_data = CostData::builder(x.as_ref(), &y)
         .clusters(&clusters)
         .build()
         .expect("data");
-    let clustered = two_part::fit(&clustered_data, &options, None)
-        .expect("clustered fit")
-        .report;
+    let clustered = two_part::fit(&clustered_data, &options, None).expect("clustered fit");
+    assert_eq!(clustered.report.cluster_count, Some(N_ROWS));
     assert_close(
-        &column(clustered.se_logit.as_ref().expect("SE")),
-        &column(plain.se_logit.as_ref().expect("SE")),
+        &standard_errors(&clustered.logit.se),
+        &standard_errors(&plain.logit.se),
         Tolerance::exact().rel(1e-9),
     );
     assert_close(
-        &column(clustered.se_gamma.as_ref().expect("SE")),
-        &column(plain.se_gamma.as_ref().expect("SE")),
+        &standard_errors(&clustered.gamma.se),
+        &standard_errors(&plain.gamma.se),
         Tolerance::exact().rel(1e-9),
     );
 }
@@ -180,14 +172,19 @@ fn tweedie_gamma_standard_errors_match_r() {
         .build()
         .expect("data");
     let options = TweedieOptions {
-        robust_se: true,
+        variance: Variance::Sandwich,
         tolerance: TIGHT_TOLERANCE,
         ..TweedieOptions::default()
     };
     let model = tweedie::fit(&data, 2.0, &options, None, None).expect("fit");
+    let model_based = TweedieOptions {
+        variance: Variance::ModelBased,
+        ..options
+    };
+    let fitted = tweedie::fit(&data, 2.0, &model_based, None, None).expect("fit");
 
-    let robust_se = column(model.report.se.as_ref().expect("robust SE"));
-    let model_se = tweedie_model_based_se(&x_pos, &model.beta, 2.0);
+    let robust_se = standard_errors(&model.se);
+    let model_se = tweedie_unit_dispersion_se(&fitted);
     assert_close(
         &model_se,
         &R_MODEL_GAMMA,
@@ -217,13 +214,18 @@ fn tweedie_standard_errors_match_r_at_power_one_and_a_half() {
     }
     let data = CostData::builder(x.as_ref(), &y).build().expect("data");
     let options = TweedieOptions {
-        robust_se: true,
+        variance: Variance::Sandwich,
         tolerance: TIGHT_TOLERANCE,
         ..TweedieOptions::default()
     };
     let model = tweedie::fit(&data, 1.5, &options, None, None).expect("fit");
-    let robust_se = column(model.report.se.as_ref().expect("robust SE"));
-    let model_se = tweedie_model_based_se(&x, &model.beta, 1.5);
+    let model_based = TweedieOptions {
+        variance: Variance::ModelBased,
+        ..options
+    };
+    let fitted = tweedie::fit(&data, 1.5, &model_based, None, None).expect("fit");
+    let robust_se = standard_errors(&model.se);
+    let model_se = tweedie_unit_dispersion_se(&fitted);
     assert_close(
         &model_se,
         &R_MODEL_TWEEDIE_1_5,
@@ -245,7 +247,7 @@ fn tweedie_standard_errors_match_r_at_power_one_and_a_half() {
     let clustered =
         tweedie::fit(&clustered_data, 1.5, &options, None, None).expect("clustered fit");
     assert_close(
-        &column(clustered.report.se.as_ref().expect("SE")),
+        &standard_errors(&clustered.se),
         &robust_se,
         Tolerance::exact().rel(1e-9),
     );

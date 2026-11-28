@@ -81,16 +81,6 @@ impl Hash {
         self.word(value as u64);
     }
 
-    fn mat(&mut self, m: &Mat<f64>) {
-        self.n(m.nrows());
-        self.n(m.ncols());
-        for j in 0..m.ncols() {
-            for i in 0..m.nrows() {
-                self.f(m[(i, j)]);
-            }
-        }
-    }
-
     /// A vector, hashed as the `n x 1` matrix it was.
     fn vec(&mut self, v: &[f64]) {
         self.n(v.len());

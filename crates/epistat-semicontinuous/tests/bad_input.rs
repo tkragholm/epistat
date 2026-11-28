@@ -7,9 +7,10 @@
 //! empty column the code of a length error. Order does not matter to a cost
 //! model, so `Unsorted` is not tried.
 
+use epistat_core::{CaseWeights, Seed};
 use epistat_linalg::Mat;
 use epistat_semicontinuous::compare::{CrossValidationOptions, cross_validate, select};
-use epistat_semicontinuous::{CostData, LongitudinalData};
+use epistat_semicontinuous::{CostData, Error, LongitudinalData};
 use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
 
 const Y: [f64; 6] = [0.0, 1.5, 2.0, 0.0, 3.5, 1.0];
@@ -45,10 +46,13 @@ fn cost_data_refuses_bad_columns() {
     assert_rejects_bad_input_with_codes("CostData outcome", code, |bad| {
         column(bad, &Y).map(|y| CostData::builder(x.as_ref(), &y).build().map(|_| ()))
     });
+    // The weights refuse a value that is not finite when they are built,
+    // and the view a column of the wrong length.
     assert_rejects_bad_input_with_codes("CostData weights", code, |bad| {
-        column(bad, &WEIGHTS).map(|w| {
+        column(bad, &WEIGHTS).map(|w| -> Result<(), Error> {
+            let weights = CaseWeights::new(&w)?;
             CostData::builder(x.as_ref(), &Y)
-                .weights(&w)
+                .weights(weights)
                 .build()
                 .map(|_| ())
         })
@@ -108,6 +112,6 @@ fn the_power_selection_refuses_bad_powers() {
     assert_rejects_bad_input_with_codes("cross_validate", first, |bad| {
         column(bad, &powers)
             .filter(|_| powered(bad))
-            .map(|p| cross_validate(&data, &p, &CrossValidationOptions::new(1)).map(|_| ()))
+            .map(|p| cross_validate(&data, &p, &CrossValidationOptions::new(Seed(1))).map(|_| ()))
     });
 }

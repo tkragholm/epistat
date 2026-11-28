@@ -128,16 +128,6 @@ impl Hasher {
         self.0.finish()
     }
 
-    fn mat(&mut self, m: &Mat<f64>) {
-        self.word(m.nrows() as u64);
-        self.word(m.ncols() as u64);
-        for j in 0..m.ncols() {
-            for i in 0..m.nrows() {
-                self.word(m[(i, j)].to_bits());
-            }
-        }
-    }
-
     /// A vector, hashed as the `n x 1` matrix it was.
     fn vec(&mut self, v: &[f64]) {
         self.word(v.len() as u64);

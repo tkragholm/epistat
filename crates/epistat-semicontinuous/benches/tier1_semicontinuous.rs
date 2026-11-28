@@ -51,15 +51,11 @@ fn main() {
     let (times, model) = common::timed(common::reps(), || {
         two_part::fit(&input, &TwoPartOptions::default(), None).expect("two-part fit")
     });
-    let report = &model.report;
     let mut lines = Lines::default();
-    for (part, beta, se) in [
-        ("logit", &model.beta_logit, &report.se_logit),
-        ("gamma", &model.beta_gamma, &report.se_gamma),
-    ] {
+    for (part, fit) in [("logit", &model.logit), ("gamma", &model.gamma)] {
         for (j, name) in ["int", "x1", "x2"].iter().enumerate() {
-            lines.push(&format!("coef_{part}_{name}"), beta[(j, 0)]);
-            lines.push_opt(&format!("se_{part}_{name}"), se.as_ref().map(|s| s[(j, 0)]));
+            lines.push(&format!("coef_{part}_{name}"), fit.coefficients[j]);
+            lines.push_opt(&format!("se_{part}_{name}"), fit.se[j]);
         }
     }
     common::finish(&method, n, &times, &lines);

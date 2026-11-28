@@ -392,7 +392,7 @@ fn fit_lognormal_with_lambda(
         Some(w) => {
             let weighted: Vec<f64> = (0..w.nrows()).map(|i| w[(i, 0)] * y_log[(i, 0)]).collect();
             (
-                epistat_linalg::row_scaled_gram(x_pos.as_ref(), |i| w[(i, 0)]),
+                epistat_linalg::row_scaled_gram(x_pos.as_ref(), |i| w[(i, 0)].sqrt()),
                 epistat_linalg::xtv(x_pos.as_ref(), &weighted),
             )
         }
@@ -485,6 +485,7 @@ fn fit_lognormal_with_lambda(
 mod tests {
     use super::*;
     use crate::utils::usize_to_f64;
+    use epistat_core::CaseWeights;
 
     #[test]
     fn fit_runs() {
@@ -505,7 +506,7 @@ mod tests {
         let data = CostData::builder(x.as_ref(), &y).build().expect("data");
         let model = fit(&data, &LogNormalOptions::default()).expect("fit");
         let pred = model.predict(x.as_ref()).expect("predict");
-        assert_eq!(pred.mean.nrows(), n);
+        assert_eq!(pred.mean_positive.len(), n);
         assert!(model.smearing_factor > 0.0);
     }
 
@@ -533,14 +534,13 @@ mod tests {
             .build()
             .expect("data");
         let options = LogNormalOptions {
-            robust_se: true,
+            variance: Variance::Sandwich,
             ..LogNormalOptions::default()
         };
-        let report = fit(&data, &options).expect("fit").report;
-        assert!(report.robust);
-        assert!(report.clustered);
-        assert!(report.se.is_some());
-        assert!(report.cluster_count.unwrap_or(0) > 1);
+        let model = fit(&data, &options).expect("fit");
+        assert_eq!(model.report.variance, Some(VarianceKind::Robust));
+        assert!(model.se.iter().all(Option::is_some));
+        assert_eq!(model.report.cluster_count, Some(6));
     }
 
     #[test]
@@ -567,18 +567,159 @@ mod tests {
         assert!(report.meta.converged);
     }
 
+    /// A design of an intercept and `i / 10` with positive outcomes that
+    /// scatter around a log-linear trend, every seventh outcome zero.
+    fn sample(n: usize) -> (Mat<f64>, Vec<f64>) {
+        let x = Mat::from_fn(
+            n,
+            2,
+            |i, j| if j == 0 { 1.0 } else { usize_to_f64(i) / 10.0 },
+        );
+        let y = (0..n)
+            .map(|i| {
+                if i % 7 == 0 {
+                    0.0
+                } else {
+                    0.1f64.mul_add(usize_to_f64(i), 1.0).exp() * [0.6, 1.0, 1.5][i % 3]
+                }
+            })
+            .collect();
+        (x, y)
+    }
+
     #[test]
-    fn weights_are_refused() {
-        let x = Mat::from_fn(4, 1, |_, _| 1.0);
-        let y = [1.0, 2.0, 0.0, 3.0];
-        let w = [1.0; 4];
+    fn frequency_weights_equal_duplicated_rows() {
+        let n = 42;
+        let (x, y) = sample(n);
+        let counts: Vec<f64> = (0..n).map(|i| usize_to_f64(1 + i % 3)).collect();
         let data = CostData::builder(x.as_ref(), &y)
-            .weights(&w)
+            .weights(CaseWeights::frequency(&counts).expect("weights"))
             .build()
             .expect("data");
+        let weighted = fit(&data, &LogNormalOptions::default()).expect("weighted");
+
+        let rows: Vec<usize> = (0..n).flat_map(|i| std::iter::repeat_n(i, 1 + i % 3)).collect();
+        let x_long = Mat::from_fn(rows.len(), 2, |i, j| x[(rows[i], j)]);
+        let y_long: Vec<f64> = rows.iter().map(|&i| y[i]).collect();
+        let long = CostData::builder(x_long.as_ref(), &y_long)
+            .build()
+            .expect("data");
+        let duplicated = fit(&long, &LogNormalOptions::default()).expect("duplicated");
+
+        // The two fits sum the same terms of X'WX and X'Wz, a weight of k
+        // standing for k equal terms, so each sum differs by at most
+        // gamma_m = m eps / (1 - m eps) relative to the sum of its absolute
+        // terms, m the rows of the long data. A perturbation of relative size
+        // e of a system of condition kappa moves its solution by at most
+        // 2 kappa e relative to its norm, here bounded by the largest
+        // coefficient times the 2 coefficients.
+        let mut information = [[0.0_f64; 2]; 2];
+        for &i in rows.iter().filter(|&&i| y[i] > 0.0) {
+            for (a, row) in information.iter_mut().enumerate() {
+                for (b, entry) in row.iter_mut().enumerate() {
+                    *entry += x[(i, a)] * x[(i, b)];
+                }
+            }
+        }
+        let half_trace = 0.5 * (information[0][0] + information[1][1]);
+        let det = information[0][0].mul_add(information[1][1], -information[0][1].powi(2));
+        let root = half_trace.mul_add(half_trace, -det).sqrt();
+        let kappa = (half_trace + root) / (half_trace - root);
+        let m = usize_to_f64(rows.len());
+        let gamma_m = m * f64::EPSILON / (1.0 - m * f64::EPSILON);
+        let scale = weighted
+            .coefficients
+            .iter()
+            .fold(0.0_f64, |acc, b| acc.max(b.abs()));
+        let tolerance = 2.0 * kappa * gamma_m * 2.0 * scale;
+        for (a, b) in weighted.coefficients.iter().zip(&duplicated.coefficients) {
+            assert!((a - b).abs() <= tolerance, "{a} against {b}");
+        }
+        // Each residual moves by at most |x_i|_1 times the largest change of
+        // a coefficient, |x_i|_1 <= 1 + 4.1, and exp turns that into the same
+        // relative change of its term; the weighted mean adds gamma_m.
+        let smearing_tolerance = (5.1 * tolerance + gamma_m) * duplicated.smearing_factor;
+        assert!(
+            (weighted.smearing_factor - duplicated.smearing_factor).abs() <= smearing_tolerance,
+            "{} against {}",
+            weighted.smearing_factor,
+            duplicated.smearing_factor
+        );
+        // Frequency weights count sum(w) rows in the residual degrees of
+        // freedom, as the duplicated data do.
+        assert_eq!(weighted.df_residual, duplicated.df_residual);
+
+        // Weights that are not all equal move the fit off the unweighted one:
+        // they up-weight the rows whose noise factor is 1.5.
+        let unweighted = fit(&data.without_weights(), &LogNormalOptions::default()).expect("fit");
+        assert!(
+            (unweighted.coefficients[0] - weighted.coefficients[0]).abs() > 1e3 * tolerance,
+            "the weights did not enter the fit"
+        );
+    }
+
+    #[test]
+    fn the_table_carries_the_coefficients_and_standard_errors() {
+        let (x, y) = sample(60);
+        let data = CostData::builder(x.as_ref(), &y).build().expect("data");
+        let model = fit(&data, &LogNormalOptions::default()).expect("fit");
+        assert_eq!(model.report.variance, Some(VarianceKind::ModelBased));
+        let level = Level::alpha(0.05).expect("level");
+        let table = model
+            .coefficients(level, VarianceKind::ModelBased)
+            .expect("table");
+        assert_eq!(table.effect(), EffectScale::LogMeanRatio);
+        assert_eq!(table.len(), model.coefficients.len());
+        for (j, term) in table.terms().iter().enumerate() {
+            let estimate = term.estimate.expect("estimated");
+            assert_eq!(estimate.estimate, model.coefficients[j]);
+            assert_eq!(estimate.se, model.se[j]);
+            assert!(estimate.se.is_some());
+        }
+        assert_eq!(
+            model
+                .coefficients(level, VarianceKind::Robust)
+                .expect_err("no sandwich"),
+            Error::NoCovariance {
+                asked: VarianceKind::Robust
+            }
+        );
+        let without = fit(
+            &data,
+            &LogNormalOptions {
+                variance: Variance::None,
+                ..LogNormalOptions::default()
+            },
+        )
+        .expect("fit");
+        assert!(without.se.iter().all(Option::is_none));
+        assert_eq!(
+            without
+                .coefficients(level, VarianceKind::ModelBased)
+                .expect_err("no covariance"),
+            Error::NoCovariance {
+                asked: VarianceKind::ModelBased
+            }
+        );
+    }
+
+    #[test]
+    fn a_model_based_covariance_with_sampling_weights_is_refused() {
+        let (x, y) = sample(40);
+        let w: Vec<f64> = (0..40).map(|i| 1.0 + usize_to_f64(i % 4)).collect();
+        let data = CostData::builder(x.as_ref(), &y)
+            .weights(CaseWeights::sampling(&w).expect("weights"))
+            .build()
+            .expect("data");
+        let model_based = LogNormalOptions {
+            variance: Variance::ModelBased,
+            ..LogNormalOptions::default()
+        };
         assert!(matches!(
-            fit(&data, &LogNormalOptions::default()),
+            fit(&data, &model_based),
             Err(Error::Unsupported { .. })
         ));
+        let auto = fit(&data, &LogNormalOptions::default()).expect("auto");
+        assert_eq!(auto.report.variance, Some(VarianceKind::Robust));
     }
 }

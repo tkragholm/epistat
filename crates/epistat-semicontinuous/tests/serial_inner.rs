@@ -4,10 +4,11 @@
 //! The results are pinned as bit patterns and must not depend on the rayon thread count
 //! or on `RAYON_NUM_THREADS`.
 
+use epistat_core::CaseWeights;
 use epistat_linalg::Mat;
 use epistat_semicontinuous::tweedie::TweedieOptions;
 use epistat_semicontinuous::two_part::{TwoPartOptions, TwoPartWarmStart};
-use epistat_semicontinuous::{CostData, Model, tweedie, two_part};
+use epistat_semicontinuous::{CostData, Model, Variance, tweedie, two_part};
 use epistat_testkit::{Fingerprint, on_threads};
 use std::process::Command;
 
@@ -42,7 +43,7 @@ struct Fixture {
 impl Fixture {
     fn data(&self) -> CostData<'_> {
         CostData::builder(self.x.as_ref(), &self.y)
-            .weights(&self.weights)
+            .weights(CaseWeights::new(&self.weights).expect("weights"))
             .clusters(&self.clusters)
             .build()
             .expect("data")
@@ -102,12 +103,9 @@ struct Fit {
     predictions: Vec<f64>,
 }
 
-fn flatten(matrices: &[&Mat<f64>]) -> Vec<f64> {
-    matrices
-        .iter()
-        .flat_map(|m| (0..m.nrows()).map(move |i| (0..m.ncols()).map(move |j| m[(i, j)])))
-        .flatten()
-        .collect()
+/// The standard errors, each defined.
+fn defined(se: &[Option<f64>]) -> impl Iterator<Item = f64> + '_ {
+    se.iter().map(|se| se.expect("se"))
 }
 
 fn collect() -> Vec<Fit> {
@@ -116,51 +114,44 @@ fn collect() -> Vec<Fit> {
     let mut out = Vec::new();
 
     let options = TwoPartOptions {
-        robust_se: true,
+        variance: Variance::Sandwich,
         ..TwoPartOptions::default()
     };
     let model = two_part::fit(&zeros.data(), &options, None).expect("two-part");
-    let report = &model.report;
     let prediction = model.predict(zeros.x.as_ref()).expect("predict");
-    let ses = [
-        report.se_logit.as_ref().expect("se"),
-        report.se_gamma.as_ref().expect("se"),
-    ];
     out.push(Fit {
         name: "two_part/robust/clustered",
-        coefficients: flatten(&[&model.beta_logit, &model.beta_gamma]),
-        standard_errors: flatten(&ses),
-        predictions: flatten(&[&prediction.expected_outcome]),
+        coefficients: [model.logit.coefficients.as_slice(), &model.gamma.coefficients].concat(),
+        standard_errors: defined(&model.logit.se).chain(defined(&model.gamma.se)).collect(),
+        predictions: prediction.mean,
     });
-    let warm = TwoPartWarmStart {
-        beta_logit: model.beta_logit.clone(),
-        beta_gamma: model.beta_gamma.clone(),
-    };
+    let warm = TwoPartWarmStart::from(&model);
 
-    let model = two_part::fit(&zeros.data(), &TwoPartOptions::default(), None).expect("two-part");
-    let report = &model.report;
+    // The data carry clusters, so the model-based covariance is asked for.
+    let options = TwoPartOptions {
+        variance: Variance::ModelBased,
+        ..TwoPartOptions::default()
+    };
+    let model = two_part::fit(&zeros.data(), &options, None).expect("two-part");
     let prediction = model.predict(zeros.x.as_ref()).expect("predict");
     out.push(Fit {
         name: "two_part/model_se",
-        coefficients: flatten(&[&model.beta_logit, &model.beta_gamma]),
-        standard_errors: flatten(&[
-            report.se_logit.as_ref().expect("se"),
-            report.se_gamma.as_ref().expect("se"),
-        ]),
-        predictions: flatten(&[&prediction.expected_outcome]),
+        coefficients: [model.logit.coefficients.as_slice(), &model.gamma.coefficients].concat(),
+        standard_errors: defined(&model.logit.se).chain(defined(&model.gamma.se)).collect(),
+        predictions: prediction.mean,
     });
 
     let options = TwoPartOptions {
-        compute_covariance: false,
+        variance: Variance::None,
         ..TwoPartOptions::stable_defaults()
     };
     let model = two_part::fit(&zeros.data(), &options, Some(&warm)).expect("two-part");
     let prediction = model.predict(zeros.x.as_ref()).expect("predict");
     out.push(Fit {
         name: "two_part/warm/no_cov",
-        coefficients: flatten(&[&model.beta_logit, &model.beta_gamma]),
+        coefficients: [model.logit.coefficients.as_slice(), &model.gamma.coefficients].concat(),
         standard_errors: Vec::new(),
-        predictions: flatten(&[&prediction.expected_outcome]),
+        predictions: prediction.mean,
     });
 
     for (name, power, input) in [
@@ -168,15 +159,15 @@ fn collect() -> Vec<Fit> {
         ("tweedie1.5/robust/clustered", 1.5, &zeros),
     ] {
         let options = TweedieOptions {
-            robust_se: true,
+            variance: Variance::Sandwich,
             ..TweedieOptions::default()
         };
         let model = tweedie::fit(&input.data(), power, &options, None, None).expect(name);
         out.push(Fit {
             name,
-            coefficients: flatten(&[&model.beta]),
-            standard_errors: flatten(&[model.report.se.as_ref().expect("se")]),
-            predictions: flatten(&[&model.predict(input.x.as_ref()).expect("predict").mean]),
+            standard_errors: defined(&model.se).collect(),
+            predictions: model.predict(input.x.as_ref()).expect("predict").mean,
+            coefficients: model.coefficients,
         });
     }
     out

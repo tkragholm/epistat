@@ -321,15 +321,32 @@ fn posterior_mean_beta(samples: &MtpPosteriorSamples) -> Vec<f64> {
 mod tests {
     use super::*;
     use crate::mtp::posterior::MtpPosteriorDraw;
+    use epistat_linalg::Mat;
+
+    /// The scenario with `exposed` as both designs of the exposed rows and
+    /// `unexposed` as both designs of the unexposed rows.
+    fn scenario<'a>(exposed: &'a Mat<f64>, unexposed: &'a Mat<f64>) -> CounterfactualScenario<'a> {
+        CounterfactualScenario {
+            binary_design_exposed: exposed.as_ref(),
+            mean_design_exposed: exposed.as_ref(),
+            binary_design_unexposed: unexposed.as_ref(),
+            mean_design_unexposed: unexposed.as_ref(),
+        }
+    }
+
+    /// An intercept and an exposure of 0 in the first row and 1 in the
+    /// second, and the same rows unexposed.
+    fn two_periods() -> (Mat<f64>, Mat<f64>) {
+        (
+            Mat::from_fn(2, 2, |i, j| if j == 0 || i == 1 { 1.0 } else { 0.0 }),
+            Mat::from_fn(2, 2, |_i, j| if j == 0 { 1.0 } else { 0.0 }),
+        )
+    }
 
     #[test]
     fn compute_effects_requires_draws() {
-        let scenario = CounterfactualScenario {
-            binary_design_exposed: Mat::from_fn(1, 1, |_i, _j| 1.0),
-            mean_design_exposed: Mat::from_fn(1, 1, |_i, _j| 1.0),
-            binary_design_unexposed: Mat::from_fn(1, 1, |_i, _j| 1.0),
-            mean_design_unexposed: Mat::from_fn(1, 1, |_i, _j| 1.0),
-        };
+        let design = Mat::from_fn(1, 1, |_i, _j| 1.0);
+        let scenario = scenario(&design, &design);
 
         let result = counterfactual_effects(&MtpPosteriorSamples::default(), &scenario);
         assert!(matches!(
@@ -351,28 +368,8 @@ mod tests {
             }],
         };
 
-        let scenario = CounterfactualScenario {
-            binary_design_exposed: Mat::from_fn(2, 2, |i, j| {
-                if j == 0 {
-                    1.0
-                } else if i == 0 {
-                    0.0
-                } else {
-                    1.0
-                }
-            }),
-            mean_design_exposed: Mat::from_fn(2, 2, |i, j| {
-                if j == 0 {
-                    1.0
-                } else if i == 0 {
-                    0.0
-                } else {
-                    1.0
-                }
-            }),
-            binary_design_unexposed: Mat::from_fn(2, 2, |_i, j| if j == 0 { 1.0 } else { 0.0 }),
-            mean_design_unexposed: Mat::from_fn(2, 2, |_i, j| if j == 0 { 1.0 } else { 0.0 }),
-        };
+        let (exposed, unexposed) = two_periods();
+        let scenario = scenario(&exposed, &unexposed);
 
         let effects = counterfactual_effects(&samples, &scenario)
             .expect("matching dimensions should produce effects");
@@ -381,12 +378,8 @@ mod tests {
 
     #[test]
     fn compute_effects_summary_requires_draws() {
-        let scenario = CounterfactualScenario {
-            binary_design_exposed: Mat::from_fn(1, 1, |_i, _j| 1.0),
-            mean_design_exposed: Mat::from_fn(1, 1, |_i, _j| 1.0),
-            binary_design_unexposed: Mat::from_fn(1, 1, |_i, _j| 1.0),
-            mean_design_unexposed: Mat::from_fn(1, 1, |_i, _j| 1.0),
-        };
+        let design = Mat::from_fn(1, 1, |_i, _j| 1.0);
+        let scenario = scenario(&design, &design);
 
         let result = counterfactual_effects_summary(&MtpPosteriorSamples::default(), &scenario);
         assert!(matches!(
@@ -416,28 +409,8 @@ mod tests {
             ],
         };
 
-        let scenario = CounterfactualScenario {
-            binary_design_exposed: Mat::from_fn(2, 2, |i, j| {
-                if j == 0 {
-                    1.0
-                } else if i == 0 {
-                    0.0
-                } else {
-                    1.0
-                }
-            }),
-            mean_design_exposed: Mat::from_fn(2, 2, |i, j| {
-                if j == 0 {
-                    1.0
-                } else if i == 0 {
-                    0.0
-                } else {
-                    1.0
-                }
-            }),
-            binary_design_unexposed: Mat::from_fn(2, 2, |_i, j| if j == 0 { 1.0 } else { 0.0 }),
-            mean_design_unexposed: Mat::from_fn(2, 2, |_i, j| if j == 0 { 1.0 } else { 0.0 }),
-        };
+        let (exposed, unexposed) = two_periods();
+        let scenario = scenario(&exposed, &unexposed);
 
         let summary =
             counterfactual_effects_summary(&samples, &scenario).expect("summary should compute");

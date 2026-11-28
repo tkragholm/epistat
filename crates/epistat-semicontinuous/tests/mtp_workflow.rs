@@ -1,4 +1,5 @@
 use epistat_linalg::Mat;
+use epistat_core::Seed;
 use epistat_semicontinuous::LongitudinalData;
 use epistat_semicontinuous::mtp::{
     self, CounterfactualScenario, MtpOptions, counterfactual_effects_summary,
@@ -35,7 +36,7 @@ fn mtp_public_workflow_produces_effects_and_ppc() {
         burn_in: 40,
         chains: 1,
         keep_draws: true,
-        ..MtpOptions::new(123)
+        ..MtpOptions::new(Seed(123))
     };
 
     let model = mtp::fit(&input, &options).expect("fit should succeed");
@@ -47,11 +48,12 @@ fn mtp_public_workflow_produces_effects_and_ppc() {
     assert!(report.diagnostics.acceptance_rates.is_some());
     assert!(report.posterior_summary.is_some());
 
+    let design = Mat::from_fn(4, 1, |_row, _col| 1.0);
     let scenario = CounterfactualScenario {
-        binary_design_exposed: Mat::from_fn(4, 1, |_row, _col| 1.0),
-        mean_design_exposed: Mat::from_fn(4, 1, |_row, _col| 1.0),
-        binary_design_unexposed: Mat::from_fn(4, 1, |_row, _col| 1.0),
-        mean_design_unexposed: Mat::from_fn(4, 1, |_row, _col| 1.0),
+        binary_design_exposed: design.as_ref(),
+        mean_design_exposed: design.as_ref(),
+        binary_design_unexposed: design.as_ref(),
+        mean_design_unexposed: design.as_ref(),
     };
 
     let effects = counterfactual_effects_summary(samples, &scenario).expect("effects should run");
