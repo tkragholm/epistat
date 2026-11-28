@@ -231,7 +231,20 @@ fn stirling_correction(z: f64) -> f64 {
 /// first order in `e` cancel exactly before they are formed, since
 /// `a e / x0 = b e / y0`, so the exponent is small near the centre and its
 /// error is eps times its own size.
-fn power_factor(a: f64, b: f64, x: f64, y: f64, ln_beta: Option<f64>) -> f64 {
+pub(super) fn power_factor(a: f64, b: f64, x: f64, y: f64, ln_beta: Option<f64>) -> f64 {
+    let (scale, exponent) = power_parts(a, b, x, y, ln_beta);
+    scale * exponent.exp()
+}
+
+/// `ln(x^a y^b / B(a, b))`, from the terms of [`power_factor`].
+pub(super) fn ln_power_factor(a: f64, b: f64, x: f64, y: f64) -> f64 {
+    let (scale, exponent) = power_parts(a, b, x, y, None);
+    scale.ln() + exponent
+}
+
+/// `(scale, exponent)` with `x^a y^b / B(a, b) = scale exp(exponent)`, as
+/// [`power_factor`] describes them.
+fn power_parts(a: f64, b: f64, x: f64, y: f64, ln_beta: Option<f64>) -> (f64, f64) {
     if a.min(b) >= CENTRED_FROM {
         let s = a + b;
         // (a + b) e = b x - a y, from the smaller of x and y.
@@ -242,7 +255,7 @@ fn power_factor(a: f64, b: f64, x: f64, y: f64, ln_beta: Option<f64>) -> f64 {
             - stirling_correction(a)
             - stirling_correction(b)
             + stirling_correction(s);
-        (a / s * b / std::f64::consts::TAU).sqrt() * exponent.exp()
+        ((a / s * b / std::f64::consts::TAU).sqrt(), exponent)
     } else {
         let (ln_x, ln_y) = if x <= y {
             (x.ln(), (-x).ln_1p())
@@ -250,7 +263,7 @@ fn power_factor(a: f64, b: f64, x: f64, y: f64, ln_beta: Option<f64>) -> f64 {
             ((-y).ln_1p(), y.ln())
         };
         let ln_beta = ln_beta.unwrap_or_else(|| self::ln_beta(a, b));
-        (a * ln_x + b * ln_y - ln_beta).exp()
+        (1.0, a * ln_x + b * ln_y - ln_beta)
     }
 }
 
@@ -264,6 +277,71 @@ pub fn cdf(x: f64, a: f64, b: f64) -> f64 {
         return f64::NAN;
     }
     regularised(a, b, x, 1.0 - x)
+}
+
+/// `P(X > x)`, R's `pbeta(x, a, b, lower.tail = FALSE)`: `I_y(b, a)` with
+/// `y = 1 - x`, computed directly so that a small upper tail keeps its
+/// relative precision. NaN as for [`cdf`]; 1 below 0 and 0 above 1.
+#[must_use]
+pub fn sf(x: f64, a: f64, b: f64) -> f64 {
+    if x.is_nan() || !(a > 0.0 && b > 0.0 && a.is_finite() && b.is_finite()) {
+        return f64::NAN;
+    }
+    regularised(b, a, 1.0 - x, x)
+}
+
+/// The beta density at `x`, R's `dbeta(x, a, b)`,
+/// `x^(a - 1) (1 - x)^(b - 1) / B(a, b)`, from the factor
+/// `x^a y^b / B(a, b)` of the incomplete beta function divided by `x y`, so
+/// that it has that factor's accuracy at large shapes. At `x = 0` it is
+/// infinite for `a < 1`, `b` for `a = 1` and 0 above, and at `x = 1` the same
+/// with the shapes exchanged; 0 outside `[0, 1]`. NaN as for [`cdf`].
+#[must_use]
+pub fn pdf(x: f64, a: f64, b: f64) -> f64 {
+    if x.is_nan() || !(a > 0.0 && b > 0.0 && a.is_finite() && b.is_finite()) {
+        return f64::NAN;
+    }
+    if !(0.0..=1.0).contains(&x) {
+        return 0.0;
+    }
+    if x == 0.0 {
+        return end_density(a, b);
+    }
+    if x >= 1.0 {
+        return end_density(b, a);
+    }
+    let y = 1.0 - x;
+    power_factor(a, b, x, y, None) / (x * y)
+}
+
+/// The log of [`pdf`], from the same terms.
+#[must_use]
+pub fn ln_pdf(x: f64, a: f64, b: f64) -> f64 {
+    if x.is_nan() || !(a > 0.0 && b > 0.0 && a.is_finite() && b.is_finite()) {
+        return f64::NAN;
+    }
+    if !(0.0..=1.0).contains(&x) {
+        return f64::NEG_INFINITY;
+    }
+    if x == 0.0 {
+        return end_density(a, b).ln();
+    }
+    if x >= 1.0 {
+        return end_density(b, a).ln();
+    }
+    let y = 1.0 - x;
+    ln_power_factor(a, b, x, y) - x.ln() - y.ln()
+}
+
+/// The density at the end of the interval where the shape `near` acts:
+/// `x^(near - 1)` at `x = 0` is infinite below 1, 1 at 1 and 0 above, and
+/// the constant at `near = 1` is `1 / B(1, far) = far`.
+fn end_density(near: f64, far: f64) -> f64 {
+    match near.partial_cmp(&1.0) {
+        Some(core::cmp::Ordering::Less) => f64::INFINITY,
+        Some(core::cmp::Ordering::Equal) => far,
+        _ => 0.0,
+    }
 }
 
 /// The regularised incomplete beta function `I_x(a, b)`, R's `pbeta(x, a, b)`,
@@ -355,6 +433,39 @@ pub(crate) fn quantile_or_none(p: f64, a: f64, b: f64) -> Option<f64> {
     }
     let upper = p > 0.5;
     let ln_target = if upper { (1.0 - p).ln() } else { p.ln() };
+    invert(a, b, upper, ln_target)
+}
+
+/// The upper-tail quantile, the `x` with `P(X > x) = p`, R's
+/// `qbeta(p, a, b, lower.tail = FALSE)`. It is [`quantile`] at `1 - p`
+/// without forming `1 - p` where that would round: below `p = 1/2` it solves
+/// for the upper tail at `ln p` itself. 1 at `p = 0` and 0 at `p = 1`; NaN as
+/// for [`quantile`].
+#[must_use]
+pub fn isf(p: f64, a: f64, b: f64) -> f64 {
+    isf_or_none(p, a, b).unwrap_or(f64::NAN)
+}
+
+/// [`isf`], `None` where it is NaN.
+pub(crate) fn isf_or_none(p: f64, a: f64, b: f64) -> Option<f64> {
+    if !(a > 0.0 && b > 0.0 && a.is_finite() && b.is_finite() && (0.0..=1.0).contains(&p)) {
+        return None;
+    }
+    if p == 0.0 {
+        return Some(1.0);
+    }
+    if p >= 1.0 {
+        return Some(0.0);
+    }
+    // quantile(1 - p) solves the upper tail when 1 - p > 1/2, at ln p.
+    let upper = p < 0.5;
+    let ln_target = if upper { p.ln() } else { (1.0 - p).ln() };
+    invert(a, b, upper, ln_target)
+}
+
+/// The `x` whose lower tail (or upper tail, with `upper`) has the log
+/// `ln_target`, by the search of the module documentation.
+fn invert(a: f64, b: f64, upper: bool, ln_target: f64) -> Option<f64> {
     let ln_beta = ln_beta(a, b);
     // ln of the tail at t, its excess over the target (positive when t is above
     // the quantile) and the slope of the excess in t.

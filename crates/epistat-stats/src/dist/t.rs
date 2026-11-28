@@ -45,6 +45,30 @@ pub fn ln_pdf(z: f64, nu: f64) -> f64 {
     constant - f64::midpoint(nu, 1.0) * (z * z / nu).ln_1p()
 }
 
+/// The t density at `z` with `nu` degrees of freedom, R's `dt(z, nu)`. NaN
+/// when `z` is NaN or `nu` is not positive.
+///
+/// The constant `ln Gamma((nu + 1) / 2) - ln Gamma(nu / 2)` is formed without
+/// the cancellation of two large log-gamma values from `nu = 2000` (see
+/// [`super::beta`]), so the density keeps its precision at the large degrees
+/// of freedom that [`ln_pdf`] loses it at, by about `eps nu ln nu` absolute.
+#[must_use]
+pub fn pdf(z: f64, nu: f64) -> f64 {
+    ln_density(z, nu).exp()
+}
+
+/// The log of [`pdf`], from the same terms.
+pub(crate) fn ln_density(z: f64, nu: f64) -> f64 {
+    if z.is_nan() || nu.is_nan() || nu <= 0.0 {
+        return f64::NAN;
+    }
+    if nu.is_infinite() {
+        return super::normal::ln_pdf(z);
+    }
+    let constant = super::beta::ln_gamma_ratio(0.5 * nu, 0.5) - 0.5 * (nu * PI).ln();
+    constant - f64::midpoint(nu, 1.0) * (z * z / nu).ln_1p()
+}
+
 /// `P(T > |z|)`, half the two-sided tail.
 fn upper_tail(z: f64, nu: f64) -> f64 {
     if z.is_infinite() {
@@ -106,6 +130,21 @@ pub fn quantile(p: f64, nu: f64) -> f64 {
         return f64::INFINITY;
     }
     search(p, nu).unwrap_or(f64::NAN)
+}
+
+/// The upper-tail quantile, the `z` with `P(T > z) = p`, R's
+/// `qt(p, nu, lower.tail = FALSE)`: `-quantile(p, nu)`, by symmetry, so a
+/// small `p` keeps its precision. NaN as for [`quantile`].
+#[must_use]
+pub fn isf(p: f64, nu: f64) -> f64 {
+    -quantile(p, nu)
+}
+
+/// `P(|T| > |z|)`, the two-sided p-value of a t statistic, computed directly.
+/// NaN as for [`cdf`].
+#[must_use]
+pub fn two_sided_p(z: f64, nu: f64) -> f64 {
+    2.0 * sf(z.abs(), nu)
 }
 
 /// The Newton search of [`quantile`], `None` when the bracket passes `1e300`.

@@ -22,7 +22,11 @@
     reason = "the probabilities 0 and 1 and integer counts are compared exactly"
 )]
 
-use super::discrete::{dbinom, floor_count, pbinom_lower, pbinom_upper, support_point};
+use super::discrete::{
+    LOWER_FUZZ, UPPER_FUZZ, cornish_fisher, dbinom, floor_count, ln_dbinom, pbinom_lower,
+    pbinom_upper, smallest_count, support_point,
+};
+use super::normal;
 
 /// Whether `n` and `p` are a binomial distribution: `n` a non-negative
 /// integer and `p` in `[0, 1]`.
@@ -44,6 +48,70 @@ pub fn pmf(x: f64, n: f64, p: f64) -> f64 {
         Some(k) if k <= n => dbinom(k, n, p),
         _ => 0.0,
     }
+}
+
+/// `ln P(X = x)`, R's `dbinom(x, n, p, log = TRUE)`, from the terms of
+/// [`pmf`] without the exponential, so it is finite where [`pmf`]
+/// underflows. `-inf` where [`pmf`] is 0; NaN as for [`pmf`].
+#[must_use]
+pub fn ln_pmf(x: f64, n: f64, p: f64) -> f64 {
+    if x.is_nan() || !valid(n, p) {
+        return f64::NAN;
+    }
+    match support_point(x) {
+        Some(k) if k <= n => ln_dbinom(k, n, p),
+        _ => f64::NEG_INFINITY,
+    }
+}
+
+/// The `q` quantile, R's `qbinom(q, n, p)`: the smallest count `k` with
+/// `P(X <= k) >= q`, compared after lowering `q` by a relative 12 eps, so
+/// that a `q` computed as `P(X <= k)` up to rounding gives `k`, as in R. The
+/// search starts at the Cornish-Fisher approximation and moves by doubling
+/// steps and then bisection. 0 at `q = 0` and `n` at `q = 1`; NaN for `q`
+/// outside `[0, 1]` or `n` and `p` as for [`pmf`].
+#[must_use]
+pub fn quantile(q: f64, n: f64, p: f64) -> f64 {
+    if !(valid(n, p) && (0.0..=1.0).contains(&q)) {
+        return f64::NAN;
+    }
+    if q == 0.0 || p == 0.0 {
+        return 0.0;
+    }
+    if q == 1.0 || p == 1.0 {
+        return n;
+    }
+    let target = q * (1.0 - LOWER_FUZZ);
+    smallest_count(start(n, p, normal::quantile(q)), n, |k| {
+        pbinom_lower(k, n, p) >= target
+    })
+}
+
+/// The upper-tail quantile, R's `qbinom(q, n, p, lower.tail = FALSE)`: the
+/// smallest count `k` with `P(X > k) <= q`, compared after raising `q` by a
+/// relative 6 eps, from the upper tail computed directly. `n` at `q = 0` and
+/// 0 at `q = 1`; NaN as for [`quantile`].
+#[must_use]
+pub fn isf(q: f64, n: f64, p: f64) -> f64 {
+    if !(valid(n, p) && (0.0..=1.0).contains(&q)) {
+        return f64::NAN;
+    }
+    if q == 1.0 || p == 0.0 {
+        return 0.0;
+    }
+    if q == 0.0 || p == 1.0 {
+        return n;
+    }
+    let target = q * (1.0 + UPPER_FUZZ);
+    smallest_count(start(n, p, normal::isf(q)), n, |k| {
+        pbinom_upper(k, n, p) <= target
+    })
+}
+
+/// The Cornish-Fisher start of a search at the normal quantile `z`.
+fn start(n: f64, p: f64, z: f64) -> f64 {
+    let sd = (n * p * (1.0 - p)).sqrt();
+    cornish_fisher(n * p, sd, (1.0 - 2.0 * p) / sd, z)
 }
 
 /// `P(X <= x)` for `X` binomial with `n` trials and probability `p`, R's

@@ -65,6 +65,19 @@ pub(crate) fn dpois(x: f64, m: f64) -> f64 {
     (-stirlerr(x) - bd0(x, m)).exp() / (TWO_PI * x).sqrt()
 }
 
+/// `ln P(X = x)` for `X` Poisson with mean `m >= 0`, from the terms of
+/// [`dpois`] without the exponential, so it is finite where `dpois`
+/// underflows.
+pub(crate) fn ln_dpois(x: f64, m: f64) -> f64 {
+    if m == 0.0 {
+        return if x == 0.0 { 0.0 } else { f64::NEG_INFINITY };
+    }
+    if x == 0.0 {
+        return -m;
+    }
+    -stirlerr(x) - bd0(x, m) - 0.5 * (TWO_PI * x).ln()
+}
+
 /// `P(X <= x)` for `X` Poisson with mean `m > 0`, and `x` an integer.
 pub(crate) fn ppois_lower(x: f64, m: f64) -> f64 {
     if x < 0.0 {
@@ -104,6 +117,102 @@ pub(crate) fn dbinom(x: f64, n: f64, p: f64) -> f64 {
     }
     let lc = stirlerr(n) - stirlerr(x) - stirlerr(n - x) - bd0(x, n * p) - bd0(n - x, n * q);
     (lc).exp() * (n / (TWO_PI * x * (n - x))).sqrt()
+}
+
+/// `ln P(X = x)` for `X` binomial with `n` trials and probability `p`, from
+/// the terms of [`dbinom`] without the exponential. The end points use
+/// `ln(1 - p)` from `p` directly.
+#[expect(
+    clippy::float_cmp,
+    reason = "the end points of the support are integers"
+)]
+pub(crate) fn ln_dbinom(x: f64, n: f64, p: f64) -> f64 {
+    let q = 1.0 - p;
+    if p == 0.0 {
+        return if x == 0.0 { 0.0 } else { f64::NEG_INFINITY };
+    }
+    if q == 0.0 {
+        return if x == n { 0.0 } else { f64::NEG_INFINITY };
+    }
+    if x == 0.0 {
+        return n * (-p).ln_1p();
+    }
+    if x == n {
+        return n * p.ln();
+    }
+    let lc = stirlerr(n) - stirlerr(x) - stirlerr(n - x) - bd0(x, n * p) - bd0(n - x, n * q);
+    lc + 0.5 * (n / (TWO_PI * x * (n - x))).ln()
+}
+
+/// The relative amount by which a lower-tail probability is lowered before
+/// a discrete quantile compares the distribution function with it, so that
+/// a `p` computed as `P(X <= k)` with a rounding error of a few units in the
+/// last place still gives `k`. R's `qpois` and `qbinom` keep such a `p` at
+/// `k` as well, by a margin between 8 and 16 eps measured from outside.
+pub(crate) const LOWER_FUZZ: f64 = 12.0 * f64::EPSILON;
+
+/// The same for an upper-tail probability, which is raised; R's margin
+/// there measures between 4 and 8 eps.
+pub(crate) const UPPER_FUZZ: f64 = 6.0 * f64::EPSILON;
+
+/// The smallest integer `k` in `[0, top]` with `reached(k)`, for a predicate
+/// that is false up to some count and true from it on, searched from
+/// `start`: steps that double in length find a bracket on the side where the
+/// predicate changes, and bisection on the integers closes it. `top` is
+/// returned when the predicate does not hold below it.
+pub(crate) fn smallest_count(start: f64, top: f64, reached: impl Fn(f64) -> bool) -> f64 {
+    let first = if start.is_nan() {
+        0.0
+    } else {
+        start.floor().clamp(0.0, top)
+    };
+    let (mut lo, mut hi);
+    if reached(first) {
+        hi = first;
+        let mut step = 1.0;
+        loop {
+            if hi == 0.0 {
+                return 0.0;
+            }
+            let below = (hi - step).max(0.0);
+            if !reached(below) {
+                lo = below;
+                break;
+            }
+            hi = below;
+            step *= 2.0;
+        }
+    } else {
+        lo = first;
+        let mut step = 1.0;
+        loop {
+            if lo >= top {
+                return top;
+            }
+            let above = (lo + step).min(top);
+            if reached(above) {
+                hi = above;
+                break;
+            }
+            lo = above;
+            step *= 2.0;
+        }
+    }
+    while hi - lo > 1.0 {
+        let mid = (lo + (hi - lo) / 2.0).floor();
+        if reached(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
+}
+
+/// The start of a discrete quantile search: the Cornish-Fisher expansion
+/// `mean + sd (z + skewness (z^2 - 1) / 6)` at the normal quantile `z`.
+pub(crate) fn cornish_fisher(mean: f64, sd: f64, skewness: f64, z: f64) -> f64 {
+    mean + sd * (z + skewness * (z * z - 1.0) / 6.0)
 }
 
 /// `P(X <= x)` for `X` binomial with `n` trials and probability `p` in
