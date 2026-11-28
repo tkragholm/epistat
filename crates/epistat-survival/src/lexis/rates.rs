@@ -36,6 +36,35 @@
 //! R would fail on them. A piece of length 0 with an event is an error: the
 //! rate is not defined.
 //!
+//! # Groups without events
+//!
+//! When a column of the design is 0 on every piece with events and has one
+//! sign, not all 0, on the pieces without, the likelihood rises without a
+//! finite maximum as its coefficient goes to minus infinity (for a column not
+//! below 0) or to plus infinity (not above 0): the pieces where it is not 0
+//! get a fitted rate that tends to 0, and the pieces where it is 0 are not
+//! affected. The indicator of a group without events, a factor level coded as
+//! a column of its own, is such a column. R's `glm` stops at a coefficient of
+//! large magnitude, with a rate ratio like `1e-9` or `1e9` and the limits 0
+//! and infinity, which are not estimates.
+//!
+//! [`fit_rates`] finds these columns and reports them in [`Rates::separated`].
+//! The coefficient of such a column is `None`, and so is every contrast of
+//! [`Rates::ci_lin`] and [`Rates::ci_exp`] with a nonzero weight on it, with
+//! the reason in [`LinCi::unestimable`]. The other coefficients are those of
+//! the limit of the likelihood as the coefficient goes to infinity: the fit of
+//! the pieces on which the column is 0, which R's coefficients approach to
+//! within its convergence tolerance. The pieces left out are counted in
+//! [`Rates::n_separated`]. The search is repeated on the pieces that remain,
+//! since leaving pieces out can give another column one sign.
+//!
+//! The check is exact for a column of its own. A separation that only a
+//! combination of columns shows, such as a reference level without events
+//! under an intercept and the indicators of the other levels, is not found,
+//! and its coefficients are those `glm` gives; coding the factor with one
+//! indicator per level and no intercept makes it a column of its own. Data
+//! without any event leave nothing to estimate and are an error.
+//!
 //! # Cells and pieces
 //!
 //! The pieces with the same design row have the likelihood of one cell with
@@ -87,19 +116,45 @@ impl Default for RateOptions {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct Rates {
-    /// The Poisson fit, over the pieces with exposure only: the coefficients
-    /// with `None` for an aliased column, and the covariance.
+    /// The Poisson fit, over the pieces used only: the coefficients with
+    /// `None` for an aliased or a separated column, and the covariance.
     pub fit: Fit,
     /// The number of pieces or cells given.
     pub n_input: usize,
-    /// The number used: those with positive exposure.
+    /// The number used: those with positive exposure that no separated column
+    /// leaves out.
     pub n_used: usize,
     /// The number left out for having no exposure.
     pub n_zero_length: usize,
-    /// The sum of the events of the pieces used.
+    /// The number left out because a separated column is not 0 on them.
+    pub n_separated: usize,
+    /// The columns that are 0 on every piece with events and of one sign on
+    /// the others, in ascending order, whose coefficients have no finite
+    /// estimate; see the module documentation.
+    pub separated: Vec<usize>,
+    /// The sum of the events of the pieces used, which is that of all
+    /// pieces.
     pub events: f64,
     /// The sum of the exposure of the pieces used.
     pub person_time: f64,
+}
+
+/// Why a coefficient or a contrast of a rate model has no estimate.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unestimable {
+    /// The column is a combination of other columns on the pieces used, and
+    /// the contrast puts weight on it.
+    Aliased {
+        /// The first such column with a nonzero weight.
+        column: usize,
+    },
+    /// The column is separated: the likelihood has no finite maximum in its
+    /// coefficient, and the contrast puts weight on it.
+    Separated {
+        /// The first such column with a nonzero weight.
+        column: usize,
+    },
 }
 
 /// A log-linear prediction with its Wald limits, as a row of `ci.lin`.
@@ -116,6 +171,8 @@ pub struct LinCi {
     pub upper: Option<f64>,
     /// The two-sided Wald p-value of `l beta = 0`.
     pub p_value: Option<f64>,
+    /// Why the contrast has no estimate, `None` when it has one.
+    pub unestimable: Option<Unestimable>,
 }
 
 /// The exponential of a prediction and its limits, as a row of `ci.exp`.
@@ -128,6 +185,8 @@ pub struct ExpCi {
     pub lower: Option<f64>,
     /// The upper limit.
     pub upper: Option<f64>,
+    /// Why the contrast has no estimate, `None` when it has one.
+    pub unestimable: Option<Unestimable>,
 }
 
 /// The refusal of `value`, at row `row` of `what`, where a count or a length
@@ -152,14 +211,17 @@ fn not_a_count(what: &'static str, value: f64, row: usize) -> InputError {
 /// Fit the rate model of the events on the columns of the design, with the
 /// log of `length` as offset.
 ///
-/// `columns` are the columns of the design, each as long as `length`.
+/// `columns` are the columns of the design, each as long as `length`. A
+/// column that is 0 on every piece with events and of one sign on the others
+/// is reported in [`Rates::separated`] and the other coefficients are fitted
+/// without the pieces on which it is not 0, see the module documentation.
 ///
 /// # Errors
 ///
 /// An input error when a column or `events` has the wrong length, a value is
 /// not finite, a length or event count is negative, a piece with length 0 has
-/// events, there is no column, no piece has exposure, or the fit fails, see
-/// [`epistat_glm::GlmError`].
+/// events, there is no column, no piece has exposure, no piece has an event,
+/// or the fit fails, see [`epistat_glm::GlmError`].
 pub fn fit_rates(
     length: &[f64],
     events: &[f64],
@@ -200,6 +262,13 @@ pub fn fit_rates(
     if keep.is_empty() {
         return Err(Error::no_information("no piece has exposure"));
     }
+    let n_exposed = keep.len();
+    let separated = separate(columns, events, &mut keep);
+    if keep.is_empty() {
+        return Err(Error::no_information(
+            "no piece has an event, so no rate has an estimate",
+        ));
+    }
     let x = Mat::from_fn(keep.len(), columns.len(), |r, j| columns[j][keep[r]]);
     let y: Vec<f64> = keep.iter().map(|&i| events[i]).collect();
     let offset: Vec<f64> = keep.iter().map(|&i| length[i].ln()).collect();
@@ -215,17 +284,78 @@ pub fn fit_rates(
             None,
         )?)
         .map_err(Error::model("the Poisson model"))?;
+    // A separated column is 0 on every piece used, and glm aliases a column
+    // of zeros, so its coefficient and covariance are None.
     Ok(Rates {
         fit,
         n_input: n,
         n_used: keep.len(),
-        n_zero_length: n - keep.len(),
+        n_zero_length: n - n_exposed,
+        n_separated: n_exposed - keep.len(),
+        separated,
         events: y.iter().sum(),
         person_time: keep.iter().map(|&i| length[i]).sum(),
     })
 }
 
+/// The columns that are 0 on every piece of `keep` with events and of one
+/// sign, not all 0, on the others, in ascending order. Each one found takes
+/// the pieces on which it is not 0 out of `keep`, and the search repeats on
+/// the pieces that remain until a pass finds none.
+fn separate(columns: &[&[f64]], events: &[f64], keep: &mut Vec<usize>) -> Vec<usize> {
+    let mut separated = Vec::new();
+    loop {
+        let mut found = false;
+        for (j, column) in columns.iter().enumerate() {
+            if separated.contains(&j) {
+                continue;
+            }
+            let mut positive: Option<bool> = None;
+            let one_sided = keep.iter().all(|&i| {
+                let v = column[i];
+                if v == 0.0 {
+                    return true;
+                }
+                if events[i] > 0.0 {
+                    return false;
+                }
+                *positive.get_or_insert(v > 0.0) == (v > 0.0)
+            });
+            if one_sided && positive.is_some() {
+                separated.push(j);
+                keep.retain(|&i| column[i] == 0.0);
+                found = true;
+            }
+        }
+        if !found {
+            break;
+        }
+    }
+    separated.sort_unstable();
+    separated
+}
+
 impl Rates {
+    /// Why coefficient `column` has no estimate: [`Unestimable::Separated`]
+    /// for a column in [`Rates::separated`], [`Unestimable::Aliased`] for
+    /// another column whose coefficient is `None`, and `None` when it has an
+    /// estimate or there is no such column.
+    #[must_use]
+    pub fn unestimable(&self, column: usize) -> Option<Unestimable> {
+        if self.separated.contains(&column) {
+            Some(Unestimable::Separated { column })
+        } else if self
+            .fit
+            .coefficients
+            .get(column)
+            .is_some_and(Option::is_none)
+        {
+            Some(Unestimable::Aliased { column })
+        } else {
+            None
+        }
+    }
+
     /// The linear predictions `l beta` of the contrast rows, with standard
     /// errors, limits at `level` and p-values, as `Epi::ci.lin`.
     ///
@@ -254,14 +384,19 @@ impl Rates {
                 }
                 .into());
             }
-            let estimable = (0..p).all(|j| l[j] == 0.0 || self.fit.coefficients[j].is_some());
-            if !estimable {
+            let weighted = || (0..p).filter(|&j| l[j] != 0.0);
+            let unestimable = weighted()
+                .find(|j| self.separated.contains(j))
+                .or_else(|| weighted().find(|&j| self.fit.coefficients[j].is_none()))
+                .and_then(|j| self.unestimable(j));
+            if unestimable.is_some() {
                 out.push(LinCi {
                     estimate: None,
                     se: None,
                     lower: None,
                     upper: None,
                     p_value: None,
+                    unestimable,
                 });
                 continue;
             }
@@ -296,6 +431,7 @@ impl Rates {
                 upper: se.map(|s| estimate + z * s),
                 p_value: se
                     .and_then(|s| (s > 0.0).then(|| 2.0 * normal::cdf(-(estimate / s).abs()))),
+                unestimable: None,
             });
         }
         Ok(out)
@@ -316,6 +452,7 @@ impl Rates {
                 estimate: c.estimate.map(f64::exp),
                 lower: c.lower.map(f64::exp),
                 upper: c.upper.map(f64::exp),
+                unestimable: c.unestimable,
             })
             .collect())
     }
