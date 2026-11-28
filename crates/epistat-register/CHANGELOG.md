@@ -29,6 +29,7 @@ The crate grows from person-time, spans and deflation into the main tools for re
 - `Error`, with `CodeItemProblem`, `CrosswalkProblem` and `PedigreeProblem`, which implements `Classify`.
 - `CpiTable::try_new`, which refuses an index that is not finite and positive and a year given twice with `InputError::Domain` at its row, where `CpiTable::new` keeps a zero index and lets the later of two rows win; `CpiTable::years`, the first and last year of the table; and `CpiTable::denmark` with the feature `denmark`.
 - `age::age_at`, the age on a `Day` of a person born on a `Day`, beside `age_in_years` on day counts; `person_time::day_from_sas_seconds`, the `Day` and time of day of a SAS datetime; and `Day` re-exported at the crate root. SAS dates enter through `Day::from_sas_days` and `Day::from_sas_column`.
+- `wtd::WtdFit` implements `epistat_core::Tidy`: its coefficient table names the parameters on the scale of estimation, without standard errors since the fit computes no information matrix, and its glance reports the log-likelihood, AIC and convergence.
 
 ### Deprecated
 

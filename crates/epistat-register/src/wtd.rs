@@ -95,7 +95,10 @@ use epistat_stats::dist::{gamma, normal};
 
 use crate::Error;
 use crate::error::csr;
-use epistat_core::InputError;
+use epistat_core::{
+    Coefficients, Covariance, EffectScale, Estimate, Glance, InputError, Level, Term, Tidy,
+    VarianceKind,
+};
 
 /// The family of the inter-arrival distribution.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -172,6 +175,57 @@ impl WtdFit {
     pub fn recurrence_density(&self, t: f64) -> f64 {
         let (a, b) = self.parameters;
         density(self.family, a, b, t).0
+    }
+}
+
+/// The coefficient table of the fit on the scale of estimation,
+/// `logit(prevalent)` and then `mu, log(sigma)` or `log(alpha), log(beta)`.
+///
+/// The fit computes no information matrix, so every standard error, interval
+/// and p-value is `None`, whichever variance is asked for; the table names
+/// the estimates and the glance reports the fit.
+///
+/// ```
+/// use epistat_core::Tidy;
+/// use epistat_register::wtd::{Family, fit_wtd};
+///
+/// let times: Vec<f64> = (0..200).map(|i| f64::from(i % 50) * 7.0 + 1.0).collect();
+/// let fit = fit_wtd(&times, 365.0, Family::LogNormal)?;
+/// let table = fit.tidy()?;
+/// assert_eq!(table.names().collect::<Vec<_>>(), ["logit(prevalent)", "mu", "log(sigma)"]);
+/// assert_eq!(fit.glance().n, 200);
+/// # Ok::<(), epistat_register::Error>(())
+/// ```
+impl Tidy for WtdFit {
+    type Error = Error;
+
+    fn coefficients(&self, level: Level, variance: VarianceKind) -> Result<Coefficients, Error> {
+        let names = match self.family {
+            Family::LogNormal => ["logit(prevalent)", "mu", "log(sigma)"],
+            Family::Weibull => ["logit(prevalent)", "log(alpha)", "log(beta)"],
+        };
+        let terms = names
+            .iter()
+            .zip(self.estimation_scale)
+            .map(|(&name, b)| Term::new(name, Some(Estimate::point(b)), None))
+            .collect();
+        Ok(Coefficients::new(
+            terms,
+            Covariance::new(3, vec![None; 9])?,
+            level,
+            variance,
+            EffectScale::Identity,
+        )?)
+    }
+
+    fn default_variance(&self) -> VarianceKind {
+        VarianceKind::ModelBased
+    }
+
+    fn glance(&self) -> Glance {
+        Glance::new(self.n, self.n, self.converged)
+            .with_log_likelihood(Some(self.log_likelihood), None)
+            .with_information(Some(2.0 * 3.0 - 2.0 * self.log_likelihood), None)
     }
 }
 
