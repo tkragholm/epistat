@@ -30,7 +30,8 @@ use epistat_did::att_gt::{
 };
 use epistat_did::did_cluster_sums;
 use epistat_honestdid::honest::{
-    self, Calibration, HonestOptions, JointPathOptions, Restriction, RmBound, Target,
+    self, Calibration, Grid, HonestOptions, JointPathOptions, OneSided, Restriction, RmBound,
+    Target,
 };
 use epistat_inference::Clusters;
 use epistat_linalg::MatRef;
@@ -336,7 +337,8 @@ fn honest(out: &mut Vec<(&'static str, u64)>, study: &EventStudy) {
     let level = Level::confidence(CONFIDENCE).expect("level");
     let options = HonestOptions {
         level,
-        ..HonestOptions::new(Bootstrap::new(DRAWS, Seed(0)))
+        least_favorable: Some(Bootstrap::new(DRAWS, Seed(0))),
+        ..HonestOptions::default()
     };
     let scale = honest_scale(study.covariance());
     let input = scaled(study, scale);
@@ -352,7 +354,7 @@ fn honest(out: &mut Vec<(&'static str, u64)>, study: &EventStudy) {
     );
 
     let restriction = Restriction::RelativeMagnitude {
-        mbar: RM_GRID.to_vec(),
+        mbar: Grid::Values(RM_GRID.to_vec()),
         bound: RmBound::ParallelTrends,
     };
     let offset = input.n_pre();
@@ -385,8 +387,8 @@ fn honest(out: &mut Vec<(&'static str, u64)>, study: &EventStudy) {
         h.f(variance.max(0.0).sqrt() * scale);
         for row in &summary.rows {
             h.f(row.value);
-            h.o(row.interval.lower.map(|v| v * scale));
-            h.o(row.interval.upper.map(|v| v * scale));
+            h.o(row.interval.and_then(|i| i.lower).map(|v| v * scale));
+            h.o(row.interval.and_then(|i| i.upper).map(|v| v * scale));
             h.o(row.identified.and_then(|set| set.lower).map(|v| v * scale));
             h.o(row.identified.and_then(|set| set.upper).map(|v| v * scale));
             h.text(row.delta.label());
@@ -399,14 +401,15 @@ fn honest(out: &mut Vec<(&'static str, u64)>, study: &EventStudy) {
         let region = honest::joint_path(
             &input,
             &Restriction::RelativeMagnitude {
-                mbar: vec![m],
+                mbar: Grid::Values(vec![m]),
                 bound: RmBound::ParallelTrends,
             },
             &JointPathOptions {
                 level,
                 null: 0.0 / scale,
                 calibration: Calibration::Gaussian(Bootstrap::new(DRAWS, Seed(JOINT_SEED))),
-                ..JointPathOptions::new(Bootstrap::new(DRAWS, Seed(0)))
+                least_favorable: Some(Bootstrap::new(DRAWS, Seed(0))),
+                ..JointPathOptions::default()
             },
         )
         .expect("joint path");
@@ -431,22 +434,27 @@ fn honest(out: &mut Vec<(&'static str, u64)>, study: &EventStudy) {
     }
     out.push(("honest/joint_path", h.finish()));
 
-    let m = honest::smoothness_bound_from_pretrends(study, Level::alpha(0.05).expect("level"))
-        .expect("smoothness m");
+    let m = honest::smoothness_bound_from_pretrends(
+        study,
+        OneSided(Level::alpha(0.05).expect("level")),
+    )
+    .expect("smoothness m");
     let mut h = Hash::new();
     h.f(m);
     let grid = vec![0.0, 0.5 * m / scale, m / scale];
     let summary = honest::summarize(
         &input,
         &Target::Weights(functionals[n_post].clone()),
-        &Restriction::Smoothness { m: grid },
+        &Restriction::Smoothness {
+            m: Grid::Values(grid),
+        },
         &options,
     )
     .expect("smoothness");
     for row in &summary.rows {
         h.f(row.value * scale);
-        h.o(row.interval.lower.map(|v| v * scale));
-        h.o(row.interval.upper.map(|v| v * scale));
+        h.o(row.interval.and_then(|i| i.lower).map(|v| v * scale));
+        h.o(row.interval.and_then(|i| i.upper).map(|v| v * scale));
         h.text(row.delta.label());
     }
     out.push(("honest/smoothness", h.finish()));

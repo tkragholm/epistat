@@ -177,37 +177,58 @@ pub enum RmBound {
     LinearTrend,
 }
 
+/// The values of `M` or `Mbar` a summary reports, R's `Mvec` and
+/// `Mbarvec`.
+#[non_exhaustive]
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum Grid {
+    /// `HonestDiD`'s default grid: for `M`, ten values from 0 to
+    /// [`smoothness_bound_from_pretrends`] at a one-sided level of 0.05 (or
+    /// to the standard error of the one pre-treatment coefficient), for
+    /// `Mbar` ten values from 0 to 2. R's `Mvec = NULL`.
+    #[default]
+    Default,
+    /// The given values: at least one, each finite and not negative, and
+    /// none smaller than the one before it, so that
+    /// [`SensitivitySummary::breakdown`] reads the rows in increasing order.
+    Values(Vec<f64>),
+}
+
 /// The set of deviations from parallel trends the analysis allows, with the
 /// values of its parameter to report.
 ///
-/// An empty list of values asks for `HonestDiD`'s default grid: for `M`, ten
-/// values from 0 to [`smoothness_bound_from_pretrends`] at level 0.05 (or to
-/// the standard error of the one pre-treatment coefficient), for `Mbar` ten
-/// values from 0 to 2.
+/// `M` is in the units of the outcome per period per period: the largest
+/// change of the slope of the deviation from one period to the next. `Mbar`
+/// has no unit, a multiple of the largest pre-treatment violation.
 #[non_exhaustive]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Restriction {
     /// `Delta^SD(M)`: the slope of the deviation changes by at most `M`
     /// between adjacent periods. R's `Mvec`.
     Smoothness {
-        /// The values of `M`, each finite and non-negative.
-        m: Vec<f64>,
+        /// The values of `M`.
+        m: Grid,
     },
     /// `Delta^RM(Mbar)` or `Delta^SDRM(Mbar)`: post-treatment violations are
     /// at most `Mbar` times the largest pre-treatment one. R's `Mbarvec`.
     RelativeMagnitude {
-        /// The values of `Mbar`, each finite and non-negative.
-        mbar: Vec<f64>,
+        /// The values of `Mbar`.
+        mbar: Grid,
         /// Which pre-treatment violation `Mbar` multiplies.
         bound: RmBound,
     },
 }
 
 impl Restriction {
-    fn values(&self) -> &[f64] {
-        match self {
+    /// The given values, `None` for the default grid.
+    fn values(&self) -> Option<&[f64]> {
+        let grid = match self {
             Self::Smoothness { m } => m,
             Self::RelativeMagnitude { mbar, .. } => mbar,
+        };
+        match grid {
+            Grid::Default => None,
+            Grid::Values(values) => Some(values),
         }
     }
 }
@@ -289,7 +310,11 @@ impl Method {
 }
 
 /// The options of [`summarize`].
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// The default is `HonestDiD`'s method, the 95% level, no bias or
+/// monotonicity restriction and no least-favourable draws, which only the
+/// `C-LF` hybrid needs.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct HonestOptions {
     /// How the rows are computed. `None` takes `HonestDiD`'s default: the
     /// FLCI under the smoothness restriction, `C-F` with a sign or
@@ -304,25 +329,13 @@ pub struct HonestOptions {
     /// A monotone deviation from parallel trends. R's
     /// `monotonicityDirection`. At most one of `bias` and `monotonicity`.
     pub monotonicity: Option<Monotonicity>,
-    /// The draws of the least-favourable critical value and their seed, for
-    /// the `C-LF` hybrid. `HonestDiD`'s R default is 1,000 draws from seed 0,
-    /// so a caller who wants R's numbers passes `Bootstrap::new(1_000, Seed(0))`.
-    pub least_favorable: Bootstrap,
-}
-
-impl HonestOptions {
-    /// The default method, the 95% level and no bias or monotonicity
-    /// restriction, with the given least-favourable draws and seed.
-    #[must_use]
-    pub fn new(least_favorable: Bootstrap) -> Self {
-        Self {
-            method: None,
-            level: Level::default(),
-            bias: None,
-            monotonicity: None,
-            least_favorable,
-        }
-    }
+    /// The draws of the least-favourable critical value and their seed, read
+    /// only by the `C-LF` hybrid, the default under the relative-magnitude
+    /// restriction; [`summarize`] refuses that method without them. No other
+    /// method draws. `HonestDiD`'s R default is 1,000 draws from seed 0, so a
+    /// caller who wants R's numbers passes
+    /// `Some(Bootstrap::new(1_000, Seed(0)))`.
+    pub least_favorable: Option<Bootstrap>,
 }
 
 /// The class of restrictions of a summary, by `HonestDiD`'s name for it.
@@ -463,12 +476,14 @@ impl IdentifiedSet {
 pub struct SensitivityRow {
     /// The value of `M` or `Mbar`.
     pub value: f64,
-    /// The robust confidence interval, or the identified set under
-    /// [`Method::IdentifiedSet`]. An end is `None` where it is undefined
-    /// (an empty identified set) and infinite where the set is unbounded.
-    pub interval: Interval,
-    /// The identified set, under the relative-magnitude restriction, where
-    /// the interval is built around it.
+    /// The robust confidence interval at [`HonestOptions::level`]; `None`
+    /// under [`Method::IdentifiedSet`], whose set has no confidence level and
+    /// is in [`identified`](Self::identified). An end is `None` where it is
+    /// undefined and infinite where the set is unbounded.
+    pub interval: Option<Interval>,
+    /// The identified set: under [`Method::IdentifiedSet`], and under the
+    /// relative-magnitude restriction, where the interval is built around
+    /// it. Both ends are `None` when the set is empty.
     pub identified: Option<IdentifiedSet>,
     /// How the row was computed.
     pub method: Method,
@@ -487,21 +502,46 @@ pub struct SensitivitySummary {
     pub solver: SolverCounts,
 }
 
+/// The breakdown value of a summary, [`SensitivitySummary::breakdown`].
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Breakdown {
+    /// The largest value of the grid up to which every row excludes zero.
+    pub value: f64,
+    /// Whether a later row of the grid includes zero, so that the breakdown
+    /// value of the restriction lies between [`value`](Self::value) and the
+    /// next value of the grid. When it is `false` every row excludes zero,
+    /// and the breakdown value of the restriction is at least `value`.
+    pub exact: bool,
+}
+
 impl SensitivitySummary {
-    /// The breakdown value: the largest `M` or `Mbar` of the rows, taken in
-    /// the order given, up to which every interval excludes zero. `None` when
-    /// the first interval includes zero or has an undefined end. When every
-    /// interval excludes zero it is the last value, a lower bound on the
-    /// breakdown value of the whole restriction.
+    /// The breakdown value: the largest `M` or `Mbar` of the rows, which are
+    /// in increasing order, up to which every interval (or identified set,
+    /// under [`Method::IdentifiedSet`]) excludes zero. `None` when the first
+    /// row includes zero or has an undefined end.
     #[must_use]
-    pub fn breakdown(&self) -> Option<f64> {
-        let mut breakdown = None;
+    pub fn breakdown(&self) -> Option<Breakdown> {
+        let mut breakdown: Option<Breakdown> = None;
         for row in &self.rows {
-            match (row.interval.lower, row.interval.upper) {
+            let ends = match (row.interval, row.identified) {
+                (Some(interval), _) => (interval.lower, interval.upper),
+                (None, Some(set)) => (set.lower, set.upper),
+                (None, None) => (None, None),
+            };
+            match ends {
                 (Some(lower), Some(upper)) if lower > 0.0 || upper < 0.0 => {
-                    breakdown = Some(row.value);
+                    breakdown = Some(Breakdown {
+                        value: row.value,
+                        exact: false,
+                    });
                 }
-                _ => break,
+                _ => {
+                    if let Some(found) = breakdown.as_mut() {
+                        found.exact = true;
+                    }
+                    break;
+                }
             }
         }
         breakdown
@@ -518,7 +558,30 @@ fn interval(lower: f64, upper: f64, level: Level) -> Interval {
 }
 
 /// The event study in the engine's form.
+///
+/// The restrictions compare neighbouring coefficients, so the relative
+/// periods with the reference among them must be consecutive.
 fn engine_input(study: &EventStudy) -> Result<HonestEventStudyInput, Error> {
+    if !study.is_consecutive() {
+        let periods = study.relative_periods();
+        let mut all: Vec<i64> = periods.to_vec();
+        all.push(study.reference());
+        all.sort_unstable();
+        let after_gap = all
+            .windows(2)
+            .find(|w| w[1].checked_sub(w[0]) != Some(1))
+            .map_or(study.reference(), |w| w[1]);
+        return Err(InputError::Domain {
+            what: "relative_periods",
+            value: after_gap as f64,
+            domain: "consecutive relative periods with the reference among them; the \
+                     smoothness and relative-magnitude restrictions compare neighbouring \
+                     periods, so a gap would be read as two adjacent periods (the value is \
+                     the first period after a gap)",
+            row: None,
+        }
+        .into());
+    }
     let k = study.coefficients().len();
     let covariance = study.covariance();
     let mut rows = Vec::with_capacity(k);
@@ -593,18 +656,43 @@ fn check_values(restriction: &Restriction) -> Result<(), Error> {
         Restriction::Smoothness { .. } => "M",
         Restriction::RelativeMagnitude { .. } => "Mbar",
     };
-    for &value in restriction.values() {
+    let Some(values) = restriction.values() else {
+        return Ok(());
+    };
+    epistat_core::check::non_empty(what, values.len())?;
+    for (row, &value) in values.iter().enumerate() {
         if !value.is_finite() || value < 0.0 {
             return Err(InputError::Domain {
                 what,
                 value,
                 domain: "finite and non-negative",
-                row: None,
+                row: Some(row),
             }
             .into());
         }
+        if row > 0 && value < values[row - 1] {
+            return Err(InputError::Unsorted { what, row }.into());
+        }
     }
     Ok(())
+}
+
+/// The draws of the least-favourable critical value when `drawn` says the
+/// method uses them, and otherwise a placeholder the engine validates but
+/// never reads.
+fn least_favorable(
+    bootstrap: Option<Bootstrap>,
+    drawn: bool,
+) -> Result<LeastFavorableSimulation, Error> {
+    match (bootstrap, drawn) {
+        (Some(bootstrap), _) => simulation(bootstrap, "least-favourable draws"),
+        (None, false) => Ok(LeastFavorableSimulation::new(1, 0)),
+        (None, true) => Err(Error::Unsupported {
+            what: "the C-LF hybrid without least-favourable draws; set \
+                   `least_favorable: Some(Bootstrap::new(1_000, Seed(0)))` for HonestDiD's \
+                   default, or choose a method that does not draw",
+        }),
+    }
 }
 
 const fn engine_bias(bias: Option<BiasDirection>) -> Option<HonestBiasDirection> {
@@ -673,13 +761,17 @@ pub fn summarize(
             what: "a sign and a monotonicity restriction together",
         });
     }
-    let simulation = simulation(options.least_favorable, "least-favourable draws")?;
     let inference = inference(options.level);
     let bias = engine_bias(options.bias);
     let monotonicity = engine_monotonicity(options.monotonicity);
     let delta = Delta::of(restriction, options.bias, options.monotonicity);
     let values = restriction.values();
-    let values = (!values.is_empty()).then_some(values);
+    let draws = match (options.method, restriction) {
+        (Some(method), _) => method == Method::ConditionalLeastFavorable,
+        (None, Restriction::Smoothness { .. }) => false,
+        (None, Restriction::RelativeMagnitude { .. }) => true,
+    };
+    let simulation = least_favorable(options.least_favorable, draws)?;
     if options.method == Some(Method::IdentifiedSet) {
         return identified_sets(&input, &weights, restriction, options, delta);
     }
@@ -740,7 +832,7 @@ pub fn summarize(
             .into_iter()
             .map(|row| SensitivityRow {
                 value: row.sensitivity_value,
-                interval: interval(row.lb, row.ub, options.level),
+                interval: Some(interval(row.lb, row.ub, options.level)),
                 identified: row
                     .identified
                     .map(|set| IdentifiedSet::from_pair(set.lb, set.ub)),
@@ -767,18 +859,16 @@ fn identified_sets(
     options: &HonestOptions,
     delta: Delta,
 ) -> Result<SensitivitySummary, Error> {
-    let values = restriction.values();
-    let values = if values.is_empty() {
-        match restriction {
+    let values = match restriction.values() {
+        Some(values) => values.to_vec(),
+        None => match restriction {
             Restriction::Smoothness { .. } => {
                 engine::default_smoothness_m_values(input).map_err(Error::from)?
             }
             Restriction::RelativeMagnitude { .. } => {
                 engine::default_relative_magnitude_mbar_values()
             }
-        }
-    } else {
-        values.to_vec()
+        },
     };
     let counter = engine::SolverCounter::new();
     let bias = engine_bias(options.bias);
@@ -811,7 +901,7 @@ fn identified_sets(
             let identified = IdentifiedSet::from_pair(set.lb, set.ub);
             Ok(SensitivityRow {
                 value,
-                interval: Interval::new(identified.lower, identified.upper, options.level),
+                interval: None,
                 identified: Some(identified),
                 method: Method::IdentifiedSet,
                 delta,
@@ -824,17 +914,27 @@ fn identified_sets(
     })
 }
 
-/// The largest one-sided upper confidence bound, at `level`, of the second
-/// differences of the pre-treatment coefficients, `max_j (d_j + z_{1 - alpha}
-/// se(d_j))`, and 0 when every bound is negative: a value of `M` that the
-/// pre-trends support. With `Level::alpha(0.05)` it is the upper end of
-/// `HonestDiD`'s default grid of `M`.
+/// A one-sided confidence level: an upper bound at `OneSided(level)` uses the
+/// quantile `z_{1 - alpha}` of `level`'s alpha, where a two-sided interval at
+/// the same level uses `z_{1 - alpha / 2}`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct OneSided(pub Level);
+
+/// The largest one-sided upper confidence bound, at the one-sided level
+/// `level`, of the second differences of the pre-treatment coefficients,
+/// `max_j (d_j + z_{1 - alpha} se(d_j))`, and 0 when every bound is negative:
+/// a value of `M` that the pre-trends support. With
+/// `OneSided(Level::alpha(0.05)?)` it is the upper end of `HonestDiD`'s
+/// default grid of `M`.
 ///
 /// # Errors
 ///
-/// [`Error::Input`] for fewer than two pre-treatment coefficients or an
-/// undefined covariance entry.
-pub fn smoothness_bound_from_pretrends(study: &EventStudy, level: Level) -> Result<f64, Error> {
+/// [`Error::Input`] for fewer than two pre-treatment coefficients, relative
+/// periods that are not consecutive, or an undefined covariance entry.
+pub fn smoothness_bound_from_pretrends(
+    study: &EventStudy,
+    OneSided(level): OneSided,
+) -> Result<f64, Error> {
     let input = engine_input(study)?;
     if input.num_pre_periods() < 2 {
         return Err(InputError::Length {
@@ -894,11 +994,11 @@ impl Surface {
     /// The unit directions and the pairwise contrasts, with `random` random
     /// unit directions drawn from `seed`.
     #[must_use]
-    pub const fn new(random: usize, seed: u64) -> Self {
+    pub const fn new(random: usize, seed: Seed) -> Self {
         Self {
             basis: true,
             pairwise_contrasts: true,
-            random: Bootstrap::new(random, Seed(seed)),
+            random: Bootstrap::new(random, seed),
         }
     }
 }
@@ -958,30 +1058,29 @@ pub struct JointPathOptions {
     pub method: JointMethod,
     /// How the pointwise level is chosen; the default is Bonferroni.
     pub calibration: Calibration,
-    /// The draws of the least-favourable critical value under the
-    /// relative-magnitude restriction and their seed. `HonestDiD`'s R default
-    /// is 1,000 draws from seed 0, so a caller who wants R's numbers passes
-    /// `Bootstrap::new(1_000, Seed(0))`.
-    pub least_favorable: Bootstrap,
+    /// The draws of the least-favourable critical value and their seed, read
+    /// only under the relative-magnitude restriction with
+    /// [`hybrid`](Self::hybrid) on; [`joint_path`] refuses that case without
+    /// them. `HonestDiD`'s R default is 1,000 draws from seed 0, so a caller
+    /// who wants R's numbers passes `Some(Bootstrap::new(1_000, Seed(0)))`.
+    pub least_favorable: Option<Bootstrap>,
     /// The least-favourable first stage under the relative-magnitude
     /// restriction (`C-LF`); without it the conditional test alone. The
     /// default is on.
     pub hybrid: bool,
 }
 
-impl JointPathOptions {
+impl Default for JointPathOptions {
     /// The 95% level, null 0, per-period targets, conditional intervals,
-    /// Bonferroni calibration and the hybrid on, with the given
-    /// least-favourable draws and seed.
-    #[must_use]
-    pub fn new(least_favorable: Bootstrap) -> Self {
+    /// Bonferroni calibration, the hybrid on and no least-favourable draws.
+    fn default() -> Self {
         Self {
             level: Level::default(),
             null: 0.0,
             directions: Directions::Periods,
             method: JointMethod::Conditional,
             calibration: Calibration::Bonferroni,
-            least_favorable,
+            least_favorable: None,
             hybrid: true,
         }
     }
@@ -1064,11 +1163,11 @@ pub fn joint_path(
 ) -> Result<JointPathRegion, Error> {
     let input = engine_input(study)?;
     check_values(restriction)?;
-    let &[value] = restriction.values() else {
+    let Some(&[value]) = restriction.values() else {
         return Err(InputError::Length {
             what: "values of the restriction",
             expected: 1,
-            found: restriction.values().len(),
+            found: restriction.values().map_or(0, <[f64]>::len),
         }
         .into());
     };
@@ -1088,7 +1187,8 @@ pub fn joint_path(
         }
     };
     let inference = inference(options.level);
-    let least_favorable = simulation(options.least_favorable, "least-favourable draws")?;
+    let draws = options.hybrid && matches!(sensitivity, HonestSensitivity::RelativeMagnitude(_));
+    let least_favorable = least_favorable(options.least_favorable, draws)?;
     let rm_config = RelativeMagnitudeConfidenceSetConfig {
         hybrid: if options.hybrid {
             RelativeMagnitudeHybrid::LeastFavorable

@@ -6,11 +6,14 @@
 //! Both take an [`EventStudy`]: the coefficients by period relative to
 //! treatment, their covariance and the reference period, from any estimator.
 //! epistat-did's `AttGt::event_study` and its fixed-effects estimators
-//! return one.
+//! return one. The restrictions compare neighbouring periods, so
+//! [`honest`] refuses an event study whose relative periods, with the
+//! reference among them, are not consecutive
+//! ([`EventStudy::is_consecutive`](epistat_core::EventStudy::is_consecutive)).
 //!
 //! ```
 //! use epistat_core::{Bootstrap, Seed, Covariance, EventStudy, Level};
-//! use epistat_honestdid::honest::{self, HonestOptions, Restriction, RmBound, Target};
+//! use epistat_honestdid::honest::{self, Grid, HonestOptions, Restriction, RmBound, Target};
 //!
 //! // Three pre-treatment and two post-treatment coefficients, reference -1.
 //! let variances = [0.04, 0.04, 0.04, 0.05, 0.06];
@@ -28,11 +31,21 @@
 //! let summary = honest::summarize(
 //!     &study,
 //!     &target,
-//!     &Restriction::RelativeMagnitude { mbar: vec![0.0, 0.5, 1.0], bound: RmBound::ParallelTrends },
-//!     &HonestOptions::new(Bootstrap::new(1_000, Seed(0))),
+//!     &Restriction::RelativeMagnitude {
+//!         mbar: Grid::Values(vec![0.0, 0.5, 1.0]),
+//!         bound: RmBound::ParallelTrends,
+//!     },
+//!     // The C-LF hybrid, the default here, draws its critical value; these
+//!     // are HonestDiD's 1,000 draws from seed 0.
+//!     &HonestOptions {
+//!         least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+//!         ..HonestOptions::default()
+//!     },
 //! )?;
 //! assert!(original.lower().is_some());
 //! assert_eq!(summary.rows.len(), 3);
+//! // The largest Mbar of the grid up to which every interval excludes zero.
+//! let _ = summary.breakdown();
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!

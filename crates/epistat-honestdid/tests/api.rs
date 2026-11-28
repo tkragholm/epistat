@@ -22,10 +22,10 @@
 use epistat_core::{Bootstrap, Classify, Covariance, ErrorKind, EventStudy, Level, Seed};
 use epistat_honestdid::Error;
 use epistat_honestdid::honest::{
-    self, Calibration, Directions, HonestOptions, JointMethod, JointPathOptions, Method,
+    self, Calibration, Directions, Grid, HonestOptions, JointMethod, JointPathOptions, Method,
     Restriction, RmBound, Target,
 };
-use epistat_honestdid::pretrends::{self, PretrendOptions, Violation};
+use epistat_honestdid::pretrends::{self, Critical, PretrendOptions, Violation};
 use epistat_testkit::{
     BadInput, Tolerance, absent, assert_rejects_bad_input_with_codes, load_json,
 };
@@ -114,14 +114,17 @@ fn relative_magnitude_matches_the_package_on_the_average_effect() {
     assert_eq!(averaged, original);
 
     let restriction = Restriction::RelativeMagnitude {
-        mbar: r.relative_magnitude.iter().map(|row| row.mbar).collect(),
+        mbar: Grid::Values(r.relative_magnitude.iter().map(|row| row.mbar).collect()),
         bound: RmBound::ParallelTrends,
     };
     let summary = honest::summarize(
         &study,
         &target,
         &restriction,
-        &HonestOptions::new(Bootstrap::new(1_000, Seed(0))),
+        &HonestOptions {
+            least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+            ..HonestOptions::default()
+        },
     )
     .expect("summary");
     let identified = honest::summarize(
@@ -130,7 +133,8 @@ fn relative_magnitude_matches_the_package_on_the_average_effect() {
         &restriction,
         &HonestOptions {
             method: Some(Method::IdentifiedSet),
-            ..HonestOptions::new(Bootstrap::new(1_000, Seed(0)))
+            least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+            ..HonestOptions::default()
         },
     )
     .expect("identified sets");
@@ -147,14 +151,14 @@ fn relative_magnitude_matches_the_package_on_the_average_effect() {
         assert!(
             Tolerance::exact()
                 .abs(5e-3)
-                .accepts(absent(row.interval.lower), reference.lb),
+                .accepts(absent(row.interval.and_then(|i| i.lower)), reference.lb),
             "Mbar {}",
             reference.mbar
         );
         assert!(
             Tolerance::exact()
                 .abs(5e-3)
-                .accepts(absent(row.interval.upper), reference.ub),
+                .accepts(absent(row.interval.and_then(|i| i.upper)), reference.ub),
             "Mbar {}",
             reference.mbar
         );
@@ -171,17 +175,17 @@ fn relative_magnitude_matches_the_package_on_the_average_effect() {
                 .accepts(absent(id.upper), reference.id_ub)
         );
         assert_eq!(set.identified, row.identified);
-        assert_eq!(set.interval.lower, id.lower);
+        assert_eq!(set.interval, None);
     }
     // The intervals widen with Mbar, so the breakdown value is the last Mbar
     // whose interval excludes zero.
     let excluding = summary
         .rows
         .iter()
-        .take_while(|row| row.interval.lower.is_some_and(|l| l > 0.0))
+        .take_while(|row| row.interval.and_then(|i| i.lower).is_some_and(|l| l > 0.0))
         .last()
         .map(|row| row.value);
-    assert_eq!(summary.breakdown(), excluding);
+    assert_eq!(summary.breakdown().map(|b| b.value), excluding);
 }
 
 #[derive(Deserialize)]
@@ -222,10 +226,13 @@ fn smoothness_identified_sets_match_the_package() {
             let summary = honest::summarize(
                 &study,
                 &Target::Weights(case.l_vec.clone()),
-                &Restriction::Smoothness { m: vec![case.m] },
+                &Restriction::Smoothness {
+                    m: Grid::Values(vec![case.m]),
+                },
                 &HonestOptions {
                     method: Some(Method::IdentifiedSet),
-                    ..HonestOptions::new(Bootstrap::new(1_000, Seed(0)))
+                    least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+                    ..HonestOptions::default()
                 },
             )
             .expect("identified set");
@@ -302,7 +309,7 @@ fn pretrend_power_matches_the_tight_reference() {
     )
     .expect("event study");
     let options = PretrendOptions {
-        level: Level::alpha(r.alpha).expect("level"),
+        critical: Critical::Level(Level::alpha(r.alpha).expect("level")),
         tolerance: 1e-6,
         ..PretrendOptions::new(
             Violation::Delta(case.delta.clone()),
@@ -362,13 +369,16 @@ fn small_study() -> EventStudy {
 fn joint_regions_cover_every_period_and_calibrate_below_bonferroni() {
     let study = small_study();
     let restriction = Restriction::RelativeMagnitude {
-        mbar: vec![0.5],
+        mbar: Grid::Values(vec![0.5]),
         bound: RmBound::ParallelTrends,
     };
     let bonferroni = honest::joint_path(
         &study,
         &restriction,
-        &JointPathOptions::new(Bootstrap::new(1_000, Seed(0))),
+        &JointPathOptions {
+            least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+            ..JointPathOptions::default()
+        },
     )
     .expect("path");
     let gaussian = honest::joint_path(
@@ -376,7 +386,8 @@ fn joint_regions_cover_every_period_and_calibrate_below_bonferroni() {
         &restriction,
         &JointPathOptions {
             calibration: Calibration::Gaussian(Bootstrap::new(5_000, Seed(7))),
-            ..JointPathOptions::new(Bootstrap::new(1_000, Seed(0)))
+            least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+            ..JointPathOptions::default()
         },
     )
     .expect("calibrated path");
@@ -391,11 +402,14 @@ fn joint_regions_cover_every_period_and_calibrate_below_bonferroni() {
 
     let flci = honest::joint_path(
         &study,
-        &Restriction::Smoothness { m: vec![0.05] },
+        &Restriction::Smoothness {
+            m: Grid::Values(vec![0.05]),
+        },
         &JointPathOptions {
             method: JointMethod::Flci,
             directions: Directions::Weights(vec![vec![1.0, 0.0], vec![0.5, 0.5]]),
-            ..JointPathOptions::new(Bootstrap::new(1_000, Seed(0)))
+            least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+            ..JointPathOptions::default()
         },
     )
     .expect("joint FLCI");
@@ -415,10 +429,13 @@ fn joint_regions_cover_every_period_and_calibrate_below_bonferroni() {
 fn unusable_input_is_refused_with_a_code() {
     let study = small_study();
     let rm = |mbar: Vec<f64>| Restriction::RelativeMagnitude {
-        mbar,
+        mbar: Grid::Values(mbar),
         bound: RmBound::ParallelTrends,
     };
-    let options = HonestOptions::new(Bootstrap::new(1_000, Seed(0)));
+    let options = HonestOptions {
+        least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+        ..HonestOptions::default()
+    };
     let cases: Vec<(Error, &str, ErrorKind)> = vec![
         (
             honest::summarize(
@@ -470,7 +487,9 @@ fn unusable_input_is_refused_with_a_code() {
             honest::summarize(
                 &study,
                 &Target::Period(0),
-                &Restriction::Smoothness { m: vec![0.1] },
+                &Restriction::Smoothness {
+                    m: Grid::Values(vec![0.1]),
+                },
                 &HonestOptions {
                     bias: Some(honest::BiasDirection::Positive),
                     monotonicity: Some(honest::Monotonicity::Increasing),
@@ -485,7 +504,10 @@ fn unusable_input_is_refused_with_a_code() {
             honest::joint_path(
                 &study,
                 &rm(vec![0.5, 1.0]),
-                &JointPathOptions::new(Bootstrap::new(1_000, Seed(0))),
+                &JointPathOptions {
+                    least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+                    ..JointPathOptions::default()
+                },
             )
             .unwrap_err(),
             "input.length",
@@ -495,10 +517,13 @@ fn unusable_input_is_refused_with_a_code() {
             honest::joint_path(
                 &study,
                 &Restriction::RelativeMagnitude {
-                    mbar: vec![1.0],
+                    mbar: Grid::Values(vec![1.0]),
                     bound: RmBound::LinearTrend,
                 },
-                &JointPathOptions::new(Bootstrap::new(1_000, Seed(0))),
+                &JointPathOptions {
+                    least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+                    ..JointPathOptions::default()
+                },
             )
             .unwrap_err(),
             "honestdid.unsupported",
@@ -534,9 +559,11 @@ fn unusable_input_is_refused_with_a_code() {
         -1,
     )
     .expect("event study");
-    let error =
-        honest::smoothness_bound_from_pretrends(&one_pre, Level::alpha(0.05).expect("level"))
-            .unwrap_err();
+    let error = honest::smoothness_bound_from_pretrends(
+        &one_pre,
+        honest::OneSided(Level::alpha(0.05).expect("level")),
+    )
+    .unwrap_err();
     assert_eq!(error.code(), "input.length");
 }
 
@@ -550,10 +577,11 @@ fn bad_columns_are_input_errors() {
     let study = small_study();
     let options = HonestOptions {
         method: Some(Method::IdentifiedSet),
-        ..HonestOptions::new(Bootstrap::new(1_000, Seed(0)))
+        least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+        ..HonestOptions::default()
     };
     let rm = |mbar: Vec<f64>| Restriction::RelativeMagnitude {
-        mbar,
+        mbar: Grid::Values(mbar),
         bound: RmBound::ParallelTrends,
     };
     let length_if_empty = |bad: BadInput| match bad {
@@ -587,4 +615,151 @@ fn bad_columns_are_input_errors() {
             .map(|analysis| analysis.power.value)
         })
     });
+}
+
+/// HonestDiD's restrictions difference neighbouring periods, so a gap in the
+/// relative periods is refused rather than read as two adjacent periods.
+#[test]
+fn relative_periods_with_a_gap_are_refused() {
+    let covariance: Vec<f64> = (0..16)
+        .map(|i| if i / 4 == i % 4 { 0.04 } else { 0.005 })
+        .collect();
+    let gapped = EventStudy::new(
+        vec![0.02, -0.01, 0.5, 0.7],
+        Covariance::from_values(4, &covariance).expect("covariance"),
+        vec![-4, -2, 0, 1],
+        -1,
+    )
+    .expect("event study");
+    assert!(!gapped.is_consecutive());
+    let restriction = Restriction::Smoothness {
+        m: Grid::Values(vec![0.0]),
+    };
+    let error = honest::summarize(
+        &gapped,
+        &Target::Period(0),
+        &restriction,
+        &HonestOptions::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "input.domain");
+    assert!(error.to_string().contains("consecutive"), "{error}");
+    let error = honest::original(&gapped, &Target::Period(0), Level::default()).unwrap_err();
+    assert_eq!(error.code(), "input.domain");
+    let error =
+        honest::smoothness_bound_from_pretrends(&gapped, honest::OneSided::default()).unwrap_err();
+    assert_eq!(error.code(), "input.domain");
+}
+
+/// The breakdown value reads the rows in increasing order, so a grid that
+/// decreases is refused; repeated values are allowed.
+#[test]
+fn a_grid_must_not_decrease() {
+    let study = small_study();
+    let options = HonestOptions {
+        method: Some(Method::IdentifiedSet),
+        ..HonestOptions::default()
+    };
+    let rm = |values: Vec<f64>| Restriction::RelativeMagnitude {
+        mbar: Grid::Values(values),
+        bound: RmBound::ParallelTrends,
+    };
+    let error =
+        honest::summarize(&study, &Target::Period(0), &rm(vec![1.0, 0.5]), &options).unwrap_err();
+    assert_eq!(error.code(), "input.unsorted");
+    let error = honest::summarize(&study, &Target::Period(0), &rm(vec![]), &options).unwrap_err();
+    assert_eq!(error.code(), "input.empty");
+    let summary = honest::summarize(&study, &Target::Period(0), &rm(vec![0.0, 0.0]), &options)
+        .expect("repeated values");
+    assert_eq!(summary.rows.len(), 2);
+}
+
+/// Only the C-LF hybrid draws, so the other methods need no seed, and the
+/// identified set carries no confidence level.
+#[test]
+fn methods_that_never_draw_need_no_seed() {
+    let study = small_study();
+    let rm = Restriction::RelativeMagnitude {
+        mbar: Grid::Values(vec![0.0, 0.5, 1.0, 4.0]),
+        bound: RmBound::ParallelTrends,
+    };
+    let error =
+        honest::summarize(&study, &Target::Period(0), &rm, &HonestOptions::default()).unwrap_err();
+    assert_eq!(error.code(), "honestdid.unsupported");
+    assert!(error.to_string().contains("least_favorable"), "{error}");
+
+    let identified = honest::summarize(
+        &study,
+        &Target::Period(0),
+        &rm,
+        &HonestOptions {
+            method: Some(Method::IdentifiedSet),
+            ..HonestOptions::default()
+        },
+    )
+    .expect("identified sets without draws");
+    assert!(identified.rows.iter().all(|row| row.interval.is_none()));
+    assert!(identified.rows.iter().all(|row| row.identified.is_some()));
+    let breakdown = identified
+        .breakdown()
+        .expect("the set at Mbar 0 excludes zero");
+    let last_excluding = identified
+        .rows
+        .iter()
+        .take_while(|row| {
+            let set = row.identified.expect("set");
+            set.lower.is_some_and(|l| l > 0.0) || set.upper.is_some_and(|u| u < 0.0)
+        })
+        .last()
+        .expect("a row");
+    assert_eq!(breakdown.value, last_excluding.value);
+    assert_eq!(
+        breakdown.exact,
+        identified.rows.last().map(|row| row.value) != Some(breakdown.value)
+    );
+
+    let smoothness = honest::summarize(
+        &study,
+        &Target::Period(0),
+        &Restriction::Smoothness {
+            m: Grid::Values(vec![0.0, 0.1]),
+        },
+        &HonestOptions::default(),
+    )
+    .expect("the FLCI does not draw");
+    assert!(smoothness.rows.iter().all(|row| row.interval.is_some()));
+}
+
+/// A critical value given as a number is the threshold `pretrends` uses.
+#[test]
+fn a_critical_value_replaces_the_level() {
+    let study = small_study();
+    let run = |critical| {
+        pretrends::power(
+            &study,
+            &PretrendOptions {
+                critical,
+                ..PretrendOptions::new(
+                    Violation::LinearTrend { slope: 0.05 },
+                    Bootstrap::new(12, Seed(5)),
+                )
+            },
+        )
+        .expect("power")
+    };
+    let wide = run(Critical::Value(3.0));
+    let narrow = run(Critical::Level(Level::confidence(0.5).expect("level")));
+    assert!(wide.pass_probability.value > narrow.pass_probability.value);
+    let error = pretrends::power(
+        &study,
+        &PretrendOptions {
+            critical: Critical::Value(-1.0),
+            ..PretrendOptions::new(
+                Violation::LinearTrend { slope: 0.0 },
+                Bootstrap::new(12, Seed(5)),
+            )
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "input.domain");
 }

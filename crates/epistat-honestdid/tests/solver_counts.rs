@@ -3,7 +3,8 @@
 
 use epistat_core::{Bootstrap, Covariance, EventStudy, Seed};
 use epistat_honestdid::honest::{
-    self, Calibration, Directions, HonestOptions, JointPathOptions, Restriction, Surface, Target,
+    self, Calibration, Directions, Grid, HonestOptions, JointPathOptions, Restriction, Surface,
+    Target,
 };
 
 #[test]
@@ -18,13 +19,18 @@ fn counts_are_reported_and_repeat() {
         -1,
     )
     .expect("event study");
-    let restriction = Restriction::Smoothness { m: vec![0.05] };
+    let restriction = Restriction::Smoothness {
+        m: Grid::Values(vec![0.05]),
+    };
     let summarize = || {
         honest::summarize(
             &study,
             &Target::Weights(vec![1.0, 0.0]),
             &restriction,
-            &HonestOptions::new(Bootstrap::new(1_000, Seed(0))),
+            &HonestOptions {
+                least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+                ..HonestOptions::default()
+            },
         )
         .expect("smoothness summary")
     };
@@ -37,9 +43,10 @@ fn counts_are_reported_and_repeat() {
     );
 
     let options = JointPathOptions {
-        directions: Directions::Surface(Surface::new(250, 1729)),
+        directions: Directions::Surface(Surface::new(250, Seed(1729))),
         calibration: Calibration::Gaussian(Bootstrap::new(20_000, Seed(42))),
-        ..JointPathOptions::new(Bootstrap::new(1_000, Seed(0)))
+        least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+        ..JointPathOptions::default()
     };
     let run = || {
         honest::joint_path(&study, &restriction, &options)

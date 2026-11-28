@@ -9,7 +9,7 @@ use criterion::{
 };
 use epistat_core::{Bootstrap, Covariance, EventStudy, Seed};
 use epistat_honestdid::honest::{
-    self, Calibration, Directions, HonestOptions, JointMethod, JointPathOptions, Restriction,
+    self, Calibration, Directions, Grid, HonestOptions, JointMethod, JointPathOptions, Restriction,
     RmBound, Target,
 };
 
@@ -79,11 +79,16 @@ fn bench_summaries(criterion: &mut Criterion) {
             (
                 "relative_magnitude",
                 Restriction::RelativeMagnitude {
-                    mbar: vec![0.5, 1.0],
+                    mbar: Grid::Values(vec![0.5, 1.0]),
                     bound: RmBound::ParallelTrends,
                 },
             ),
-            ("smoothness", Restriction::Smoothness { m: vec![0.05, 0.1] }),
+            (
+                "smoothness",
+                Restriction::Smoothness {
+                    m: Grid::Values(vec![0.05, 0.1]),
+                },
+            ),
         ] {
             group.bench_function(format!("{name}_{n_pre}pre_{n_post}post"), |bencher| {
                 bencher.iter(|| {
@@ -92,7 +97,10 @@ fn bench_summaries(criterion: &mut Criterion) {
                             &study,
                             &target,
                             &restriction,
-                            &HonestOptions::new(Bootstrap::new(1_000, Seed(0))),
+                            &HonestOptions {
+                                least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+                                ..HonestOptions::default()
+                            },
                         )
                         .expect("summary");
                     }
@@ -109,7 +117,7 @@ fn bench_joint_regions(criterion: &mut Criterion) {
     let n_post = 6;
     let study = event_study(3, n_post);
     let restriction = Restriction::RelativeMagnitude {
-        mbar: vec![1.0],
+        mbar: Grid::Values(vec![1.0]),
         bound: RmBound::ParallelTrends,
     };
     let basis: Vec<Vec<f64>> = (0..n_post)
@@ -121,7 +129,8 @@ fn bench_joint_regions(criterion: &mut Criterion) {
             "joint_path",
             JointPathOptions {
                 calibration: gaussian,
-                ..JointPathOptions::new(Bootstrap::new(1_000, Seed(0)))
+                least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+                ..JointPathOptions::default()
             },
         ),
         (
@@ -129,7 +138,8 @@ fn bench_joint_regions(criterion: &mut Criterion) {
             JointPathOptions {
                 directions: Directions::Weights(basis),
                 calibration: gaussian,
-                ..JointPathOptions::new(Bootstrap::new(1_000, Seed(0)))
+                least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+                ..JointPathOptions::default()
             },
         ),
         (
@@ -137,7 +147,8 @@ fn bench_joint_regions(criterion: &mut Criterion) {
             JointPathOptions {
                 method: JointMethod::Flci,
                 calibration: gaussian,
-                ..JointPathOptions::new(Bootstrap::new(1_000, Seed(0)))
+                least_favorable: Some(Bootstrap::new(1_000, Seed(0))),
+                ..JointPathOptions::default()
             },
         ),
     ] {

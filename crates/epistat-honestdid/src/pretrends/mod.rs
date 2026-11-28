@@ -106,23 +106,38 @@ pub enum Violation {
     Power(f64),
 }
 
+/// The critical value `z` of the pre-test: a pre-period coefficient is
+/// significant when `|beta_j| > z s_j`.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Critical {
+    /// The two-sided normal quantile of the level, `z = Phi^{-1}(1 - alpha /
+    /// 2)`, R's `alpha`.
+    Level(Level),
+    /// The critical value itself, finite and positive; `pretrends` uses 1.96.
+    Value(f64),
+}
+
+impl Default for Critical {
+    /// A confidence of 0.95, R's `alpha = 0.05`.
+    fn default() -> Self {
+        Self::Level(Level::default())
+    }
+}
+
 /// The options of [`power`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct PretrendOptions {
     /// The hypothesised violation.
     pub violation: Violation,
-    /// The level of each pre-period coefficient's test: it is significant
-    /// when `|beta_j| > z s_j`, with `z` the upper quantile of the level
-    /// unless [`threshold`](Self::threshold) is given. The default is a
-    /// confidence of 0.95, R's `alpha = 0.05`.
-    pub level: Level,
-    /// The critical value `z` of the t-statistics instead of the level's
-    /// quantile, positive; `pretrends` uses 1.96.
-    pub threshold: Option<f64>,
+    /// The critical value of each pre-period coefficient's test. The default
+    /// is the quantile of a confidence of 0.95.
+    pub critical: Critical,
     /// The standard error of a rectangle probability the lattice grows to,
     /// positive. The default is `1e-7`.
     pub tolerance: f64,
-    /// The random shifts of the lattice, at least 2, and their seed.
+    /// The random shifts of the quasi-Monte Carlo lattice, at least 2, and
+    /// their seed: draws of the integration, not a bootstrap of the data.
     pub shifts: Bootstrap,
 }
 
@@ -134,8 +149,7 @@ impl PretrendOptions {
     pub fn new(violation: Violation, shifts: Bootstrap) -> Self {
         Self {
             violation,
-            level: Level::default(),
-            threshold: None,
+            critical: Critical::default(),
             tolerance: 1e-7,
             shifts,
         }
@@ -259,9 +273,13 @@ fn engine_input(study: &EventStudy) -> Result<PretrendInput, Error> {
 }
 
 fn config(options: &PretrendOptions) -> Result<PretrendConfig, Error> {
+    let (level, threshold) = match options.critical {
+        Critical::Level(level) => (level, None),
+        Critical::Value(value) => (Level::default(), Some(value)),
+    };
     let config = PretrendConfig {
-        level: options.level,
-        threshold: options.threshold,
+        level,
+        threshold,
         abs_tol: options.tolerance,
         shifts: options.shifts.replicates,
         seed: options.shifts.seed.value(),
