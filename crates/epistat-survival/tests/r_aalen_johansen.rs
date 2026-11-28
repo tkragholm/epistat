@@ -210,14 +210,12 @@ fn curves_match_r() {
         if case.weights != "none" {
             builder = builder.weight(&weight);
         }
-        if case.use_group {
-            builder = builder.stratum(&group);
-        }
         if case.use_entry {
             builder = builder.start(&reference.entry);
         }
         let data = builder.build().unwrap();
-        let got = estimate(&data, &AalenJohansenOptions::default()).unwrap();
+        let groups = case.use_group.then_some(group.as_slice());
+        let got = estimate(&data, groups, &AalenJohansenOptions::default()).unwrap();
         assert_eq!(got.n_rows, n, "{}", case.name);
         assert_eq!(got.n_used, n, "{}", case.name);
         assert_eq!(got.causes, vec![1, 2, 3], "{}", case.name);

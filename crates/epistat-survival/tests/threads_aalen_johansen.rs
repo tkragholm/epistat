@@ -70,14 +70,13 @@ fn estimate_does_not_depend_on_the_number_of_threads() {
     for start in [None, Some(s.start.as_slice())] {
         let mut builder = SurvData::builder(&s.stop, &s.status)
             .n_codes(3)
-            .weight(&s.weight)
-            .stratum(&s.stratum);
+            .weight(&s.weight);
         if let Some(start) = start {
             builder = builder.start(start);
         }
         let data = builder.build().unwrap();
         assert_same_on_pools(&POOLS, || {
-            let c = estimate(&data, &AalenJohansenOptions::default()).unwrap();
+            let c = estimate(&data, Some(&s.stratum), &AalenJohansenOptions::default()).unwrap();
             let mut out: Vec<f64> = c.causes.iter().map(|&k| f64::from(k)).collect();
             out.extend(c.group.iter().map(|&g| f64::from(g)));
             out.extend([c.n_rows as f64, c.n_used as f64]);

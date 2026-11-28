@@ -32,7 +32,7 @@ use epistat_rng::Stream;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxModelFit, Ties};
 use epistat_survival::fine_gray::{
-    FineGrayOptions, FineGrayRows, RowsOptions, fit, risk_rows, rows,
+    CensoringStrata, FineGrayOptions, FineGrayRows, RowsOptions, fit, risk_rows, rows,
 };
 use epistat_survival::lowlevel::float_codes;
 use epistat_survival::timefix::TimeFix;
@@ -173,6 +173,7 @@ fn fit_record(fit: Result<CoxModelFit, epistat_survival::Error>) -> Vec<u64> {
 /// Times are compared as they are.
 const ROWS: RowsOptions = RowsOptions {
     timefix: TimeFix::Exact,
+    censoring_strata: CensoringStrata::Pooled,
 };
 
 fn options(cause: u32, ties: Ties) -> FineGrayOptions {

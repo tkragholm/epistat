@@ -116,12 +116,11 @@ fn curves(
 ) -> Result<epistat_survival::aalen_johansen::Curves, epistat_survival::Error> {
     let mut builder = SurvData::builder(time, event)
         .n_codes(n_codes)
-        .weight(weight)
-        .stratum(group);
+        .weight(weight);
     if let Some(entry) = entry {
         builder = builder.start(entry);
     }
-    estimate(&builder.build()?, &EXACT)
+    estimate(&builder.build()?, Some(group), &EXACT)
 }
 
 fn curve_cases(out: &mut Vec<(String, Vec<u64>)>) {

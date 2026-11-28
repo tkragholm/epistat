@@ -439,7 +439,7 @@ fn rttright_weights_reproduce_kaplan_meier() {
         .unwrap();
     let times = [3.0, 8.0, 12.0, 20.0, 26.0];
     let w = rttright::estimate(&data, Some(&times), &RttrightOptions::default()).unwrap();
-    let curve = km(&data, &SurvfitOptions::default()).unwrap();
+    let curve = km(&data, None, &SurvfitOptions::default()).unwrap();
     let g = &curve.groups[0];
     let bound = 8.0 * n as f64 * EPS;
     for (j, &t) in times.iter().enumerate() {

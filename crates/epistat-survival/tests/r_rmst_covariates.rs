@@ -206,10 +206,7 @@ fn rmst_covariates_agree_with_r() {
         let n = d.time.len();
         let status: Vec<i32> = d.status.iter().map(|&s| s as i32).collect();
         let arm: Vec<u32> = d.arm.iter().map(|&a| a as u32).collect();
-        let data = SurvData::builder(&d.time, &status)
-            .stratum(&arm)
-            .build()
-            .unwrap();
+        let data = SurvData::builder(&d.time, &status).build().unwrap();
         for fit in &case.fits {
             let cols: Vec<&Vec<f64>> = fit
                 .covs
@@ -227,7 +224,7 @@ fn rmst_covariates_agree_with_r() {
                 "{} {:?} tau {:?} alpha {}",
                 case.name, fit.covs, fit.tau_given, fit.alpha
             );
-            let got = rmst2_adjusted(&data, Some(x.as_ref()), &opts)
+            let got = rmst2_adjusted(&data, &arm, Some(x.as_ref()), &opts)
                 .unwrap_or_else(|e| panic!("{label}: {e}"));
             assert_eq!(
                 got.difference.tau.to_bits(),
@@ -286,25 +283,29 @@ fn rmst_regression_refuses_what_rmst2_does_not_take() {
     let weight = [1.0; 8];
     let start = [0.0; 8];
     let data = SurvData::builder(&time, &status)
-        .stratum(&arm)
         .weight(&weight)
         .build()
         .unwrap();
-    assert!(rmst2_regression(&data, None, RmstEffect::Difference, &opts).is_err());
+    assert!(rmst2_regression(&data, &arm, None, RmstEffect::Difference, &opts).is_err());
     let data = SurvData::builder(&time, &status)
-        .stratum(&arm)
         .start(&start)
         .build()
         .unwrap();
-    assert!(rmst2_regression(&data, None, RmstEffect::Difference, &opts).is_err());
-    let data = SurvData::builder(&time, &status)
-        .stratum(&arm)
-        .build()
-        .unwrap();
+    assert!(rmst2_regression(&data, &arm, None, RmstEffect::Difference, &opts).is_err());
+    let data = SurvData::builder(&time, &status).build().unwrap();
     let short = Mat::from_fn(7, 1, |i, _| i as f64);
-    assert!(rmst2_regression(&data, Some(short.as_ref()), RmstEffect::Ratio, &opts).is_err());
+    assert!(rmst2_regression(&data, &arm, Some(short.as_ref()), RmstEffect::Ratio, &opts).is_err());
     // A covariate that repeats the arm is aliased.
     let repeat = Mat::from_fn(8, 1, |i, _| f64::from(arm[i]));
-    assert!(rmst2_regression(&data, Some(repeat.as_ref()), RmstEffect::Difference, &opts).is_err());
-    assert!(rmst2_regression(&data, None, RmstEffect::Difference, &opts).is_ok());
+    assert!(
+        rmst2_regression(
+            &data,
+            &arm,
+            Some(repeat.as_ref()),
+            RmstEffect::Difference,
+            &opts
+        )
+        .is_err()
+    );
+    assert!(rmst2_regression(&data, &arm, None, RmstEffect::Difference, &opts).is_ok());
 }

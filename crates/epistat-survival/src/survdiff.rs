@@ -126,7 +126,7 @@ pub struct Survdiff {
     /// Expected events per stratum and group, `n_strata * groups`.
     pub expected_by_stratum: Vec<f64>,
     /// The chi-square statistic, or `None` when the variance matrix has rank
-    /// 0: one group, or no event.
+    /// 0, when no stratum has an event.
     pub statistic: Option<f64>,
     /// The degrees of freedom, the rank of the variance matrix.
     pub df: Option<usize>,
@@ -215,14 +215,17 @@ struct Block {
 /// column of the data. See the module documentation for the method and what
 /// comes back in [`Survdiff`].
 ///
-/// One group, or no event in any stratum, leaves the statistic, its degrees of
+/// A group that is constant within every stratum is refused: there is
+/// nothing to compare, which happens when the groups were also given as the
+/// strata. No event in any stratum leaves the statistic, its degrees of
 /// freedom and the p-value `None`, and the counts are still reported.
 ///
 /// The result is the same on any number of threads.
 ///
 /// # Errors
 ///
-/// An input error when `group` is not as long as the data, when the data have
+/// An input error when `group` is not as long as the data or constant within
+/// every stratum of the rows used, when the data have
 /// a start column or more than one event code, when a weight is neither 0 nor
 /// 1, when no row has weight 1, when `rho` is not finite, or when the tie rule
 /// fails.
@@ -265,6 +268,15 @@ pub fn test(data: &SurvData<'_>, group: &[u32], opts: &SurvdiffOptions) -> Resul
             .then(a.cmp(&b))
     });
     let grp: Vec<u32> = rows.par_iter().map(|&r| dense(r)).collect();
+    let varies = (1..rows.len())
+        .any(|i| stratum_of(rows[i]) == stratum_of(rows[i - 1]) && grp[i] != grp[i - 1]);
+    if !varies {
+        return Err(Error::not_applicable(
+            "group: constant within every stratum, so the test compares nothing; the \
+             groups under test go in `group`, and the stratum column holds only the strata \
+             of a stratified test",
+        ));
+    }
 
     let mut n = vec![0_usize; k];
     for &g in &grp {

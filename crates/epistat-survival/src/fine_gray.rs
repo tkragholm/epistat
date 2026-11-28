@@ -16,13 +16,17 @@
 //! [`rows`], [`risk_rows`] and [`fit`] take a [`SurvData`]. Its status is the
 //! cause code, with 0 for censoring, the cause of interest is a code in
 //! `1..=n_codes`, and every other nonzero code is a competing event. Its
-//! stop is the time, its weight the case weight, its stratum the censoring
-//! stratum and, for [`fit`], its cluster the cluster of the robust variance,
-//! as the dense codes the type holds. The covariates of [`fit`] are the
+//! stop is the time, its weight the case weight and, for [`fit`], its cluster
+//! the cluster of the robust variance, as the dense codes the type holds. Its
+//! stratum column is read as the censoring strata only when the options say
+//! so with [`CensoringStrata::ByStratum`]; otherwise a stratum column is
+//! refused, since in a Cox model the same column would stratify the baseline
+//! hazard, which this model does not do. The covariates of [`fit`] are the
 //! columns of a matrix with one row per row of the data. The model follows
 //! every individual from time 0, so data with a start column is an error.
 //!
-//! A stratum is a censoring stratum, `cengroup` of `cmprsk::crr`: the
+//! A censoring stratum, `cengroup` of `cmprsk::crr`, is a stratum of the
+//! data under [`CensoringStrata::ByStratum`]: the
 //! censoring distribution is estimated within each stratum and each competing
 //! event is reweighted by that of its own stratum. The model has one baseline
 //! subdistribution hazard. Without a stratum the censoring distribution is
@@ -641,12 +645,28 @@ fn row_codes(x: MatRef<'_, f64>) -> Vec<u32> {
         .collect()
 }
 
+/// Where the censoring distribution of the model comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum CensoringStrata {
+    /// One censoring distribution, estimated from everyone, as `crr`
+    /// without `cengroup`. Data with a stratum column is refused.
+    #[default]
+    Pooled,
+    /// The stratum column of the data is the censoring stratum, `cengroup` of
+    /// `crr`: each stratum has its own censoring distribution. The model still
+    /// has one baseline subdistribution hazard.
+    ByStratum,
+}
+
 /// The options of [`rows`] and [`risk_rows`].
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct RowsOptions {
     /// How times that differ by rounding error are treated. The default is the
     /// rule of `survival::aeqSurv`, which `finegray` applies.
     pub timefix: TimeFix,
+    /// Whether the stratum column of the data is the censoring stratum.
+    pub censoring_strata: CensoringStrata,
 }
 
 /// The options of [`fit`].
@@ -665,6 +685,8 @@ pub struct FineGrayOptions {
     pub tolerance: f64,
     /// The largest number of trial points, `iter.max` of `coxph.control`.
     pub max_iterations: usize,
+    /// Whether the stratum column of the data is the censoring stratum.
+    pub censoring_strata: CensoringStrata,
 }
 
 impl FineGrayOptions {
@@ -680,6 +702,7 @@ impl FineGrayOptions {
             timefix: cox.timefix,
             tolerance: cox.tolerance,
             max_iterations: cox.max_iterations,
+            censoring_strata: CensoringStrata::Pooled,
         }
     }
 }
@@ -693,8 +716,16 @@ fn with_expansion<T>(
     data: &SurvData<'_>,
     cause: u32,
     timefix: TimeFix,
+    censoring_strata: CensoringStrata,
     body: impl FnOnce(&Expansion<'_>, Option<&[u32]>) -> Result<T>,
 ) -> Result<T> {
+    if censoring_strata == CensoringStrata::Pooled && data.stratum().is_some() {
+        return Err(Error::not_applicable(
+            "Fine-Gray has one baseline hazard, and the data has a stratum column: set \
+             censoring_strata to CensoringStrata::ByStratum to estimate the censoring \
+             distribution within each stratum, or build the data without the column",
+        ));
+    }
     if data.followup().start().is_some() {
         return Err(Error::unsupported(
             "start",
@@ -734,8 +765,8 @@ fn original_rows(mut rows: FineGrayRows, index: Option<&[u32]>) -> FineGrayRows 
 /// individual and interval, as `survival::finegray` writes them.
 ///
 /// The cause is a status code of `data`, a code other than 0 and another
-/// cause is a competing event. The stratum of `data`, if any, is the
-/// censoring stratum: a competing event's rows are split at the censoring
+/// cause is a competing event. Under [`CensoringStrata::ByStratum`] the
+/// stratum of `data` is the censoring stratum: a competing event's rows are split at the censoring
 /// times of its stratum and weighted by its censoring distribution. The tie
 /// rule of `opts` is applied to the times first, and rows of weight 0 are left
 /// out of the data, of the censoring distribution and of the rows.
@@ -743,12 +774,16 @@ fn original_rows(mut rows: FineGrayRows, index: Option<&[u32]>) -> FineGrayRows 
 ///
 /// # Errors
 ///
-/// An input error when `data` has a start column, when `cause` is not a
-/// status code of `data`, or as for [`SurvData::with_timefix`].
+/// An input error when `data` has a start column, or a stratum column under
+/// [`CensoringStrata::Pooled`], when `cause` is not a status code of `data`, or as for [`SurvData::with_timefix`].
 pub fn rows(data: &SurvData<'_>, cause: u32, opts: &RowsOptions) -> Result<FineGrayRows> {
-    with_expansion(data, cause, opts.timefix, |expansion, index| {
-        Ok(original_rows(expansion.expand(), index))
-    })
+    with_expansion(
+        data,
+        cause,
+        opts.timefix,
+        opts.censoring_strata,
+        |expansion, index| Ok(original_rows(expansion.expand(), index)),
+    )
 }
 
 /// The expansion of [`rows`] with the competing-event rows summed per
@@ -770,18 +805,25 @@ pub fn risk_rows(
     opts: &RowsOptions,
 ) -> Result<FineGrayRows> {
     check_lengths(&[("stop", data.n_rows()), ("level", level.len())])?;
-    with_expansion(data, cause, opts.timefix, |expansion, index| {
-        let level = pick_used(level, index);
-        Ok(original_rows(expansion.risk_rows(&level)?, index))
-    })
+    with_expansion(
+        data,
+        cause,
+        opts.timefix,
+        opts.censoring_strata,
+        |expansion, index| {
+            let level = pick_used(level, index);
+            Ok(original_rows(expansion.risk_rows(&level)?, index))
+        },
+    )
 }
 
 /// Fit the subdistribution hazard model of a cause on a design matrix.
 ///
 /// `x` holds the covariates, one row per row of `data` and one column per
 /// covariate, with no intercept column. A factor is its indicator columns. The
-/// cause is [`FineGrayOptions::cause`], a status code of `data`, and the
-/// stratum of `data`, if any, is the censoring stratum. Rows of weight 0 are
+/// cause is [`FineGrayOptions::cause`], a status code of `data`, and under
+/// [`CensoringStrata::ByStratum`] the stratum of `data` is the censoring
+/// stratum. Rows of weight 0 are
 /// dropped, the tie rule of `opts` is applied to the times, and every
 /// individual is at risk from time 0. The result is that of
 /// [`crate::cox::fit`] on the rows of [`rows`] with their weights:
@@ -789,10 +831,15 @@ pub fn risk_rows(
 /// report. It is computed by the sweep of the module documentation, without
 /// the rows.
 ///
-/// With clusters in `data`, dense codes, the robust covariance is the sandwich
-/// of the Cox fit on the rows with each row in its individual's cluster, which
-/// treats the weights as known. `n_rows` counts the rows of `data` and
-/// `n_used` those of positive weight.
+/// The robust covariance is the sandwich of the Cox fit on the rows with each
+/// row in its individual's cluster, which treats the weights as known. It is
+/// the variance `cmprsk::crr` reports, and `coxph` on the rows of `finegray`
+/// with `cluster(id)`, and it is always given: the clusters are the cluster
+/// column of `data`, else its id column, else each individual, one row of
+/// the data. It is the variance the fit's coefficient table reports by
+/// default; `se` and `covariance` keep the model-based variance. With
+/// `Ties::Exact` there is no robust variance. `n_rows` counts the rows of
+/// `data` and `n_used` those of positive weight.
 ///
 /// # Errors
 ///
@@ -816,45 +863,58 @@ pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FineGrayOptions) -> R
             "ties: the exact method has no cluster-robust variance",
         ));
     }
-    let mut fit = with_expansion(data, opts.cause, opts.timefix, |expansion, index| {
-        let source = |i: usize| index.map_or(i, |index| index[i] as usize);
-        if opts.ties == Ties::Exact {
-            return exact(expansion, x, &source, opts);
-        }
-        let p = x.ncols();
-        let n = expansion.time.len();
-        let n_events: f64 = (0..n)
-            .filter(|&i| expansion.event[i] == expansion.cause)
-            .map(|i| expansion.weight[i])
-            .sum();
-        let clusters = data.cluster().map(|cluster| {
-            let used: Vec<u32> = (0..n).map(|i| cluster[source(i)]).collect();
+    let mut fit = with_expansion(
+        data,
+        opts.cause,
+        opts.timefix,
+        opts.censoring_strata,
+        |expansion, index| {
+            let source = |i: usize| index.map_or(i, |index| index[i] as usize);
+            if opts.ties == Ties::Exact {
+                return exact(expansion, x, &source, opts);
+            }
+            let p = x.ncols();
+            let n = expansion.time.len();
+            let n_events: f64 = (0..n)
+                .filter(|&i| expansion.event[i] == expansion.cause)
+                .map(|i| expansion.weight[i])
+                .sum();
+            // The robust variance is always given, as `crr` and `coxph` on the
+            // rows of `finegray` with `cluster(id)` give it: clustered by the
+            // cluster column, else by the id column, else by individual, each row
+            // being one individual.
+            let codes = data.cluster().or_else(|| data.id());
+            let used: Vec<u32> = match codes {
+                Some(codes) => (0..n).map(|i| codes[source(i)]).collect(),
+                None => (0..n).map(|i| source(i) as u32).collect(),
+            };
             let count = used.iter().map(|&c| c as usize + 1).max().unwrap_or(0);
-            (used, count)
-        });
-        let with_clusters = clusters.is_some();
-        if !expansion.event.contains(&expansion.cause) {
-            return CoxModelFit::degenerate(p, n_events, n, with_clusters);
-        }
-        let (model, factor) = prepare(expansion, x, &source, opts.ties, clusters);
-        let summary = with_clusters
-            .then(|| DenseClusters::of(&model.cluster, 0..model.cluster.len(), model.n_clusters));
-        newton(
-            &model,
-            &Newton {
-                p,
-                factor: &factor,
-                init: None,
-                max_iterations: opts.max_iterations,
-                tolerance: opts.tolerance,
-                stepping: Stepping::Counting,
-                ties: opts.ties,
-                n_events,
-                n_rows: n,
-                clusters: summary,
-            },
-        )
-    })?;
+            let clusters = Some((used, count));
+            let with_clusters = clusters.is_some();
+            if !expansion.event.contains(&expansion.cause) {
+                return CoxModelFit::degenerate(p, n_events, n, with_clusters);
+            }
+            let (model, factor) = prepare(expansion, x, &source, opts.ties, clusters);
+            let summary = with_clusters.then(|| {
+                DenseClusters::of(&model.cluster, 0..model.cluster.len(), model.n_clusters)
+            });
+            newton(
+                &model,
+                &Newton {
+                    p,
+                    factor: &factor,
+                    init: None,
+                    max_iterations: opts.max_iterations,
+                    tolerance: opts.tolerance,
+                    stepping: Stepping::Counting,
+                    ties: opts.ties,
+                    n_events,
+                    n_rows: n,
+                    clusters: summary,
+                },
+            )
+        },
+    )?;
     fit.n_rows = data.n_rows();
     fit.n_used = data.n_used();
     Ok(fit)
@@ -1094,8 +1154,8 @@ mod tests {
     use epistat_rng::Stream;
 
     use super::{
-        Expansion, FineGrayOptions, FineGrayRows, RowsOptions, censoring_curve, fit, risk_rows,
-        row_codes, rows, with_expansion,
+        CensoringStrata, Expansion, FineGrayOptions, FineGrayRows, RowsOptions, censoring_curve,
+        fit, risk_rows, row_codes, rows, with_expansion,
     };
     use crate::check::check_lengths;
     use crate::cox::{CoxModelFit, CoxOptions, Ties};
@@ -1119,42 +1179,52 @@ mod tests {
         if x.ncols() == 0 {
             return Err(epistat_core::InputError::Empty { what: "x" }.into());
         }
-        with_expansion(data, opts.cause, opts.timefix, |expansion, index| {
-            let source =
-                |row: u32| index.map_or(row as usize, |index| index[row as usize] as usize);
-            let rows = if collapsed {
-                let used = Mat::from_fn(expansion.time.len(), x.ncols(), |i, j| {
-                    x[(source(i as u32), j)]
+        with_expansion(
+            data,
+            opts.cause,
+            opts.timefix,
+            opts.censoring_strata,
+            |expansion, index| {
+                let source =
+                    |row: u32| index.map_or(row as usize, |index| index[row as usize] as usize);
+                let rows = if collapsed {
+                    let used = Mat::from_fn(expansion.time.len(), x.ncols(), |i, j| {
+                        x[(source(i as u32), j)]
+                    });
+                    expansion.risk_rows(&row_codes(used.as_ref()))?
+                } else {
+                    expansion.expand()
+                };
+                let design = Mat::from_fn(rows.row.len(), x.ncols(), |k, j| {
+                    x[(source(rows.row[k]), j)]
                 });
-                expansion.risk_rows(&row_codes(used.as_ref()))?
-            } else {
-                expansion.expand()
-            };
-            let design = Mat::from_fn(rows.row.len(), x.ncols(), |k, j| {
-                x[(source(rows.row[k]), j)]
-            });
-            let cluster: Option<Vec<u32>> = data
-                .cluster()
-                .map(|cluster| rows.row.iter().map(|&row| cluster[source(row)]).collect());
-            let mut builder = SurvData::builder(&rows.stop, &rows.status)
-                .n_codes(1)
-                .start(&rows.start)
-                .weight(&rows.weight);
-            if let Some(cluster) = &cluster {
-                builder = builder.cluster(cluster);
-            }
-            crate::cox::fit(
-                &builder.build()?,
-                design.as_ref(),
-                &CoxOptions {
-                    ties: opts.ties,
-                    timefix: TimeFix::Exact,
-                    tolerance: opts.tolerance,
-                    max_iterations: opts.max_iterations,
-                    ..CoxOptions::default()
-                },
-            )
-        })
+                // Clustered as the fit clusters: by the cluster column, else
+                // by individual. Exact ties have no robust variance.
+                let cluster: Option<Vec<u32>> =
+                    (opts.ties != Ties::Exact).then(|| match data.cluster() {
+                        Some(cluster) => rows.row.iter().map(|&row| cluster[source(row)]).collect(),
+                        None => rows.row.iter().map(|&row| source(row) as u32).collect(),
+                    });
+                let mut builder = SurvData::builder(&rows.stop, &rows.status)
+                    .n_codes(1)
+                    .start(&rows.start)
+                    .weight(&rows.weight);
+                if let Some(cluster) = &cluster {
+                    builder = builder.cluster(cluster);
+                }
+                crate::cox::fit(
+                    &builder.build()?,
+                    design.as_ref(),
+                    &CoxOptions {
+                        ties: opts.ties,
+                        timefix: TimeFix::Exact,
+                        tolerance: opts.tolerance,
+                        max_iterations: opts.max_iterations,
+                        ..CoxOptions::default()
+                    },
+                )
+            },
+        )
     }
 
     // Two groups, two causes, with ties within a cause, across causes, and
@@ -1386,10 +1456,20 @@ mod tests {
         builder.build().unwrap()
     }
 
+    /// The options of the tests, which read a stratum column as the
+    /// censoring strata.
     fn options(cause: u32, ties: Ties) -> FineGrayOptions {
         FineGrayOptions {
             ties,
+            censoring_strata: CensoringStrata::ByStratum,
             ..FineGrayOptions::new(cause)
+        }
+    }
+
+    fn by_stratum() -> RowsOptions {
+        RowsOptions {
+            censoring_strata: CensoringStrata::ByStratum,
+            ..RowsOptions::default()
         }
     }
 
@@ -1421,7 +1501,8 @@ mod tests {
         assert_eq!((plain.n_rows, plain.n_used), (20, 20));
         assert_eq!((clustered.n_rows, clustered.n_used), (20, 20));
         assert!(clustered.robust_se.is_some());
-        assert!(plain.robust_se.is_none());
+        // Without a cluster column the fit clusters by individual.
+        assert!(plain.robust_se.is_some());
     }
 
     /// Three columns, one of them a factor's indicator pair: the collapsed
@@ -1474,7 +1555,7 @@ mod tests {
         let robust = clustered.robust_covariance.as_ref().unwrap();
         assert_eq!(robust.dim(), 3);
         assert!(clustered.tests.robust_wald.is_some());
-        assert!(plain.tests.wald.is_some() && plain.tests.robust_wald.is_none());
+        assert!(plain.tests.wald.is_some() && plain.tests.robust_wald.is_some());
         assert!(plain.n_events > 0.0);
     }
 
@@ -1488,7 +1569,7 @@ mod tests {
             zero.unwrap_err().to_string(),
             "cause 0 is outside 1..=2; 0 is censoring"
         );
-        let above = rows(&d, 3, &RowsOptions::default());
+        let above = rows(&d, 3, &by_stratum());
         assert!(above.is_err());
         let short = fit(&d, column(&x[..19]).as_ref(), &options(1, Ties::Breslow));
         assert_eq!(
@@ -1499,7 +1580,7 @@ mod tests {
         let error = fit(&d, none.as_ref(), &options(1, Ties::Breslow)).unwrap_err();
         assert_eq!(error.to_string(), "x is empty");
         let levels = vec![0u32; 19];
-        assert!(risk_rows(&d, 1, &levels, &RowsOptions::default()).is_err());
+        assert!(risk_rows(&d, 1, &levels, &by_stratum()).is_err());
         let mut nan = x.clone();
         nan[3] = f64::NAN;
         assert!(fit(&d, column(&nan).as_ref(), &options(1, Ties::Breslow)).is_err());
@@ -1517,7 +1598,7 @@ mod tests {
             .unwrap();
         let error = fit(&delayed, column(&x).as_ref(), &options(1, Ties::Breslow)).unwrap_err();
         assert!(error.to_string().contains("start column"), "{error}");
-        assert!(rows(&delayed, 1, &RowsOptions::default()).is_err());
+        assert!(rows(&delayed, 1, &by_stratum()).is_err());
     }
 
     /// With no weights or all weights positive, every row is used, so the rows
@@ -1527,10 +1608,10 @@ mod tests {
         let weight: Vec<f64> = (0..20).map(|i| 0.5 + f64::from(i % 3)).collect();
         let d = data(&TIME, &EVENT, &weight, None);
         let core = Expansion::new(&TIME, &EVENT, &weight, 1).unwrap();
-        let ours = rows(&d, 1, &RowsOptions::default()).unwrap();
+        let ours = rows(&d, 1, &by_stratum()).unwrap();
         assert_eq!(ours, core.expand());
         let levels: Vec<u32> = (0..20).map(|i| i % 4).collect();
-        let ours = risk_rows(&d, 1, &levels, &RowsOptions::default()).unwrap();
+        let ours = risk_rows(&d, 1, &levels, &by_stratum()).unwrap();
         assert_eq!(ours, core.risk_rows(&levels).unwrap());
     }
 
@@ -1584,21 +1665,17 @@ mod tests {
         merged[7] = time[5];
         let weight = [1.0; 20];
         let d = data(&time, &EVENT, &weight, None);
-        let by_default = rows(&d, 1, &RowsOptions::default()).unwrap();
+        let by_default = rows(&d, 1, &by_stratum()).unwrap();
         let exact = rows(
             &d,
             1,
             &RowsOptions {
                 timefix: TimeFix::Exact,
+                ..RowsOptions::default()
             },
         )
         .unwrap();
-        let reference = rows(
-            &data(&merged, &EVENT, &weight, None),
-            1,
-            &RowsOptions::default(),
-        )
-        .unwrap();
+        let reference = rows(&data(&merged, &EVENT, &weight, None), 1, &by_stratum()).unwrap();
         assert_eq!(by_default, reference);
         assert_ne!(exact, reference);
     }
@@ -1849,7 +1926,7 @@ mod tests {
                                 want.robust_covariance.is_some(),
                                 "{label}"
                             );
-                            let rows = rows(&d, cause, &RowsOptions::default()).unwrap().row.len();
+                            let rows = rows(&d, cause, &by_stratum()).unwrap().row.len();
                             let units = deviations(&got, &want, c.x.as_ref(), rows, n);
                             for (k, &value) in units.iter().enumerate() {
                                 assert!(value <= 1.0, "{label}: {value} of the bound in {k}");
@@ -1932,8 +2009,8 @@ mod tests {
                 fit(&c.data(false, true), c.x.as_ref(), &o).unwrap()
             );
             assert_eq!(
-                rows(&one, 1, &RowsOptions::default()).unwrap(),
-                rows(&c.data(false, false), 1, &RowsOptions::default()).unwrap()
+                rows(&one, 1, &by_stratum()).unwrap(),
+                rows(&c.data(false, false), 1, &by_stratum()).unwrap()
             );
         }
     }
@@ -1948,7 +2025,7 @@ mod tests {
         let pooled = fit(&c.data(false, false), c.x.as_ref(), &o).unwrap();
         let stratified = fit(&c.data(true, false), c.x.as_ref(), &o).unwrap();
         assert_ne!(pooled.coefficients, stratified.coefficients);
-        let expanded = rows(&c.data(true, false), 1, &RowsOptions::default()).unwrap();
+        let expanded = rows(&c.data(true, false), 1, &by_stratum()).unwrap();
         for k in 0..expanded.row.len() {
             let i = expanded.row[k] as usize;
             if expanded.start[k] > 0.0 {

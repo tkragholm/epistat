@@ -109,9 +109,7 @@ fn estimate_does_not_depend_on_the_number_of_threads() {
             if robust == Some(true) && start.is_some() && !cluster && !id {
                 continue;
             }
-            let mut builder = SurvData::builder(&s.stop, &s.status)
-                .weight(&s.weight)
-                .stratum(&s.stratum);
+            let mut builder = SurvData::builder(&s.stop, &s.status).weight(&s.weight);
             if let Some(start) = start {
                 builder = builder.start(start);
             }
@@ -151,7 +149,7 @@ fn estimate_does_not_depend_on_the_number_of_threads() {
                     ..SurvfitOptions::default()
                 };
                 assert_same_on_pools(&POOLS, || {
-                    let fit = estimate(&data, &opts).unwrap();
+                    let fit = estimate(&data, Some(&s.stratum), &opts).unwrap();
                     let mut out = Vec::new();
                     flatten(&fit, &mut out);
                     assert!(out.len() > 1000);

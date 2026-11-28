@@ -92,7 +92,10 @@ fn fine_gray_rows() {
     let levels = float_codes(&s.x);
     let d = data(&s, false);
     for timefix in [TimeFix::default(), TimeFix::Exact] {
-        let opts = RowsOptions { timefix };
+        let opts = RowsOptions {
+            timefix,
+            ..RowsOptions::default()
+        };
         for cause in 1..=3 {
             assert_same_on_pools(&POOLS, || {
                 let mut out = rows_bits(&rows(&d, cause, &opts).unwrap());

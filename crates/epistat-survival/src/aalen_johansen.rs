@@ -39,9 +39,11 @@
 //! # Input
 //!
 //! [`estimate`] and [`bootstrap`] take a [`SurvData`]. It supplies the exit
-//! time (`stop`), the status, the optional entry time (`start`), the weight and
-//! the groups, which are its strata, with the caller's stratum codes carried
-//! into the output. Status 0 is censoring and a code from 1 to `n_codes` is a
+//! time (`stop`), the status, the optional entry time (`start`) and the
+//! weight. The groups of [`estimate`] and [`variance`] are an argument, with
+//! the caller's group codes carried into the output, and not the stratum
+//! column of the data, which holds the baseline strata of a regression and is
+//! refused here. Status 0 is censoring and a code from 1 to `n_codes` is a
 //! cause. The estimate has a column for every code, observed or not, as
 //! `survfit` has a level for every level of a factor status. The tie rule of
 //! `survival::aeqSurv` is applied to the times first and is the default, as in
@@ -103,8 +105,9 @@
 //! row is a separate argument, since it is not part of the survival data. The
 //! cells stay a [`RowWindows`] over the rows of the data.
 //!
-//! Seeds are supplied per cell, so the caller decides where a seed comes from.
-//! The output holds the incidence of each arm, not their difference, so a
+//! One root seed, that of the [`Bootstrap`], gives every cell its own seed,
+//! `replicate_seed(seed, c)` for cell `c`, so a cell's draws do not depend on
+//! which other cells are asked for. The output holds the incidence of each arm, not their difference, so a
 //! caller can form a difference, a ratio or per-arm bands from the same draws.
 //!
 //! # Edge cases
@@ -427,11 +430,12 @@ pub struct AalenJohansenOptions {
     pub timefix: TimeFix,
 }
 
-/// The weighted Aalen-Johansen estimate for every stratum of `data`.
+/// The weighted Aalen-Johansen estimate for every group, as
+/// `survfit(Surv(time, cause) ~ group)` with a factor status.
 ///
 /// Status 0 is censoring and a code `k` in `1..=n_codes` is an event of cause
-/// `k`. The strata are the groups, and the result carries the caller's stratum
-/// codes. Without a stratum column there is one group, coded 0. A start time
+/// `k`. `groups` holds one code per row of `data`, any `u32` values, and the
+/// result carries them. Without groups there is one group, coded 0. A start time
 /// is the delayed-entry time: a row is at risk on `(start, stop]`. The tie rule
 /// of `opts` is applied to the times first, `survival`'s by default. Rows of
 /// weight 0 are not used. They are counted in `n_rows` and not in `n_used`, and
@@ -443,9 +447,19 @@ pub struct AalenJohansenOptions {
 ///
 /// # Errors
 ///
-/// An input error when the tie rule fails, see
-/// [`SurvData::with_timefix`], or `n_codes` does not fit an `i32`.
-pub fn estimate(data: &SurvData<'_>, opts: &AalenJohansenOptions) -> Result<Curves> {
+/// An input error when `data` has a stratum column (pass the groups as
+/// `groups`), `groups` has another length than `data`, the tie rule fails,
+/// see [`SurvData::with_timefix`], or `n_codes` does not fit an `i32`.
+pub fn estimate(
+    data: &SurvData<'_>,
+    groups: Option<&[u32]>,
+    opts: &AalenJohansenOptions,
+) -> Result<Curves> {
+    by_strata(&data.with_groups(groups, "aalen_johansen", "groups")?, opts)
+}
+
+/// [`estimate`] with the stratum column of `data` as the groups.
+pub(crate) fn by_strata(data: &SurvData<'_>, opts: &AalenJohansenOptions) -> Result<Curves> {
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup();
     let n_codes = i32::try_from(surv.n_codes())
@@ -602,15 +616,16 @@ pub type Variance = AalenJohansenVariance;
 ///
 /// # Errors
 ///
-/// An input error when the tie rule fails, see [`SurvData::with_timefix`],
-/// `n_codes` does not fit an `i32`, or `horizons` or `influence_times` is not
-/// ascending or holds a value that is not finite.
+/// An input error as for [`estimate`], and when `horizons` or
+/// `influence_times` is not ascending or holds a value that is not finite.
 pub fn variance(
     data: &SurvData<'_>,
+    groups: Option<&[u32]>,
     opts: &AalenJohansenOptions,
     v: &AalenJohansenVarianceOptions,
 ) -> Result<AalenJohansenVariance> {
-    let (mut out, dfbeta) = variance_dfbeta(data, opts, v)?;
+    let data = data.with_groups(groups, "aalen_johansen", "groups")?;
+    let (mut out, dfbeta) = variance_dfbeta(&data, opts, v)?;
     let columns = v.influence_times.len() * (out.causes.len() + 1);
     for (group, values) in out.groups.iter_mut().zip(dfbeta) {
         group.influence = influence::per_cluster(&values, &group.clusters, columns)?;
@@ -1359,7 +1374,7 @@ fn scatter(by_age: &[f64], replicate: usize, n_replicates: usize, block: &mut [f
 
 #[cfg(test)]
 mod curve_tests {
-    use super::{AalenJohansenOptions, Curves, estimate};
+    use super::{AalenJohansenOptions, Curves, by_strata};
     use crate::error::Result;
     use crate::surv::SurvData;
     use crate::timefix::TimeFix;
@@ -1387,7 +1402,7 @@ mod curve_tests {
         if let Some(entry) = entry {
             builder = builder.start(entry);
         }
-        estimate(
+        by_strata(
             &builder.build()?,
             &AalenJohansenOptions {
                 timefix: TimeFix::Exact,
@@ -1768,7 +1783,7 @@ mod tests {
 #[cfg(test)]
 mod estimate_tests {
     use super::{
-        AalenJohansenOptions, BootstrapOptions, Curves, Draw, RowWindows, bootstrap, estimate,
+        AalenJohansenOptions, BootstrapOptions, Curves, Draw, RowWindows, bootstrap, by_strata,
     };
     use crate::surv::SurvData;
     use crate::timefix::TimeFix;
@@ -1814,7 +1829,7 @@ mod estimate_tests {
             .stratum(&GROUP)
             .build()
             .unwrap();
-        let new = estimate(&data, &EXACT).unwrap();
+        let new = by_strata(&data, &EXACT).unwrap();
         assert_eq!((new.n_rows, new.n_used), (8, 8));
         // Each group's event-free probability and incidences add up to 1.
         for group in [0, 1] {
@@ -1832,13 +1847,13 @@ mod estimate_tests {
             .stratum(&strata)
             .build()
             .unwrap();
-        let new = estimate(&data, &EXACT).unwrap();
+        let new = by_strata(&data, &EXACT).unwrap();
         let coded = SurvData::builder(&TIME, &EVENT)
             .n_codes(2)
             .stratum(&GROUP)
             .build()
             .unwrap();
-        let old = estimate(&coded, &EXACT).unwrap();
+        let old = by_strata(&coded, &EXACT).unwrap();
         assert!(new.group.iter().all(|g| [10, 30].contains(g)));
         let relabelled: Vec<u32> = old.group.iter().map(|&g| 10 + 20 * g).collect();
         assert_eq!(new.group, relabelled);
@@ -1854,7 +1869,7 @@ mod estimate_tests {
             .stratum(&GROUP)
             .build()
             .unwrap();
-        let new = estimate(&data, &EXACT).unwrap();
+        let new = by_strata(&data, &EXACT).unwrap();
         let keep = [0usize, 2, 3, 5, 6, 7];
         let pick = |c: &[f64]| keep.iter().map(|&i| c[i]).collect::<Vec<_>>();
         let kept_event: Vec<i32> = keep.iter().map(|&i| EVENT[i]).collect();
@@ -1866,7 +1881,7 @@ mod estimate_tests {
             .stratum(&kept_group)
             .build()
             .unwrap();
-        let old = estimate(&kept, &EXACT).unwrap();
+        let old = by_strata(&kept, &EXACT).unwrap();
         same(&new, &old);
         assert_eq!((new.n_rows, new.n_used), (8, 6));
     }
@@ -1874,7 +1889,7 @@ mod estimate_tests {
     #[test]
     fn every_code_is_a_cause_whether_observed_or_not() {
         let data = SurvData::builder(&TIME, &EVENT).n_codes(4).build().unwrap();
-        let new = estimate(&data, &EXACT).unwrap();
+        let new = by_strata(&data, &EXACT).unwrap();
         assert_eq!(new.causes, vec![1, 2, 3, 4]);
         assert_eq!(new.cif.len(), 4);
         assert!(new.cif[2].iter().chain(&new.cif[3]).all(|&v| v == 0.0));
@@ -1885,10 +1900,10 @@ mod estimate_tests {
         let time = [1.0, 1.0 + 1e-12, 2.0];
         let status = [1, 0, 1];
         let data = SurvData::builder(&time, &status).build().unwrap();
-        let fixed = estimate(&data, &AalenJohansenOptions::default()).unwrap();
+        let fixed = by_strata(&data, &AalenJohansenOptions::default()).unwrap();
         assert_eq!(fixed.time, vec![1.0, 2.0]);
         assert_eq!(fixed.n_at_risk, vec![3.0, 1.0]);
-        let exact = estimate(&data, &EXACT).unwrap();
+        let exact = by_strata(&data, &EXACT).unwrap();
         assert_eq!(exact.time.len(), 3);
     }
 
@@ -1899,7 +1914,7 @@ mod estimate_tests {
             .n_codes(2)
             .build()
             .unwrap();
-        let new = estimate(&data, &EXACT).unwrap();
+        let new = by_strata(&data, &EXACT).unwrap();
         assert!(new.time.is_empty() && new.group.is_empty());
         assert_eq!((new.n_rows, new.n_used), (8, 0));
         assert_eq!(new.cif.len(), 2);
@@ -2074,6 +2089,7 @@ mod variance_tests {
             .unwrap();
         let got = variance(
             &data,
+            None,
             &AalenJohansenOptions::default(),
             &AalenJohansenVarianceOptions::default(),
         )
@@ -2113,8 +2129,15 @@ mod variance_tests {
             .build()
             .unwrap();
         let opts = AalenJohansenOptions::default();
-        let by_id = variance(&whole, &opts, &AalenJohansenVarianceOptions::default()).unwrap();
-        let by_row = variance(&rows, &opts, &AalenJohansenVarianceOptions::default()).unwrap();
+        let by_id = variance(
+            &whole,
+            None,
+            &opts,
+            &AalenJohansenVarianceOptions::default(),
+        )
+        .unwrap();
+        let by_row =
+            variance(&rows, None, &opts, &AalenJohansenVarianceOptions::default()).unwrap();
         assert_eq!(by_id.groups[0].clusters, vec![0, 1, 2]);
         assert_eq!(by_row.groups[0].clusters, vec![0, 1, 2, 3]);
         // the estimates are the same, the errors are not
@@ -2146,7 +2169,7 @@ mod variance_tests {
             horizons: vec![],
             influence_times: times.clone(),
         };
-        let got = variance(&data, &AalenJohansenOptions::default(), &v).unwrap();
+        let got = variance(&data, None, &AalenJohansenOptions::default(), &v).unwrap();
         let g = &got.groups[0];
         assert_eq!(g.clusters.len(), n);
         let width = 4;
@@ -2200,7 +2223,10 @@ mod variance_tests {
                 influence_times: vec![f64::NAN],
             },
         ] {
-            assert!(matches!(variance(&data, &opts, &v), Err(Error::Input(_))));
+            assert!(matches!(
+                variance(&data, None, &opts, &v),
+                Err(Error::Input(_))
+            ));
         }
     }
 }

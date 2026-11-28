@@ -411,20 +411,20 @@ fn cox_models_refuse_bad_columns() {
 fn curves_refuse_bad_columns() {
     rejects("survfit::estimate", |bad| {
         on_data(bad, &STATUS, 1, |d| {
-            survfit::estimate(d, &SurvfitOptions::default())
+            survfit::estimate(d, None, &SurvfitOptions::default())
         })
     });
     rejects("aalen_johansen::estimate", |bad| {
         on_data(bad, &CAUSE, 2, |d| {
-            aalen_johansen::estimate(d, &AalenJohansenOptions::default())
+            aalen_johansen::estimate(d, None, &AalenJohansenOptions::default())
         })
     });
     rejects("rmst::rmst2", |bad| {
         let groups = [0, 1, 0, 1, 0, 1, 0, 1, 0, 1];
         let stop = col(bad, &STOP);
         unordered(bad).then(|| {
-            let data = SurvData::builder(&stop, &STATUS).stratum(&groups).build()?;
-            rmst::rmst2(&data, &RmstOptions::new(Tau::Fixed(4.0))).map(|_| ())
+            let data = SurvData::builder(&stop, &STATUS).build()?;
+            rmst::rmst2(&data, &groups, &RmstOptions::new(Tau::Fixed(4.0))).map(|_| ())
         })
     });
     let buf = follow_up();
@@ -2230,6 +2230,7 @@ fn bootstraps_and_variances_refuse_bad_columns() {
         on_data(bad, &CAUSE, 2, |d| {
             aalen_johansen::variance(
                 d,
+                None,
                 &AalenJohansenOptions::default(),
                 &AalenJohansenVarianceOptions::default(),
             )

@@ -183,6 +183,7 @@ fn greenwood(d: &Dataset, group: u32) -> (usize, f64, f64) {
     let data = builder.build().unwrap();
     let curve = estimate(
         &data,
+        None,
         &SurvfitOptions {
             conf_type: ConfType::None,
             robust: Some(false),
@@ -194,6 +195,7 @@ fn greenwood(d: &Dataset, group: u32) -> (usize, f64, f64) {
     let curve = curve.unwrap_or_else(|_| {
         estimate(
             &data,
+            None,
             &SurvfitOptions {
                 conf_type: ConfType::None,
                 robust: None,

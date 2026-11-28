@@ -590,9 +590,6 @@ fn survfit_matches_r() {
         if !d.weight.is_empty() {
             builder = builder.weight(&d.weight);
         }
-        if !d.group.is_empty() {
-            builder = builder.stratum(&d.group);
-        }
         if !d.id.is_empty() {
             builder = builder.id(&d.id);
         }
@@ -612,7 +609,8 @@ fn survfit_matches_r() {
                 "{}: R's scale flag",
                 case.name
             );
-            let got = estimate(&data, &opts).unwrap();
+            let groups = (!d.group.is_empty()).then_some(d.group.as_slice());
+            let got = estimate(&data, groups, &opts).unwrap();
             let name = format!(
                 "{} fit {fit_index} (stype {}, ctype {}, {}, {})",
                 case.name, fit.stype, fit.ctype, fit.conf_type, fit.conf_lower

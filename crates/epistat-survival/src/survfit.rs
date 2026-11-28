@@ -5,8 +5,11 @@
 //!
 //! # Algorithm
 //!
-//! A group is a stratum of the data, or all rows when there is no stratum
-//! column. Row `i` is at risk on `(start_i, stop_i]`, with `start_i` absent
+//! A group is a level of the `groups` argument of [`estimate`], or all rows
+//! when there are no groups. The groups are an argument and not the stratum
+//! column of the data, which holds the baseline strata of a regression, so
+//! data built for a stratified Cox model cannot silently give curves by its
+//! strata. Row `i` is at risk on `(start_i, stop_i]`, with `start_i` absent
 //! meaning from the beginning of follow-up, and has weight `w_i` and status 0
 //! or 1. At each time `t` in the group's reporting times, with `Y(t)` the weight
 //! at risk, `d(t)` the weight of events and `m(t)` their number, the estimates
@@ -282,7 +285,7 @@ impl Default for SurvfitOptions {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct GroupCurve {
-    /// The caller's stratum code, 0 without a stratum column.
+    /// The caller's group code, 0 without groups.
     pub group: u32,
     /// The number of rows used in the group.
     pub n: usize,
@@ -335,7 +338,7 @@ pub struct Survfit {
     pub level: Level,
     /// The transformation of the limits.
     pub conf_type: ConfType,
-    /// One curve per stratum that has rows, in the order of the stratum codes.
+    /// One curve per group that has rows, in the order of the group codes.
     pub groups: Vec<GroupCurve>,
 }
 
@@ -433,19 +436,20 @@ impl GroupCurve {
 }
 
 impl Survfit {
-    /// The curve of the stratum with the caller's code `group`.
+    /// The curve of the group with the caller's code `group`.
     #[must_use]
     pub fn group(&self, group: u32) -> Option<&GroupCurve> {
         self.groups.iter().find(|g| g.group == group)
     }
 }
 
-/// The survival curves of every stratum of `data`.
+/// The survival curves of every group, as `survfit(Surv(time, status) ~ group)`.
 ///
 /// Status 0 is censoring and 1 the event, so `data` must have one event code.
 /// Use [`aalen_johansen::estimate`](crate::aalen_johansen::estimate) for
-/// competing events. The strata are the groups, labelled by the caller's
-/// codes, and without a stratum column there is one group, coded 0. The tie
+/// competing events. `groups` holds one code per row of `data`, any `u32`
+/// values, and the curves are labelled by them; without groups there is one
+/// curve, coded 0. The tie
 /// rule of `opts` is applied to the times first. Rows of weight 0 are not
 /// used. They count in `n_rows` and not in `n_used`.
 ///
@@ -455,19 +459,30 @@ impl Survfit {
 ///
 /// # Errors
 ///
-/// An input error when `data` has more than one event code, no row has
-/// positive weight, the tie rule fails (see [`SurvData::with_timefix`]), `robust` is `Some(false)` with a
+/// An input error when `data` has a stratum column (pass the groups as
+/// `groups`), `groups` has another length than `data`, `data` has more than
+/// one event code, no row has positive weight, the tie rule fails (see [`SurvData::with_timefix`]), `robust` is `Some(false)` with a
 /// cluster column, or `robust` is `Some(true)` for counting-process data with
 /// neither a cluster nor an id column.
 ///
 /// # Panics
 ///
 /// Never on valid data. The `expect`s mark invariants of the checked input.
+pub fn estimate(
+    data: &SurvData<'_>,
+    groups: Option<&[u32]>,
+    opts: &SurvfitOptions,
+) -> Result<Survfit> {
+    by_strata(&data.with_groups(groups, "survfit", "groups")?, opts)
+}
+
+/// The curves of [`estimate`] with the stratum column of `data` as the
+/// groups, for the steps of other estimators that build their own groups.
 #[expect(
     clippy::float_cmp,
     reason = "a weight is whole when it equals its floor"
 )]
-pub fn estimate(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
+pub(crate) fn by_strata(data: &SurvData<'_>, opts: &SurvfitOptions) -> Result<Survfit> {
     let data = data.clone().with_timefix(opts.timefix)?;
     let surv = data.followup();
     if surv.n_codes() != 1 {

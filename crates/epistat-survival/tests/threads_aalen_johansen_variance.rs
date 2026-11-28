@@ -50,7 +50,6 @@ fn variance_does_not_depend_on_the_number_of_threads() {
         .n_codes(3)
         .weight(&weight)
         .cluster(&cluster)
-        .stratum(&stratum)
         .build()
         .unwrap();
     let opts = AalenJohansenOptions {
@@ -61,7 +60,7 @@ fn variance_does_not_depend_on_the_number_of_threads() {
         influence_times: vec![0.5, 4.0, 9.0, 30.0],
     };
     assert_same_on_pools(&POOLS, || {
-        let got = variance(&data, &opts, &v).unwrap();
+        let got = variance(&data, Some(&stratum), &opts, &v).unwrap();
         assert!(got.groups.iter().any(|g| g.clusters.len() > 512));
         let mut out = got.time.clone();
         out.extend(&got.event_free);

@@ -27,10 +27,9 @@ fn reading_does_not_depend_on_the_number_of_threads() {
             assert_same_on_pools(&POOLS, || {
                 let data = SurvData::builder(&stop, &status)
                     .weight(&weight)
-                    .stratum(&stratum)
                     .build()
                     .unwrap();
-                let fit = estimate(&data, &SurvfitOptions::default()).unwrap();
+                let fit = estimate(&data, Some(&stratum), &SurvfitOptions::default()).unwrap();
                 let mut out = Vec::new();
                 for c in fit.at(&times, &ReadOptions { extend, sum }).unwrap() {
                     for column in [

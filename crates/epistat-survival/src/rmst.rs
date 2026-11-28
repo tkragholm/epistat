@@ -46,10 +46,11 @@
 //!
 //! # Input
 //!
-//! The data are follow-up data with one event code and a stratum column with
-//! two levels, the groups. The stratum with the smaller code is group 0, the
-//! reference, and the other is group 1, as `arm == 0` and `arm == 1` in
-//! `rmst2`. The tie rule of [`TimeFix`] is applied first, as `survfit` does.
+//! The data are follow-up data with one event code, and the arm is an
+//! argument with one code per row and two levels, not the stratum column of
+//! the data, which these functions refuse. The arm with the smaller code is
+//! group 0, the reference, and the other is group 1, as `arm == 0` and
+//! `arm == 1` in `rmst2`. The tie rule of [`TimeFix`] is applied first, as `survfit` does.
 //! Rows of weight 0 are not used, and a group with no row of positive weight
 //! is an error. Case weights, delayed entry and the other things
 //! [`survfit`](crate::survfit) accepts are accepted here, which `rmst2` does
@@ -61,7 +62,7 @@
 //!   the curves, the smaller of 0 and every time, which is the same for times
 //!   that are not negative.
 //! - `rmst2` with `covariates` is [`rmst2_regression`], see below. It takes the
-//!   arm from the stratum column and the covariates as a matrix, and refuses
+//!   arm as an argument and the covariates as a matrix, and refuses
 //!   case weights and delayed entry, which `rmst2` does not take.
 //!
 //! # Covariates
@@ -119,7 +120,7 @@ use crate::covariance;
 use crate::error::{Error, Result};
 use crate::metrics::censoring::CensoringKm;
 use crate::surv::SurvData;
-use crate::survfit::{ConfType, GroupCurve, SurvfitOptions, estimate};
+use crate::survfit::{ConfType, GroupCurve, SurvfitOptions, by_strata};
 use crate::timefix::TimeFix;
 
 /// The horizon of the restricted means.
@@ -162,7 +163,7 @@ impl RmstOptions {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct GroupRmst {
-    /// The caller's stratum code of the group.
+    /// The caller's arm code of the group.
     pub group: u32,
     /// The number of rows used in the group.
     pub n: usize,
@@ -215,7 +216,7 @@ pub struct Rmst2 {
     pub tau: f64,
     /// The largest horizon the data determine, see [`Tau::Largest`].
     pub tau_largest: f64,
-    /// The reference group, the stratum with the smaller code.
+    /// The reference group, the arm with the smaller code.
     pub group0: GroupRmst,
     /// The other group.
     pub group1: GroupRmst,
@@ -241,18 +242,13 @@ pub struct Rmst2 {
 ///
 /// # Errors
 ///
-/// An input error when `data` has more than one event code or no row of
-/// positive weight, a stratum column with other than two levels used, or a
-/// group with no row used, the tie rule fails (see
+/// An input error when `data` has a stratum column, `arm` has another length
+/// than `data` or other than two levels, `data` has more than one event code
+/// or no row of positive weight, or an arm has no row used, the tie rule fails (see
 /// [`SurvData::with_timefix`]), or the horizon is not finite, is before the
 /// origin of the curves or is above the largest the data determine.
-pub fn rmst2(data: &SurvData<'_>, opts: &RmstOptions) -> Result<Rmst2> {
-    if data.n_strata() != 2 {
-        return Err(Error::not_applicable(format!(
-            "rmst2 compares two groups, and the stratum column has {} levels",
-            data.n_strata()
-        )));
-    }
+pub fn rmst2(data: &SurvData<'_>, arm: &[u32], opts: &RmstOptions) -> Result<Rmst2> {
+    let data = &with_arm(data, arm)?;
     let (curve0, curve1, tau, tau_largest) = horizon(data, opts)?;
     let (curve0, curve1) = (&curve0, &curve1);
     let z = epistat_stats::dist::normal::quantile(opts.level.upper_probability());
@@ -295,10 +291,22 @@ pub fn rmst2(data: &SurvData<'_>, opts: &RmstOptions) -> Result<Rmst2> {
     })
 }
 
+/// The data with `arm` as its groups, checked to have two levels.
+fn with_arm<'a>(data: &SurvData<'a>, arm: &'a [u32]) -> Result<SurvData<'a>> {
+    let data = data.with_groups(Some(arm), "rmst2", "arm")?;
+    if data.n_strata() != 2 {
+        return Err(Error::not_applicable(format!(
+            "rmst2 compares two arms, and the arm has {} levels",
+            data.n_strata()
+        )));
+    }
+    Ok(data)
+}
+
 /// The two curves and the horizon: the one asked for, checked against the
 /// largest the data determine, and that largest.
 fn horizon(data: &SurvData<'_>, opts: &RmstOptions) -> Result<(GroupCurve, GroupCurve, f64, f64)> {
-    let fit = estimate(
+    let fit = by_strata(
         data,
         &SurvfitOptions {
             timefix: opts.timefix,
@@ -452,13 +460,14 @@ pub struct AdjustedRmst {
 /// As [`rmst2_regression`].
 pub fn rmst2_adjusted(
     data: &SurvData<'_>,
+    arm: &[u32],
     covariates: Option<MatRef<'_, f64>>,
     opts: &RmstOptions,
 ) -> Result<AdjustedRmst> {
     Ok(AdjustedRmst {
-        difference: rmst2_regression(data, covariates, RmstEffect::Difference, opts)?,
-        ratio: rmst2_regression(data, covariates, RmstEffect::Ratio, opts)?,
-        loss_ratio: rmst2_regression(data, covariates, RmstEffect::LossRatio, opts)?,
+        difference: rmst2_regression(data, arm, covariates, RmstEffect::Difference, opts)?,
+        ratio: rmst2_regression(data, arm, covariates, RmstEffect::Ratio, opts)?,
+        loss_ratio: rmst2_regression(data, arm, covariates, RmstEffect::LossRatio, opts)?,
     })
 }
 
@@ -466,8 +475,8 @@ pub fn rmst2_adjusted(
 /// inverse probability of censoring weighting, as `survRM2::rmst2` with
 /// `covariates`.
 ///
-/// The arm is the stratum column, which must have two levels, the one with the
-/// smaller code being 0. `covariates` has one row per row of the data and is
+/// `arm` holds one code per row and has two levels, the one with the smaller
+/// code being 0. `covariates` has one row per row of the data and is
 /// given without an intercept. The horizon, the tie rule and the confidence
 /// level are those of [`RmstOptions`]. The weighted fit uses `glm.control`'s
 /// defaults, 1e-8 and 25 iterations, as `rmst2` does. See the [module
@@ -480,16 +489,12 @@ pub fn rmst2_adjusted(
 /// not finite, the design is rank deficient, or the fit does not converge.
 pub fn rmst2_regression(
     data: &SurvData<'_>,
+    arm: &[u32],
     covariates: Option<MatRef<'_, f64>>,
     effect: RmstEffect,
     opts: &RmstOptions,
 ) -> Result<RmstRegression> {
-    if data.n_strata() != 2 {
-        return Err(Error::not_applicable(format!(
-            "the arm is the stratum column, which must have two levels, and it has {}",
-            data.n_strata()
-        )));
-    }
+    let data = &with_arm(data, arm)?;
     if data.weight().is_some() {
         return Err(Error::not_applicable(
             "the regression of the restricted mean takes no case weights",
@@ -518,7 +523,7 @@ pub fn rmst2_regression(
     let surv = data.followup();
     let arm_of = data
         .stratum()
-        .ok_or_else(|| Error::missing("the arm is the stratum column"))?;
+        .ok_or_else(|| Error::missing("rmst2 needs an arm"))?;
     let p = 2 + q;
     let x = Mat::from_fn(n, p, |i, j| match j {
         0 => 1.0,

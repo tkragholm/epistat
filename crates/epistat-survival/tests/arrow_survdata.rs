@@ -151,22 +151,26 @@ fn follow_up_paths_give_the_bits_of_slices() {
                     let fit_b = cox::fit(&from_slices, s.x.as_ref(), &opts).unwrap();
                     assert_eq!(format!("{fit_a:?}"), format!("{fit_b:?}"));
 
-                    if !multi {
-                        let sf_a = survfit::estimate(&from_arrow, &SurvfitOptions::default());
-                        let sf_b = survfit::estimate(&from_slices, &SurvfitOptions::default());
+                    // The curves take their groups as an argument and refuse a
+                    // stratum column, so they are compared without one.
+                    if !multi && grouping == 0 {
+                        let sf_a = survfit::estimate(&from_arrow, None, &SurvfitOptions::default());
+                        let sf_b =
+                            survfit::estimate(&from_slices, None, &SurvfitOptions::default());
                         assert_eq!(
                             format!("{:?}", sf_a.unwrap()),
                             format!("{:?}", sf_b.unwrap())
                         );
                     }
-                    let aj_a =
-                        aalen_johansen::estimate(&from_arrow, &AalenJohansenOptions::default());
-                    let aj_b =
-                        aalen_johansen::estimate(&from_slices, &AalenJohansenOptions::default());
-                    assert_eq!(
-                        format!("{:?}", aj_a.unwrap()),
-                        format!("{:?}", aj_b.unwrap())
-                    );
+                    if grouping == 0 {
+                        let options = AalenJohansenOptions::default();
+                        let aj_a = aalen_johansen::estimate(&from_arrow, None, &options);
+                        let aj_b = aalen_johansen::estimate(&from_slices, None, &options);
+                        assert_eq!(
+                            format!("{:?}", aj_a.unwrap()),
+                            format!("{:?}", aj_b.unwrap())
+                        );
+                    }
                     checked += 1;
                 }
             }

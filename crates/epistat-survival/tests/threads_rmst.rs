@@ -72,10 +72,7 @@ fn rmst2_does_not_depend_on_the_number_of_threads() {
         arm[row] = arm[row - 1];
     }
     for with_start in [false, true] {
-        let mut builder = SurvData::builder(&stop, &status)
-            .weight(&weight)
-            .stratum(&arm)
-            .id(&id);
+        let mut builder = SurvData::builder(&stop, &status).weight(&weight).id(&id);
         if with_start {
             builder = builder.start(&start);
         }
@@ -83,14 +80,14 @@ fn rmst2_does_not_depend_on_the_number_of_threads() {
         for tau in [Tau::Fixed(2.0), Tau::Fixed(5.0)] {
             assert_same_on_pools(&POOLS, || {
                 let mut out = Vec::new();
-                match rmst2(&data, &RmstOptions::new(tau)) {
+                match rmst2(&data, &arm, &RmstOptions::new(tau)) {
                     Ok(r) => flatten(&r, &mut out),
                     Err(_) => out.push(absent(None)),
                 }
                 out
             });
         }
-        let r = rmst2(&data, &RmstOptions::new(Tau::Fixed(2.0))).unwrap();
+        let r = rmst2(&data, &arm, &RmstOptions::new(Tau::Fixed(2.0))).unwrap();
         assert_eq!((r.group0.group, r.group1.group), (2, 7));
     }
 }

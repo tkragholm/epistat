@@ -98,7 +98,7 @@ fn a_curve_that_stays_above_the_level_has_no_quantile() {
         .stratum(&stratum)
         .build()
         .unwrap();
-    let fit = estimate(&data, &SurvfitOptions::default()).unwrap();
+    let fit = by_strata(&data, &SurvfitOptions::default()).unwrap();
     assert_eq!(fit.groups.len(), 2);
     assert_eq!(fit.groups[1].group, 9);
     let censored = fit.group(9).unwrap().quantiles(&[0.0, 0.5]).unwrap();
@@ -120,14 +120,14 @@ fn input_that_survfit_cannot_use_is_refused() {
         robust: Some(false),
         ..SurvfitOptions::default()
     };
-    assert!(estimate(&data, &robust_false).is_err());
+    assert!(by_strata(&data, &robust_false).is_err());
     let plain = SurvData::builder(&stop, &status).build().unwrap();
     let none = SurvfitOptions {
         conf_type: ConfType::None,
         ..SurvfitOptions::default()
     };
     assert_eq!(
-        estimate(&plain, &none).unwrap().groups[0].lower,
+        by_strata(&plain, &none).unwrap().groups[0].lower,
         Vec::<Option<f64>>::new()
     );
     let start = [0.0; 7];
@@ -139,19 +139,21 @@ fn input_that_survfit_cannot_use_is_refused() {
         robust: Some(true),
         ..SurvfitOptions::default()
     };
-    assert!(estimate(&counting, &robust_true).is_err());
+    assert!(by_strata(&counting, &robust_true).is_err());
     let competing = SurvData::builder(&stop, &status)
         .n_codes(2)
         .build()
         .unwrap();
-    assert!(estimate(&competing, &SurvfitOptions::default()).is_err());
+    assert!(by_strata(&competing, &SurvfitOptions::default()).is_err());
     let zero = [0.0; 7];
     let nothing = SurvData::builder(&stop, &status)
         .weight(&zero)
         .build()
         .unwrap();
-    assert!(estimate(&nothing, &SurvfitOptions::default()).is_err());
-    let curve = &estimate(&plain, &SurvfitOptions::default()).unwrap().groups[0];
+    assert!(by_strata(&nothing, &SurvfitOptions::default()).is_err());
+    let curve = &by_strata(&plain, &SurvfitOptions::default())
+        .unwrap()
+        .groups[0];
     assert!(curve.quantiles(&[1.5]).is_err());
     assert!(curve.quantiles(&[f64::NAN]).is_err());
     assert!(curve.rmean(-1.0).is_err());
@@ -167,8 +169,8 @@ fn rows_of_weight_zero_change_nothing() {
         .build()
         .unwrap();
     let used = SurvData::builder(&stop[..5], &status[..5]).build().unwrap();
-    let a = estimate(&all, &SurvfitOptions::default()).unwrap();
-    let b = estimate(&used, &SurvfitOptions::default()).unwrap();
+    let a = by_strata(&all, &SurvfitOptions::default()).unwrap();
+    let b = by_strata(&used, &SurvfitOptions::default()).unwrap();
     assert_eq!((a.n_rows, a.n_used), (7, 5));
     assert_eq!(a.groups, b.groups);
 }

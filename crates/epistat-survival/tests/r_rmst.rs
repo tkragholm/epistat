@@ -170,16 +170,13 @@ fn rmst2_agrees_with_survrm2() {
         let status: Vec<i32> = d.status.iter().map(|&s| s as i32).collect();
         let arm: Vec<u32> = d.arm.iter().map(|&a| a as u32).collect();
         let n_arm = |a: u32| arm.iter().filter(|&&x| x == a).count() as f64;
-        let data = SurvData::builder(stop, &status)
-            .stratum(&arm)
-            .build()
-            .unwrap();
+        let data = SurvData::builder(stop, &status).build().unwrap();
         for (i, fit) in case.fits.iter().enumerate() {
             let label = format!("{} fit {i} (tau {:?})", case.name, fit.tau_given);
             let tau = fit.tau_given.map_or(Tau::Largest, Tau::Fixed);
             let mut opts = RmstOptions::new(tau);
             opts.level = Level::confidence(1.0 - fit.alpha).unwrap();
-            let got = rmst2(&data, &opts);
+            let got = rmst2(&data, &arm, &opts);
             if fit.error {
                 assert!(got.is_err(), "{label}: R refuses the horizon");
                 refused += 1;

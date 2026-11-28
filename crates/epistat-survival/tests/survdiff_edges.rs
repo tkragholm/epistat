@@ -35,13 +35,28 @@ fn a_worked_example_is_exact_to_rounding() {
 }
 
 #[test]
-fn one_group_or_no_event_leaves_the_statistic_missing() {
+fn a_group_constant_within_every_stratum_is_refused() {
+    let time = [1.0, 2.0, 3.0, 4.0];
+    let data = SurvData::builder(&time, &[1, 0, 1, 1]).build().unwrap();
+    let one = test(&data, &[4, 4, 4, 4], &SurvdiffOptions::default());
+    assert!(
+        one.unwrap_err()
+            .to_string()
+            .contains("constant within every stratum")
+    );
+    // The groups given again as the strata: each stratum holds one group.
+    let arm = [0, 0, 1, 1];
+    let stratified = SurvData::builder(&time, &[1, 0, 1, 1])
+        .stratum(&arm)
+        .build()
+        .unwrap();
+    assert!(test(&stratified, &arm, &SurvdiffOptions::default()).is_err());
+    assert!(test(&data, &arm, &SurvdiffOptions::default()).is_ok());
+}
+
+#[test]
+fn no_event_leaves_the_statistic_missing() {
     let time = [1.0, 2.0, 3.0];
-    let data = SurvData::builder(&time, &[1, 0, 1]).build().unwrap();
-    let one = test(&data, &[4, 4, 4], &SurvdiffOptions::default()).unwrap();
-    assert_eq!(one.groups, vec![4]);
-    assert!(one.statistic.is_none() && one.df.is_none() && one.p_value.is_none());
-    assert_eq!(one.observed, vec![2.0]);
     let data = SurvData::builder(&time, &[0, 0, 0]).build().unwrap();
     let none = test(&data, &[1, 2, 1], &SurvdiffOptions::default()).unwrap();
     assert!(none.statistic.is_none() && none.p_value.is_none());

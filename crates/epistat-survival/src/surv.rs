@@ -505,6 +505,39 @@ impl<'a, K: OutcomeKind> SurvData<'a, K> {
         Ok(data)
     }
 
+    /// The same data with `groups`, the curves an estimator such as
+    /// `survfit` draws, in the stratum slot its internal steps read, so that
+    /// they run unchanged. `entry` names the estimator and `role` its
+    /// argument in the error.
+    ///
+    /// # Errors
+    ///
+    /// An input error when the data has a stratum column, which holds the
+    /// baseline strata of a regression and not the groups of a curve, and
+    /// when `groups` has another length than the data.
+    pub(crate) fn with_groups<'b>(
+        &self,
+        groups: Option<&'b [u32]>,
+        entry: &str,
+        role: &str,
+    ) -> Result<SurvData<'b, K>>
+    where
+        'a: 'b,
+    {
+        if self.stratum.is_some() {
+            return Err(Error::not_applicable(format!(
+                "{entry} takes its {role} as the `{role}` argument; the stratum column of the \
+                 data holds the baseline strata of a regression, which {entry} does not read"
+            )));
+        }
+        let mut data: SurvData<'b, K> = self.clone();
+        if let Some(groups) = groups {
+            check_lengths(&[("data", self.n_rows), ("groups", groups.len())])?;
+            data.stratum = Some(Dense::new(groups));
+        }
+        Ok(data)
+    }
+
     /// The rows with positive weight, ascending, which are the rows a fit
     /// uses. All rows when there are no weights.
     ///

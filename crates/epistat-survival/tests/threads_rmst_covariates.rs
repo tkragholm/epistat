@@ -32,13 +32,10 @@ fn adjusted_rmst_does_not_depend_on_the_number_of_threads() {
         }
         Mat::from_fn(n, 2, |i, j| if j == 0 { cells[i].0 } else { cells[i].1 })
     };
-    let data = SurvData::builder(&stop, &status)
-        .stratum(&arm)
-        .build()
-        .unwrap();
+    let data = SurvData::builder(&stop, &status).build().unwrap();
     let opts = RmstOptions::new(Tau::Fixed(3.0));
     assert_same_on_pools(&POOLS, || {
-        let r = rmst2_adjusted(&data, Some(x.as_ref()), &opts).unwrap();
+        let r = rmst2_adjusted(&data, &arm, Some(x.as_ref()), &opts).unwrap();
         let mut out = Vec::new();
         for f in [&r.difference, &r.ratio, &r.loss_ratio] {
             out.extend_from_slice(&f.coefficients);

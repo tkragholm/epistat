@@ -38,7 +38,7 @@ use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxModelFit, Ties};
 use epistat_survival::fine_gray::{
-    FineGrayOptions, FineGrayRows, RowsOptions, fit, risk_rows, rows,
+    CensoringStrata, FineGrayOptions, FineGrayRows, RowsOptions, fit, risk_rows, rows,
 };
 use epistat_survival::lowlevel::float_codes;
 use epistat_testkit::load_json;
@@ -538,7 +538,10 @@ fn fits_match_coxph_on_finegray_rows() {
                 let se = fit_deviation(fit.se[0].unwrap(), r.se);
                 let robust = match (&fit.robust_se, r.robust_se) {
                     (Some(got), Some(want)) => fit_deviation(got[0].unwrap(), want),
-                    (None, None) => 0.0,
+                    // Without a cluster column the fit clusters by
+                    // individual, which R's reference without `cluster`
+                    // does not report; the clustered cases check it.
+                    (Some(_), None) => 0.0,
                     other => panic!("{label}: robust standard errors {other:?}"),
                 };
                 let events = fit_deviation(fit.n_events, r.n_events);
@@ -813,7 +816,9 @@ fn check_multi(
     // weights squared, and the solves and sums are those of
     // `r_cox.rs`: `4 p bound + 2 n epsilon`.
     if r.cluster == "none" {
-        assert!(model.robust_covariance.is_none(), "{label}");
+        // The fit clusters by individual without a cluster column, which
+        // the reference without `cluster` does not report.
+        assert!(model.robust_covariance.is_some(), "{label}");
         assert!(!r.vcov_robust.iter().any(|row| !row.is_empty()), "{label}");
     } else {
         let robust = model.robust_covariance.as_ref().unwrap();
@@ -891,7 +896,8 @@ fn check_multi(
         label,
     );
     if r.cluster == "none" {
-        assert!(model.tests.robust_wald.is_none(), "{label}");
+        // Clustered by individual, which the reference does not report.
+        assert!(model.tests.robust_wald.is_some(), "{label}");
     } else {
         // `d' V^-1 d` with the robust `V`: a relative change of `V`
         // moves it by at most kappa(V) times that change.
@@ -1123,6 +1129,7 @@ fn censoring_strata_match_coxph_on_rows_of_each_stratum() {
                     x.as_ref(),
                     &FineGrayOptions {
                         ties: ties_of(&r.ties),
+                        censoring_strata: CensoringStrata::ByStratum,
                         ..FineGrayOptions::new(cause_code_of(result.cause))
                     },
                 )
@@ -1171,6 +1178,7 @@ fn censoring_strata_match_crr_with_censoring_groups() {
                 &FineGrayOptions {
                     ties: Ties::Breslow,
                     tolerance: 1e-13,
+                    censoring_strata: CensoringStrata::ByStratum,
                     ..FineGrayOptions::new(cause_code_of(result.cause))
                 },
             )

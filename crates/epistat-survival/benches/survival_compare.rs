@@ -287,12 +287,11 @@ fn run_aj(f: &Frame, c: &Cohort, reps: usize) -> Timed {
     let arm = f.pick(&c.arm);
     let data = SurvData::builder(&f.stop, &f.status)
         .start(&f.start)
-        .stratum(&arm)
         .n_codes(2)
         .build()
         .expect("data");
     let (times, curves) = timed(reps, || {
-        aalen_johansen::estimate(&data, &AalenJohansenOptions::default()).expect("aj")
+        aalen_johansen::estimate(&data, Some(&arm), &AalenJohansenOptions::default()).expect("aj")
     });
     let mut lines = String::new();
     for g in [0u32, 1] {
@@ -390,11 +389,10 @@ fn run_survfit(f: &Frame, c: &Cohort, reps: usize) -> Timed {
     let event: Vec<i32> = f.status.iter().map(|&s| i32::from(s > 0)).collect();
     let data = SurvData::builder(&f.stop, &event)
         .start(&f.start)
-        .stratum(&arm)
         .build()
         .expect("data");
     let (times, fit) = timed(reps, || {
-        survfit::estimate(&data, &SurvfitOptions::default()).expect("survfit")
+        survfit::estimate(&data, Some(&arm), &SurvfitOptions::default()).expect("survfit")
     });
     let mut lines = String::new();
     for g in &fit.groups {

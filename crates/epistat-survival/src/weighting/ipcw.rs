@@ -215,7 +215,7 @@ pub(super) fn fit_parts<'a>(
     let label = |g: usize| data.stratum_levels().map_or(0, |l| l.code(g).unwrap_or(0));
 
     // The Kaplan-Meier censoring survival of each stratum, on the log scale.
-    let km = survfit::estimate(
+    let km = survfit::by_strata(
         &process,
         &SurvfitOptions {
             timefix: TimeFix::Exact,

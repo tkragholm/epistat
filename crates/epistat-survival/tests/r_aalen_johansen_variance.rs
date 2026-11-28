@@ -121,9 +121,6 @@ fn matches_r_survfit() {
         if case.use_entry {
             builder = builder.start(&case.entry);
         }
-        if case.use_group {
-            builder = builder.stratum(&case.group);
-        }
         match case.uses.as_str() {
             "cluster" => builder = builder.cluster(&case.cluster),
             "id" => builder = builder.id(&case.id),
@@ -145,7 +142,8 @@ fn matches_r_survfit() {
             horizons: case.tau.clone(),
             influence_times: all_times.clone(),
         };
-        let got = variance(&data, &AalenJohansenOptions::default(), &opts).unwrap();
+        let groups = case.use_group.then_some(case.group.as_slice());
+        let got = variance(&data, groups, &AalenJohansenOptions::default(), &opts).unwrap();
         assert_eq!(got.origin, case.t0, "{}", case.name);
         assert_eq!(got.n_rows, n);
 
