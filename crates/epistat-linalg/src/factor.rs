@@ -39,13 +39,30 @@
 //!
 //! # Failure
 //!
+//! Before any factorisation, [`solve`] and [`Factor::new`] refuse a shape that
+//! does not fit, an empty list of attempts ([`Error::NoAttempts`]) and a
+//! matrix or right-hand side with NaN or an infinity (`Error::Input` with
+//! `InputError::NotFinite`, naming the first such entry).
+//!
 //! A candidate fails when its factorisation fails or when its solution has a
 //! non-finite entry. Only Cholesky can fail in the first way, when it meets a
 //! pivot that is not positive. The other three factorise any matrix, so for
 //! them failure shows only as a non-finite solution, which [`Factor::solve`]
 //! reports as [`Error::Singular`]. When every candidate fails, [`solve`]
-//! returns [`Error::Singular`]. A shape error is returned before any
-//! factorisation.
+//! returns [`Error::Singular`].
+//!
+//! # Condition
+//!
+//! A finite solution can still be meaningless: `[[1, 1], [1, 1 + 1e-12]]`
+//! solves to entries of about `1e12`. Every [`Solution`] carries `rcond`,
+//! the reciprocal condition number `1 / (|A|_1 |A^-1|_1)` of the matrix that
+//! was factorised, with `|A^-1|_1` estimated as LAPACK's condition
+//! estimators do: Hager's method \[4\] with Higham's refinements \[3\],
+//! which needs a few solves with the factor and its transpose and is
+//! usually within a factor of 3 of the exact value. [`solve_with`] refuses a
+//! solution whose `rcond` is below `1 / max_condition` with
+//! [`Error::IllConditioned`]; by default there is no limit, as in [`solve`].
+//! R's `solve` refuses below an `rcond` of the machine epsilon.
 //!
 //! # Factor and solve
 //!
@@ -73,7 +90,9 @@
 //! 2. Bunch JR, Kaufman L. Some stable methods for calculating inertia and
 //!    solving symmetric linear systems. Math Comput. 1977;31(137):163-79.
 //! 3. Higham NJ. Accuracy and Stability of Numerical Algorithms. 2nd ed.
-//!    Philadelphia: SIAM; 2002.
+//!    Philadelphia: SIAM; 2002. Chapter 15.
+//! 4. Hager WW. Condition estimates. SIAM J Sci Stat Comput.
+//!    1984;5(2):311-6.
 
 use std::sync::OnceLock;
 
@@ -82,6 +101,8 @@ use faer::linalg::cholesky::llt;
 use faer::linalg::solvers::{FullPivLu, Lblt, PartialPivLu};
 use faer::prelude::*;
 use faer::{Conj, Par, Side, Spec};
+
+use epistat_core::InputError;
 
 use crate::error::check_length;
 use crate::{Error, is_finite};
@@ -158,7 +179,9 @@ impl Attempt {
     }
 
     /// Cholesky, then Bunch-Kaufman, then LU with partial and then full
-    /// pivoting: the sequence `did_methods` and `semicontinuous_models` use.
+    /// pivoting, without ridge: the fastest route for a symmetric positive
+    /// definite matrix, falling back to methods that need less of the matrix
+    /// when it is indefinite or nearly singular.
     pub const SYMMETRIC: [Self; 4] = [
         Self::plain(Method::Cholesky),
         Self::plain(Method::Lblt),
@@ -177,31 +200,89 @@ pub struct Solution {
     pub method: Method,
     /// The ridge added to the diagonal, 0 when none was.
     pub ridge: f64,
+    /// The estimated reciprocal condition number `1 / (|A|_1 |A^-1|_1)` of
+    /// the matrix factorised, `A` plus the ridge: 1 for a multiple of the
+    /// identity, near 0 for a matrix close to singular. A solution with an
+    /// `rcond` near the machine epsilon has lost about all its digits. See
+    /// the module documentation.
+    pub rcond: f64,
+}
+
+/// Limits on a solution that [`solve_with`] checks.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SolveOptions {
+    /// The largest condition number accepted, `1 / rcond`. `None`, the
+    /// default, accepts any finite solution. `Some(1.0 / f64::EPSILON)` is
+    /// the rule of R's `solve`.
+    pub max_condition: Option<f64>,
 }
 
 /// Solves `a x = b`, trying each attempt in turn until one factorises `a`
 /// and gives a finite solution.
 ///
+/// The [`Solution`] reports the reciprocal condition number of the matrix
+/// factorised; [`solve_with`] refuses one that is too small.
+///
 /// # Errors
 ///
-/// [`Error::Input`] when `a` is not square or `b` has another number of
-/// rows, and [`Error::Singular`] when every attempt fails.
+/// [`Error::Input`] when `a` is not square, `b` has another number of rows,
+/// or either holds NaN or an infinity; [`Error::NoAttempts`] when `attempts`
+/// is empty; and [`Error::Singular`] when every attempt fails.
 pub fn solve(
     a: MatRef<'_, f64>,
     b: MatRef<'_, f64>,
     attempts: &[Attempt],
 ) -> Result<Solution, Error> {
+    solve_with(a, b, attempts, &SolveOptions::default())
+}
+
+/// [`solve`] with the limits of `options`.
+///
+/// # Errors
+///
+/// As [`solve`], and [`Error::IllConditioned`] when the solution's `rcond`
+/// is below `1 / max_condition`, or [`Error::Input`] when `max_condition` is
+/// not a number of at least 1.
+pub fn solve_with(
+    a: MatRef<'_, f64>,
+    b: MatRef<'_, f64>,
+    attempts: &[Attempt],
+    options: &SolveOptions,
+) -> Result<Solution, Error> {
     check_shape(a, b.nrows())?;
+    if let Some(limit) = options.max_condition
+        && !(limit >= 1.0)
+    {
+        return Err(Error::Input(InputError::Domain {
+            what: "max_condition",
+            value: limit,
+            domain: "[1, inf]",
+            row: None,
+        }));
+    }
+    check_attempts(attempts)?;
+    check_finite("a", a)?;
+    check_finite("b", b)?;
     for attempt in attempts {
         for (matrix, ridge) in candidates(a, attempt.ridge) {
             if let Some(factor) =
                 Factor::with_method(matrix.as_ref(), attempt.method, attempt.min_pivot)
                 && let Ok(x) = factor.solve(b)
             {
+                let rcond = factor.rcond();
+                if let Some(limit) = options.max_condition
+                    && rcond < 1.0 / limit
+                {
+                    return Err(Error::IllConditioned {
+                        rcond,
+                        limit: 1.0 / limit,
+                    });
+                }
                 return Ok(Solution {
                     x,
                     method: attempt.method,
                     ridge,
+                    rcond,
                 });
             }
         }
@@ -228,6 +309,8 @@ pub struct Factor {
     method: Method,
     ridge: f64,
     n: usize,
+    /// `|A|_1` of the matrix factorised, as the method reads it.
+    norm: f64,
 }
 
 enum Kind {
@@ -246,10 +329,13 @@ impl Factor {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when `a` is not square, and
+    /// [`Error::Input`] when `a` is not square or holds NaN or an infinity,
+    /// [`Error::NoAttempts`] when `attempts` is empty, and
     /// [`Error::Singular`] when no attempt factorises it.
     pub fn new(a: MatRef<'_, f64>, attempts: &[Attempt]) -> Result<Self, Error> {
         check_shape(a, a.nrows())?;
+        check_attempts(attempts)?;
+        check_finite("a", a)?;
         for attempt in attempts {
             for (matrix, ridge) in candidates(a, attempt.ridge) {
                 if let Some(mut factor) =
@@ -289,21 +375,59 @@ impl Factor {
     ///
     /// # Errors
     ///
-    /// [`Error::Input`] when `b` has the wrong number of rows, and
-    /// [`Error::Singular`] when the solution is not finite.
+    /// [`Error::Input`] when `b` has the wrong number of rows or holds NaN or
+    /// an infinity, and [`Error::Singular`] when the solution is not finite.
     pub fn solve(&self, b: MatRef<'_, f64>) -> Result<Mat<f64>, Error> {
-        let n = self.n;
-        check_length("rows of b", b.nrows(), n)?;
-        let x = match &self.kind {
-            Kind::Cholesky(lower) => cholesky_solve(lower.as_ref(), b),
-            Kind::Lblt(f) => on_one_thread(|| f.solve(b)),
-            Kind::PartialPivLu(f) => on_one_thread(|| f.solve(b)),
-            Kind::FullPivLu(f) => on_one_thread(|| f.solve(b)),
-        };
+        check_length("rows of b", b.nrows(), self.n)?;
+        check_finite("b", b)?;
+        let x = self.solve_unchecked(b);
         if is_finite(x.as_ref()) {
             Ok(x)
         } else {
             Err(Error::Singular)
+        }
+    }
+
+    /// The estimated reciprocal condition number `1 / (|A|_1 |A^-1|_1)` of
+    /// the factorised matrix, as in [`Solution::rcond`], in `[0, 1]`: 0 when
+    /// the estimate of `|A^-1|_1` is not finite. It costs a few solves with the factor.
+    #[must_use]
+    pub fn rcond(&self) -> f64 {
+        if self.n == 0 {
+            return 1.0;
+        }
+        let inverse_norm = inverse_norm_one(
+            self.n,
+            |x| self.solve_unchecked(x),
+            |x| self.solve_transpose_unchecked(x),
+        );
+        let condition = self.norm * inverse_norm;
+        if condition.is_finite() && condition > 0.0 {
+            // The condition number is at least 1; rounding of the estimate
+            // can take it just below.
+            (1.0 / condition).min(1.0)
+        } else {
+            0.0
+        }
+    }
+
+    fn solve_unchecked(&self, b: MatRef<'_, f64>) -> Mat<f64> {
+        match &self.kind {
+            Kind::Cholesky(lower) => cholesky_solve(lower.as_ref(), b),
+            Kind::Lblt(f) => on_one_thread(|| f.solve(b)),
+            Kind::PartialPivLu(f) => on_one_thread(|| f.solve(b)),
+            Kind::FullPivLu(f) => on_one_thread(|| f.solve(b)),
+        }
+    }
+
+    /// `x` with `A' x = b`; the symmetric factorisations are their own
+    /// transposes.
+    fn solve_transpose_unchecked(&self, b: MatRef<'_, f64>) -> Mat<f64> {
+        match &self.kind {
+            Kind::Cholesky(lower) => cholesky_solve(lower.as_ref(), b),
+            Kind::Lblt(f) => on_one_thread(|| f.solve(b)),
+            Kind::PartialPivLu(f) => on_one_thread(|| f.solve_transpose(b)),
+            Kind::FullPivLu(f) => on_one_thread(|| f.solve_transpose(b)),
         }
     }
 
@@ -328,13 +452,118 @@ impl Factor {
                 }
             }
         }
+        let symmetric = matches!(method, Method::Cholesky | Method::Lblt);
         Some(Self {
             kind,
             method,
             ridge: 0.0,
             n: a.nrows(),
+            norm: norm_one(a, symmetric),
         })
     }
+}
+
+/// `|A|_1`, the largest column sum of absolute values. With `symmetric`, the
+/// matrix is the symmetric one whose lower triangle `a` holds, which is what
+/// Cholesky and Bunch-Kaufman factorise.
+fn norm_one(a: MatRef<'_, f64>, symmetric: bool) -> f64 {
+    let n = a.ncols();
+    (0..n)
+        .map(|j| {
+            (0..a.nrows())
+                .map(|i| {
+                    if symmetric && i < j {
+                        a[(j, i)].abs()
+                    } else {
+                        a[(i, j)].abs()
+                    }
+                })
+                .sum::<f64>()
+        })
+        .fold(0.0, f64::max)
+}
+
+/// The most iterations of Hager's method; LAPACK's estimators stop at 5.
+const HAGER_ITERATIONS: usize = 5;
+
+/// An estimate of `|A^-1|_1` from solves with `A` and with `A'`: Hager's
+/// method, which is a lower bound of the norm and usually close to it, with
+/// Higham's test vector of alternating signs as a second lower bound, the
+/// larger of the two returned.
+fn inverse_norm_one(
+    n: usize,
+    solve: impl Fn(MatRef<'_, f64>) -> Mat<f64>,
+    solve_transpose: impl Fn(MatRef<'_, f64>) -> Mat<f64>,
+) -> f64 {
+    let one_norm = |y: &Mat<f64>| (0..n).map(|i| y[(i, 0)].abs()).sum::<f64>();
+    let signs = |y: &Mat<f64>| Mat::from_fn(n, 1, |i, _| if y[(i, 0)] >= 0.0 { 1.0 } else { -1.0 });
+    let largest = |z: &Mat<f64>| {
+        (0..n).fold(0, |best, i| {
+            if z[(i, 0)].abs() > z[(best, 0)].abs() {
+                i
+            } else {
+                best
+            }
+        })
+    };
+    let mut x = Mat::from_fn(n, 1, |_, _| 1.0 / n as f64);
+    let mut y = solve(x.as_ref());
+    let mut estimate = one_norm(&y);
+    if n > 1 && estimate.is_finite() {
+        let mut xi = signs(&y);
+        let mut z = solve_transpose(xi.as_ref());
+        let mut j = largest(&z);
+        for _ in 1..HAGER_ITERATIONS {
+            x = Mat::from_fn(n, 1, |i, _| if i == j { 1.0 } else { 0.0 });
+            y = solve(x.as_ref());
+            let next = one_norm(&y);
+            let next_signs = signs(&y);
+            let repeated = (0..n).all(|i| next_signs[(i, 0)] == xi[(i, 0)]);
+            if repeated || !(next > estimate) {
+                estimate = estimate.max(next);
+                break;
+            }
+            estimate = next;
+            xi = next_signs;
+            z = solve_transpose(xi.as_ref());
+            let k = largest(&z);
+            if z[(k, 0)].abs() <= z[(j, 0)] {
+                break;
+            }
+            j = k;
+        }
+        let step = 1.0 / (n - 1) as f64;
+        let alternating = Mat::from_fn(n, 1, |i, _| {
+            let magnitude = 1.0 + i as f64 * step;
+            if i % 2 == 0 { magnitude } else { -magnitude }
+        });
+        let higham = 2.0 * one_norm(&solve(alternating.as_ref())) / (3.0 * n as f64);
+        estimate = estimate.max(higham);
+    }
+    estimate
+}
+
+/// `attempts` is not empty.
+const fn check_attempts(attempts: &[Attempt]) -> Result<(), Error> {
+    if attempts.is_empty() {
+        Err(Error::NoAttempts)
+    } else {
+        Ok(())
+    }
+}
+
+/// Every entry of `matrix` is finite, or the first that is not, by column.
+fn check_finite(what: &'static str, matrix: MatRef<'_, f64>) -> Result<(), Error> {
+    for j in 0..matrix.ncols() {
+        if let Some(row) = (0..matrix.nrows()).find(|&i| !matrix[(i, j)].is_finite()) {
+            return Err(Error::Input(InputError::NotFinite {
+                what,
+                row,
+                column: Some(j),
+            }));
+        }
+    }
+    Ok(())
 }
 
 /// `a` is square and the right-hand side has `rhs` rows, one per row of `a`.
@@ -788,6 +1017,117 @@ mod tests {
         let factor = Factor::new(a.as_ref(), &Attempt::SYMMETRIC).unwrap();
         let lower = factor.cholesky_factor().unwrap();
         assert!((lower[(0, 0)] - 2.0).abs() < 1e-15 && lower[(0, 1)].abs() < 1e-300);
+    }
+
+    /// `1 / (|A|_1 |A^-1|_1)` with the inverse formed column by column.
+    fn exact_rcond(a: &Mat<f64>) -> f64 {
+        let inverse = inverse(a.as_ref(), &[Attempt::plain(Method::FullPivLu)])
+            .unwrap()
+            .x;
+        1.0 / (norm_one(a.as_ref(), false) * norm_one(inverse.as_ref(), false))
+    }
+
+    #[test]
+    fn the_reciprocal_condition_number_is_reported() {
+        let b = column(&[1.0, 2.0]);
+        let identity = Mat::<f64>::identity(2, 2) * 3.0;
+        let solution = solve(identity.as_ref(), b.as_ref(), &Attempt::SYMMETRIC).unwrap();
+        assert_eq!(solution.rcond.to_bits(), 1.0_f64.to_bits());
+        let cases = [
+            mat![[4.0, 1.0], [1.0, 3.0]],
+            mat![[1.0, 1.0], [1.0, 1.0 + 1e-12]],
+            mat![[0.0, 1.0], [1.0, 0.0]],
+            mat![[4.0, 1.0, 0.5], [1.0, 3.0, 0.2], [0.5, 0.2, 2.0]],
+            mat![[1.0, 2.0, 3.0], [0.0, 1.0, 4.0], [5.0, 6.0, 0.0]],
+        ];
+        let lu = [Attempt::plain(Method::PartialPivLu)];
+        for (k, a) in cases.iter().enumerate() {
+            let rhs = column(&vec![1.0; a.nrows()]);
+            // The last matrix is not symmetric, so only LU factorises it.
+            let sequences: &[&[Attempt]] = if k + 1 < cases.len() {
+                &[&Attempt::SYMMETRIC, &lu]
+            } else {
+                &[&lu]
+            };
+            for attempts in sequences {
+                let solution = solve(a.as_ref(), rhs.as_ref(), attempts).unwrap();
+                let exact = exact_rcond(a);
+                // The estimate of |A^-1| is a lower bound, so rcond is at
+                // least the exact value, and usually within a factor of 3.
+                assert!(
+                    solution.rcond >= exact * (1.0 - 1e-6) && solution.rcond <= 3.0 * exact,
+                    "{a:?} {:?}: {} against {exact}",
+                    solution.method,
+                    solution.rcond
+                );
+            }
+        }
+        let near = &cases[1];
+        let solution = solve(near.as_ref(), b.as_ref(), &Attempt::SYMMETRIC).unwrap();
+        assert!(solution.rcond < 1e-12);
+    }
+
+    #[test]
+    fn an_ill_conditioned_matrix_is_refused_when_asked() {
+        let near = mat![[1.0, 1.0], [1.0, 1.0 + 2.0 * f64::EPSILON]];
+        let b = column(&[1.0, 2.0]);
+        let r = SolveOptions {
+            max_condition: Some(1.0 / f64::EPSILON),
+        };
+        assert!(solve(near.as_ref(), b.as_ref(), &Attempt::SYMMETRIC).is_ok());
+        assert!(matches!(
+            solve_with(near.as_ref(), b.as_ref(), &Attempt::SYMMETRIC, &r),
+            Err(Error::IllConditioned { .. })
+        ));
+        let fine = mat![[4.0, 1.0], [1.0, 3.0]];
+        let plain = solve(fine.as_ref(), b.as_ref(), &Attempt::SYMMETRIC).unwrap();
+        let checked = solve_with(fine.as_ref(), b.as_ref(), &Attempt::SYMMETRIC, &r).unwrap();
+        assert_eq!(values(&plain.x), values(&checked.x));
+        let bad = SolveOptions {
+            max_condition: Some(0.5),
+        };
+        assert!(matches!(
+            solve_with(fine.as_ref(), b.as_ref(), &Attempt::SYMMETRIC, &bad),
+            Err(Error::Input(InputError::Domain { .. }))
+        ));
+    }
+
+    #[test]
+    fn no_attempts_and_values_that_are_not_finite_are_their_own_errors() {
+        let a = mat![[4.0, 1.0], [1.0, 3.0]];
+        let b = column(&[1.0, 2.0]);
+        assert_eq!(
+            solve(a.as_ref(), b.as_ref(), &[]).unwrap_err(),
+            Error::NoAttempts
+        );
+        assert!(matches!(
+            Factor::new(a.as_ref(), &[]),
+            Err(Error::NoAttempts)
+        ));
+        let nan = mat![[4.0, 1.0], [f64::NAN, 3.0]];
+        assert_eq!(
+            solve(nan.as_ref(), b.as_ref(), &Attempt::SYMMETRIC).unwrap_err(),
+            Error::Input(InputError::NotFinite {
+                what: "a",
+                row: 1,
+                column: Some(0),
+            })
+        );
+        assert!(matches!(
+            Factor::new(nan.as_ref(), &Attempt::SYMMETRIC),
+            Err(Error::Input(InputError::NotFinite { what: "a", .. }))
+        ));
+        let infinite = column(&[1.0, f64::INFINITY]);
+        assert!(matches!(
+            solve(a.as_ref(), infinite.as_ref(), &Attempt::SYMMETRIC),
+            Err(Error::Input(InputError::NotFinite { what: "b", .. }))
+        ));
+        let factor = Factor::new(a.as_ref(), &Attempt::SYMMETRIC).unwrap();
+        assert!(matches!(
+            factor.solve(infinite.as_ref()),
+            Err(Error::Input(InputError::NotFinite { what: "b", .. }))
+        ));
+        assert!(factor.rcond() > 0.3);
     }
 
     #[test]

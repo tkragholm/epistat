@@ -6,8 +6,9 @@ The crate has one error type with stable codes, adds restricted and natural cubi
 
 ### Breaking changes
 
-- `DesignError`, `SolveError` and `basis::KnotError` are replaced by `epistat_linalg::Error`, a non-exhaustive enum with the variants `Input` (wrapping `epistat_core::InputError`), `Singular`, `Boundary`, `OutsideBoundary`, `TooFewKnots`, `TooFewObservations` and `TooFewDistinct`. The old `Length`, `Weight`, `Tolerance`, `Shape`, `NotFinite` and `Unsorted` variants are now `Error::Input`. A matrix that is not finite is reported as `Error::Singular` by the solves. Match on `Error` or read `code()` through `epistat_core::Classify`.
+- `DesignError`, `SolveError` and `basis::KnotError` are replaced by `epistat_linalg::Error`, a non-exhaustive enum with the variants `Input` (wrapping `epistat_core::InputError`), `Singular`, `Boundary`, `OutsideBoundary`, `TooFewKnots`, `TooFewObservations` and `TooFewDistinct`. The old `Length`, `Weight`, `Tolerance`, `Shape`, `NotFinite` and `Unsorted` variants are now `Error::Input`. Match on `Error` or read `code()` through `epistat_core::Classify`.
 - `Solution` is `#[non_exhaustive]`. Read its fields and do not build it with a struct literal.
+- `solve`, `inverse`, `Factor::new` and `Factor::solve` refuse a matrix or right-hand side with NaN or an infinity before they factorise, with `Error::Input` and `InputError::NotFinite` naming the first such entry, and an empty list of attempts with `Error::NoAttempts`. Both were reported as `Error::Singular`, which now means only that no factorisation gave a finite solution.
 - The `nightly` feature is removed. It enabled faer's AVX-512 kernels. A program that wants them can turn on faer's `nightly` feature in its own manifest, and results then differ in the last bits on a machine with AVX-512. On x86, last bits also depend on which vector instructions the processor offers.
 - The crate depends on `epistat-core` and `epistat-stats`, and its minimum supported Rust version is 1.89, up from 1.85.
 
@@ -17,7 +18,8 @@ The crate has one error type with stable codes, adds restricted and natural cubi
 - `basis::NaturalSpline`, a natural cubic spline, as `splines::ns`, with prediction at new values and `count_outside` for values beyond the boundary.
 - `basis::harrell_knots` and `basis::natural_spline_knots`, the knot rules of those splines.
 - `basis::basis_matrix`, the basis evaluated at a vector of values, and `BSpline::nonzero_values_into`, the nonzero basis functions at one value.
-- `solve::lu_partial`, `solve::llt` and `solve::least_squares`, dense solves with one factorisation.
+- `solve::lu_partial`, `solve::llt` and `solve::least_squares`, dense solves with one factorisation, and `solve::least_squares_rank`, which also returns the numerical rank in a `LeastSquares`.
+- `Solution::rcond` and `Factor::rcond`, the estimated reciprocal condition number of the matrix factorised, by Hager's method as LAPACK estimates it. `solve_with` and `SolveOptions` refuse a solution whose condition number is above `max_condition` with the new `Error::IllConditioned`; `Some(1.0 / f64::EPSILON)` is the rule of R's `solve`. `solve` has no limit, as before.
 - `small`, solves with a small Cholesky factor: `forward_solve`, `backward_solve`, `cholesky_solve`, `cholesky_inverse`, `log_det_from_cholesky` and `quadratic_form_inverse`.
 - `cholesky::cholesky_lower` with `Pivot`, and `cholesky_factor` with `Regularisation`, `CholeskySolver` for repeated solves of one dimension, and `eigen::pinv`, the generalised inverse of a symmetric matrix.
 - `gram`, `congruence`, `block_scaled_gram`, `block_xtv` and `BlockSum`, products over fixed blocks of rows.
@@ -31,7 +33,7 @@ The crate has one error type with stable codes, adds restricted and natural cubi
 
 ### Results
 
-No released result changes.
+No released result changes. Solutions are the same bits as before; `rcond` is computed after the solve from the same factor.
 
 ## [0.3.1] - 2026-11-22
 

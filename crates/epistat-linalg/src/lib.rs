@@ -50,7 +50,8 @@
 //! | a factor that must exist, with pivots regularised | [`cholesky_factor`] with a [`Regularisation`] | faer's dynamic regularisation |
 //! | a small matrix whose bits must not depend on faer's kernels | [`cholesky::cholesky_lower`] and [`small`] | fixed loops on row-major slices |
 //! | a square system that needs faer's LU or Cholesky itself | [`solve::lu_partial`], [`solve::llt`] | the faer call, on one thread |
-//! | least squares | [`solve::least_squares`] | column-pivoted QR |
+//! | the same, refusing an ill-conditioned matrix | [`solve_with`] with a [`SolveOptions`] `max_condition` | [`Error::IllConditioned`] below the reciprocal condition asked for |
+//! | least squares | [`solve::least_squares`], or [`solve::least_squares_rank`] for the rank too | column-pivoted QR |
 //!
 //! # Threads
 //!
@@ -83,8 +84,8 @@ pub use blocks::{
 };
 pub use error::{Error, weight_error};
 pub use factor::{
-    Attempt, CholeskySolver, Factor, Method, Regularisation, Ridge, Solution, cholesky_factor,
-    inverse, solve,
+    Attempt, CholeskySolver, Factor, Method, Regularisation, Ridge, Solution, SolveOptions,
+    cholesky_factor, inverse, solve, solve_with,
 };
 pub use faer::linalg::matmul::matmul;
 pub use faer::{Accum, Col, Mat, MatMut, MatRef, Par, Side, get_global_parallelism, mat};
