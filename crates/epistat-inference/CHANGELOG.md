@@ -26,7 +26,7 @@ Confidence levels, bootstrap settings and errors now use the shared types of `ep
 - `Influence`, the influence function of one or more estimates, with `ClusterRule` for the small-sample rule, `variance` and `variance_with` for the clustered covariance, and `combine`, `select` and `with_values`. It is keyed either by unit codes (`Influence::new`, `from_dfbeta`) or by rows (`over_rows`, `from_dfbeta_over_rows`), and `KeyedBy` names which.
 - `Clusters::per_unit` and `Clusters::per_row`, which key clusters by unit codes or by rows, `Clusters::from_codes`, `for_keys`, `keys` and `keyed_by`. `Influence::variance` refuses clusters keyed the other way with `Error::KeyMismatch`. Clusters given by position work with either.
 - `Clusters::from_labels_first_seen`, the numbering of `from_labels` under a name that states its order.
-- `sandwich::SmallSample`, with `factor`, and `sandwich::scaled`, for the small-sample factors of a sandwich covariance, and `sandwich::meat_from`, the meat from a vector of residuals.
+- `sandwich::SandwichAdjustment` (`None`, `ClusterCount`, `Hc1`), with `factor`, and `sandwich::scaled`, for the small-sample factors of a sandwich covariance, each listed in the module against the call of R's `sandwich` package and of Stata that applies it, and `sandwich::meat_from`, the meat from a vector of residuals.
 - `curve::contrast_curve` and `curve::ContrastCurve`, the contrast of a spline term against a reference value, with pointwise or simultaneous (sup-t) bands, chosen by `curve::Band`.
 - `multiplicity::adjust` with `Adjustment`, the p-value adjustments of Bonferroni, Holm, Hochberg, Hommel, Benjamini-Hochberg and Benjamini-Yekutieli.
 - `pooling::rubin_vector` and `PooledVector`, `pooling::d1`, `d2` and `d3` with `MultiMethod`, `NegativeRiv` and `MultiTest`, `pooling::rubin_transformed` with `Transform` and `PooledOnScale`, `dfcom_residual` and `dfcom_events`, and `Pooled::p_value`.
@@ -35,6 +35,8 @@ Confidence levels, bootstrap settings and errors now use the shared types of `ep
 - `Error`, which implements `Classify`.
 - `CovarianceInput`, the covariance forms `wald` takes: a faer `MatRef` or `&Mat`, an `epistat_core::Covariance` such as `Influence::variance` returns, or an `epistat_core::Matrix`. A `Covariance` with an undefined entry is refused with `InputError::NotFinite`.
 - `interval::try_normal`, the normal interval with its standard error checked: a negative standard error is `InputError::Domain` and a NaN estimate or standard error `InputError::NotFinite`, where `interval::normal` returns reversed or undefined limits.
+- `sandwich::covariance`, the sandwich as an `epistat_core::Covariance`, and `sandwich::defined_standard_errors`, the square roots of the diagonal with `None` for a negative or NaN variance, as `Covariance::standard_errors` gives them. `sandwich::standard_errors` still reads a negative variance as zero.
+- `simultaneous::sup_t_from_covariance` takes any `CovarianceInput`, so an `epistat_core::Covariance` goes in as it is; a faer `MatRef` still does.
 
 ### Deprecated
 

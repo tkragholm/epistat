@@ -418,7 +418,7 @@ mod tests {
             )));
         }
         assert!(domain(trimmed_percentile(
-            &mut vec![1.0, 2.0, 3.0],
+            &mut [1.0, 2.0, 3.0],
             alpha(0.1),
             0.4,
             Percentile::Type7

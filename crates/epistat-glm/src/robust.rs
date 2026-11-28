@@ -33,7 +33,7 @@
 //! where `h_i = W_i x_i' A^-1 x_i` is the leverage. `Hc0` with clusters has no
 //! small-sample factor, and `Cr1` is `sandwich::vcovCL(type = "HC0", cadjust =
 //! TRUE)`, every row its own cluster when there are none. The factors are
-//! those of [`SmallSample`]. The covariance is `None` throughout where the
+//! those of [`SandwichAdjustment`]. The covariance is `None` throughout where the
 //! factor does not exist (`N <= K` for `Hc1`, fewer than two clusters), and
 //! `None` for an aliased coefficient. A dispersion in the fit is divided out,
 //! so the sandwich is the same for a family with an estimated dispersion.
@@ -71,7 +71,7 @@
 
 use epistat_core::Covariance;
 use epistat_inference::Clusters;
-use epistat_inference::sandwich::{SmallSample, meat, sandwich_with_inverse};
+use epistat_inference::sandwich::{SandwichAdjustment, meat, sandwich_with_inverse};
 use epistat_linalg::design::select_columns;
 use epistat_linalg::{Mat, MatRef};
 
@@ -97,9 +97,9 @@ impl SandwichType {
     /// clusters (`None` without clusters), or `None` where it does not exist.
     pub(crate) fn factor(self, rows: usize, rank: usize, clusters: Option<usize>) -> Option<f64> {
         let rule = match self {
-            Self::Hc0 | Self::Hc3 => SmallSample::None,
-            Self::Hc1 => SmallSample::Hc1,
-            Self::Cr1 => SmallSample::Clusters,
+            Self::Hc0 | Self::Hc3 => SandwichAdjustment::None,
+            Self::Hc1 => SandwichAdjustment::Hc1,
+            Self::Cr1 => SandwichAdjustment::ClusterCount,
         };
         rule.factor(rows, rank, clusters)
     }
