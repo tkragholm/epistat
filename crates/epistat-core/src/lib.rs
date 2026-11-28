@@ -11,6 +11,7 @@
 //! | [`Level`] | a confidence level, kept as the confidence or alpha the caller gave |
 //! | [`Interval`], [`Coverage`], [`Estimate`], [`Scale`], [`Contrast`] | how an estimator reports a number |
 //! | [`Covariance`] | a covariance matrix that knows its dimension |
+//! | [`Test`], [`Reference`] | a test statistic, its degrees of freedom and p-value |
 //! | [`EventStudy`] | event-study coefficients, their covariance and the reference period |
 //! | [`Bootstrap`], [`Seed`] | the replicates and root seed of a randomised call |
 //! | [`Estimand`] | the population an average treatment effect is averaged over |
@@ -40,6 +41,7 @@ pub mod estimand;
 pub mod estimate;
 pub mod event_study;
 mod format;
+pub mod hypothesis;
 pub mod level;
 pub mod panel;
 pub mod permutation;
@@ -53,6 +55,7 @@ pub use error::{Classify, ErrorKind};
 pub use estimand::Estimand;
 pub use estimate::{Contrast, Coverage, Estimate, Interval, Scale};
 pub use event_study::EventStudy;
+pub use hypothesis::{Reference, Test};
 pub use level::Level;
 pub use panel::Panel;
 pub use permutation::Permutation;

@@ -16,6 +16,7 @@ First release. The crate holds the types the other epistat crates share, so that
 - `Covariance`, a covariance matrix that knows its dimension, with `variances`, `standard_errors` and `quadratic`. It prints as R prints a matrix.
 - `EventStudy`, event-study coefficients with their covariance and reference period. `is_consecutive` says whether the relative periods and the reference are consecutive integers, as HonestDiD's restrictions assume.
 - `Bootstrap`, a number of replicates and a root seed, and `Seed`, the root seed as a type of its own, so that `Bootstrap::new(999, Seed(20_381))` cannot be written with the two numbers swapped. A seed's value and the streams derived from it are those of the integer. There is no default seed. A bootstrap prints as `999 replicates from seed 20381`.
+- `Test` and `Reference`, the statistic, degrees of freedom and p-value of a hypothesis test and the distribution the p-value is read from (normal, t, chi-square, F, the chi-bar-square of a boundary test, or exact). A test prints as `chi-square = 3.21 on 2 df, p = 0.20`.
 - `Estimand`, the population an average treatment effect is averaged over.
 - `Codes`, labels as dense `u32` codes in sorted order, with the way back to the labels.
 - `Panel`, the validated unit-and-period key of person-period data. `Panel::sort_order` returns a `Permutation`, whose `apply` puts a column in the sorted order and refuses a column of another length, and whose `inverse` puts per-row results back. It derefs to the row numbers.
