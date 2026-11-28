@@ -11,6 +11,7 @@
 //! | [`Level`] | a confidence level, kept as the confidence or alpha the caller gave |
 //! | [`Interval`], [`Coverage`], [`Estimate`], [`Scale`], [`Contrast`] | how an estimator reports a number |
 //! | [`Coefficients`], [`Term`], [`Glance`], [`Tidy`] | a fit's coefficient table and summary, and the trait fits implement |
+//! | [`Col`] | a column with null rows, as Arrow holds it: values and a validity bitmap |
 //! | [`Covariance`] | a covariance matrix that knows its dimension |
 //! | [`Matrix`] | a rectangular matrix of results, row-major |
 //! | [`Test`], [`Reference`] | a test statistic, its degrees of freedom and p-value |
@@ -95,6 +96,7 @@ pub mod bootstrap;
 pub mod check;
 pub mod codes;
 pub mod coefficients;
+pub mod col;
 pub mod covariance;
 pub mod day;
 pub mod error;
@@ -114,6 +116,7 @@ pub use bootstrap::{Bootstrap, Seed};
 pub use check::InputError;
 pub use codes::Codes;
 pub use coefficients::{Coefficients, EffectScale, Glance, Term, Tidy, TidyRow, VarianceKind};
+pub use col::Col;
 pub use covariance::Covariance;
 pub use day::Day;
 pub use error::{Classify, ErrorKind};
