@@ -53,7 +53,7 @@
 //! Cole SR, Hernan MA. Adjusted survival curves with inverse probability
 //! weights. Comput Methods Programs Biomed 2004;75(1):45-49.
 
-use epistat_core::{Covariance, Estimate, Level, Scale};
+use epistat_core::{Contrast, Covariance, Estimate, Level, Scale};
 use epistat_linalg::{Factor, Mat};
 use epistat_stats::sum::Compensated;
 use epistat_stats::wald;
@@ -217,6 +217,76 @@ impl WeightedKm {
         })
     }
 
+    /// The curve of `group` (a position in `groups`) at `t`, read at the last
+    /// chosen time at or before `t`; `None` before the first chosen time and
+    /// for a group out of range.
+    #[must_use]
+    pub fn at(&self, group: usize, t: f64) -> Option<WeightedKmAt> {
+        let time = self.position_at(t)?;
+        Some(WeightedKmAt {
+            time: self.times[time],
+            survival: self.survival(group, time)?,
+            se: self.se(group, time),
+            se_known: self.se_known(group, time),
+        })
+    }
+
+    /// The risks `1 - S` of `group` and `other` (positions in `groups`, such
+    /// as the treated and the control arm) at `times[time]`, their difference
+    /// `risk_group - risk_other` and their ratio `risk_group / risk_other`,
+    /// with standard errors that account for the estimation of the weights
+    /// and normal intervals at `level`.
+    ///
+    /// The difference has the variance `w' V w` of the covariance `V` of the
+    /// two curves at the time, `w = (1, -1)` on the two groups
+    /// ([`Covariance::quadratic`]). The ratio has the delta-method variance of
+    /// its logarithm, `V_gg / r_g^2 + V_hh / r_h^2 - 2 V_gh / (r_g r_h)`, and
+    /// its interval and p-value are formed on the log scale
+    /// ([`Scale::Log`]). The ratio is `None` when the risk of `other` is 0; a
+    /// standard error is `None` where a covariance it needs is.
+    ///
+    /// # Errors
+    ///
+    /// An input error when `group`, `other` or `time` is beyond the groups or
+    /// times.
+    pub fn contrast(
+        &self,
+        group: usize,
+        other: usize,
+        time: usize,
+        level: Level,
+    ) -> Result<Contrast> {
+        self.check_positions(&[group, other], time)?;
+        let m = self.times.len();
+        let (r1, r0) = (
+            1.0 - self.surv[group * m + time],
+            1.0 - self.surv[other * m + time],
+        );
+        let covariance = &self.covariance[time];
+        let mut w = vec![0.0; covariance.dim()];
+        w[group] = 1.0;
+        w[other] -= 1.0;
+        let difference_se = covariance.quadratic(&w).map(|v| v.max(0.0).sqrt());
+        let ratio = (r0 != 0.0).then(|| {
+            let se = (|| {
+                let (gg, hh, gh) = (
+                    covariance.get(group, group)?,
+                    covariance.get(other, other)?,
+                    covariance.get(group, other)?,
+                );
+                let v = gg / (r1 * r1) + hh / (r0 * r0) - 2.0 * gh / (r1 * r0);
+                v.is_finite().then(|| v.max(0.0).sqrt())
+            })();
+            wald(r1 / r0, se, level, Scale::Log)
+        });
+        Ok(Contrast::new(
+            wald(r1, self.se(group, time), level, Scale::Identity),
+            wald(r0, self.se(other, time), level, Scale::Identity),
+            wald(r1 - r0, difference_se, level, Scale::Identity),
+            ratio,
+        ))
+    }
+
     /// The covariance of the curves of two groups at `times[time]` with the
     /// weights taken as known.
     #[must_use]
@@ -246,6 +316,20 @@ impl WeightedKm {
         }
         Ok(())
     }
+}
+
+/// One weighted curve read at a time, from [`WeightedKm::at`].
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WeightedKmAt {
+    /// The chosen time read: the last at or before the time asked for.
+    pub time: f64,
+    /// The survival probability.
+    pub survival: f64,
+    /// Its standard error accounting for the estimation of the weights.
+    pub se: Option<f64>,
+    /// Its standard error with the weights taken as known.
+    pub se_known: Option<f64>,
 }
 
 /// The difference of the risks of two weighted curves at one time.
