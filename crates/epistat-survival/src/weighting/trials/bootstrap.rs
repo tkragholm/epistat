@@ -8,9 +8,11 @@ use crate::error::{Error, Result};
 /// How often each person is drawn in one resample of the persons with
 /// replacement, for the case weights of a bootstrap replicate.
 ///
-/// The persons are the distinct ids, in increasing order, and the counts are
-/// those of `epistat_rng::resample_counts` with the replicate's seed, so a
-/// replicate depends on its seed and the set of ids only.
+/// The persons are the distinct ids, in increasing order, and the counts of
+/// replicate `r` of a [`Bootstrap`] are those of
+/// `epistat_inference::bootstrap::unit_counts_of`, that is
+/// `resample_counts(n, replicate_seed(seed, r))`, so a replicate depends on
+/// the root seed, its number and the set of ids only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PersonCounts {
     persons: Vec<u64>,
@@ -18,11 +20,13 @@ pub struct PersonCounts {
 }
 
 impl PersonCounts {
-    /// The counts of the distinct ids of `ids` in the resample of `seed`.
+    /// The counts of the distinct ids of `ids` in replicate `replicate` of
+    /// `bootstrap`, the counts [`bootstrap_trials`] gives that replicate.
     #[must_use]
-    pub fn draw(ids: &[u64], seed: u64) -> Self {
+    pub fn draw(ids: &[u64], bootstrap: Bootstrap, replicate: usize) -> Self {
         let persons = distinct(ids);
-        let counts = epistat_rng::resample_counts(persons.len(), seed);
+        let counts =
+            epistat_inference::bootstrap::unit_counts_of(persons.len(), bootstrap, replicate);
         Self { persons, counts }
     }
 
@@ -121,15 +125,17 @@ mod tests {
     #[test]
     fn counts_follow_the_ids_and_the_seed() {
         let ids = [9, 9, 3, 3, 3, 12];
-        let a = PersonCounts::draw(&ids, 5);
+        let a = PersonCounts::draw(&ids, Bootstrap::new(1, 5), 0);
         assert_eq!(a.persons(), &[3, 9, 12]);
         assert_eq!(a.counts().iter().sum::<u32>(), 3);
-        assert_eq!(a, PersonCounts::draw(&[12, 3, 9], 5));
+        assert_eq!(a, PersonCounts::draw(&[12, 3, 9], Bootstrap::new(1, 5), 0));
         let w = a.case_weights(&ids).expect("known ids");
         assert_eq!(w[0], f64::from(a.count(9).expect("drawn from")));
         assert!(a.case_weights(&[4]).is_err());
         let runs = bootstrap_trials(&ids, Bootstrap::new(2, 5), |c| Ok(c.counts().to_vec()));
-        let first = PersonCounts::draw(&ids, epistat_rng::replicate_seed(5, 0));
-        assert_eq!(runs[0].as_ref().expect("runs"), first.counts());
+        for (r, run) in runs.iter().enumerate() {
+            let drawn = PersonCounts::draw(&ids, Bootstrap::new(2, 5), r);
+            assert_eq!(run.as_ref().expect("runs"), drawn.counts());
+        }
     }
 }

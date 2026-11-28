@@ -272,9 +272,9 @@ impl MsTerm {
 }
 
 /// The coefficients of the model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
-pub enum MsTerms<'a> {
+pub enum MsTerms {
     /// A coefficient for each covariate in each transition, covariate by
     /// covariate and within a covariate in the order of the transitions.
     #[default]
@@ -282,13 +282,13 @@ pub enum MsTerms<'a> {
     /// One coefficient for each covariate, shared by all transitions.
     Common,
     /// These terms, in this order.
-    Custom(&'a [MsTerm]),
+    Custom(Vec<MsTerm>),
 }
 
 /// The baseline hazards of the transitions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
-pub enum MsBaseline<'a> {
+pub enum MsBaseline {
     /// A baseline hazard of its own for each transition.
     #[default]
     Separate,
@@ -296,12 +296,12 @@ pub enum MsBaseline<'a> {
     Shared,
     /// One group code for each transition, in the order of the transitions.
     /// Transitions with the same code share a baseline hazard.
-    Groups(&'a [u32]),
+    Groups(Vec<u32>),
 }
 
 /// What [`fit`] takes besides the data and the covariates.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MsOptions<'a> {
+pub struct MsOptions {
     /// How tied events enter the partial likelihood, as in [`CoxOptions`].
     /// `Efron`, as in `coxph`.
     pub ties: Ties,
@@ -311,11 +311,11 @@ pub struct MsOptions<'a> {
     pub timefix: TimeFix,
     /// The transitions of the model, from state and to state, in any order. The
     /// default is those the data has, [`observed_transitions`].
-    pub transitions: Option<&'a [(u32, u32)]>,
+    pub transitions: Option<Vec<(u32, u32)>>,
     /// The coefficients.
-    pub terms: MsTerms<'a>,
+    pub terms: MsTerms,
     /// The baseline hazards.
-    pub baseline: MsBaseline<'a>,
+    pub baseline: MsBaseline,
     /// Whether to give the cluster-robust covariance, with the subject (or the
     /// cluster column of the data) as the cluster. True, as `coxph` does with
     /// an `id`.
@@ -330,7 +330,7 @@ pub struct MsOptions<'a> {
     pub tolerance: f64,
 }
 
-impl Default for MsOptions<'_> {
+impl Default for MsOptions {
     fn default() -> Self {
         let cox = CoxOptions::default();
         Self {
@@ -443,6 +443,6 @@ fn resolve<'a>(data: &SurvData<'a>, timefix: TimeFix) -> Result<(SurvData<'a>, V
 /// transition that does not exist or two terms give one covariate in one
 /// transition two coefficients, when `baseline` or `start` have the
 /// wrong length, and as [`crate::cox::fit`] for its options.
-pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &MsOptions<'_>) -> Result<MsModel> {
+pub fn fit(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &MsOptions) -> Result<MsModel> {
     stack::fit(data, x, opts)
 }

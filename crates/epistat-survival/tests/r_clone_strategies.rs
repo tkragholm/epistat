@@ -98,7 +98,7 @@ fn the_clones_and_their_weights_agree_with_r() {
     )
     .expect("clones");
     let w = &r.clones;
-    assert_eq!(c.source, w.row);
+    assert_eq!(c.row.iter().map(|&r| r as usize).collect::<Vec<_>>(), w.row);
     assert_eq!(c.arm, w.arm);
     let flags = |v: &[bool]| v.iter().map(|&b| u8::from(b)).collect::<Vec<_>>();
     assert_eq!(flags(&c.deviation), w.dev);
@@ -108,11 +108,11 @@ fn the_clones_and_their_weights_agree_with_r() {
     let m = c.len();
     #[expect(clippy::cast_precision_loss, reason = "periods are small integers")]
     let den = Mat::from_fn(m, 4, |i, j| {
-        let s = c.source[i];
+        let s = c.row[i] as usize;
         [1.0, d.l[s], d.f[s], d.period[s] as f64][j]
     });
     let model = DeviationModel {
-        denominator: den.as_ref(),
+        denominator: den.as_ref().into(),
         numerator: None,
     };
     let fit = deviation_weights(&c, &[model; 5], None).expect("weights");

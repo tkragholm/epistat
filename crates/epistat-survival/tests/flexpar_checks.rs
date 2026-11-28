@@ -68,19 +68,19 @@ fn refusals() {
     let mut zero = s.time.clone();
     zero[0] = 0.0;
     let dz = SurvData::builder(&zero, &s.status).build().unwrap();
-    assert!(fit(&dz, s.x.as_ref(), &opts).is_err());
+    assert!(fit(&dz, s.x.as_ref(), None, &opts).is_err());
     // all censored
     let none = vec![0; 200];
     let dn = SurvData::builder(&s.time, &none).build().unwrap();
-    assert!(fit(&dn, s.x.as_ref(), &opts).is_err());
+    assert!(fit(&dn, s.x.as_ref(), None, &opts).is_err());
     // events all at one time: the knots coincide
     let tied = vec![2.0; 200];
     let dt = SurvData::builder(&tied, &s.status).build().unwrap();
-    assert!(fit(&dt, s.x.as_ref(), &opts).is_err());
+    assert!(fit(&dt, s.x.as_ref(), None, &opts).is_err());
     // more parameters than events
     let few: Vec<i32> = (0..200).map(|i| i32::from(i < 4)).collect();
     let df = SurvData::builder(&s.time, &few).build().unwrap();
-    assert!(fit(&df, s.x.as_ref(), &opts).is_err());
+    assert!(fit(&df, s.x.as_ref(), None, &opts).is_err());
     // a time-varying column out of range, a repeated one, df 0
     for tvc in [
         vec![TimeVarying { column: 2, df: 1 }],
@@ -90,26 +90,30 @@ fn refusals() {
         ],
         vec![TimeVarying { column: 0, df: 0 }],
     ] {
-        let o = FlexParOptions { tvc: &tvc, ..opts };
-        assert!(fit(&d, s.x.as_ref(), &o).is_err());
+        let o = FlexParOptions {
+            tvc: tvc.clone(),
+            ..opts.clone()
+        };
+        assert!(fit(&d, s.x.as_ref(), None, &o).is_err());
     }
     assert!(
         fit(
             &d,
             s.x.as_ref(),
+            None,
             &FlexParOptions::new(FlexparScale::Hazard, 0)
         )
         .is_err()
     );
     // knots of the wrong number
     let o = FlexParOptions {
-        knots: Some(&[0.0, 1.0]),
-        ..opts
+        knots: Some(vec![0.0, 1.0]),
+        ..opts.clone()
     };
-    assert!(fit(&d, s.x.as_ref(), &o).is_err());
+    assert!(fit(&d, s.x.as_ref(), None, &o).is_err());
     // covariates of another length
     let short = Mat::<f64>::zeros(10, 2);
-    assert!(fit(&d, short.as_ref(), &opts).is_err());
+    assert!(fit(&d, short.as_ref(), None, &opts).is_err());
     // competing causes
     let codes: Vec<i32> = s
         .status
@@ -121,7 +125,7 @@ fn refusals() {
         .n_codes(2)
         .build()
         .unwrap();
-    assert!(fit(&dc, s.x.as_ref(), &opts).is_err());
+    assert!(fit(&dc, s.x.as_ref(), None, &opts).is_err());
     // split follow-up of a subject is accepted on the hazard scale only
     let ids: Vec<u32> = (0..200).map(|i| i / 2).collect();
     let di = SurvData::builder(&s.time, &s.status)
@@ -133,6 +137,7 @@ fn refusals() {
         fit(
             &di,
             s.x.as_ref(),
+            None,
             &FlexParOptions::new(FlexparScale::Odds, 2)
         )
         .is_err()
@@ -141,6 +146,7 @@ fn refusals() {
         fit(
             &di,
             s.x.as_ref(),
+            None,
             &FlexParOptions::new(FlexparScale::Hazard, 2)
         )
         .is_ok()
@@ -151,7 +157,7 @@ fn refusals() {
         .stratum(&strata)
         .build()
         .unwrap();
-    assert!(fit(&ds, s.x.as_ref(), &opts).is_err());
+    assert!(fit(&ds, s.x.as_ref(), None, &opts).is_err());
 }
 
 #[test]
@@ -160,6 +166,7 @@ fn prediction_refusals() {
     let f = fit(
         &data(&s, false),
         s.x.as_ref(),
+        None,
         &FlexParOptions::new(FlexparScale::Hazard, 3),
     )
     .unwrap();
@@ -201,8 +208,8 @@ fn an_aliased_column_has_no_coefficient_and_changes_nothing_else() {
     });
     let opts = FlexParOptions::new(FlexparScale::Probit, 3);
     let d = data(&s, true);
-    let full = fit(&d, wide.as_ref(), &opts).unwrap();
-    let base = fit(&d, s.x.as_ref(), &opts).unwrap();
+    let full = fit(&d, wide.as_ref(), None, &opts).unwrap();
+    let base = fit(&d, s.x.as_ref(), None, &opts).unwrap();
     assert_eq!(full.beta[2], None);
     assert_eq!(full.beta[3], None);
     assert!((full.log_likelihood - base.log_likelihood).abs() < 1e-9);
@@ -221,7 +228,18 @@ fn an_aliased_column_has_no_coefficient_and_changes_nothing_else() {
     assert!((a[0][1].estimate - b[0][1].estimate).abs() < 1e-7);
     // a time-varying term on an aliased column is refused
     let tvc = [TimeVarying { column: 3, df: 1 }];
-    assert!(fit(&d, wide.as_ref(), &FlexParOptions { tvc: &tvc, ..opts }).is_err());
+    assert!(
+        fit(
+            &d,
+            wide.as_ref(),
+            None,
+            &FlexParOptions {
+                tvc: tvc.to_vec(),
+                ..opts.clone()
+            }
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -233,7 +251,7 @@ fn integer_weights_are_repeated_rows_and_zero_weights_are_absent_rows() {
         .weight(&weights)
         .build()
         .unwrap();
-    let a = fit(&weighted, s.x.as_ref(), &opts).unwrap();
+    let a = fit(&weighted, s.x.as_ref(), None, &opts).unwrap();
     // the same data written out
     let (mut time, mut status, mut rows) = (Vec::new(), Vec::new(), Vec::new());
     for i in 0..120 {
@@ -249,17 +267,19 @@ fn integer_weights_are_repeated_rows_and_zero_weights_are_absent_rows() {
     let b = fit(
         &repeated,
         x.as_ref(),
+        None,
         &FlexParOptions {
-            knots: Some(&a.knots),
-            ..opts
+            knots: Some(a.knots.clone()),
+            ..opts.clone()
         },
     )
     .unwrap();
     let a = fit(
         &weighted,
         s.x.as_ref(),
+        None,
         &FlexParOptions {
-            knots: Some(&a.knots),
+            knots: Some(a.knots.clone()),
             ..opts
         },
     )
@@ -277,7 +297,7 @@ fn an_offset_moves_the_intercept_and_leaves_no_null_likelihood() {
     let s = simulate(250, 5);
     let d = data(&s, false);
     let opts = FlexParOptions::new(FlexparScale::Hazard, 3);
-    let base = fit(&d, s.x.as_ref(), &opts).unwrap();
+    let base = fit(&d, s.x.as_ref(), None, &opts).unwrap();
     assert!(base.null_log_likelihood.unwrap() < base.log_likelihood);
     // an offset of 0.7 on every row shifts the intercept by -0.7
     let off = vec![0.7; 250];
@@ -285,7 +305,7 @@ fn an_offset_moves_the_intercept_and_leaves_no_null_likelihood() {
         .offset(&off)
         .build()
         .unwrap();
-    let shifted = fit(&shifted_data, s.x.as_ref(), &opts).unwrap();
+    let shifted = fit(&shifted_data, s.x.as_ref(), None, &opts).unwrap();
     assert!(shifted.null_log_likelihood.is_none());
     assert!((shifted.log_likelihood - base.log_likelihood).abs() < 1e-8);
     assert!((shifted.gamma[0] - (base.gamma[0] - 0.7)).abs() < 1e-6);
@@ -309,6 +329,7 @@ fn the_hazard_ratio_is_constant_without_time_varying_effects_and_is_not_with_the
     let f = fit(
         &d,
         s.x.as_ref(),
+        None,
         &FlexParOptions::new(FlexparScale::Hazard, 3),
     )
     .unwrap();
@@ -330,8 +351,9 @@ fn the_hazard_ratio_is_constant_without_time_varying_effects_and_is_not_with_the
     let g = fit(
         &d,
         s.x.as_ref(),
+        None,
         &FlexParOptions {
-            tvc: &tvc,
+            tvc: tvc.to_vec(),
             ..FlexParOptions::new(FlexparScale::Hazard, 3)
         },
     )
@@ -384,7 +406,7 @@ fn survival_is_a_decreasing_function_within_its_limits() {
         FlexparScale::Odds,
         FlexparScale::Probit,
     ] {
-        let f = fit(&d, s.x.as_ref(), &FlexParOptions::new(scale, 4)).unwrap();
+        let f = fit(&d, s.x.as_ref(), None, &FlexParOptions::new(scale, 4)).unwrap();
         assert!(f.converged && f.monotone_on_data && !f.diverging);
         let x = Mat::from_fn(1, 2, |_, j| [0.0, 1.0][j]);
         let times: Vec<f64> = (1..40).map(|k| 0.1 * f64::from(k)).collect();
@@ -428,6 +450,7 @@ fn a_fit_that_is_not_monotone_is_flagged_and_refused() {
         let Ok(f) = fit(
             &d,
             s.x.as_ref(),
+            None,
             &FlexParOptions::new(FlexparScale::Hazard, 6),
         ) else {
             continue;
@@ -471,8 +494,8 @@ fn the_bfgs_fallback_reaches_the_same_maximum() {
             max_iterations: 1,
             ..FlexParOptions::new(scale, 4)
         };
-        let f = fit(&d, s.x.as_ref(), &opts).unwrap();
-        let g = fit(&d, s.x.as_ref(), &FlexParOptions::new(scale, 4)).unwrap();
+        let f = fit(&d, s.x.as_ref(), None, &opts).unwrap();
+        let g = fit(&d, s.x.as_ref(), None, &FlexParOptions::new(scale, 4)).unwrap();
         assert!(g.converged && f.iterations > 1, "{scale:?}");
         assert!((f.log_likelihood - g.log_likelihood).abs() < 1e-8 * g.log_likelihood.abs());
         assert!(!f.diverging);

@@ -61,9 +61,9 @@
 //!
 //! The stacked trials have about `T (T + 1) / 2` rows for each person followed
 //! for `T` periods, so a design built for them is several times the data.
-//! [`fit_msm_trials`] takes the trials as spans of the rows of the data and
-//! forms their rows block by block while it fits, with the bits of
-//! [`fit_msm`] on the built rows, so that the memory is that of the
+//! [`fit_msm`] on a [`TrialDesign`] takes the trials as spans of the rows of
+//! the data and forms their rows block by block while it fits, with the bits
+//! of the built rows, so that the memory is that of the
 //! person-period data and its weights. The models of the weights read their
 //! rows from the design given, without a copy of the rows of each fit.
 //!
@@ -89,13 +89,14 @@
 //!    2020;95(1):1-36.
 
 use epistat_core::{Covariance, InputError, check};
-use epistat_glm::robust::{SandwichType, robust_covariance};
+use epistat_glm::robust::SandwichType;
 use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
 use epistat_inference::Clusters;
 use epistat_linalg::{Mat, MatRef, ROW_BLOCK};
 use rayon::prelude::*;
 
+use super::clone::CloneDesign;
 use crate::check::{check_lengths, refuse_non_finite_matrix};
 use crate::error::{Error, Result};
 
@@ -560,15 +561,69 @@ impl Msm {
     }
 }
 
-/// Fit the weighted logistic outcome model of the stacked trials, with the
-/// covariance clustered by person.
+/// The rows of the outcome model of [`fit_msm`], in one of three forms.
+#[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
+pub enum MsmRows<'a> {
+    /// The rows of the trials or of the clones built in full.
+    Design(MsmInput<'a>),
+    /// The stacked trials as spans of the person-period rows, formed block by
+    /// block while the model is fitted.
+    Trials(TrialDesign<'a>),
+    /// The clone rows that are not a deviation, formed block by block while the
+    /// model is fitted.
+    Clones(CloneDesign<'a>),
+}
+
+impl<'a> From<MsmInput<'a>> for MsmRows<'a> {
+    fn from(input: MsmInput<'a>) -> Self {
+        Self::Design(input)
+    }
+}
+
+impl<'a> From<TrialDesign<'a>> for MsmRows<'a> {
+    fn from(trials: TrialDesign<'a>) -> Self {
+        Self::Trials(trials)
+    }
+}
+
+impl<'a> From<CloneDesign<'a>> for MsmRows<'a> {
+    fn from(clones: CloneDesign<'a>) -> Self {
+        Self::Clones(clones)
+    }
+}
+
+/// Fit the weighted logistic outcome model of the stacked trials, or of the
+/// clones of a clone-censor-weight analysis, with the covariance clustered by
+/// person.
+///
+/// Every form of `rows` is fitted by
+/// [`Glm::fit_rows`](epistat_glm::Glm::fit_rows), which forms the rows block by
+/// block, and its `Cr1` sandwich clustered by person. A design built in full
+/// ([`MsmRows::Design`]) has its rows read from the matrix; the trials
+/// ([`MsmRows::Trials`]) and the clones ([`MsmRows::Clones`]) have theirs
+/// formed from the person-period data or the clones as the fit needs them,
+/// with the bits of building the same rows and fitting them as a design, and
+/// the memory of the data. The fit reads its rows about `2 i + p^2` times for
+/// `i` iterations and `p` columns. See [`epistat_glm::rows`].
 ///
 /// # Errors
 ///
 /// An input error for inputs of different lengths, a weight that is negative
-/// or not finite, a model that has an aliased column or does not converge, and
-/// fewer than two persons.
-pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
+/// or not finite, a design value that is not finite, a design with no columns,
+/// a model that has an aliased column or does not converge, and fewer than two
+/// persons; for [`MsmRows::Trials`] also the errors of [`TrialDesign`], and for
+/// [`MsmRows::Clones`] those of [`CloneDesign`].
+pub fn fit_msm<'a>(rows: impl Into<MsmRows<'a>>) -> Result<Msm> {
+    match rows.into() {
+        MsmRows::Design(input) => fit_design(&input),
+        MsmRows::Trials(trials) => fit_trials(&trials),
+        MsmRows::Clones(clones) => super::clone::fit_clones(&clones),
+    }
+}
+
+/// [`fit_msm`] on a design built in full.
+fn fit_design(input: &MsmInput<'_>) -> Result<Msm> {
     let n = input.outcome.len();
     check_design("design", input.design, n)?;
     check_lengths(&[
@@ -576,51 +631,50 @@ pub fn fit_msm(input: &MsmInput<'_>) -> Result<Msm> {
         ("weight", input.weight.len()),
         ("person", input.person.len()),
     ])?;
-    let y: Vec<f64> = input
-        .outcome
-        .iter()
-        .map(|&o| f64::from(u8::from(o)))
-        .collect();
-    let model = Glm::new(Family::Binomial, Link::Logit);
-    let fit = model
-        .fit(&crate::logistic::data(
-            input.design,
-            &y,
-            Some(input.weight),
-            None,
-            None,
-        )?)
-        .map_err(Error::model("outcome model"))?;
-    let p = input.design.ncols();
-    let coefficients = fit.full_rank().map_err(Error::model("outcome model"))?;
     let clusters = Clusters::from_labels_first_seen(input.person);
-    let cov = robust_covariance(
-        &model,
-        &fit,
-        input.design,
-        &y,
-        Some(&clusters),
-        SandwichType::Cr1,
-    )
-    .map_err(Error::model("outcome model"))?;
-    let g = clusters.count();
-    if g < 2 {
-        return Err(Error::no_information(
-            "outcome model: at least two persons are needed",
-        ));
+    let rows = DesignRows {
+        input,
+        cluster: clusters.of(),
+        n_clusters: clusters.count(),
+    };
+    fit_msm_rows(&rows, input.design.ncols())
+}
+
+/// The rows of a design built in full, each clustered by its person in the
+/// order in which the persons first appear.
+struct DesignRows<'a> {
+    input: &'a MsmInput<'a>,
+    cluster: &'a [usize],
+    n_clusters: usize,
+}
+
+impl Rows for DesignRows<'_> {
+    fn n_rows(&self) -> usize {
+        self.input.outcome.len()
     }
-    if cov.as_slice().iter().any(Option::is_none) {
-        return Err(Error::undefined(
-            "outcome model: the covariance is not defined",
-        ));
+
+    fn n_columns(&self) -> usize {
+        self.input.design.ncols()
     }
-    debug_assert_eq!(cov.dim(), p);
-    Ok(Msm {
-        coefficients,
-        covariance: cov,
-        n_rows: n,
-        n_persons: clusters.count(),
-    })
+
+    fn fill(&self, start: usize, mut block: Block<'_>) {
+        let x = self.input.design;
+        for i in 0..block.y.len() {
+            let r = start + i;
+            for j in 0..x.ncols() {
+                block.x[(i, j)] = x[(r, j)];
+            }
+            block.y[i] = f64::from(u8::from(self.input.outcome[r]));
+            block.weight[i] = self.input.weight[r];
+            block.cluster[i] = self.cluster[r];
+        }
+    }
+}
+
+impl Clustered for DesignRows<'_> {
+    fn n_clusters(&self) -> usize {
+        self.n_clusters
+    }
 }
 
 /// The trials of a stacked analysis as spans of the rows of the person-period
@@ -638,37 +692,57 @@ pub struct TrialSpans<'a> {
     pub end: &'a [usize],
 }
 
-/// [`fit_msm`] on the stacked trials of `trials` without building them: the
+/// The stacked trials of [`MsmRows::Trials`], without building them: the
 /// rows of the trials in order, trial by trial and in each from its first row,
 /// with the design that `design(start, row, out)` writes into `out` for the
 /// trial that starts at row `start` of the data and its row `row`, the outcome
 /// `outcome[row]`, the weight [`trial_weights`] gives the row and the person of
 /// the row as its cluster.
 ///
-/// The result has the bits of building the rows of the trials with
-/// [`TrialRows`], weighting them with [`trial_weights`] and fitting them with
-/// [`fit_msm`], and the memory is that of the data: the rows of the trials are
-/// formed block by block as the fit needs them, by
-/// [`Glm::fit_rows`](epistat_glm::Glm::fit_rows). The time is that of the
-/// rows of the trials formed about `2 i + p^2` times for `i` iterations and `p`
-/// columns, which the fit of a built design does not spend. See
-/// [`epistat_glm::rows`].
+/// [`fit_msm`] gives the bits of building the rows of the trials with
+/// [`TrialRows`], weighting them with [`trial_weights`] and fitting them as a
+/// [`MsmRows::Design`], and the memory is that of the data.
 ///
-/// # Errors
-///
-/// An input error for rows that are not ordered by person and period, a
+/// [`fit_msm`] refuses rows that are not ordered by person and period, a
 /// `row_weight` or `outcome` of another length than the rows, spans of
 /// different lengths, a trial that is empty, ends beyond the data or leaves
-/// its person, trials not ordered by their first row, `columns` of 0, and the
-/// errors of [`fit_msm`].
-pub fn fit_msm_trials(
-    data: &PersonPeriod<'_>,
-    row_weight: &[f64],
-    trials: &TrialSpans<'_>,
-    outcome: &[bool],
-    columns: usize,
-    design: &(dyn Fn(usize, usize, &mut [f64]) + Sync),
-) -> Result<Msm> {
+/// its person, trials not ordered by their first row, and `columns` of 0.
+#[derive(Clone, Copy)]
+pub struct TrialDesign<'a> {
+    /// The person-period data the trials are spans of.
+    pub data: PersonPeriod<'a>,
+    /// The weight of each row of the data, such as [`RowWeights::weight`].
+    pub row_weight: &'a [f64],
+    /// The trials.
+    pub trials: TrialSpans<'a>,
+    /// Whether the event happens in each row of the data.
+    pub outcome: &'a [bool],
+    /// The number of columns of the design.
+    pub columns: usize,
+    /// Writes the design of a row of a trial into its third argument.
+    pub design: &'a (dyn Fn(usize, usize, &mut [f64]) + Sync),
+}
+
+impl std::fmt::Debug for TrialDesign<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TrialDesign")
+            .field("data", &self.data)
+            .field("trials", &self.trials)
+            .field("columns", &self.columns)
+            .finish_non_exhaustive()
+    }
+}
+
+/// [`fit_msm`] on the trials of `t`.
+fn fit_trials(t: &TrialDesign<'_>) -> Result<Msm> {
+    let (data, row_weight, trials, outcome, columns, design) = (
+        &t.data,
+        t.row_weight,
+        &t.trials,
+        t.outcome,
+        t.columns,
+        t.design,
+    );
     let n = data.check()?;
     if row_weight.len() != n {
         return Err(Error::from(InputError::Length {
@@ -716,7 +790,7 @@ pub fn fit_msm_trials(
         |k| data.id[trials.start[k]],
     );
     let rows = TrialStack {
-        trials,
+        trials: *trials,
         outcome,
         cumulative,
         person: data.id,
@@ -780,7 +854,7 @@ impl Stack {
 
 /// The rows of the trials, formed from the data.
 struct TrialStack<'a> {
-    trials: &'a TrialSpans<'a>,
+    trials: TrialSpans<'a>,
     outcome: &'a [bool],
     cumulative: Vec<f64>,
     person: &'a [u64],
@@ -898,62 +972,100 @@ pub struct CumulativeIncidence {
     pub se: Vec<f64>,
 }
 
-/// The cumulative incidence under one treatment from the model, for a
-/// population of rows: `designs[t]` has the design of every row at follow-up
-/// time `t`, with the assigned treatment and the time set, and the same rows in
-/// the same order for every time.
-///
-/// [`cumulative_incidence_rows`] gives the same, bit for bit, from a function
-/// that writes the design of a row at a time, without a matrix per time.
-///
-/// # Errors
-///
-/// An input error for no time, designs with another number of columns than the
-/// model or of different numbers of rows, no row, and a covariance that is not
-/// `p` by `p` or has an undefined entry.
-pub fn cumulative_incidence(msm: &Msm, designs: &[MatRef<'_, f64>]) -> Result<CumulativeIncidence> {
-    let p = msm.coefficients.len();
-    let Some(first) = designs.first() else {
-        return Err(Error::from(InputError::Empty { what: "designs" }));
-    };
-    let rows = first.nrows();
-    for (t, d) in designs.iter().enumerate() {
-        if d.nrows() != rows || d.ncols() != p {
-            return Err(Error::mismatch(format!(
-                "designs[{t}]: {} by {} where {rows} by {p} is needed",
-                d.nrows(),
-                d.ncols()
-            )));
-        }
-    }
-    cumulative_incidence_rows(msm, rows, designs.len(), &|r, t, out| {
-        for (j, v) in out.iter_mut().enumerate() {
-            *v = designs[t][(r, j)];
-        }
-    })
+/// The population whose cumulative incidence [`cumulative_incidence`] gives:
+/// the design of each of its rows at each follow-up time, with the assigned
+/// treatment and the time set.
+#[derive(Clone, Copy)]
+#[non_exhaustive]
+pub enum Population<'a> {
+    /// `designs[t]` has the design of every row at follow-up time `t`, the same
+    /// rows in the same order for every time.
+    Designs(&'a [MatRef<'a, f64>]),
+    /// `design(row, time, out)` writes into `out` the design of row `row` of
+    /// the population at follow-up time `time` (from 0 to `times - 1`), so no
+    /// matrix per time is held: the memory is one design row and the sums of
+    /// each time.
+    Rows {
+        /// The number of rows of the population.
+        rows: usize,
+        /// The number of follow-up times.
+        times: usize,
+        /// Writes the design of a row at a time into its third argument.
+        design: &'a (dyn Fn(usize, usize, &mut [f64]) + Sync),
+    },
 }
 
-/// [`cumulative_incidence`] with the designs formed by `design(row, time,
-/// out)`, which writes into `out` the design of row `row` of the population at
-/// follow-up time `time` (from 0 to `times - 1`), with the assigned treatment
-/// and the time set. The memory is one design row and the sums of each time.
+impl std::fmt::Debug for Population<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Designs(designs) => f.debug_tuple("Designs").field(designs).finish(),
+            Self::Rows { rows, times, .. } => f
+                .debug_struct("Rows")
+                .field("rows", rows)
+                .field("times", times)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+/// A function that writes the design of a row at a time into its third
+/// argument.
+type DesignFill<'a> = Box<dyn Fn(usize, usize, &mut [f64]) + Sync + 'a>;
+
+impl<'a> Population<'a> {
+    /// The rows, the times and the design of each row at each time, checking
+    /// held designs against the `p` coefficients of a model.
+    pub(crate) fn rows(&self, p: usize) -> Result<(usize, usize, DesignFill<'a>)> {
+        match *self {
+            Self::Designs(designs) => {
+                let Some(first) = designs.first() else {
+                    return Err(Error::from(InputError::Empty { what: "designs" }));
+                };
+                let rows = first.nrows();
+                for (t, d) in designs.iter().enumerate() {
+                    if d.nrows() != rows || d.ncols() != p {
+                        return Err(Error::mismatch(format!(
+                            "designs[{t}]: {} by {} where {rows} by {p} is needed",
+                            d.nrows(),
+                            d.ncols()
+                        )));
+                    }
+                }
+                Ok((
+                    rows,
+                    designs.len(),
+                    Box::new(move |r, t, out: &mut [f64]| {
+                        for (j, v) in out.iter_mut().enumerate() {
+                            *v = designs[t][(r, j)];
+                        }
+                    }),
+                ))
+            }
+            Self::Rows {
+                rows,
+                times,
+                design,
+            } => Ok((rows, times, Box::new(design))),
+        }
+    }
+}
+
+/// The cumulative incidence under one treatment from the model, for a
+/// population of rows.
 ///
 /// The risk at time `t` is `1 - mean over rows of S_r(t)`, `S_r(t) = prod over
 /// s <= t of (1 - p_r(s))`, with the delta-method standard error of the module
 /// documentation. The sum over rows is taken in the order of the rows, so the
-/// result does not depend on the number of threads and equals that of
-/// [`cumulative_incidence`] on the same designs.
+/// result does not depend on the number of threads, and the two forms of
+/// [`Population`] give the same bits on the same designs.
 ///
 /// # Errors
 ///
-/// An input error for no time, no row, a design value that is not finite,
-/// and a covariance that is not `p` by `p` or has an undefined entry.
-pub fn cumulative_incidence_rows(
-    msm: &Msm,
-    rows: usize,
-    times: usize,
-    design: &(dyn Fn(usize, usize, &mut [f64]) + Sync),
-) -> Result<CumulativeIncidence> {
+/// An input error for no time, no row, designs with another number of columns
+/// than the model or of different numbers of rows, a design value that is not
+/// finite, and a covariance that is not `p` by `p` or has an undefined entry.
+pub fn cumulative_incidence(msm: &Msm, population: &Population<'_>) -> Result<CumulativeIncidence> {
+    let (rows, times, design) = population.rows(msm.coefficients.len())?;
     let p = msm.coefficients.len();
     if times == 0 {
         return Err(Error::no_information("designs: no times"));

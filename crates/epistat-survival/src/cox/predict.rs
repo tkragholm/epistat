@@ -238,9 +238,9 @@ pub struct FittedModel<'a> {
 }
 
 /// The point the covariates are measured from. See the module documentation.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 #[non_exhaustive]
-pub enum Centring<'a> {
+pub enum Centring {
     /// The means `coxph` stores: weighted without entry times, unweighted with
     /// them, and 0 for a column with all values in `{-1, 0, 1}`.
     #[default]
@@ -248,7 +248,7 @@ pub enum Centring<'a> {
     /// The case-weighted mean of every column over the rows of positive weight.
     Weighted,
     /// One value per column.
-    Given(&'a [f64]),
+    Given(Vec<f64>),
 }
 
 /// How the cumulative hazard handles tied events.
@@ -346,10 +346,10 @@ impl<'a> NewData<'a> {
 }
 
 /// The options of [`basehaz`].
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct BaselineOptions<'a> {
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BaselineOptions {
     /// The reference the hazard is for.
-    pub centring: Centring<'a>,
+    pub centring: Centring,
     /// The form of the hazard. `None` follows the ties of the fit: Efron for
     /// Efron ties and Breslow otherwise.
     pub hazard: Option<CoxHazardType>,
@@ -358,14 +358,14 @@ pub struct BaselineOptions<'a> {
 }
 
 /// The options of [`predict`] and [`predict_terms`].
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CoxPredictOptions<'a> {
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoxPredictOptions {
     /// The reference. `None` is the default of `predict.coxph`: `Strata` for
     /// the linear predictor and the risk and for terms `Sample`; the expected
     /// number and the survival are always from `Sample`.
     pub reference: Option<Reference>,
     /// The means.
-    pub centring: Centring<'a>,
+    pub centring: Centring,
     /// The covariance of the standard errors.
     pub variance: CoxVariance,
     /// Whether to give standard errors, `se.fit`.
@@ -374,7 +374,7 @@ pub struct CoxPredictOptions<'a> {
     pub hazard: Option<CoxHazardType>,
 }
 
-impl Default for CoxPredictOptions<'_> {
+impl Default for CoxPredictOptions {
     fn default() -> Self {
         Self {
             reference: None,
@@ -388,7 +388,7 @@ impl Default for CoxPredictOptions<'_> {
 
 /// `CoxPredictOptions`, under its name in 0.3.
 #[deprecated(since = "0.4.0", note = "renamed `CoxPredictOptions`")]
-pub type PredictOptions<'a> = CoxPredictOptions<'a>;
+pub type PredictOptions = CoxPredictOptions;
 
 pub use crate::survfit::ConfType;
 
@@ -406,10 +406,10 @@ pub enum CurveType {
 }
 
 /// The options of [`survfit`].
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CoxSurvfitOptions<'a> {
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoxSurvfitOptions {
     /// The means the baseline is formed with. The curves do not depend on it.
-    pub centring: Centring<'a>,
+    pub centring: Centring,
     /// The form of the hazard, as in [`BaselineOptions`], `ctype` of `survfit`.
     pub hazard: Option<CoxHazardType>,
     /// The covariance of the standard error.
@@ -434,7 +434,7 @@ pub struct CoxSurvfitOptions<'a> {
     pub censor_times: bool,
 }
 
-impl Default for CoxSurvfitOptions<'_> {
+impl Default for CoxSurvfitOptions {
     fn default() -> Self {
         Self {
             centring: Centring::Coxph,
@@ -452,7 +452,7 @@ impl Default for CoxSurvfitOptions<'_> {
 
 /// `CoxSurvfitOptions`, under its name in 0.3.
 #[deprecated(since = "0.4.0", note = "renamed `CoxSurvfitOptions`")]
-pub type SurvfitOptions<'a> = CoxSurvfitOptions<'a>;
+pub type SurvfitOptions = CoxSurvfitOptions;
 
 /// The baseline of one stratum at its event times, in ascending order.
 #[derive(Debug, Clone, PartialEq)]
@@ -765,16 +765,16 @@ impl<'a> Model<'a> {
         })
     }
 
-    fn means(&self, centring: Centring<'_>) -> Result<Vec<f64>> {
+    fn means(&self, centring: &Centring) -> Result<Vec<f64>> {
         let (p, rows) = (self.p, self.rows);
         match centring {
             Centring::Given(values) => {
                 check_lengths(&[("x columns", p), ("centring", values.len())])?;
                 refuse_non_finite(values, "centring")?;
-                Ok(values.to_vec())
+                Ok(values.clone())
             }
             Centring::Weighted | Centring::Coxph => {
-                let coxph = centring == Centring::Coxph;
+                let coxph = *centring == Centring::Coxph;
                 let weighted = !(coxph && self.has_start);
                 let total = compensated(self.weight.iter().copied());
                 let mut means = vec![0.0; p];
@@ -1275,7 +1275,7 @@ fn build_baseline(
 
 fn baseline_of(
     model: &Model<'_>,
-    centring: Centring<'_>,
+    centring: &Centring,
     hazard: Option<CoxHazardType>,
 ) -> Result<Baseline> {
     let centre = model.means(centring)?;
@@ -1295,7 +1295,7 @@ fn baseline_of(
 /// # Errors
 ///
 /// An input error as for [`basehaz`].
-pub fn reference_means(model: &FittedModel<'_>, centring: Centring<'_>) -> Result<Vec<f64>> {
+pub fn reference_means(model: &FittedModel<'_>, centring: &Centring) -> Result<Vec<f64>> {
     Model::new(model, CoxVariance::Auto)?.means(centring)
 }
 
@@ -1324,9 +1324,9 @@ pub fn reference_offset(model: &FittedModel<'_>) -> Result<f64> {
 /// event code is missing for a status with several codes or outside the
 /// codes, when `Centring::Given` has another length than `x` has columns, and
 /// when a risk score or a risk set sum is not finite or not positive.
-pub fn basehaz(model: &FittedModel<'_>, opts: &BaselineOptions<'_>) -> Result<Baseline> {
+pub fn basehaz(model: &FittedModel<'_>, opts: &BaselineOptions) -> Result<Baseline> {
     let m = Model::new(model, opts.variance)?;
-    baseline_of(&m, opts.centring, opts.hazard)
+    baseline_of(&m, &opts.centring, opts.hazard)
 }
 
 // -- predict
@@ -1375,7 +1375,7 @@ pub fn predict(
     model: &FittedModel<'_>,
     kind: CoxPredictType,
     newdata: Option<&NewData<'_>>,
-    opts: &CoxPredictOptions<'_>,
+    opts: &CoxPredictOptions,
 ) -> Result<CoxPrediction> {
     let m = Model::new(model, opts.variance)?;
     let p = m.p;
@@ -1398,7 +1398,7 @@ pub fn predict(
                 (new.x, new.x.nrows(), m.new_strata(new)?, new.offset)
             }
         };
-    let means = m.means(opts.centring)?;
+    let means = m.means(&opts.centring)?;
     let stratum_means = if reference == Reference::Strata && m.has_strata() {
         Some(m.stratum_means()?)
     } else {
@@ -1471,7 +1471,7 @@ pub fn predict(
                     (new.start.map(<[f64]>::to_vec), stop.to_vec())
                 }
             };
-            let baseline = baseline_of(&m, opts.centring, opts.hazard)?;
+            let baseline = baseline_of(&m, &opts.centring, opts.hazard)?;
             for i in 0..rows {
                 centred_row(xm, i, &baseline.centre, &mut z);
                 let eta = m.dot_beta(&z) + offset.map_or(0.0, |o| o[i] - baseline.offset_centre);
@@ -1530,7 +1530,7 @@ pub fn predict_terms(
     model: &FittedModel<'_>,
     groups: &[&[usize]],
     newdata: Option<&NewData<'_>>,
-    opts: &CoxPredictOptions<'_>,
+    opts: &CoxPredictOptions,
 ) -> Result<TermsPrediction> {
     let m = Model::new(model, opts.variance)?;
     let p = m.p;
@@ -1546,7 +1546,7 @@ pub fn predict_terms(
             (new.x, new.x.nrows(), m.new_strata(new)?)
         }
     };
-    let means = m.means(opts.centring)?;
+    let means = m.means(&opts.centring)?;
     let stratum_means = if reference == Reference::Strata && m.has_strata() {
         Some(m.stratum_means()?)
     } else {
@@ -1655,7 +1655,7 @@ fn bands(kind: ConfType, survival: &[f64], se: Option<&[f64]>, z: f64) -> (Band,
 }
 
 /// The baseline a curve is read from, for the options of [`survfit`].
-fn curve_baseline(m: &Model<'_>, opts: &CoxSurvfitOptions<'_>) -> Result<Baseline> {
+fn curve_baseline(m: &Model<'_>, opts: &CoxSurvfitOptions) -> Result<Baseline> {
     let product_limit = opts.curve_type == CurveType::KalbfleischPrentice;
     if product_limit && opts.hazard.is_some() {
         return Err(Error::options(
@@ -1667,7 +1667,7 @@ fn curve_baseline(m: &Model<'_>, opts: &CoxSurvfitOptions<'_>) -> Result<Baselin
     {
         return Err(Error::options("start_time: must be finite"));
     }
-    let centre = m.means(opts.centring)?;
+    let centre = m.means(&opts.centring)?;
     build_baseline(
         m,
         centre,
@@ -1701,7 +1701,7 @@ fn curve_baseline(m: &Model<'_>, opts: &CoxSurvfitOptions<'_>) -> Result<Baselin
 pub fn survfit(
     model: &FittedModel<'_>,
     newdata: &NewData<'_>,
-    opts: &CoxSurvfitOptions<'_>,
+    opts: &CoxSurvfitOptions,
 ) -> Result<SurvCurves> {
     let m = Model::new(model, opts.variance)?;
     m.check_new(newdata)?;

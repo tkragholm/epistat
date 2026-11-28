@@ -50,6 +50,14 @@ fn residuals_and_zph() {
         .build()
         .unwrap();
     let codes: Vec<u32> = (0..n).map(|i| (i % 11) as u32).collect();
+    // The same data with other groups as its clusters, to collapse within them.
+    let grouped = SurvData::builder(&stop, &status)
+        .start(&start)
+        .weight(&weight)
+        .stratum(&stratum)
+        .cluster(&codes)
+        .build()
+        .unwrap();
     for ties in [Ties::Breslow, Ties::Efron] {
         let cox = CoxOptions {
             ties,
@@ -58,21 +66,21 @@ fn residuals_and_zph() {
         assert_same_on_pools(&POOLS, || {
             let model = fit(&data, x.as_ref(), &cox).unwrap();
             let mut out = Vec::new();
-            for (kind, collapse) in [
-                (CoxResidualKind::Martingale, Collapse::None),
-                (CoxResidualKind::Martingale, Collapse::Cluster),
-                (CoxResidualKind::Deviance, Collapse::Codes(&codes)),
-                (CoxResidualKind::Score, Collapse::None),
-                (CoxResidualKind::Schoenfeld, Collapse::None),
-                (CoxResidualKind::ScaledSchoenfeld, Collapse::None),
-                (CoxResidualKind::Dfbeta, Collapse::Cluster),
-                (CoxResidualKind::Dfbetas, Collapse::None),
+            for (kind, collapse, on) in [
+                (CoxResidualKind::Martingale, Collapse::None, &data),
+                (CoxResidualKind::Martingale, Collapse::Cluster, &data),
+                (CoxResidualKind::Deviance, Collapse::Cluster, &grouped),
+                (CoxResidualKind::Score, Collapse::None, &data),
+                (CoxResidualKind::Schoenfeld, Collapse::None, &data),
+                (CoxResidualKind::ScaledSchoenfeld, Collapse::None, &data),
+                (CoxResidualKind::Dfbeta, Collapse::Cluster, &data),
+                (CoxResidualKind::Dfbetas, Collapse::None, &data),
             ] {
                 let opts = ResidualOptions {
                     collapse,
                     ..ResidualOptions::new(kind, cox.clone())
                 };
-                let got = residuals(&data, x.as_ref(), &model, &opts).unwrap();
+                let got = residuals(on, x.as_ref(), &model, &opts).unwrap();
                 for column in got.columns.iter().flatten() {
                     out.extend_from_slice(column);
                 }
@@ -88,7 +96,7 @@ fn residuals_and_zph() {
                 let opts = ZphOptions {
                     cox: cox.clone(),
                     transform,
-                    groups: Some(&groups),
+                    groups: Some(groups.to_vec()),
                     singledf: false,
                 };
                 let got = zph(&data, x.as_ref(), &model, &opts).unwrap();
@@ -100,7 +108,7 @@ fn residuals_and_zph() {
                 for column in &got.y {
                     out.extend(column.iter().copied().map(absent));
                 }
-                out.extend(got.variance.iter().copied().map(absent));
+                out.extend(got.variance.as_slice().iter().copied().map(absent));
             }
             out
         });

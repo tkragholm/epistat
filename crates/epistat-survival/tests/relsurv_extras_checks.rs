@@ -42,8 +42,11 @@ fn the_new_estimators_on_threads() {
             let opts = NetOptions {
                 method,
                 grid,
-                potential,
                 ..NetOptions::default()
+            };
+            let expected = match potential {
+                Some(p) => expected.clone().with_potential(p),
+                None => expected.clone(),
             };
             assert_same_on_pools(&POOLS, || {
                 net_survival(&data, &expected, &opts)
@@ -125,11 +128,9 @@ fn refusals() {
     };
     assert!(net_survival(&data, &expected, &hakulinen).is_err());
     let potential = c.time.clone();
-    let pohar = NetOptions {
-        potential: Some(&potential),
-        ..NetOptions::default()
-    };
-    assert!(net_survival(&data, &expected, &pohar).is_err());
+    let pohar = NetOptions::default();
+    let with_potential = expected.clone().with_potential(&potential);
+    assert!(net_survival(&data, &with_potential, &pohar).is_err());
     // Delayed entry has no Ederer I.
     let ederer = NetOptions {
         method: NetMethod::EdererI,

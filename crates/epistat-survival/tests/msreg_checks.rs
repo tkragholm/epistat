@@ -263,7 +263,7 @@ fn the_transitions_are_those_observed_in_order() {
         &data,
         x.as_ref(),
         &MsOptions {
-            transitions: Some(&only),
+            transitions: Some(only.to_vec()),
             ..MsOptions::default()
         },
     )
@@ -305,7 +305,7 @@ fn bad_input_is_refused_with_the_reason() {
             &data,
             x.as_ref(),
             &MsOptions {
-                terms: MsTerms::Custom(&terms),
+                terms: MsTerms::Custom(terms.clone()),
                 ..MsOptions::default()
             },
         ));
@@ -315,7 +315,7 @@ fn bad_input_is_refused_with_the_reason() {
         &data,
         x.as_ref(),
         &MsOptions {
-            baseline: MsBaseline::Groups(&[0, 1]),
+            baseline: MsBaseline::Groups(vec![0, 1]),
             ..MsOptions::default()
         },
     ));
@@ -330,7 +330,7 @@ fn bad_input_is_refused_with_the_reason() {
             &data,
             x.as_ref(),
             &MsOptions {
-                transitions: Some(&list),
+                transitions: Some(list.clone()),
                 ..MsOptions::default()
             },
         ));

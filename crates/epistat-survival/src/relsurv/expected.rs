@@ -40,6 +40,8 @@ pub struct ExpectedHazard {
     cell_hazard: Vec<f64>,
     /// Whether the time dimensions have extended ends.
     open: bool,
+    /// The potential follow-up of every row, for Hakulinen's estimator.
+    potential: Option<Vec<f64>>,
 }
 
 impl ExpectedHazard {
@@ -128,7 +130,28 @@ impl ExpectedHazard {
             used,
             cell_hazard: table.rates().iter().map(|r| r / scale).collect(),
             open,
+            potential: None,
         })
+    }
+
+    /// These hazards with the potential follow-up of every row of the data,
+    /// which [`NetMethod::Hakulinen`](super::NetMethod::Hakulinen) needs and
+    /// the other methods of [`net_survival`](super::net_survival) do not
+    /// take: the time a row would have been followed to had it not died, its
+    /// exit time if it was censored. `relsurv::rs.surv` sets it to `fin.date`
+    /// less the date of diagnosis for those who died. [`net_survival`](super::net_survival) checks
+    /// it against the data.
+    #[must_use]
+    pub fn with_potential(mut self, potential: &[f64]) -> Self {
+        self.potential = Some(potential.to_vec());
+        self
+    }
+
+    /// The potential follow-up of every row, `None` unless it was given with
+    /// [`Self::with_potential`].
+    #[must_use]
+    pub fn potential(&self) -> Option<&[f64]> {
+        self.potential.as_deref()
     }
 
     /// The number of rows of the data it was built from.

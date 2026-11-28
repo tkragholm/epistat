@@ -24,7 +24,7 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
-use epistat_survival::clogit::{ClogitMethod, ClogitOptions, clogit};
+use epistat_survival::clogit::{ClogitMethod, ClogitOptions, MatchedSets, clogit};
 use epistat_survival::cox::{ChiSquareTest, CoxModelFit, CoxOptions, Ties, fit};
 use epistat_testkit::{NanRule, load_json, na_f64_vec, none_as_nan, worst_deviation};
 use serde::Deserialize;
@@ -158,13 +158,15 @@ fn run(reference: &Reference, r: &RFit) -> CoxModelFit {
                 "breslow" => ClogitMethod::Breslow,
                 other => panic!("unknown method {other}"),
             },
-            offset,
             start: start.clone(),
             max_iterations: r.iter_max,
             tolerance: r.eps,
-            ..ClogitOptions::default()
         };
-        return clogit(&case, &dataset.stratum, x.as_ref(), &opts).unwrap();
+        let sets = MatchedSets {
+            offset,
+            ..MatchedSets::new(&case, &dataset.stratum)
+        };
+        return clogit(&sets, x.as_ref(), &opts).unwrap();
     }
     let status: Vec<i32> = dataset.event.iter().map(|&e| i32::from(e)).collect();
     let mut builder = SurvData::builder(&dataset.stop, &status);

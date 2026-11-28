@@ -23,7 +23,7 @@
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, Ties};
-use epistat_survival::metrics::score::{Censoring, CoxCensoring, ScoreOptions, brier};
+use epistat_survival::metrics::score::{CoxCensoring, ScoreCensoring, ScoreOptions, brier};
 use epistat_testkit::load_json;
 use serde::Deserialize;
 
@@ -59,17 +59,17 @@ fn influence_with_tied_censoring_times_against_numerical_derivatives() {
     let risk = Mat::from_fn(n, t, |i, j| r.risk[i][j]);
     let opts = ScoreOptions {
         keep_influence: true,
-        censoring: Censoring::Cox(CoxCensoring {
-            x: x.as_ref(),
-            options: CoxOptions {
-                ties: Ties::Breslow,
-                tolerance: 1e-14,
-                ..CoxOptions::default()
-            },
-        }),
         ..ScoreOptions::default()
     };
-    let score = brier(&data, risk.as_ref(), &r.times, &opts).unwrap();
+    let censoring = ScoreCensoring::Cox(CoxCensoring {
+        x: x.as_ref(),
+        options: CoxOptions {
+            ties: Ties::Breslow,
+            tolerance: 1e-14,
+            ..CoxOptions::default()
+        },
+    });
+    let score = brier(&data, risk.as_ref(), &r.times, &censoring, &opts).unwrap();
     let influence = score.influence.as_ref().unwrap();
     let eps = f64::EPSILON;
     let m = r.status.iter().filter(|&&s| s == 0).count() as f64;

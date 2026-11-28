@@ -42,7 +42,7 @@ fn the_clones_the_weights_and_the_outcome_model_agree_with_the_reference() {
     let d = ccw_run::data(&r);
     let c = ccw_run::cloned(&r, &d);
     let k = &r.clones;
-    assert_eq!(c.source, k.row);
+    assert_eq!(c.row.iter().map(|&r| r as usize).collect::<Vec<_>>(), k.row);
     assert_eq!(c.arm, k.arm);
     let as_u8 = |v: &[bool]| v.iter().map(|&b| u8::from(b)).collect::<Vec<_>>();
     assert_eq!(as_u8(&c.deviation), k.dev);
@@ -97,7 +97,7 @@ fn the_rules_of_the_strategies_on_a_small_data_set() {
             by.push((c.person[i] as usize, c.arm[i], Vec::new(), false));
         }
         let last = by.last_mut().unwrap();
-        last.2.push(c.source[i]);
+        last.2.push(c.row[i] as usize);
         last.3 = c.deviation[i];
     }
     let expect = [
@@ -150,12 +150,12 @@ fn a_numerator_equal_to_the_denominator_gives_weights_of_one() {
     let c = ccw_run::cloned(&r, &d);
     let m = c.len();
     let den = Mat::from_fn(m, 3, |i, j| {
-        let s = c.source[i];
+        let s = c.row[i] as usize;
         [1.0, r.input.l[s], r.input.period[s] as f64][j]
     });
     let model = DeviationModel {
-        denominator: den.as_ref(),
-        numerator: Some(den.as_ref()),
+        denominator: den.as_ref().into(),
+        numerator: Some(den.as_ref().into()),
     };
     let w = deviation_weights(&c, &[model, model], None).unwrap();
     assert!(w.weight.iter().all(|&v| (v - 1.0).abs() < 1e-12));

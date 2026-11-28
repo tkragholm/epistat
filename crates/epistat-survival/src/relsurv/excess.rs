@@ -23,12 +23,12 @@ const WAVE: usize = 64;
 const BOUNDARY: f64 = 1e-10;
 
 /// The settings of [`excess_hazard`].
-#[derive(Clone, Copy, Debug)]
-pub struct ExcessOptions<'a> {
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExcessOptions {
     /// The cut points of the follow-up intervals, finite and strictly
     /// increasing from 0, at least two. Interval `k` is `(cuts[k], cuts[k + 1]]`
     /// and follow-up beyond the last cut is not used.
-    pub cuts: &'a [f64],
+    pub cuts: Vec<f64>,
     /// Whether the records are summed into cells of the same interval and
     /// covariate values before the fit, as Dickman et al. (2004) fit grouped
     /// data. Without it each record, a stretch of follow-up in one interval and
@@ -43,13 +43,13 @@ pub struct ExcessOptions<'a> {
     pub max_iterations: usize,
 }
 
-impl<'a> ExcessOptions<'a> {
+impl ExcessOptions {
     /// The cut points given, records not aggregated, a tolerance of `1e-12`
     /// and at most 100 iterations.
     #[must_use]
-    pub fn new(cuts: &'a [f64]) -> Self {
+    pub fn new(cuts: &[f64]) -> Self {
         Self {
-            cuts,
+            cuts: cuts.to_vec(),
             aggregate: false,
             tolerance: 1e-12,
             max_iterations: 100,
@@ -388,9 +388,9 @@ pub fn excess_hazard(
     data: &SurvData<'_>,
     x: &[&[f64]],
     expected: &ExpectedHazard,
-    opts: &ExcessOptions<'_>,
+    opts: &ExcessOptions,
 ) -> Result<ExcessFit> {
-    let cuts = opts.cuts;
+    let cuts = opts.cuts.as_slice();
     check::non_empty("cuts", cuts.len())?;
     check_ascending(cuts, "cuts", true)?;
     if cuts.len() < 2 || cuts[0] != 0.0 {

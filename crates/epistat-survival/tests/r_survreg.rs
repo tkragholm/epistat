@@ -283,7 +283,7 @@ fn fits_match_r() {
         let mut variance = 0.0f64;
         for a in 0..q {
             for b in 0..q {
-                let got = f.variance[a * q + b];
+                let got = f.variance.get(a, b);
                 let e = variance_r[a][b];
                 let aliased = (a < p && r.coefficients[a].is_none())
                     || (b < p && r.coefficients[b].is_none());

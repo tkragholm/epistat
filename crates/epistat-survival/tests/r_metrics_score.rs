@@ -53,7 +53,7 @@ use epistat_linalg::Mat;
 use epistat_survival::SurvData;
 use epistat_survival::metrics::calibration::{self, CalibrationOptions, Groups};
 use epistat_survival::metrics::score::{
-    Censoring, ControlSet, HorizonRule, ScoreOptions, SuppliedCensoring, auc, brier, ipa,
+    ControlSet, HorizonRule, ScoreCensoring, ScoreOptions, SuppliedCensoring, auc, brier, ipa,
     null_brier,
 };
 use epistat_testkit::load_json;
@@ -260,22 +260,23 @@ fn score_against_riskregression() {
                     .fold(1.0f64, f64::min);
                 w = 1.0 / smallest;
             }
-            let mut opts = ScoreOptions {
+            let opts = ScoreOptions {
                 keep_influence: true,
                 conservative: run.conservative,
                 ..ScoreOptions::default()
             };
-            if let Some((own, at)) = &weights {
-                opts.censoring = Censoring::Supplied(SuppliedCensoring {
+            let censoring = match &weights {
+                Some((own, at)) => ScoreCensoring::Supplied(SuppliedCensoring {
                     before_own_time: own,
                     at_times: at.as_ref(),
-                });
-            }
+                }),
+                None => ScoreCensoring::KaplanMeier,
+            };
             let tag = format!("{} / {}", case.name, run.label);
-            let b = brier(&data, m.as_ref(), &case.times, &opts).unwrap();
-            let z = null_brier(&data, &case.times, &opts).unwrap();
+            let b = brier(&data, m.as_ref(), &case.times, &censoring, &opts).unwrap();
+            let z = null_brier(&data, &case.times, &censoring, &opts).unwrap();
             let p = ipa(&b, &z).unwrap();
-            let a = auc(&data, m.as_ref(), &case.times, &opts).unwrap();
+            let a = auc(&data, m.as_ref(), &case.times, &censoring, &opts).unwrap();
             let base = 8.0 * (nf + m_cens + 3.0) * eps;
             let b_b = 4.0 * (nf + m_cens + 3.0) * eps * w;
             let u_b = w * (1.0 + nf * kappa);
@@ -379,7 +380,14 @@ fn auc_against_timeroc() {
                 horizon: HorizonRule::Exclusive,
                 ..ScoreOptions::default()
             };
-            let a = auc(&data, m.as_ref(), &tr.times, &opts).unwrap();
+            let a = auc(
+                &data,
+                m.as_ref(),
+                &tr.times,
+                &ScoreCensoring::KaplanMeier,
+                &opts,
+            )
+            .unwrap();
             let se_want = if controls == ControlSet::EventFree {
                 &tr.se1
             } else {
@@ -407,11 +415,19 @@ fn auc_against_timeroc() {
             }
         }
         // Where Score and timeROC differ: a death exactly at the time.
-        let inclusive = auc(&data, m.as_ref(), &tr.times, &ScoreOptions::default()).unwrap();
+        let inclusive = auc(
+            &data,
+            m.as_ref(),
+            &tr.times,
+            &ScoreCensoring::KaplanMeier,
+            &ScoreOptions::default(),
+        )
+        .unwrap();
         let exclusive = auc(
             &data,
             m.as_ref(),
             &tr.times,
+            &ScoreCensoring::KaplanMeier,
             &ScoreOptions {
                 horizon: HorizonRule::Exclusive,
                 ..ScoreOptions::default()

@@ -331,7 +331,34 @@ impl Setup<'_> {
         &self,
         kind: CoxResidualKind,
         weighted: Option<bool>,
-        collapse: Collapse<'_>,
+        collapse: Collapse,
+    ) -> CoxResiduals {
+        self.residuals_on(&self.data(), kind, weighted, collapse)
+    }
+
+    /// The residuals summed within the groups `grp` of the data set, which
+    /// are the clusters of the data the residuals are computed on.
+    fn residuals_by_codes(&self, kind: CoxResidualKind, weighted: Option<bool>) -> CoxResiduals {
+        let mut builder = SurvData::builder(&self.ds.stop, &self.status);
+        if self.r.use_start {
+            builder = builder.start(&self.ds.start);
+        }
+        if self.r.use_strata {
+            builder = builder.stratum(&self.ds.stratum);
+        }
+        if self.r.use_weights {
+            builder = builder.weight(&self.ds.weight);
+        }
+        let grouped = builder.cluster(&self.ds.grp).build().unwrap();
+        self.residuals_on(&grouped, kind, weighted, Collapse::Cluster)
+    }
+
+    fn residuals_on(
+        &self,
+        data: &SurvData<'_>,
+        kind: CoxResidualKind,
+        weighted: Option<bool>,
+        collapse: Collapse,
     ) -> CoxResiduals {
         let opts = ResidualOptions {
             kind,
@@ -339,7 +366,7 @@ impl Setup<'_> {
             collapse,
             cox: self.opts(),
         };
-        let got = residuals(&self.data(), self.x.as_ref(), &self.fit, &opts).unwrap();
+        let got = residuals(data, self.x.as_ref(), &self.fit, &opts).unwrap();
         if got.columns.len() == self.p {
             for (j, column) in got.columns.iter().enumerate() {
                 assert_eq!(
@@ -617,15 +644,20 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
     let tol_sum = |f: &dyn Fn(usize) -> f64| -> Vec<f64> {
         group_sum(codes, &(0..n).map(f).collect::<Vec<_>>())
     };
+    // `None` collapses within the codes `grp`, `Some` within a column of the
+    // data.
     let collapse_check = |kind: CoxResidualKind,
                           weighted: Option<bool>,
-                          collapse: Collapse<'_>,
+                          collapse: Option<Collapse>,
                           expected: &Matrix,
                           tol_rows: &dyn Fn(usize, usize) -> f64,
                           expect_groups: &[u32],
                           label: &str|
      -> f64 {
-        let got = s.residuals(kind, weighted, collapse);
+        let got = match collapse {
+            Some(collapse) => s.residuals(kind, weighted, collapse),
+            None => s.residuals_by_codes(kind, weighted),
+        };
         assert!(got.rows.is_empty(), "{label}");
         assert_eq!(got.groups, expect_groups, "{label}: groups");
         let columns = if matches!(
@@ -638,7 +670,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
         };
         let mut value = 0.0f64;
         for (j, column) in got.columns.iter().enumerate().take(columns) {
-            let tols = if matches!(collapse, Collapse::Codes(_)) {
+            let tols = if collapse.is_none() {
                 tol_sum(&|i| tol_rows(i, j))
             } else {
                 group_sum(
@@ -664,15 +696,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
     let scaled_tol = |i: usize, j: usize| tol_dfbeta(i, j, true) / s.v(j, j).sqrt();
     let mut cases: Vec<(&str, f64)> = Vec::new();
     let c = |kind, weighted, expected: &Matrix, tol: &dyn Fn(usize, usize) -> f64, label: &str| {
-        collapse_check(
-            kind,
-            weighted,
-            Collapse::Codes(codes),
-            expected,
-            tol,
-            &groups,
-            label,
-        )
+        collapse_check(kind, weighted, None, expected, tol, &groups, label)
     };
     cases.push((
         "martingale",
@@ -745,7 +769,7 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
         .iter()
         .map(|row| row[0].unwrap())
         .collect();
-    let got = s.residuals(CoxResidualKind::Deviance, None, Collapse::Codes(codes));
+    let got = s.residuals_by_codes(CoxResidualKind::Deviance, None);
     let tols = tol_sum(&|i| s.bx * (1.0 + mart[i].abs()) + s.ne * s.cs[i]);
     let ours = got.columns[0].as_ref().unwrap();
     let mut value = 0.0f64;
@@ -810,8 +834,15 @@ fn check_residuals(s: &Setup<'_>, worst: &mut Worst) {
         ];
         for (what, kind, expected, tol) in cluster_cases {
             let expected = expected.as_ref().unwrap();
-            let by_cluster =
-                collapse_check(kind, None, Collapse::Cluster, expected, tol, &ids, what);
+            let by_cluster = collapse_check(
+                kind,
+                None,
+                Some(Collapse::Cluster),
+                expected,
+                tol,
+                &ids,
+                what,
+            );
             // The data have clusters but no ids; id is refused.
             worst.add(&format!("{name} collapse cluster {what}"), by_cluster);
         }
@@ -853,7 +884,7 @@ fn check_zph(s: &Setup<'_>, worst: &mut Worst) {
         let opts = ZphOptions {
             cox: s.opts(),
             transform: zph_transform(&z.transform),
-            groups: groups.as_deref(),
+            groups: groups.clone(),
             singledf: z.singledf,
         };
         let got = zph(&s.data(), s.x.as_ref(), &s.fit, &opts).unwrap();
@@ -965,10 +996,10 @@ fn check_zph(s: &Setup<'_>, worst: &mut Worst) {
         }
         worst.add(&format!("{label} y"), value);
         let mut value = 0.0f64;
-        for i in 0..nterm {
-            for k in 0..nterm {
-                let g = got.variance[i * nterm + k].unwrap();
-                value = value.max((g - z.var[i][k]).abs() / (kz * var_scale(i, k)));
+        for (i, row) in z.var.iter().enumerate().take(nterm) {
+            for (k, &want) in row.iter().enumerate().take(nterm) {
+                let g = got.variance.get(i, k).unwrap();
+                value = value.max((g - want).abs() / (kz * var_scale(i, k)));
             }
         }
         worst.add(&format!("{label} variance"), value);

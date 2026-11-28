@@ -71,17 +71,72 @@ pub enum ClogitMethod {
     Breslow,
 }
 
+/// The rows of matched sets: whether each row is a case, its set, and the
+/// optional columns of an offset, case weights and clusters, one value per
+/// row. [`clogit`] checks them.
+#[derive(Debug, Clone, Copy)]
+pub struct MatchedSets<'a> {
+    /// Whether the row is a case.
+    pub case: &'a [bool],
+    /// The matched set of the row. The codes may be any `u32` values.
+    pub set: &'a [u32],
+    /// A term added to the linear predictor of every row.
+    pub offset: Option<&'a [f64]>,
+    /// Case weights. An error with [`ClogitMethod::Exact`], which has no
+    /// weights.
+    pub weight: Option<&'a [f64]>,
+    /// Cluster codes for a robust variance. An error with
+    /// [`ClogitMethod::Exact`].
+    pub cluster: Option<&'a [u32]>,
+}
+
+impl<'a> MatchedSets<'a> {
+    /// The rows of `case` in the sets `set`, without offset, weights or
+    /// clusters.
+    #[must_use]
+    pub const fn new(case: &'a [bool], set: &'a [u32]) -> Self {
+        Self {
+            case,
+            set,
+            offset: None,
+            weight: None,
+            cluster: None,
+        }
+    }
+
+    /// These rows with an offset.
+    #[must_use]
+    pub const fn offset(self, offset: &'a [f64]) -> Self {
+        Self {
+            offset: Some(offset),
+            ..self
+        }
+    }
+
+    /// These rows with case weights.
+    #[must_use]
+    pub const fn weight(self, weight: &'a [f64]) -> Self {
+        Self {
+            weight: Some(weight),
+            ..self
+        }
+    }
+
+    /// These rows with clusters.
+    #[must_use]
+    pub const fn cluster(self, cluster: &'a [u32]) -> Self {
+        Self {
+            cluster: Some(cluster),
+            ..self
+        }
+    }
+}
+
 /// What [`clogit`] takes besides the data.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ClogitOptions<'a> {
+pub struct ClogitOptions {
     /// The treatment of sets with more than one case. `Exact`, as in `clogit`.
     pub method: ClogitMethod,
-    /// A term added to the linear predictor of every row, one value per row.
-    pub offset: Option<&'a [f64]>,
-    /// Case weights, one per row. An error with `Exact`, which has no weights.
-    pub weight: Option<&'a [f64]>,
-    /// Cluster codes for a robust variance. An error with `Exact`.
-    pub cluster: Option<&'a [u32]>,
     /// Starting coefficients, as `init` of `coxph`.
     pub start: Option<Vec<f64>>,
     /// The largest number of trial points, `iter.max` of `coxph.control`.
@@ -91,14 +146,11 @@ pub struct ClogitOptions<'a> {
     pub tolerance: f64,
 }
 
-impl Default for ClogitOptions<'_> {
+impl Default for ClogitOptions {
     fn default() -> Self {
         let base = CoxOptions::default();
         Self {
             method: ClogitMethod::Exact,
-            offset: None,
-            weight: None,
-            cluster: None,
             start: None,
             max_iterations: base.max_iterations,
             tolerance: base.tolerance,
@@ -106,11 +158,11 @@ impl Default for ClogitOptions<'_> {
     }
 }
 
-/// Conditional logistic regression of `case` on the columns of `x` within the
-/// matched sets `set`, as `survival::clogit`.
+/// Conditional logistic regression of the cases of `sets` on the columns of
+/// `x` within their matched sets, as `survival::clogit`.
 ///
-/// `case`, `set` and the rows of `x` have one entry per row of the data. The
-/// codes of `set` may be any `u32` values. Rows with a weight of 0 are left
+/// The columns of `sets` and the rows of `x` have one entry per row of the
+/// data. Rows with a weight of 0 are left
 /// out of the fit, and counted in `n_rows`. See the module documentation for
 /// the likelihood and for what the result holds.
 ///
@@ -121,22 +173,22 @@ impl Default for ClogitOptions<'_> {
 /// weights, offset, starting values and `tolerance` that [`cox::fit`](crate::cox::fit)
 /// refuses, and with the exact method when case weights or clusters are given.
 pub fn clogit(
-    case: &[bool],
-    set: &[u32],
+    sets: &MatchedSets<'_>,
     x: MatRef<'_, f64>,
-    opts: &ClogitOptions<'_>,
+    opts: &ClogitOptions,
 ) -> Result<CoxModelFit> {
+    let (case, set) = (sets.case, sets.set);
     check_lengths(&[("case", case.len()), ("set", set.len()), ("x", x.nrows())])?;
     let time = vec![1.0f64; case.len()];
     let status: Vec<i32> = case.iter().map(|&c| i32::from(c)).collect();
     let mut builder = SurvData::builder(&time, &status).stratum(set);
-    if let Some(weight) = opts.weight {
+    if let Some(weight) = sets.weight {
         builder = builder.weight(weight);
     }
-    if let Some(cluster) = opts.cluster {
+    if let Some(cluster) = sets.cluster {
         builder = builder.cluster(cluster);
     }
-    if let Some(offset) = opts.offset {
+    if let Some(offset) = sets.offset {
         builder = builder.offset(offset);
     }
     let data = builder.build()?;

@@ -583,7 +583,7 @@ pub fn integrate(
 
 /// The clustered bootstrap of the occupation probabilities, replicates and all.
 ///
-/// Replicate `r` draws one weight per cluster from `seeds[r]` and multiplies
+/// Replicate `r` draws one weight per cluster from the seed `seeds[r]` and multiplies
 /// the base weight `base[i]` of each interval by the weight of its cluster
 /// `cluster_codes[i]`. The opening distribution is formed from the weights of
 /// the intervals at `first_positions`, which open the follow-up of each

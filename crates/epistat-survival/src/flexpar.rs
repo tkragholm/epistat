@@ -65,7 +65,7 @@
 //!
 //! # Excess hazard
 //!
-//! With [`FlexParOptions::bhazard`] the model is for the excess hazard of
+//! With an expected hazard `bhazard` given to [`fit`] the model is for the excess hazard of
 //! Nelson et al. (2007): the observed hazard is `h*(t) + h_E(t | x)`, with `h*`
 //! the expected hazard of the reference population, given for each row at its
 //! exit time, and `h_E = e^eta eta'(u) / t` the hazard of the model on the
@@ -197,8 +197,8 @@ pub struct TimeVarying {
 }
 
 /// The settings of a fit.
-#[derive(Clone, Copy, Debug)]
-pub struct FlexParOptions<'a> {
+#[derive(Clone, Debug, PartialEq)]
+pub struct FlexParOptions {
     /// The scale of the model.
     pub scale: FlexparScale,
     /// The degrees of freedom of the baseline spline besides its intercept, at least 1.
@@ -206,14 +206,9 @@ pub struct FlexParOptions<'a> {
     /// The knots of the baseline on the `ln t` scale, boundary knots included
     /// and `df + 1` in all, or `None` for the smallest and largest log event
     /// time and the quantiles between them.
-    pub knots: Option<&'a [f64]>,
+    pub knots: Option<Vec<f64>>,
     /// The time-varying effects.
-    pub tvc: &'a [TimeVarying],
-    /// The expected hazard of the reference population at the exit time of
-    /// each row, for an excess hazard model (Nelson et al. 2007), or `None`
-    /// for an ordinary model. Needs [`FlexparScale::Hazard`]; the model is then for
-    /// the excess hazard, and its survivor function is the net survival.
-    pub bhazard: Option<&'a [f64]>,
+    pub tvc: Vec<TimeVarying>,
     /// Convergence is declared when the Newton decrement is at most
     /// `tolerance (1 + |log likelihood|)`.
     pub tolerance: f64,
@@ -221,21 +216,20 @@ pub struct FlexParOptions<'a> {
     pub max_iterations: usize,
 }
 
-impl Default for FlexParOptions<'_> {
+impl Default for FlexParOptions {
     fn default() -> Self {
         Self {
             scale: FlexparScale::Hazard,
             df: 3,
             knots: None,
-            tvc: &[],
-            bhazard: None,
+            tvc: Vec::new(),
             tolerance: 1e-12,
             max_iterations: 50,
         }
     }
 }
 
-impl FlexParOptions<'_> {
+impl FlexParOptions {
     /// The defaults with the scale and degrees of freedom given.
     #[must_use]
     pub fn new(scale: FlexparScale, df: usize) -> Self {
@@ -356,7 +350,12 @@ impl FlexParFit {
     }
 }
 
-fn check_inputs(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FlexParOptions<'_>) -> Result<()> {
+fn check_inputs(
+    data: &SurvData<'_>,
+    x: MatRef<'_, f64>,
+    bhazard: Option<&[f64]>,
+    opts: &FlexParOptions,
+) -> Result<()> {
     let n = data.n_rows();
     if x.nrows() != n {
         if x.nrows() == 0 {
@@ -378,7 +377,7 @@ fn check_inputs(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FlexParOptions<'
             "tolerance and max_iterations must be positive",
         ));
     }
-    if let Some(h) = opts.bhazard {
+    if let Some(h) = bhazard {
         if opts.scale != FlexparScale::Hazard {
             return Err(Error::options(
                 "an expected hazard needs the hazard scale: the excess hazard is additive on the hazard",
@@ -401,6 +400,12 @@ fn check_inputs(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FlexParOptions<'
 /// row, because the survivor function of the other scales is not
 /// additive over the pieces of follow-up.
 ///
+/// `bhazard` is the expected hazard of the reference population at the exit
+/// time of each row, `bhazard` of `rstpm2::stpm2`, for an excess hazard model
+/// (Nelson et al. 2007), or `None` for an ordinary model. It needs
+/// [`FlexparScale::Hazard`]; the model is then for the excess hazard, and its
+/// survivor function is the net survival.
+///
 /// # Errors
 ///
 /// An input error for inputs of other lengths, a covariate that is not
@@ -416,9 +421,10 @@ fn check_inputs(data: &SurvData<'_>, x: MatRef<'_, f64>, opts: &FlexParOptions<'
 pub fn fit(
     data: &SurvData<'_>,
     x: MatRef<'_, f64>,
-    opts: &FlexParOptions<'_>,
+    bhazard: Option<&[f64]>,
+    opts: &FlexParOptions,
 ) -> Result<FlexParFit> {
-    check_inputs(data, x, opts)?;
+    check_inputs(data, x, bhazard, opts)?;
     let surv = data.followup()?;
     if surv.n_codes() != 1 {
         return Err(Error::not_applicable(
@@ -461,7 +467,7 @@ pub fn fit(
     }
     events.sort_by(f64::total_cmp);
 
-    let baseline_knots = match opts.knots {
+    let baseline_knots = match opts.knots.as_deref() {
         Some(k) => {
             if k.len() != opts.df + 1 {
                 return Err(Error::options(format!(
@@ -531,7 +537,7 @@ pub fn fit(
         event,
         weight,
         offset: data.offset(),
-        bhazard: opts.bhazard,
+        bhazard,
     };
     let theta0 = start::starting_values(&design, opts.scale, stop, start, event, weight);
     let best = maximise(&model, &theta0, opts.tolerance, opts.max_iterations).ok_or_else(|| {
@@ -560,7 +566,7 @@ pub fn fit(
                 event,
                 weight,
                 offset: None,
-                bhazard: opts.bhazard,
+                bhazard,
             }
         };
         let s0 = start::starting_values(&null_design, opts.scale, stop, start, event, weight);

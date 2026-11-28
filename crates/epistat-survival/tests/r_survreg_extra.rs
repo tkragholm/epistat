@@ -48,6 +48,7 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
+use epistat_survival::cox::Collapse;
 use epistat_survival::survreg::{
     DfbetaOptions, Distribution, SurvregOptions, SurvregPredictOptions, SurvregPredictType,
     SurvregResidualKind, TermsReference, fit,
@@ -245,7 +246,9 @@ fn columns(dataset: &str, d: &Dataset) -> Columns {
     c
 }
 
-fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit) -> SurvData<'a> {
+/// The data of the fit, with the clusters of `c` when the fit is clustered or
+/// `clustered` asks for them.
+fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit, clustered: bool) -> SurvData<'a> {
     if dataset == "lung" || dataset == "right" {
         let mut b = SurvData::builder(&c.time, &c.status);
         if r.use_strata {
@@ -254,7 +257,7 @@ fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit) -> SurvData<'a> {
         if r.use_weights {
             b = b.weight(&c.weight);
         }
-        if r.robust == "cluster" {
+        if clustered || r.robust == "cluster" {
             b = b.cluster(&c.cluster);
         }
         if r.use_offset {
@@ -269,7 +272,7 @@ fn build<'a>(dataset: &str, c: &'a Columns, r: &RFit) -> SurvData<'a> {
         if r.use_weights {
             b = b.weight(&c.weight);
         }
-        if r.robust == "cluster" {
+        if clustered || r.robust == "cluster" {
             b = b.cluster(&c.cluster);
         }
         if r.use_offset {
@@ -337,7 +340,8 @@ fn extra_options_match_r() {
             robust: r.robust == "robust",
             ..SurvregOptions::default()
         };
-        let data = build(&r.dataset, &c, r);
+        let data = build(&r.dataset, &c, r, false);
+        let grouped = build(&r.dataset, &c, r, true);
         let f = fit(&data, x.as_ref(), &options).unwrap_or_else(|e| panic!("{}: {e}", r.name));
         if r.dataset == "interval" {
             // The same data as bounds and as a status give the same fit.
@@ -408,7 +412,7 @@ fn extra_options_match_r() {
         };
         note(
             "variance",
-            variance_units(&f.variance, &dense(&r.variance), q as f64),
+            variance_units(f.variance.as_slice(), &dense(&r.variance), q as f64),
         );
         let ll_bound = 4.0 * n * f64::EPSILON;
         note(
@@ -450,7 +454,10 @@ fn extra_options_match_r() {
         ) {
             let (native, corrected) = (&native, &corrected);
             let factor = 2.0 * q as f64;
-            note("robust variance", variance_units(got, corrected, factor));
+            note(
+                "robust variance",
+                variance_units(got.as_slice(), corrected, factor),
+            );
             if r.interval_scale_defect {
                 // R's own robust variance differs from the one that follows
                 // from its definition.
@@ -467,7 +474,7 @@ fn extra_options_match_r() {
             } else {
                 note(
                     "robust variance vs native",
-                    variance_units(got, native, factor),
+                    variance_units(got.as_slice(), native, factor),
                 );
             }
             assert_eq!(f.n_clusters, r.n_clusters, "{}", r.name);
@@ -658,7 +665,7 @@ fn extra_options_match_r() {
         // dfbeta, dfbetas, weighted and collapsed.
         let rb = bound * (p as f64 + 1.0);
         let by_cluster = DfbetaOptions {
-            collapse: Some(&c.cluster),
+            collapse: Collapse::Cluster,
             ..DfbetaOptions::default()
         };
         let plain = f
@@ -686,7 +693,7 @@ fn extra_options_match_r() {
             .unwrap();
         let collapsed = f
             .dfbeta(
-                &data,
+                &grouped,
                 x.as_ref(),
                 &DfbetaOptions {
                     weighted: true,
@@ -696,7 +703,7 @@ fn extra_options_match_r() {
             .unwrap();
         let collapsed_s = f
             .dfbeta(
-                &data,
+                &grouped,
                 x.as_ref(),
                 &DfbetaOptions {
                     standardise: true,

@@ -102,12 +102,9 @@ fn flexible_excess_model_on_threads() {
         .build()
         .unwrap();
     let x = Mat::from_fn(n, 2, |i, j| if j == 0 { c.x1[i] } else { c.x2[i] });
-    let opts = FlexParOptions {
-        bhazard: Some(&bh),
-        ..FlexParOptions::new(FlexparScale::Hazard, 3)
-    };
+    let opts = FlexParOptions::new(FlexparScale::Hazard, 3);
     assert_same_on_pools(&POOLS, || {
-        let f = flexpar::fit(&data, x.as_ref(), &opts).unwrap();
+        let f = flexpar::fit(&data, x.as_ref(), Some(&bh), &opts).unwrap();
         let mut out = f.gamma.clone();
         out.extend(f.beta.iter().map(|b| b.unwrap_or(f64::NAN)));
         out.extend(

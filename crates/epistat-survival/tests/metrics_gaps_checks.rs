@@ -10,16 +10,13 @@ use epistat_survival::metrics::recalibration::{
     smoothed_curve,
 };
 use epistat_survival::metrics::rttright::{self, RttrightOptions};
-use epistat_survival::metrics::score::{Censoring, CoxCensoring, ScoreOptions, auc, brier};
+use epistat_survival::metrics::score::{CoxCensoring, ScoreCensoring, ScoreOptions, auc, brier};
 
-fn make(x: &Mat<f64>, options: CoxOptions) -> ScoreOptions<'_> {
-    ScoreOptions {
-        censoring: Censoring::Cox(CoxCensoring {
-            x: x.as_ref(),
-            options,
-        }),
-        ..ScoreOptions::default()
-    }
+fn make(x: &Mat<f64>, options: CoxOptions) -> ScoreCensoring<'_> {
+    ScoreCensoring::Cox(CoxCensoring {
+        x: x.as_ref(),
+        options,
+    })
 }
 
 fn build<'a>(id: &'a [u32], start: &'a [f64], stop: &'a [f64], status: &'a [i32]) -> SurvData<'a> {
@@ -51,6 +48,7 @@ fn the_cox_censoring_model_refuses_what_it_cannot_use() {
         risk.as_ref(),
         &[4.0],
         &make(&col, CoxOptions::default()),
+        &ScoreOptions::default(),
     )
     .unwrap();
     assert!(ok.se[0].is_some());
@@ -60,6 +58,7 @@ fn the_cox_censoring_model_refuses_what_it_cannot_use() {
         risk.as_ref(),
         &[4.0],
         &make(&short, CoxOptions::default()),
+        &ScoreOptions::default(),
     )
     .unwrap_err();
     assert!(e.to_string().contains("rows of data"), "{e}");
@@ -67,7 +66,14 @@ fn the_cox_censoring_model_refuses_what_it_cannot_use() {
         ties: Ties::Exact,
         ..CoxOptions::default()
     };
-    let e = brier(&data, risk.as_ref(), &[4.0], &make(&col, exact)).unwrap_err();
+    let e = brier(
+        &data,
+        risk.as_ref(),
+        &[4.0],
+        &make(&col, exact),
+        &ScoreOptions::default(),
+    )
+    .unwrap_err();
     assert!(e.to_string().contains("exact"), "{e}");
     // No covariates is the Breslow estimate of the censoring hazard with no
     // coefficients: it works.
@@ -77,7 +83,8 @@ fn the_cox_censoring_model_refuses_what_it_cannot_use() {
             &data,
             risk.as_ref(),
             &[4.0],
-            &make(&none, CoxOptions::default())
+            &make(&none, CoxOptions::default()),
+            &ScoreOptions::default()
         )
         .is_ok()
     );
@@ -94,8 +101,22 @@ fn contrasts_need_matching_scores_with_influence() {
         keep_influence: true,
         ..ScoreOptions::default()
     };
-    let sa = brier(&data, a.as_ref(), &[3.0, 6.0], &kept).unwrap();
-    let sb = brier(&data, b.as_ref(), &[3.0, 6.0], &kept).unwrap();
+    let sa = brier(
+        &data,
+        a.as_ref(),
+        &[3.0, 6.0],
+        &ScoreCensoring::KaplanMeier,
+        &kept,
+    )
+    .unwrap();
+    let sb = brier(
+        &data,
+        b.as_ref(),
+        &[3.0, 6.0],
+        &ScoreCensoring::KaplanMeier,
+        &kept,
+    )
+    .unwrap();
     let c = brier_difference(&sa, &sb, &ContrastOptions::default()).unwrap();
     assert!((c.difference[0].unwrap() - (sa.brier[0] - sb.brier[0])).abs() < 1e-15);
     assert!(c.lower[0].unwrap() < c.upper[0].unwrap());
@@ -105,14 +126,42 @@ fn contrasts_need_matching_scores_with_influence() {
     let same = brier_difference(&sa, &sa, &ContrastOptions::default()).unwrap();
     assert_eq!(same.difference[0], Some(0.0));
     assert!(same.se[0].is_none() && same.p_value[0].is_none());
-    let plain = brier(&data, a.as_ref(), &[3.0, 6.0], &ScoreOptions::default()).unwrap();
+    let plain = brier(
+        &data,
+        a.as_ref(),
+        &[3.0, 6.0],
+        &ScoreCensoring::KaplanMeier,
+        &ScoreOptions::default(),
+    )
+    .unwrap();
     let e = brier_difference(&plain, &sb, &ContrastOptions::default()).unwrap_err();
     assert!(e.to_string().contains("influence"), "{e}");
-    let other = brier(&data, a.as_ref().get(.., ..1), &[3.0], &kept).unwrap();
+    let other = brier(
+        &data,
+        a.as_ref().get(.., ..1),
+        &[3.0],
+        &ScoreCensoring::KaplanMeier,
+        &kept,
+    )
+    .unwrap();
     let e = brier_difference(&other, &sb, &ContrastOptions::default()).unwrap_err();
     assert!(e.to_string().contains("same data and times"), "{e}");
-    let aa = auc(&data, a.as_ref(), &[3.0, 6.0], &kept).unwrap();
-    let ab = auc(&data, b.as_ref(), &[3.0, 6.0], &kept).unwrap();
+    let aa = auc(
+        &data,
+        a.as_ref(),
+        &[3.0, 6.0],
+        &ScoreCensoring::KaplanMeier,
+        &kept,
+    )
+    .unwrap();
+    let ab = auc(
+        &data,
+        b.as_ref(),
+        &[3.0, 6.0],
+        &ScoreCensoring::KaplanMeier,
+        &kept,
+    )
+    .unwrap();
     assert!(auc_difference(&aa, &ab, &ContrastOptions::default()).is_ok());
 }
 

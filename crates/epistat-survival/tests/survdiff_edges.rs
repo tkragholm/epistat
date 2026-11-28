@@ -24,9 +24,9 @@ fn a_worked_example_is_exact_to_rounding() {
     close(got.observed[0], 2.0);
     close(got.expected[0], 13.0 / 6.0);
     close(got.expected[1], 5.0 / 6.0);
-    close(got.variance[0], 17.0 / 36.0);
-    close(got.variance[3], 17.0 / 36.0);
-    close(got.variance[1], -17.0 / 36.0);
+    close(got.variance.get(0, 0).unwrap(), 17.0 / 36.0);
+    close(got.variance.get(1, 1).unwrap(), 17.0 / 36.0);
+    close(got.variance.get(0, 1).unwrap(), -17.0 / 36.0);
     close(got.statistic.unwrap(), 1.0 / 17.0);
     assert_eq!(got.df, Some(1));
     assert!(got.strata.is_none());

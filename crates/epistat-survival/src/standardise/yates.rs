@@ -182,15 +182,15 @@ pub enum YatesTest {
 pub type Test = YatesTest;
 
 /// The options of [`yates`].
-#[derive(Debug, Clone, Copy, Default)]
-pub struct YatesOptions<'a> {
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct YatesOptions {
     /// What the predictions are. `Identity`, `predict = "linear"`.
     pub link: InverseLink,
     /// The covariate vector subtracted from every row before the linear
     /// predictor is formed: the means of the covariates of a Cox fit, as
     /// `coxph` centres at, [`cox::reference_means`](crate::cox::reference_means)
     /// with `Centring::Coxph`, or `None` for a model with an intercept.
-    pub centre: Option<&'a [f64]>,
+    pub centre: Option<Vec<f64>>,
     /// The tests. `Global`, as `yates`.
     pub test: YatesTest,
 }
@@ -240,7 +240,7 @@ pub fn yates(
     coefficients: &[f64],
     covariance: &[f64],
     levels: &[YatesLevel<'_>],
-    opts: &YatesOptions<'_>,
+    opts: &YatesOptions,
 ) -> Result<Yates> {
     let p = coefficients.len();
     if levels.is_empty() {
@@ -280,7 +280,7 @@ pub fn yates(
             }
         }
     }
-    if let Some(c) = opts.centre {
+    if let Some(c) = &opts.centre {
         if c.len() != p {
             return Err(InputError::Length {
                 what: "centre",
@@ -338,7 +338,7 @@ fn one_level(
     l: usize,
     level: &YatesLevel<'_>,
     beta: &[f64],
-    opts: &YatesOptions<'_>,
+    opts: &YatesOptions,
 ) -> Result<(f64, Vec<f64>)> {
     let p = beta.len();
     let (rows, over, design): (
@@ -401,7 +401,7 @@ fn one_level(
             "level {l}: the weights sum to zero"
         )));
     }
-    let centre = opts.centre;
+    let centre = opts.centre.as_deref();
     let link = opts.link;
     let sums = ordered_reduce(
         rows,

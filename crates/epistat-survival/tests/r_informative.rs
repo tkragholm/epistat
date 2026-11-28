@@ -9,7 +9,7 @@
 //! `1e-9` on the coefficients.
 
 use epistat_linalg::Mat;
-use epistat_survival::clogit::{ClogitOptions, clogit};
+use epistat_survival::clogit::{ClogitOptions, MatchedSets, clogit};
 use epistat_survival::informative::{InformativeSets, informative_sets, informative_strata};
 use epistat_survival::surv::SurvData;
 use epistat_testkit::load_json;
@@ -124,8 +124,18 @@ fn a_fit_on_the_informative_sets_equals_the_fit_on_all() {
     let case: Vec<bool> = keep.iter().map(|&r| d.case[r]).collect();
     let set: Vec<u32> = keep.iter().map(|&r| d.set[r]).collect();
     let sub = Mat::from_fn(keep.len(), 2, |i, j| x[(keep[i], j)]);
-    let all = clogit(&d.case, &d.set, x.as_ref(), &ClogitOptions::default()).unwrap();
-    let part = clogit(&case, &set, sub.as_ref(), &ClogitOptions::default()).unwrap();
+    let all = clogit(
+        &MatchedSets::new(&d.case, &d.set),
+        x.as_ref(),
+        &ClogitOptions::default(),
+    )
+    .unwrap();
+    let part = clogit(
+        &MatchedSets::new(&case, &set),
+        sub.as_ref(),
+        &ClogitOptions::default(),
+    )
+    .unwrap();
     for (a, b) in all.coefficients.iter().zip(&part.coefficients) {
         let (a, b) = (a.unwrap(), b.unwrap());
         assert!((a - b).abs() <= 1e-9 * a.abs().max(1.0), "{a} {b}");

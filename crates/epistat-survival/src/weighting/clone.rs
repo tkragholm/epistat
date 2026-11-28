@@ -82,7 +82,7 @@
 //! cumulative incidence of each strategy comes from
 //! [`trials::cumulative_incidence`](super::trials::cumulative_incidence). The
 //! two clones of a person are two rows at each period, so the covariance is
-//! clustered by person. It treats the weights as known. [`fit_msm_clones`] fits
+//! clustered by person. It treats the weights as known. A [`CloneDesign`] fits
 //! the same model without building its design, from the clones and a function
 //! that forms the design of a clone row. The person bootstrap that refits
 //! everything, which is the variance to report, is
@@ -108,7 +108,7 @@
 use epistat_core::{InputError, check};
 use epistat_glm::rows::{Block, Rows};
 use epistat_glm::{Family, Glm, Link};
-use epistat_linalg::{Mat, MatRef, ROW_BLOCK};
+use epistat_linalg::{MatRef, ROW_BLOCK};
 use rayon::prelude::*;
 
 use super::trials::PersonCounts;
@@ -234,7 +234,7 @@ pub struct CloneInput<'a> {
 pub struct Cloned {
     /// The row of the input each clone row is made from, for building the
     /// designs of the models.
-    pub source: Vec<usize>,
+    pub row: Vec<u32>,
     /// The strategy of each clone row, an index into the strategies.
     pub arm: Vec<usize>,
     /// The person of each clone row, numbered from 0 in the order of the input,
@@ -264,30 +264,19 @@ impl Cloned {
     ///
     /// An input error when `column` has no value at some input row.
     pub fn gather<T: Copy>(&self, column: &[T]) -> Result<Vec<T>> {
-        match self.source.iter().find(|&&r| r >= column.len()) {
-            Some(_) => {
-                let needed = self.source.iter().max().map_or(0, |&r| r + 1);
-                Err(epistat_core::InputError::Length {
-                    what: "column",
-                    expected: needed,
-                    found: column.len(),
-                }
-                .into())
-            }
-            None => Ok(self.source.iter().map(|&r| column[r]).collect()),
-        }
+        crate::expanded::gather(&self.row, column, "column")
     }
 
     /// The number of clone rows.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.source.len()
+        self.row.len()
     }
 
     /// Whether there are no clone rows.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.source.is_empty()
+        self.row.is_empty()
     }
 
     /// The case weight of each clone row in a resample of the persons: the
@@ -334,6 +323,13 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
         ("outcome", input.outcome.len()),
     ])?;
     check::non_empty("strategies", strategies.len())?;
+    if u32::try_from(n).is_err() {
+        return Err(Error::from(epistat_core::InputError::TooLarge {
+            what: "id",
+            limit: u64::from(u32::MAX),
+            found: n as u64,
+        }));
+    }
     let mut n_persons = 0usize;
     let mut starts = Vec::new();
     let mut ids = Vec::new();
@@ -418,7 +414,7 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
         without += 1;
     });
     let mut out = Cloned {
-        source: Vec::with_capacity(rows),
+        row: Vec::with_capacity(rows),
         arm: Vec::with_capacity(rows),
         person: Vec::with_capacity(rows),
         ids,
@@ -433,7 +429,8 @@ pub fn clone_censor(input: &CloneInput<'_>, strategies: &[Strategy]) -> Result<C
         strategies,
         &starts,
         &mut |c| {
-            out.source.push(c.row);
+            #[expect(clippy::cast_possible_truncation, reason = "checked against u32::MAX")]
+            out.row.push(c.row as u32);
             out.arm.push(c.arm);
             out.person.push(c.person);
             out.deviation.push(c.deviation);
@@ -562,53 +559,98 @@ fn for_each_clone_row(
     }
 }
 
-/// The designs of the models of the deviation of one strategy, with one row for
-/// each clone row of every strategy.
+/// The design of one model of the deviation, one row for each clone row of
+/// every strategy: held as a matrix, or formed for a clone row when it is
+/// needed.
+#[derive(Clone, Copy)]
+#[non_exhaustive]
+pub enum DeviationDesign<'a> {
+    /// The design of every clone row, with an intercept.
+    Matrix(MatRef<'a, f64>),
+    /// The design formed row by row, without the matrix.
+    Rows {
+        /// The number of columns, with the intercept.
+        columns: usize,
+        /// Writes the design of clone row `row` into `out`, `columns` values.
+        fill: &'a (dyn Fn(usize, &mut [f64]) + Sync),
+    },
+}
+
+impl std::fmt::Debug for DeviationDesign<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Matrix(m) => f.debug_tuple("Matrix").field(m).finish(),
+            Self::Rows { columns, .. } => f
+                .debug_struct("Rows")
+                .field("columns", columns)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+impl<'a> From<MatRef<'a, f64>> for DeviationDesign<'a> {
+    fn from(m: MatRef<'a, f64>) -> Self {
+        Self::Matrix(m)
+    }
+}
+
+impl DeviationDesign<'_> {
+    /// The number of columns.
+    fn columns(&self) -> usize {
+        match self {
+            Self::Matrix(m) => m.ncols(),
+            Self::Rows { columns, .. } => *columns,
+        }
+    }
+
+    /// Writes the design of clone row `row` into `out`.
+    fn fill(&self, row: usize, out: &mut [f64]) {
+        match self {
+            Self::Matrix(m) => {
+                for (j, v) in out.iter_mut().enumerate() {
+                    *v = m[(row, j)];
+                }
+            }
+            Self::Rows { fill, .. } => fill(row, out),
+        }
+    }
+
+    /// Refuses a design of no columns or, for a matrix, of another number of
+    /// rows than the `n` clone rows, and a value that is not finite.
+    fn check(&self, n: usize, what: &str) -> Result<()> {
+        if let Self::Matrix(m) = self
+            && m.nrows() != n
+        {
+            return Err(Error::mismatch(format!(
+                "{what}: {} rows and {} columns for {n} clone rows",
+                m.nrows(),
+                m.ncols()
+            )));
+        }
+        if self.columns() == 0 {
+            return Err(Error::mismatch(format!(
+                "{what}: {n} rows and 0 columns for {n} clone rows"
+            )));
+        }
+        let finite = match self {
+            Self::Matrix(m) => epistat_linalg::is_finite(*m),
+            Self::Rows { .. } => finite_design(self, n),
+        };
+        if finite {
+            Ok(())
+        } else {
+            Err(Error::value(format!("{what}: a value is not finite")))
+        }
+    }
+}
+
+/// The designs of the models of the deviation of one strategy.
 #[derive(Debug, Clone, Copy)]
 pub struct DeviationModel<'a> {
-    /// The denominator design of every clone row, with an intercept.
-    pub denominator: MatRef<'a, f64>,
-    /// The numerator design of every clone row, with an intercept, for
-    /// stabilised weights.
-    pub numerator: Option<MatRef<'a, f64>>,
-}
-
-fn subset(x: MatRef<'_, f64>, rows: &[usize]) -> Mat<f64> {
-    Mat::from_fn(rows.len(), x.ncols(), |i, j| x[(rows[i], j)])
-}
-
-fn fit_deviation(
-    x: MatRef<'_, f64>,
-    d: &[bool],
-    rows: &[usize],
-    case: Option<&[f64]>,
-    what: &str,
-) -> Result<Vec<f64>> {
-    let positives = rows.iter().filter(|&&r| d[r]).count();
-    if positives == 0 || positives == rows.len() {
-        return Err(Error::no_information(format!(
-            "{what}: the rows at risk need both deviations and rows that are not"
-        )));
-    }
-    let xs = subset(x, rows);
-    let ys: Vec<f64> = rows.iter().map(|&r| f64::from(u8::from(d[r]))).collect();
-    let ws: Option<Vec<f64>> = case.map(|c| rows.iter().map(|&r| c[r]).collect());
-    let fit = Glm::new(Family::Binomial, Link::Logit)
-        .fit(&crate::logistic::data(
-            xs.as_ref(),
-            &ys,
-            ws.as_deref(),
-            None,
-            None,
-        )?)
-        .map_err(Error::model(what))?;
-    let coef = fit.full_rank().map_err(Error::model(what))?;
-    Ok(coef)
-}
-
-fn probability(x: MatRef<'_, f64>, coef: &[f64], row: usize) -> f64 {
-    let eta: f64 = (0..coef.len()).map(|j| x[(row, j)] * coef[j]).sum();
-    Link::Logit.inverse(eta)
+    /// The denominator design, with an intercept.
+    pub denominator: DeviationDesign<'a>,
+    /// The numerator design, with an intercept, for stabilised weights.
+    pub numerator: Option<DeviationDesign<'a>>,
 }
 
 /// The weights of the clones of one fit of the deviation models.
@@ -628,151 +670,25 @@ pub struct DeviationWeights {
 /// one for each strategy fitted on its rows at risk.
 ///
 /// `models` has one entry for each strategy, with designs of one row per clone
-/// row. `case_weight` weights the rows in the fits, for the resamples of a
+/// row, held as matrices or formed row by row ([`DeviationDesign`]); the two
+/// give the same weights, probabilities and coefficients, bit for bit. The
+/// models are fitted by [`Glm::fit_rows`], which forms the rows at risk block
+/// by block, and the numerator probabilities are formed where the weights are,
+/// so the memory beyond the clones and the designs is the weights and the
+/// probabilities. The fits read their rows about `p^2` times for `p` columns.
+/// `case_weight` weights the rows in the fits, for the resamples of a
 /// bootstrap, and is `None` otherwise.
 ///
 /// # Errors
 ///
 /// An input error for models or designs that do not match the clones, a
-/// strategy without rows at risk or whose rows at risk are all deviations or none,
-/// a model that has an aliased column or does not converge, and a case weight of
-/// the wrong length, negative or not finite.
+/// design with no column or a value that is not finite in any clone row, a
+/// strategy without rows at risk or whose rows at risk are all deviations or
+/// none, a model that has an aliased column or does not converge, and a case
+/// weight of the wrong length, negative or not finite.
 pub fn deviation_weights(
     cloned: &Cloned,
     models: &[DeviationModel<'_>],
-    case_weight: Option<&[f64]>,
-) -> Result<DeviationWeights> {
-    check_columns(cloned)?;
-    let n = cloned.len();
-    let n_arms = cloned.arm.iter().copied().max().map_or(0, |a| a + 1);
-    if models.len() < n_arms {
-        return Err(Error::mismatch(format!(
-            "models: {} for {n_arms} strategies",
-            models.len()
-        )));
-    }
-    if let Some(c) = case_weight {
-        check::same_length("case_weight", n, c.len())?;
-        check::weights("case_weight", c)?;
-    }
-    let mut p_d = vec![0.0; n];
-    let mut p_n = vec![0.0; n];
-    let mut coefficients = Vec::new();
-    for (k, model) in models.iter().enumerate().take(n_arms) {
-        for (name, m) in [
-            ("denominator", Some(model.denominator)),
-            ("numerator", model.numerator),
-        ] {
-            if let Some(m) = m {
-                if m.nrows() != n || m.ncols() == 0 {
-                    return Err(Error::mismatch(format!(
-                        "strategy {k} {name}: {} rows and {} columns for {n} clone rows",
-                        m.nrows(),
-                        m.ncols()
-                    )));
-                }
-                if !epistat_linalg::is_finite(m) {
-                    return Err(Error::value(format!(
-                        "strategy {k} {name}: a value is not finite"
-                    )));
-                }
-            }
-        }
-        let rows: Vec<usize> = (0..n)
-            .filter(|&r| cloned.arm[r] == k && cloned.at_risk[r])
-            .collect();
-        let coef = fit_deviation(
-            model.denominator,
-            &cloned.deviation,
-            &rows,
-            case_weight,
-            &format!("strategy {k} denominator"),
-        )?;
-        for (r, p) in p_d.iter_mut().enumerate() {
-            if cloned.arm[r] == k {
-                *p = probability(model.denominator, &coef, r);
-            }
-        }
-        coefficients.push(coef);
-        if let Some(num) = model.numerator {
-            let c = fit_deviation(
-                num,
-                &cloned.deviation,
-                &rows,
-                case_weight,
-                &format!("strategy {k} numerator"),
-            )?;
-            for (r, p) in p_n.iter_mut().enumerate() {
-                if cloned.arm[r] == k {
-                    *p = probability(num, &c, r);
-                }
-            }
-        }
-    }
-    let mut weight = vec![0.0; n];
-    let mut cum = 1.0;
-    for r in 0..n {
-        if r == 0 || cloned.person[r] != cloned.person[r - 1] || cloned.arm[r] != cloned.arm[r - 1]
-        {
-            cum = 1.0;
-        }
-        if cloned.at_risk[r] {
-            cum *= (1.0 - p_n[r]) / (1.0 - p_d[r]);
-        }
-        weight[r] = cum;
-    }
-    Ok(DeviationWeights {
-        weight,
-        probability: p_d,
-        coefficients,
-    })
-}
-
-/// The design of one model of the deviation, formed for a clone row when it
-/// is needed instead of held for every clone row.
-#[derive(Clone, Copy)]
-pub struct DeviationDesign<'a> {
-    /// The number of columns, with the intercept.
-    pub columns: usize,
-    /// Writes the design of clone row `row` into `out`, `columns` values.
-    pub fill: &'a (dyn Fn(usize, &mut [f64]) + Sync),
-}
-
-impl std::fmt::Debug for DeviationDesign<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DeviationDesign")
-            .field("columns", &self.columns)
-            .finish_non_exhaustive()
-    }
-}
-
-/// The designs of the models of the deviation of one strategy as
-/// [`DeviationDesign`]s, the form of [`DeviationModel`] for
-/// [`deviation_weights_rows`].
-#[derive(Debug, Clone, Copy)]
-pub struct DeviationRows<'a> {
-    /// The denominator design, with an intercept.
-    pub denominator: DeviationDesign<'a>,
-    /// The numerator design, with an intercept, for stabilised weights.
-    pub numerator: Option<DeviationDesign<'a>>,
-}
-
-/// [`deviation_weights`] with designs formed row by row: the same weights,
-/// probabilities and coefficients, bit for bit, as from matrices that hold the
-/// values `fill` writes, without the matrices or the copies of their rows at
-/// risk. The models are fitted by [`Glm::fit_rows`], which forms the rows at
-/// risk block by block, and the numerator probabilities are formed where the
-/// weights are, so the memory beyond the clones is the weights and the
-/// probabilities. The fits read their rows about `p^2` times for `p` columns,
-/// which [`deviation_weights`] does not.
-///
-/// # Errors
-///
-/// As [`deviation_weights`], for a design with no column or a value that is
-/// not finite in any clone row.
-pub fn deviation_weights_rows(
-    cloned: &Cloned,
-    models: &[DeviationRows<'_>],
     case_weight: Option<&[f64]>,
 ) -> Result<DeviationWeights> {
     check_columns(cloned)?;
@@ -797,16 +713,7 @@ pub fn deviation_weights_rows(
             ("numerator", model.numerator),
         ] {
             if let Some(m) = m {
-                if m.columns == 0 {
-                    return Err(Error::mismatch(format!(
-                        "strategy {k} {name}: {n} rows and 0 columns for {n} clone rows"
-                    )));
-                }
-                if !finite_design(m, n) {
-                    return Err(Error::value(format!(
-                        "strategy {k} {name}: a value is not finite"
-                    )));
-                }
+                m.check(n, &format!("strategy {k} {name}"))?;
             }
         }
         let at_risk = AtRisk::new(cloned, k, case_weight);
@@ -841,8 +748,8 @@ pub fn deviation_weights_rows(
                 }
                 let p_n = match &numerators[cloned.arm[r]] {
                     Some((design, coef)) => {
-                        values.resize(design.columns, 0.0);
-                        (design.fill)(r, &mut values);
+                        values.resize(design.columns(), 0.0);
+                        design.fill(r, &mut values);
                         probability_of(&values, coef)
                     }
                     None => 0.0,
@@ -868,10 +775,10 @@ pub fn deviation_weights_rows(
     })
 }
 
-/// Refuse clones whose columns differ in length from `source`.
+/// Refuse clones whose columns differ in length from `row`.
 fn check_columns(cloned: &Cloned) -> Result<()> {
     check_lengths(&[
-        ("source", cloned.source.len()),
+        ("row", cloned.row.len()),
         ("arm", cloned.arm.len()),
         ("person", cloned.person.len()),
         ("deviation", cloned.deviation.len()),
@@ -880,18 +787,18 @@ fn check_columns(cloned: &Cloned) -> Result<()> {
 }
 
 /// Whether `design` gives finite values in every one of `n` clone rows.
-fn finite_design(design: DeviationDesign<'_>, n: usize) -> bool {
+fn finite_design(design: &DeviationDesign<'_>, n: usize) -> bool {
     (0..n.div_ceil(ROW_BLOCK)).into_par_iter().all(|b| {
-        let mut values = vec![0.0; design.columns];
+        let mut values = vec![0.0; design.columns()];
         (b * ROW_BLOCK..((b + 1) * ROW_BLOCK).min(n)).all(|r| {
-            (design.fill)(r, &mut values);
+            design.fill(r, &mut values);
             values.iter().all(|v| v.is_finite())
         })
     })
 }
 
 /// The probability of the logistic model with coefficients `coef` for the
-/// design row `x`, as `probability` forms it from a matrix.
+/// design row `x`.
 fn probability_of(x: &[f64], coef: &[f64]) -> f64 {
     let eta: f64 = (0..coef.len()).map(|j| x[j] * coef[j]).sum();
     Link::Logit.inverse(eta)
@@ -908,11 +815,11 @@ fn fill_probabilities(
     p_d.par_chunks_mut(ROW_BLOCK)
         .enumerate()
         .for_each(|(b, chunk)| {
-            let mut values = vec![0.0; design.columns];
+            let mut values = vec![0.0; design.columns()];
             for (i, p) in chunk.iter_mut().enumerate() {
                 let r = b * ROW_BLOCK + i;
                 if cloned.arm[r] == k {
-                    (design.fill)(r, &mut values);
+                    design.fill(r, &mut values);
                     *p = probability_of(&values, coef);
                 }
             }
@@ -965,7 +872,7 @@ impl Rows for AtRiskRows<'_> {
     }
 
     fn n_columns(&self) -> usize {
-        self.design.columns
+        self.design.columns()
     }
 
     fn fill(&self, start: usize, mut block: Block<'_>) {
@@ -977,12 +884,12 @@ impl Rows for AtRiskRows<'_> {
         let a = self.at_risk;
         let c = a.cloned;
         let mut r = a.blocks[start / ROW_BLOCK];
-        let mut values = vec![0.0; self.design.columns];
+        let mut values = vec![0.0; self.design.columns()];
         for i in 0..block.y.len() {
             while !(c.arm[r] == a.arm && c.at_risk[r]) {
                 r += 1;
             }
-            (self.design.fill)(r, &mut values);
+            self.design.fill(r, &mut values);
             for (j, &v) in values.iter().enumerate() {
                 block.x[(i, j)] = v;
             }
@@ -1012,33 +919,46 @@ fn fit_deviation_rows(
     Ok(coef)
 }
 
-/// [`trials::fit_msm`](super::trials::fit_msm) on the clone rows that are not a
-/// deviation without building their design: the rows in order, with the design
-/// that `design(row, out)` writes into `out` for clone row `row`, the outcome
-/// of the row, its `weight` (one per clone row, such as
-/// [`DeviationWeights::weight`]) and its person as its cluster.
+/// The clone rows that are not a deviation as the rows of
+/// [`MsmRows::Clones`](super::trials::MsmRows::Clones), without building their
+/// design: the rows in order, with the design that `design(row, out)` writes
+/// into `out` for clone row `row`, the outcome of the row, its `weight` (one
+/// per clone row, such as [`DeviationWeights::weight`]) and its person as its
+/// cluster.
 ///
-/// The result has the bits of building the design, outcomes, weights and
-/// persons of those rows and fitting them with `fit_msm`, and the memory is
-/// that of the clones: the rows are formed block by block as the fit needs
-/// them, by [`Glm::fit_rows`](epistat_glm::Glm::fit_rows). See
-/// [`epistat_glm::rows`].
-///
-/// # Errors
-///
-/// An input error for a `weight` of another length than the clone rows,
-/// clone rows whose persons are not in order, `columns` of 0, and the errors
-/// of `fit_msm`.
-pub fn fit_msm_clones(
-    cloned: &Cloned,
-    weight: &[f64],
-    columns: usize,
-    design: &(dyn Fn(usize, &mut [f64]) + Sync),
-) -> Result<super::trials::Msm> {
+/// [`fit_msm`](super::trials::fit_msm) gives the bits of building the design,
+/// outcomes, weights and persons of those rows and fitting them as a
+/// [`MsmRows::Design`](super::trials::MsmRows::Design), and the memory is
+/// that of the clones. It refuses a `weight` of another length than the clone
+/// rows, clone rows whose persons are not in order, and `columns` of 0.
+#[derive(Clone, Copy)]
+pub struct CloneDesign<'a> {
+    /// The clones.
+    pub cloned: &'a Cloned,
+    /// The weight of each clone row.
+    pub weight: &'a [f64],
+    /// The number of columns of the design.
+    pub columns: usize,
+    /// Writes the design of a clone row into its second argument.
+    pub design: &'a (dyn Fn(usize, &mut [f64]) + Sync),
+}
+
+impl std::fmt::Debug for CloneDesign<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CloneDesign")
+            .field("rows", &self.cloned.len())
+            .field("columns", &self.columns)
+            .finish_non_exhaustive()
+    }
+}
+
+/// [`fit_msm`](super::trials::fit_msm) on the clone rows of `spec`.
+pub(super) fn fit_clones(spec: &CloneDesign<'_>) -> Result<super::trials::Msm> {
+    let (cloned, weight, columns, design) = (spec.cloned, spec.weight, spec.columns, spec.design);
     let n = cloned.len();
     check::same_length("weight", n, weight.len())?;
     check_lengths(&[
-        ("source", n),
+        ("row", n),
         ("arm", cloned.arm.len()),
         ("person", cloned.person.len()),
         ("deviation", cloned.deviation.len()),

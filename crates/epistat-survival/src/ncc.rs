@@ -463,7 +463,7 @@ pub fn baseline(
     let result = basehaz(
         &model,
         &BaselineOptions {
-            centring: Centring::Given(&zeros),
+            centring: Centring::Given(zeros.clone()),
             ..BaselineOptions::default()
         },
     )?;

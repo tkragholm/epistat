@@ -13,8 +13,15 @@
 
 mod ccw_run;
 
+use epistat_survival::Bootstrap;
 use epistat_survival::weighting::trials::PersonCounts;
 use epistat_testkit::Fingerprint;
+
+/// The root seed whose replicate 0 draws from seed 99,
+/// `replicate_seed(ROOT, 0) == 99`, the seed the recorded replicate was drawn
+/// from. `replicate_seed` is `splitmix64(base ^ r * GAMMA)` and `splitmix64`
+/// is a bijection, so the root is its inverse at 99.
+const ROOT: u64 = 0xc7da_422f_dc3c_0db5;
 
 /// `(name, length, digest)` of each recorded output.
 const EXPECTED: &[(&str, usize, u64)] = &[
@@ -23,12 +30,17 @@ const EXPECTED: &[(&str, usize, u64)] = &[
 ];
 
 #[test]
+fn the_root_seed_draws_the_recorded_replicate() {
+    assert_eq!(epistat_rng::replicate_seed(ROOT, 0), 99);
+}
+
+#[test]
 fn bits_are_unchanged() {
     let r = ccw_run::load();
     let d = ccw_run::data(&r);
     let c = ccw_run::cloned(&r, &d);
     let counts = c
-        .case_weights(&PersonCounts::draw(&r.input.id, 99))
+        .case_weights(&PersonCounts::draw(&r.input.id, Bootstrap::new(1, ROOT), 0))
         .unwrap();
     let got: Vec<(String, usize, u64)> = [
         ("analysis", ccw_run::analyse(&r, &c, None).flatten()),

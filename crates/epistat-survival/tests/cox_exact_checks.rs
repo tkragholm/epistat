@@ -3,7 +3,7 @@
 
 use epistat_linalg::Mat;
 use epistat_survival::SurvData;
-use epistat_survival::clogit::{ClogitMethod, ClogitOptions, clogit};
+use epistat_survival::clogit::{ClogitMethod, ClogitOptions, MatchedSets, clogit};
 use epistat_survival::cox::{CoxOptions, Ties, fit, score_residuals};
 
 /// The log partial likelihood at `beta` by listing every subset of the risk
@@ -164,27 +164,38 @@ fn clogit_rules() {
     let case = [true, false, false, true, false];
     let set = [1, 1, 1, 2, 2];
     let x = Mat::from_fn(5, 1, |i, _| [0.5, -0.2, 1.1, 0.9, 0.1][i]);
-    let model = clogit(&case, &set, x.as_ref(), &ClogitOptions::default()).unwrap();
+    let model = clogit(
+        &MatchedSets::new(&case, &set),
+        x.as_ref(),
+        &ClogitOptions::default(),
+    )
+    .unwrap();
     assert_eq!((model.n_rows, model.n_events), (5, 2.0));
-    assert!(clogit(&case[..4], &set, x.as_ref(), &ClogitOptions::default()).is_err());
+    assert!(
+        clogit(
+            &MatchedSets::new(&case[..4], &set),
+            x.as_ref(),
+            &ClogitOptions::default()
+        )
+        .is_err()
+    );
     let weight = [1.0, 1.0, 1.0, 2.0, 1.0];
-    let weighted = ClogitOptions {
-        weight: Some(&weight),
-        ..ClogitOptions::default()
-    };
-    assert!(clogit(&case, &set, x.as_ref(), &weighted).is_err());
+    let weighted = MatchedSets::new(&case, &set).weight(&weight);
+    assert!(clogit(&weighted, x.as_ref(), &ClogitOptions::default()).is_err());
     let approximate = ClogitOptions {
         method: ClogitMethod::Approximate,
-        ..weighted
-    };
-    assert!(clogit(&case, &set, x.as_ref(), &approximate).is_ok());
-    let cluster = [0, 0, 0, 1, 1];
-    let clustered = ClogitOptions {
-        cluster: Some(&cluster),
         ..ClogitOptions::default()
     };
-    assert!(clogit(&case, &set, x.as_ref(), &clustered).is_err());
+    assert!(clogit(&weighted, x.as_ref(), &approximate).is_ok());
+    let cluster = [0, 0, 0, 1, 1];
+    let clustered = MatchedSets::new(&case, &set).cluster(&cluster);
+    assert!(clogit(&clustered, x.as_ref(), &ClogitOptions::default()).is_err());
     // No case at all gives no estimate, as in the Cox fit.
-    let none = clogit(&[false; 5], &set, x.as_ref(), &ClogitOptions::default()).unwrap();
+    let none = clogit(
+        &MatchedSets::new(&[false; 5], &set),
+        x.as_ref(),
+        &ClogitOptions::default(),
+    )
+    .unwrap();
     assert!(none.coefficients[0].is_none());
 }

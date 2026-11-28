@@ -275,6 +275,7 @@ fn propensity_weights_alone_give_the_propensity_only_variance() {
         .unwrap();
     let times = [2.0, 4.0, 6.0];
     let mut worst = 0.0f64;
+    let mut differing = 0usize;
     for stabilise in [false, true] {
         let w = iptw::fit(
             &treat,
@@ -292,7 +293,13 @@ fn propensity_weights_alone_give_the_propensity_only_variance() {
             subject: Some(&subject),
             censoring: None,
         };
-        let new = wcox::fit(&d, x.as_ref(), &opts, &est).unwrap();
+        // The general route of 0.3's `fit_estimated`, which every model of the
+        // weights takes.
+        #[expect(
+            deprecated,
+            reason = "the general route is reached through the 0.3 name"
+        )]
+        let new = wcox::fit_estimated(&d, x.as_ref(), &opts, &est).unwrap();
         assert_eq!(old.n_units, new.n_units);
         assert_eq!(old.coefficients, new.coefficients);
         for (a, b) in [
@@ -316,7 +323,11 @@ fn propensity_weights_alone_give_the_propensity_only_variance() {
             &Weights::iptw(&w, Some(&subject)),
         )
         .unwrap();
-        let new = km::estimate(&arms, &times, &KmOptions::default(), &est).unwrap();
+        #[expect(
+            deprecated,
+            reason = "the general route is reached through the 0.3 name"
+        )]
+        let new = km::estimate_estimated(&arms, &times, &KmOptions::default(), &est).unwrap();
         assert_eq!(old.surv, new.surv);
         for (a, b) in old
             .covariance
@@ -329,10 +340,84 @@ fn propensity_weights_alone_give_the_propensity_only_variance() {
             )
         {
             let (a, b) = (a.unwrap(), b.unwrap());
+            if a.to_bits() != b.to_bits() {
+                differing += 1;
+            }
             worst = worst.max((a - b).abs() / a.abs().max(1e-12));
         }
     }
     // The routes sum the same terms in another order, so they agree to rounding.
-    println!("propensity only against the generic route: {worst:.2e}");
+    println!(
+        "propensity only against the generic route: {worst:.2e}, {differing} Kaplan-Meier covariance entries differ in their bits"
+    );
     assert!(worst < 1e-10, "{worst}");
+}
+
+#[test]
+fn the_contrast_of_two_weighted_curves_reads_their_covariance() {
+    // 30 subjects in two arms with a treatment that depends on a covariate.
+    let n = 30usize;
+    let z = Mat::from_fn(n, 2, |i, j| {
+        if j == 0 {
+            1.0
+        } else {
+            ((i * 7 % 11) as f64 - 5.0) / 5.0
+        }
+    });
+    let treat: Vec<bool> = (0..n).map(|i| (i * 5 + i / 4) % 3 != 0).collect();
+    let stop: Vec<f64> = (0..n).map(|i| 1.0 + (i * 3 % 8) as f64).collect();
+    let status: Vec<i32> = (0..n).map(|i| i32::from(i % 3 != 0)).collect();
+    let arm: Vec<u32> = treat.iter().map(|&a| u32::from(a)).collect();
+    let data = SurvData::builder(&stop, &status)
+        .stratum(&arm)
+        .build()
+        .unwrap();
+    let w = iptw::fit(&treat, z.as_ref(), &IptwOptions::default()).unwrap();
+    let times = [2.0, 4.0, 6.0];
+    let km = km::estimate(
+        &data,
+        &times,
+        &KmOptions::default(),
+        &Weights::iptw(&w, None),
+    )
+    .unwrap();
+    let level = epistat_survival::Level::default();
+    for time in 0..times.len() {
+        let c = km.contrast(1, 0, time, level).unwrap();
+        let (r1, r0) = (
+            1.0 - km.survival(1, time).unwrap(),
+            1.0 - km.survival(0, time).unwrap(),
+        );
+        assert_eq!(c.mean1.estimate.to_bits(), r1.to_bits());
+        assert_eq!(c.mean0.estimate.to_bits(), r0.to_bits());
+        assert_eq!(c.difference.estimate.to_bits(), (r1 - r0).to_bits());
+        // The difference of the risks is minus that of the survival curves,
+        // whose standard error risk_difference forms entry by entry; the
+        // quadratic form sums the same terms in another order.
+        let by_entries = km.risk_difference(0, 1, time, level).unwrap();
+        let (a, b) = (c.difference.se.unwrap(), by_entries.difference.se.unwrap());
+        assert!((a - b).abs() <= 8.0 * f64::EPSILON * b, "{a} {b}");
+        let ratio = c.ratio.unwrap();
+        assert_eq!(ratio.estimate.to_bits(), (r1 / r0).to_bits());
+        let v = |g, h| km.covariance_between(g, h, time).unwrap();
+        let want = (v(1, 1) / (r1 * r1) + v(0, 0) / (r0 * r0) - 2.0 * v(1, 0) / (r1 * r0))
+            .max(0.0)
+            .sqrt();
+        if r1 > 0.0 {
+            assert_eq!(ratio.se.unwrap().to_bits(), want.to_bits());
+        } else {
+            // A risk of 0 leaves the logarithm of the ratio undefined.
+            assert!(ratio.se.is_none() && ratio.interval.is_none());
+        }
+    }
+    let read = km.at(1, 5.0).unwrap();
+    assert_eq!(read.time.to_bits(), 4.0f64.to_bits());
+    assert_eq!(
+        read.survival.to_bits(),
+        km.survival(1, 1).unwrap().to_bits()
+    );
+    assert_eq!(read.se, km.se(1, 1));
+    assert!(km.at(1, 1.0).is_none());
+    assert!(km.at(2, 5.0).is_none());
+    assert!(km.contrast(2, 0, 0, level).is_err());
 }

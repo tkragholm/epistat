@@ -18,7 +18,7 @@ use epistat_survival::metrics::recalibration::{
 };
 use epistat_survival::metrics::rttright::{self, RttrightOptions};
 use epistat_survival::metrics::score::{
-    Censoring, CoxCensoring, ScoreOptions, auc, brier, null_brier,
+    CoxCensoring, ScoreCensoring, ScoreOptions, auc, brier, null_brier,
 };
 use epistat_testkit::{POOLS, absent, assert_same_on_pools};
 
@@ -60,18 +60,18 @@ fn cox_censoring_contrasts_and_calibration() {
     let times: Vec<f64> = (1..=n_times).map(|j| 0.4 * j as f64).collect();
     let opts = ScoreOptions {
         keep_influence: true,
-        censoring: Censoring::Cox(CoxCensoring {
-            x: x.as_ref(),
-            options: CoxOptions::default(),
-        }),
         ..ScoreOptions::default()
     };
+    let censoring = ScoreCensoring::Cox(CoxCensoring {
+        x: x.as_ref(),
+        options: CoxOptions::default(),
+    });
     assert_same_on_pools(&POOLS, || {
-        let sa = brier(&data, a.as_ref(), &times, &opts).unwrap();
-        let sb = brier(&data, b.as_ref(), &times, &opts).unwrap();
-        let s0 = null_brier(&data, &times, &opts).unwrap();
-        let aa = auc(&data, a.as_ref(), &times, &opts).unwrap();
-        let ab = auc(&data, b.as_ref(), &times, &opts).unwrap();
+        let sa = brier(&data, a.as_ref(), &times, &censoring, &opts).unwrap();
+        let sb = brier(&data, b.as_ref(), &times, &censoring, &opts).unwrap();
+        let s0 = null_brier(&data, &times, &censoring, &opts).unwrap();
+        let aa = auc(&data, a.as_ref(), &times, &censoring, &opts).unwrap();
+        let ab = auc(&data, b.as_ref(), &times, &censoring, &opts).unwrap();
         let level = ContrastOptions::default();
         let mut out = Vec::new();
         for s in [&sa, &sb, &s0] {

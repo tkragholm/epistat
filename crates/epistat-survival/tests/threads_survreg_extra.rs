@@ -5,6 +5,7 @@
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
+use epistat_survival::cox::Collapse;
 use epistat_survival::survreg::{
     DfbetaOptions, Distribution, SurvregOptions, SurvregPredictOptions, SurvregPredictType,
     TermsReference, fit,
@@ -73,11 +74,12 @@ fn survreg_extra_options() {
             .map(|c| c.unwrap_or(f64::NAN))
             .collect();
         out.extend(&f.log_scale);
-        out.extend(f.variance.iter().map(|v| v.unwrap_or(f64::NAN)));
+        out.extend(f.variance.as_slice().iter().map(|v| v.unwrap_or(f64::NAN)));
         out.extend(
             f.robust_variance
                 .as_ref()
                 .unwrap()
+                .as_slice()
                 .iter()
                 .map(|v| v.unwrap_or(f64::NAN)),
         );
@@ -115,7 +117,7 @@ fn survreg_extra_options() {
             DfbetaOptions {
                 standardise: true,
                 weighted: true,
-                collapse: Some(&cluster),
+                collapse: Collapse::Cluster,
             },
         ] {
             out.extend(

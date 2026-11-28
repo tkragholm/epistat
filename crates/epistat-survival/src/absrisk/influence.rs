@@ -76,7 +76,7 @@ impl Baselines {
             };
             let zero = vec![0.0; model.x.ncols()];
             let opts = BaselineOptions {
-                centring: Centring::Given(&zero),
+                centring: Centring::Given(zero.clone()),
                 ..BaselineOptions::default()
             };
             bases.push(basehaz(&fitted, &opts)?);

@@ -179,13 +179,13 @@ impl CaseCohortMethod {
 }
 
 /// What [`fit`] takes besides the data.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CaseCohortOptions<'a> {
+#[derive(Debug, Clone, PartialEq)]
+pub struct CaseCohortOptions {
     /// The method.
     pub method: CaseCohortMethod,
     /// The cohort size: one value for the unstratified methods, one per
     /// stratum in ascending order of the stratum codes for Borgan's.
-    pub cohort_size: &'a [f64],
+    pub cohort_size: Vec<f64>,
     /// Barlow's variance for the first phase as well, as `robust` of `cch`.
     /// Lin-Ying only; it is an error with any other method.
     pub robust: bool,
@@ -200,14 +200,14 @@ pub struct CaseCohortOptions<'a> {
     pub tolerance: f64,
 }
 
-impl<'a> CaseCohortOptions<'a> {
+impl CaseCohortOptions {
     /// The options of `method` for a cohort of `cohort_size`, with Efron ties,
     /// no robust variance and the default convergence limit.
     #[must_use]
-    pub fn new(method: CaseCohortMethod, cohort_size: &'a [f64]) -> Self {
+    pub fn new(method: CaseCohortMethod, cohort_size: &[f64]) -> Self {
         Self {
             method,
-            cohort_size,
+            cohort_size: cohort_size.to_vec(),
             robust: false,
             ties: Ties::Efron,
             cause: None,
@@ -555,7 +555,7 @@ pub fn fit(
     x: MatRef<'_, f64>,
     subcohort: &[bool],
     stratum: Option<&[u32]>,
-    opts: &CaseCohortOptions<'_>,
+    opts: &CaseCohortOptions,
 ) -> Result<CaseCohortFit> {
     let rows = data.n_rows();
     check_lengths(&[
@@ -655,7 +655,7 @@ struct Counts {
 fn check_inputs(
     data: &SurvData<'_>,
     stratum: Option<&[u32]>,
-    opts: &CaseCohortOptions<'_>,
+    opts: &CaseCohortOptions,
 ) -> Result<()> {
     let rows = data.n_rows();
     if opts.ties == Ties::Exact {
@@ -682,7 +682,7 @@ fn check_inputs(
             "robust: only the Lin-Ying method has a robust variance",
         ));
     }
-    refuse_non_finite(opts.cohort_size, "cohort_size")?;
+    refuse_non_finite(&opts.cohort_size, "cohort_size")?;
     if opts.cohort_size.iter().any(|&n| n <= 0.0) {
         return Err(Error::options("cohort_size: every value must be positive"));
     }
@@ -811,7 +811,7 @@ fn prentice(
 fn lin_ying(
     sample: &Sample<'_>,
     control: Control,
-    opts: &CaseCohortOptions<'_>,
+    opts: &CaseCohortOptions,
     counts: Counts,
 ) -> Result<Pieces> {
     let p = sample.x.ncols();
@@ -896,7 +896,7 @@ fn dense_strata(stratum: &[u32]) -> (Vec<usize>, usize) {
 fn borgan(
     sample: &Sample<'_>,
     control: Control,
-    opts: &CaseCohortOptions<'_>,
+    opts: &CaseCohortOptions,
     stratum: &[u32],
 ) -> Result<Pieces> {
     let second = opts.method == CaseCohortMethod::BorganII;

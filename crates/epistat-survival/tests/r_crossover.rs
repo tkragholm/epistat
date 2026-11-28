@@ -15,7 +15,7 @@
 //! same order.
 
 use epistat_linalg::Mat;
-use epistat_survival::clogit::{ClogitMethod, ClogitOptions, clogit};
+use epistat_survival::clogit::{ClogitMethod, ClogitOptions, MatchedSets, clogit};
 use epistat_survival::crossover::{
     ExposureIntervals, Measure, Observation, Referent, StratumUnit, build_windows,
     case_time_control_design, exposure_in_windows,
@@ -228,7 +228,7 @@ fn the_analysis_equals_clogit_on_the_same_windows() {
             max_iterations: 100,
             ..ClogitOptions::default()
         };
-        let exact = clogit(&w.is_case, &w.set, x.as_ref(), &opts).unwrap();
+        let exact = clogit(&MatchedSets::new(&w.is_case, &w.set), x.as_ref(), &opts).unwrap();
         let db = worst(&exact.coefficients, &c.fit.coef, &c.fit.vcov);
         assert!(db <= 1e-8, "{}: coefficients {db} s", c.label);
         let ll = exact.log_partial_likelihood.unwrap();
@@ -249,12 +249,16 @@ fn the_analysis_equals_clogit_on_the_same_windows() {
                 );
             }
         }
-        let cluster = ClogitOptions {
+        let approximate = ClogitOptions {
             method: ClogitMethod::Approximate,
-            cluster: Some(&w.person),
             ..opts
         };
-        let robust = clogit(&w.is_case, &w.set, x.as_ref(), &cluster).unwrap();
+        let robust = clogit(
+            &MatchedSets::new(&w.is_case, &w.set).cluster(&w.person),
+            x.as_ref(),
+            &approximate,
+        )
+        .unwrap();
         let dr = worst(
             &robust.coefficients,
             &c.fit.approx_coef,

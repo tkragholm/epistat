@@ -317,10 +317,9 @@ fn relative_survival_of_ederer_one_and_hakulinen() {
     }
     let hak = net_survival(
         &data,
-        &expected,
+        &expected.clone().with_potential(&potential),
         &NetOptions {
             method: NetMethod::Hakulinen,
-            potential: Some(&potential),
             ..NetOptions::default()
         },
     )

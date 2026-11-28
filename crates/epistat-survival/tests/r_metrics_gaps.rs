@@ -48,7 +48,7 @@ use epistat_survival::SurvData;
 use epistat_survival::cox::{CoxOptions, fit};
 use epistat_survival::metrics::contrast::{ContrastOptions, auc_difference, brier_difference};
 use epistat_survival::metrics::score::{
-    Censoring, CoxCensoring, ScoreOptions, auc, brier, ipa, null_brier,
+    CoxCensoring, ScoreCensoring, ScoreOptions, auc, brier, ipa, null_brier,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -201,28 +201,30 @@ fn cox_censoring_and_contrasts_against_riskregression() {
         let w = case.wmax;
         for run in &case.runs {
             let tag = format!("{} / conservative {}", case.name, run.conservative);
-            let mut opts = ScoreOptions {
+            let opts = ScoreOptions {
                 keep_influence: true,
                 conservative: run.conservative,
                 ..ScoreOptions::default()
             };
-            if run.cens == "cox" {
-                opts.censoring = Censoring::Cox(CoxCensoring {
+            let censoring = if run.cens == "cox" {
+                ScoreCensoring::Cox(CoxCensoring {
                     x: x.as_ref(),
                     options: CoxOptions {
                         tolerance: 1e-6,
                         ..CoxOptions::default()
                     },
-                });
-            }
+                })
+            } else {
+                ScoreCensoring::KaplanMeier
+            };
             let ka = if run.cens == "cox" { 1.0 + kappa } else { 1.0 };
             let b_b = 4.0 * (nf + m + 3.0) * eps * w * ka;
             let b_a = 8.0 * (nf + m + 3.0) * eps * ka;
-            let sa = brier(&data, ma.as_ref(), &d.times, &opts).unwrap();
-            let sb = brier(&data, mb.as_ref(), &d.times, &opts).unwrap();
-            let s0 = null_brier(&data, &d.times, &opts).unwrap();
-            let aa = auc(&data, ma.as_ref(), &d.times, &opts).unwrap();
-            let ab = auc(&data, mb.as_ref(), &d.times, &opts).unwrap();
+            let sa = brier(&data, ma.as_ref(), &d.times, &censoring, &opts).unwrap();
+            let sb = brier(&data, mb.as_ref(), &d.times, &censoring, &opts).unwrap();
+            let s0 = null_brier(&data, &d.times, &censoring, &opts).unwrap();
+            let aa = auc(&data, ma.as_ref(), &d.times, &censoring, &opts).unwrap();
+            let ab = auc(&data, mb.as_ref(), &d.times, &censoring, &opts).unwrap();
             let big = |m: &Option<Influence>| {
                 let m = m.as_ref().unwrap();
                 (0..t)

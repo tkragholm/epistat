@@ -249,7 +249,7 @@ fn build(reference: &Reference, case: &RCase) -> Built {
     let opts = MsOptions {
         ties,
         terms: match (case.kind.as_str(), &terms) {
-            (_, Some(t)) => MsTerms::Custom(t),
+            (_, Some(t)) => MsTerms::Custom(t.clone()),
             ("common", _) => MsTerms::Common,
             _ => MsTerms::Separate,
         },
@@ -522,7 +522,7 @@ fn time_varying_fits_match_coxph() {
             x.as_ref(),
             &MsOptions {
                 ties: ties_of(&case.ties),
-                terms: MsTerms::Custom(&terms),
+                terms: MsTerms::Custom(terms.clone()),
                 ..MsOptions::default()
             },
         )

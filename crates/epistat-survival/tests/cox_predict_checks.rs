@@ -146,7 +146,7 @@ fn rows_of_weight_zero_change_no_baseline_bit() {
         .unwrap();
     let model2 = with_coefficients(fit(&data2, x2.as_ref(), &opts).unwrap(), &beta, &variance);
     let given = BaselineOptions {
-        centring: Centring::Given(&[0.1, 0.2]),
+        centring: Centring::Given(vec![0.1, 0.2]),
         ..BaselineOptions::default()
     };
     let b1 = basehaz(
@@ -216,8 +216,8 @@ fn curves_do_not_depend_on_the_means() {
     let bound = 8.0 * eps * (25.0 + 2.0 + 4.0 + 4.0);
     for centring in [
         Centring::Weighted,
-        Centring::Given(&[0.0, 0.0]),
-        Centring::Given(&[3.0, -2.0]),
+        Centring::Given(vec![0.0, 0.0]),
+        Centring::Given(vec![3.0, -2.0]),
     ] {
         let other = survfit(
             &fitted,

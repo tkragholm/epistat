@@ -166,7 +166,7 @@ fn population_means_match_r() {
             &levels,
             &YatesOptions {
                 link,
-                centre: case.centre.as_deref(),
+                centre: case.centre.clone(),
                 test,
             },
         )

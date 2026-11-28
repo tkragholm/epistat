@@ -11,7 +11,7 @@
 use epistat_linalg::Mat;
 use epistat_rng::Stream;
 use epistat_survival::SurvData;
-use epistat_survival::clogit::{ClogitOptions, clogit};
+use epistat_survival::clogit::{ClogitOptions, MatchedSets, clogit};
 use epistat_survival::cox::{CoxOptions, fit};
 use epistat_survival::ncc::{
     NccDesign, absolute_risk, baseline, fit_weighted, inclusion_probabilities, weights,
@@ -272,7 +272,12 @@ fn weighted_estimates_are_unbiased_over_simulated_studies() {
             }
         }
         let cx = Mat::from_fn(set_rows.len(), 2, |i, j| all_x[(set_rows[i], j)]);
-        let cl = clogit(&set_case, &set_id, cx.as_ref(), &ClogitOptions::default()).unwrap();
+        let cl = clogit(
+            &MatchedSets::new(&set_case, &set_id),
+            cx.as_ref(),
+            &ClogitOptions::default(),
+        )
+        .unwrap();
         for (j, d) in d_clogit.iter_mut().enumerate() {
             d.push(cl.coefficients[j].unwrap() - model.coefficients[j].unwrap());
         }

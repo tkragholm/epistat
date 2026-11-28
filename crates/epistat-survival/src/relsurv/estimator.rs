@@ -43,7 +43,7 @@ pub enum NetMethod {
     EdererI,
     /// The relative survival of Hakulinen: the observed survival divided by
     /// Hakulinen's expected survival, in which each person counts until its
-    /// potential follow-up, [`NetOptions::potential`]
+    /// potential follow-up, [`ExpectedHazard::with_potential`]
     /// ([`super::ExpectedMethod::Hakulinen`]).
     Hakulinen,
 }
@@ -78,7 +78,7 @@ pub enum Grid {
 
 /// The settings of [`net_survival`].
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct NetOptions<'a> {
+pub struct NetOptions {
     /// The estimator.
     pub method: NetMethod,
     /// The time points.
@@ -87,22 +87,15 @@ pub struct NetOptions<'a> {
     pub level: Level,
     /// The scale of the limits.
     pub transform: NetTransform,
-    /// The potential follow-up of every row of the data, which
-    /// [`NetMethod::Hakulinen`] needs and the other methods do not take: the time
-    /// a row would have been followed to had it not died, its exit time if it
-    /// was censored. `relsurv::rs.surv` sets it to `fin.date` less the date
-    /// of diagnosis for those who died.
-    pub potential: Option<&'a [f64]>,
 }
 
-impl Default for NetOptions<'_> {
+impl Default for NetOptions {
     fn default() -> Self {
         Self {
             method: NetMethod::PoharPerme,
             grid: Grid::EventTimes,
             level: Level::default(),
             transform: NetTransform::LogLog,
-            potential: None,
         }
     }
 }
@@ -184,7 +177,7 @@ struct Raw {
     events: Vec<f64>,
 }
 
-fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions<'_>) -> Result<()> {
+fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions) -> Result<()> {
     if expected.n_rows() != data.n_rows() {
         return Err(Error::mismatch(format!(
             "the expected hazards are for {} rows and the data has {}",
@@ -210,12 +203,12 @@ fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions<'_>) 
         ));
     }
     let hakulinen = opts.method == NetMethod::Hakulinen;
-    if hakulinen && opts.potential.is_none() {
+    if hakulinen && expected.potential().is_none() {
         return Err(Error::missing(
             "the Hakulinen estimator needs the potential follow-up of every row",
         ));
     }
-    if !hakulinen && opts.potential.is_some() {
+    if !hakulinen && expected.potential().is_some() {
         return Err(Error::options(
             "only the Hakulinen estimator takes a potential follow-up",
         ));
@@ -246,7 +239,7 @@ fn check(data: &SurvData<'_>, expected: &ExpectedHazard, opts: &NetOptions<'_>) 
 pub fn net_survival(
     data: &SurvData<'_>,
     expected: &ExpectedHazard,
-    opts: &NetOptions<'_>,
+    opts: &NetOptions,
 ) -> Result<Vec<NetSurvival>> {
     check(data, expected, opts)?;
     let surv = data.followup()?;
@@ -410,7 +403,7 @@ fn relative(
     stop: &[f64],
     status: &[i32],
     expected: &ExpectedHazard,
-    opts: &NetOptions<'_>,
+    opts: &NetOptions,
     grid: Grid,
 ) -> Result<Raw> {
     if let Some(s) = start
@@ -424,7 +417,7 @@ fn relative(
         Grid::EventTimes => observed(rows, stop, status),
         Grid::Width(w) => interval_observed(rows, stop, status, w),
     };
-    let method = match (opts.method, opts.potential) {
+    let method = match (opts.method, expected.potential()) {
         (NetMethod::Hakulinen, Some(potential)) => {
             epistat_core::check::same_length("potential", stop.len(), potential.len())?;
             if let Some(&i) = rows
