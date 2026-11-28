@@ -27,9 +27,8 @@
 mod common;
 
 use common::{Lines, Rng, Table, Writer};
-use epistat_did::{
-    MissingAssumption, MissingFolds, MissingModels, MissingOptions, MissingPreData, att_missing_pre,
-};
+use epistat_did::missing;
+use epistat_did::{MissingAssumption, MissingData, MissingFolds, MissingOptions};
 use epistat_linalg::Mat;
 
 const SEED: u64 = 20_261_125;
@@ -79,22 +78,17 @@ fn main() {
         .zip(t.col("y0"))
         .map(|(&r, &y)| r.then_some(y))
         .collect();
-    let data = MissingPreData {
-        treated: &treated,
-        outcome_pre: &pre,
-        outcome_post: t.col("y1"),
-        clusters: None,
+    let data = MissingData::builder(&treated, &pre, t.col("y1"))
+        .covariates(z.as_ref())
+        .build()
+        .expect("data");
+    let config = MissingOptions {
+        assumption,
+        folds,
+        ..MissingOptions::default()
     };
-    let all = [0, 1, 2, 3];
-    let models = MissingModels {
-        propensity: &all,
-        missingness: &all,
-        outcome: &all,
-        nested: &all,
-    };
-    let config = MissingOptions::default();
     let (times, est) = common::timed(common::reps(), || {
-        att_missing_pre(&data, z.as_ref(), assumption, &models, folds, &config).expect("estimate")
+        missing::estimate(&data, &config).expect("estimate")
     });
     let mut lines = Lines::default();
     let prefix = if assumption == MissingAssumption::MarX {

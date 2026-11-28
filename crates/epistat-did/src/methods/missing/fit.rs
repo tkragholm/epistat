@@ -1,4 +1,4 @@
-//! The parametric nuisance models of [`super::att_missing_pre`]: designs with
+//! The parametric nuisance models of [`super::estimate`]: designs with
 //! scaled covariates, logistic regression by Newton's method and least
 //! squares by the normal equations, fitted on a subset of the units and
 //! predicting for another.
@@ -13,8 +13,8 @@ use rayon::prelude::*;
 use epistat_core::InputError;
 
 use super::{
-    MissingAssumption, MissingFolds, MissingModels, MissingNuisance, MissingOptions,
-    MissingPreData, NestedOutcome, compensated_sum,
+    MissingAssumption, MissingData, MissingFolds, MissingNuisance, MissingOptions, NestedOutcome,
+    compensated_sum,
 };
 use crate::error::Error;
 
@@ -388,13 +388,18 @@ struct Designs {
 }
 
 impl Designs {
-    fn new(
-        data: &MissingPreData<'_>,
-        covariates: MatRef<'_, f64>,
-        assumption: MissingAssumption,
-        models: &MissingModels<'_>,
-    ) -> Result<Self, Error> {
-        let y1 = (assumption == MissingAssumption::MarXY1).then_some(data.outcome_post);
+    fn new(data: &MissingData<'_>, options: &MissingOptions) -> Result<Self, Error> {
+        let covariates = data.covariate_matrix();
+        let all: Vec<usize> = (0..covariates.ncols()).collect();
+        let models = &options.models;
+        let columns = |model: &Option<Vec<usize>>| model.as_deref().unwrap_or(&all).to_vec();
+        let (propensity_columns, missingness_columns, outcome_columns, nested_columns) = (
+            columns(&models.propensity),
+            columns(&models.missingness),
+            columns(&models.outcome),
+            columns(&models.nested),
+        );
+        let y1 = (options.assumption == MissingAssumption::MarXY1).then_some(data.outcome_post);
         let mut built: HashMap<(Vec<usize>, bool), usize> = HashMap::new();
         let mut store: Vec<Design> = Vec::new();
         let mut get = |columns: &[usize], with_y1: bool| -> Result<usize, Error> {
@@ -411,12 +416,12 @@ impl Designs {
             Ok(store.len() - 1)
         };
         let with_y1 = y1.is_some();
-        let propensity = get(models.propensity, false)?;
-        let missingness = get(models.missingness, with_y1)?;
-        let pre = get(models.outcome, with_y1)?;
-        let post = get(models.outcome, false)?;
+        let propensity = get(&propensity_columns, false)?;
+        let missingness = get(&missingness_columns, with_y1)?;
+        let pre = get(&outcome_columns, with_y1)?;
+        let post = get(&outcome_columns, false)?;
         let nested = if with_y1 {
-            Some(get(models.nested, false)?)
+            Some(get(&nested_columns, false)?)
         } else {
             None
         };
@@ -489,13 +494,10 @@ pub(super) fn fold_assignment(
 /// Fits the nuisance models on all units, or fold by fold, and returns the
 /// predictions of every unit with the number of folds.
 pub(super) fn fit_nuisance(
-    data: &MissingPreData<'_>,
-    covariates: MatRef<'_, f64>,
-    assumption: MissingAssumption,
-    models: &MissingModels<'_>,
-    folds: MissingFolds,
+    data: &MissingData<'_>,
     options: &MissingOptions,
 ) -> Result<(MissingNuisance, usize), Error> {
+    let assumption = options.assumption;
     let n = data.treated.len();
     let roles = Roles {
         treated: data.treated.to_vec(),
@@ -518,7 +520,7 @@ pub(super) fn fit_nuisance(
             return Err(Error::NoObservedPre { treated: arm });
         }
     }
-    let designs = Designs::new(data, covariates, assumption, models)?;
+    let designs = Designs::new(data, options)?;
     let mut out = MissingNuisance {
         propensity: vec![0.0; n],
         gamma_treated: vec![0.0; n],
@@ -528,14 +530,14 @@ pub(super) fn fit_nuisance(
         pre_control: vec![0.0; n],
         nested_control: (assumption == MissingAssumption::MarXY1).then(|| vec![0.0; n]),
     };
-    match folds {
+    match options.folds {
         MissingFolds::None => {
             let all = vec![true; n];
             fit_fold(&roles, &designs, &all, None, &all, options, &mut out)?;
             Ok((out, 1))
         }
         MissingFolds::CrossFit { folds, seed } => {
-            let (fold, half) = fold_assignment(n, data.clusters, folds, seed)?;
+            let (fold, half) = fold_assignment(n, data.clusters(), folds, seed)?;
             for j in 0..folds {
                 let train: Vec<bool> = fold.iter().map(|&f| f != j).collect();
                 let eval: Vec<bool> = fold.iter().map(|&f| f == j).collect();

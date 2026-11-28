@@ -1,4 +1,4 @@
-# Reference values for epistat_did::att_missing_pre, the difference-in-
+# Reference values for epistat_did::missing::estimate, the difference-in-
 # differences estimator of Testa, Kennedy and Reimherr for a pre-treatment
 # outcome missing at random, from the authors' replication code.
 #

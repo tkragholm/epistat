@@ -14,10 +14,16 @@ First release of `epistat-did`, which continues `did_methods` (last release 0.2.
 - `dcdh::estimate`: the event-study estimator of de Chaisemartin and D'Haultfoeuille for treatments that switch on and off or take several values, as `did_multiplegt_dyn` of `DIDmultiplegtDYN`, with placebos, normalised effects, controls, strata, weights, clusters, joint tests, heterogeneity regressions and a bootstrap.
 - `twfe` and `bacon`: static and event-study two-way fixed-effects regressions as `fixest` fits them, and the Goodman-Bacon decomposition as `bacondecomp::bacon`.
 - `sunab`, `etwfe`, `imputation`, `two_stage` and `synthdid`: the interaction-weighted estimator of Sun and Abraham, Wooldridge's extended two-way fixed effects (linear, Poisson and logit), the imputation estimator of Borusyak, Jaravel and Spiess, the two-stage estimator of Gardner, and synthetic difference-in-differences with synthetic control.
-- `missing::att_missing_pre` and `att_missing_pre_from_predictions`: the two-period ATT with a missing pre-treatment outcome (Testa, Kennedy and Reimherr), with options for the propensity ceiling and the missingness floor.
+- `missing::estimate` and `missing::from_predictions`: the two-period ATT with a missing pre-treatment outcome (Testa, Kennedy and Reimherr) on a validated `MissingData`, which holds the covariates and cluster codes. `MissingOptions` holds the missing-at-random assumption, the covariates of each nuisance model (`NuisanceModels`, every covariate by default), the cross-fitting folds, the propensity ceiling and the missingness floor. `missing::cross_fit_folds` gives the folds. `MissingAtt::influence` is an `Influence` keyed by row under `ClusterRule::NoSmallSample`.
 - Inference by influence functions: analytic and cluster-robust standard errors, and multiplier-bootstrap simultaneous bands as `did::mboot`. `did_cluster_sums`, `did_standard_error` and `did_covariance` expose the cluster sums.
 - `Error` with `Classify` and stable `did.*` codes. Confidence levels are `epistat_core::Level` and bootstraps are `epistat_core::Bootstrap`, with no default seed. Results do not depend on the number of threads.
 
+### Deprecated
+
+Deprecated items are removed in the next release that breaks the API.
+
+- `att_missing_pre`, `att_missing_pre_from_predictions` and `missing_cross_fit_folds`, use `missing::estimate`, `missing::from_predictions` and `missing::cross_fit_folds`. They take the earlier `MissingPreData` and `MissingModels`, also deprecated, and give the same bits.
+
 ### Results
 
-- The improved two-period estimators (`Estimator::Improved`, `drdid_imp_panel` and `drdid_imp_rc` in `did_methods`) form their interval with the normal quantile of the level asked for, as the other two-period estimators do, where `did_methods` 0.2.0 reported `att +- 1.96 se` labelled 95 per cent whatever the level. At 95 per cent each limit moves by `(1.96 - 1.959964) se`, about `3.6e-5 se`; at other levels the interval is the one asked for. Estimates and standard errors do not change.
+- The improved two-period estimators (`Estimator::Improved`) form their interval with the normal quantile of the level asked for, as the other two-period estimators do, where they reported `att +- 1.96 se` labelled 95 per cent whatever the level, as `DRDID`'s `drdid_imp_panel` and `drdid_imp_rc` do. At 95 per cent each limit moves by `(1.96 - 1.959964) se`, about `3.6e-5 se`; at other levels the interval is the one asked for. Estimates and standard errors do not change.
