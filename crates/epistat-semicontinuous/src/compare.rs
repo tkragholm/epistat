@@ -90,7 +90,8 @@ pub struct ModelFitMetrics {
     pub mae: f64,
     /// Root mean squared log error (log1p scale).
     pub rmsle: f64,
-    /// Coefficient of determination.
+    /// Coefficient of determination, 0 when the outcome does not vary, where
+    /// it is undefined; the ranking guard of the comparison reads that 0.
     pub r2: f64,
     /// The Tweedie deviance, or the mean squared error.
     pub deviance: f64,
