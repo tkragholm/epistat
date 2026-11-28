@@ -7,7 +7,7 @@
 //! parameter outside the domain, as R's do; neither is checked here.
 
 use epistat_stats::cluster::{KMeansAlgorithm, kmeans};
-use epistat_stats::weighted::{ProbabilityBounds, WeightLimits, effective_sample_size};
+use epistat_stats::weighted::{ProbabilityBounds, WeightLimits, effective_sample_size, try_mean};
 use epistat_testkit::{BadInput, assert_rejects_bad_input_with_codes};
 
 const WEIGHTS: [f64; 6] = [1.0, 0.5, 2.0, 1.5, 0.25, 1.0];
@@ -28,6 +28,16 @@ fn weights_are_refused_when_empty_or_not_finite() {
     assert_rejects_bad_input_with_codes("effective_sample_size", single, |bad| {
         matches!(bad, BadInput::Nan | BadInput::Infinite)
             .then(|| effective_sample_size(&bad.column(&WEIGHTS)))
+    });
+    assert_rejects_bad_input_with_codes("try_mean weights", single, |bad| {
+        matches!(
+            bad,
+            BadInput::Nan | BadInput::Infinite | BadInput::Mismatched
+        )
+        .then(|| try_mean(&WEIGHTS, Some(&bad.column(&WEIGHTS))))
+    });
+    assert_rejects_bad_input_with_codes("try_mean values", single, |bad| {
+        one(bad).then(|| try_mean(&bad.column(&WEIGHTS), None))
     });
     assert_rejects_bad_input_with_codes("WeightLimits::apply", single, |bad| {
         one(bad).then(|| WeightLimits::P99.apply(&bad.column(&WEIGHTS)))
