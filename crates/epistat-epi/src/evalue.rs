@@ -657,9 +657,8 @@ pub struct RdEValues {
 }
 
 /// The E-values of the risk difference of a table and of its lower limit, as
-/// `EValue::evalues.RD` \[2\]. The table is that of [`crate::bias`]: `a`
-/// exposed cases, `b` unexposed cases, `c` exposed non-cases and `d`
-/// unexposed non-cases. `true_rd` is the value to move to, 0 for the null,
+/// `EValue::evalues.RD` \[2\]. The table is a [`Counts2x2`](crate::Counts2x2)
+/// with its cells named. `true_rd` is the value to move to, 0 for the null,
 /// and the lower limit is the Wald limit at `level`.
 ///
 /// # Algorithm

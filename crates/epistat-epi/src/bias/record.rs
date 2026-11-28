@@ -184,7 +184,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bias::{Dist, Misclass, correct_exposure};
+    use crate::bias::roles::Pairs;
+    use crate::bias::{Dist, correct_exposure};
     use epistat_core::{Bootstrap, Level, Seed};
 
     #[expect(
@@ -268,11 +269,14 @@ mod tests {
             exposed_noncases: 360.0,
             unexposed_noncases: 1540.0,
         };
-        let m = Misclass {
+        let m = Pairs {
             se: [0.85, 0.85],
             sp: [0.97, 0.97],
         };
-        let corrected = correct_exposure(&t, &m).unwrap().risk_ratio.unwrap();
+        let corrected = correct_exposure(&t, &m.exposure())
+            .unwrap()
+            .risk_ratio
+            .unwrap();
         let (exposed, case) = records(&t);
         let r = record_level_misclass(
             &exposed,

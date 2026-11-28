@@ -10,9 +10,10 @@
 use epistat_core::{Bootstrap, Estimate, Level, Seed};
 use epistat_epi::Counts2x2;
 use epistat_epi::bias::{
-    Confounder, ConfoundingMeasure, Dist, Kind, Misclass, Pair, ProbOptions, ProbResult,
-    adjust_confounding, correct_exposure, correct_exposure_predictive, correct_outcome,
-    correct_selection, probabilistic_confounding, probabilistic_misclass, probabilistic_selection,
+    ByOutcome, Cells, Confounder, ConfoundingMeasure, Dist, ExposureMisclass, Kind,
+    OutcomeMisclass, Pair, Predictive, ProbOptions, ProbResult, SeSp, adjust_confounding,
+    correct_exposure, correct_exposure_predictive, correct_outcome, correct_selection,
+    probabilistic_confounding, probabilistic_misclass, probabilistic_selection,
 };
 use epistat_testkit::{Fingerprint, assert_same_on_threads, load_json};
 use serde::Deserialize;
@@ -100,24 +101,50 @@ fn deterministic_corrections_agree_to_machine_precision() {
         };
         let (cells, rr, or) = match case.kind.as_str() {
             "exposure" | "outcome" => {
-                let m = Misclass {
-                    se: [p[0], p[1]],
-                    sp: [p[2], p[3]],
-                };
+                let first = SeSp::new(p[0], p[2]).unwrap();
+                let second = SeSp::new(p[1], p[3]).unwrap();
                 let c = if case.kind == "exposure" {
-                    correct_exposure(&t, &m)
+                    correct_exposure(
+                        &t,
+                        &ExposureMisclass {
+                            cases: first,
+                            noncases: second,
+                        },
+                    )
                 } else {
-                    correct_outcome(&t, &m)
+                    correct_outcome(
+                        &t,
+                        &OutcomeMisclass {
+                            exposed: first,
+                            unexposed: second,
+                        },
+                    )
                 }
                 .unwrap();
                 (c.cells.unwrap(), c.risk_ratio, c.odds_ratio)
             }
             "exposure_pv" => {
-                let c = correct_exposure_predictive(&t, [p[0], p[1]], [p[2], p[3]]).unwrap();
+                let c = correct_exposure_predictive(
+                    &t,
+                    &ByOutcome {
+                        cases: Predictive::new(p[0], p[2]).unwrap(),
+                        noncases: Predictive::new(p[1], p[3]).unwrap(),
+                    },
+                )
+                .unwrap();
                 (c.cells.unwrap(), c.risk_ratio, c.odds_ratio)
             }
             "selection" => {
-                let c = correct_selection(&t, &[[p[0], p[1]], [p[2], p[3]]]).unwrap();
+                let c = correct_selection(
+                    &t,
+                    &Cells {
+                        exposed_cases: p[0],
+                        unexposed_cases: p[1],
+                        exposed_noncases: p[2],
+                        unexposed_noncases: p[3],
+                    },
+                )
+                .unwrap();
                 (c.cells.unwrap(), c.risk_ratio, c.odds_ratio)
             }
             kind => {
@@ -352,24 +379,20 @@ fn check_misclass(label: &str, reference: &[Replicate], fits: &Runs) -> f64 {
 fn probabilistic_selection_agrees_with_episensr_on_the_systematic_error() {
     let r = reference();
     let t = table(r.table);
-    let s = [
-        [
-            Dist::Uniform { lo: 0.8, hi: 0.95 },
-            Dist::Uniform { lo: 0.7, hi: 0.9 },
-        ],
-        [
-            Dist::Trapezoidal {
-                a: 0.4,
-                b: 0.5,
-                c: 0.6,
-                d: 0.7,
-            },
-            Dist::Beta {
-                alpha: 30.0,
-                beta: 30.0,
-            },
-        ],
-    ];
+    let s = Cells {
+        exposed_cases: Dist::Uniform { lo: 0.8, hi: 0.95 },
+        unexposed_cases: Dist::Uniform { lo: 0.7, hi: 0.9 },
+        exposed_noncases: Dist::Trapezoidal {
+            a: 0.4,
+            b: 0.5,
+            c: 0.6,
+            d: 0.7,
+        },
+        unexposed_noncases: Dist::Beta {
+            alpha: 30.0,
+            beta: 30.0,
+        },
+    };
     let fits = runs(r.k, r.reps, |o| probabilistic_selection(&t, &s, o).unwrap());
     let pick = |f: fn(&Replicate) -> Option<[f64; 3]>| {
         r.probabilistic.selection.iter().map(f).collect::<Vec<_>>()

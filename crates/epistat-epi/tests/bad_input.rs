@@ -360,9 +360,9 @@ fn evalue_and_bias_refuse_bad_numbers() {
             evalue::evalues_rd(&t, 0.0, Level::default())
         })
     });
-    let m = bias::Misclass {
-        se: [0.9, 0.85],
-        sp: [0.95, 0.9],
+    let m = bias::ExposureMisclass {
+        cases: bias::SeSp::new(0.9, 0.95).unwrap(),
+        noncases: bias::SeSp::new(0.85, 0.9).unwrap(),
     };
     assert_rejects_bad_input_with_codes("bias::correct_exposure", single, |bad| {
         number(bad, 150.0).map(|a| {

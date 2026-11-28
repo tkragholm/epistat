@@ -7,7 +7,7 @@
 use epistat_core::{Bootstrap, Estimate, Level, Seed};
 use epistat_epi::Counts2x2;
 use epistat_epi::bias::{
-    ConfoundingMeasure, Dist, Kind, Pair, ProbOptions, probabilistic_confounding,
+    Cells, ConfoundingMeasure, Dist, Kind, Pair, ProbOptions, probabilistic_confounding,
     probabilistic_misclass, probabilistic_selection,
 };
 use epistat_testkit::Fingerprint;
@@ -66,16 +66,12 @@ fn probabilistic_results_are_unchanged() {
             fp = fp.u64(r.n_draws_used as u64).u64(r.n_discarded as u64);
         }
     }
-    let s = [
-        [
-            Dist::Uniform { lo: 0.7, hi: 0.9 },
-            Dist::Uniform { lo: 0.85, hi: 0.95 },
-        ],
-        [
-            Dist::Uniform { lo: 0.93, hi: 0.97 },
-            Dist::Uniform { lo: 0.93, hi: 0.97 },
-        ],
-    ];
+    let s = Cells {
+        exposed_cases: Dist::Uniform { lo: 0.7, hi: 0.9 },
+        unexposed_cases: Dist::Uniform { lo: 0.85, hi: 0.95 },
+        exposed_noncases: Dist::Uniform { lo: 0.93, hi: 0.97 },
+        unexposed_noncases: Dist::Uniform { lo: 0.93, hi: 0.97 },
+    };
     let r = probabilistic_selection(&T, &s, &options(true)).unwrap();
     fp = summary(fp, r.risk_ratio);
     fp = summary(fp, r.odds_ratio);

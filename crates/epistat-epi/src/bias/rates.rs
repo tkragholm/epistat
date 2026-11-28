@@ -42,8 +42,8 @@ use epistat_rng::{Stream, replicate_seed};
 use crate::tables::PersonTime2;
 
 use super::{
-    AdjustedResult, BiasError, Draws, Misclass, Pair, ProbOptions, check_options, finish_single,
-    names,
+    AdjustedResult, BiasError, ByExposure, Draws, Pair, PpvSe, ProbOptions, RateMisclass,
+    check_options, finish_single, names,
 };
 
 impl PersonTime2 {
@@ -132,37 +132,33 @@ fn exposure_rate_cells(t: &PersonTime2, se: [f64; 2], sp: [f64; 2]) -> PersonTim
 }
 
 /// Corrects cases and person-time for misclassification of the exposure,
-/// with the sensitivity and specificity of the classification of the cases
-/// (stratum 0) and of the person-time (stratum 1).
+/// with the sensitivity and specificity of the classification of the events
+/// and of the person-time.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] when the table or a parameter is invalid.
-pub fn correct_exposure_rates(t: &PersonTime2, m: &Misclass) -> Result<CorrectedRates, Error> {
+/// [`crate::Error`] when the table is invalid.
+pub fn correct_exposure_rates(t: &PersonTime2, m: &RateMisclass) -> Result<CorrectedRates, Error> {
     t.check()?;
-    m.check()?;
-    Ok(CorrectedRates::from_table(exposure_rate_cells(
-        t, m.se, m.sp,
-    )))
+    let (se, sp) = super::roles::arrays(m.events, m.person_time);
+    Ok(CorrectedRates::from_table(exposure_rate_cells(t, se, sp)))
 }
 
 /// Corrects the cases of a rate table for misclassification of the outcome
 /// from the positive predictive value and the sensitivity of the outcome
-/// classification among the exposed (index 0) and the unexposed (index 1):
-/// the true events are the recorded times `PPV / Se`, and the person-time is
-/// kept.
+/// classification among the exposed and among the unexposed: the true events
+/// are the recorded times `PPV / Se`, and the person-time is kept.
 ///
 /// # Errors
 ///
-/// [`crate::Error`] when the table is invalid, a predictive value is outside
-/// `[0, 1]` or a sensitivity outside `(0, 1]`.
+/// [`crate::Error`] when the table is invalid.
 pub fn correct_outcome_rates_ppv(
     t: &PersonTime2,
-    ppv: [f64; 2],
-    se: [f64; 2],
+    p: &ByExposure<PpvSe>,
 ) -> Result<CorrectedRates, Error> {
     t.check()?;
-    super::check_ppv_sensitivity(ppv, se)?;
+    let ppv = [p.exposed.ppv(), p.unexposed.ppv()];
+    let se = [p.exposed.sensitivity(), p.unexposed.sensitivity()];
     Ok(CorrectedRates::from_table(PersonTime2 {
         exposed_events: t.exposed_events * ppv[0] / se[0],
         unexposed_events: t.unexposed_events * ppv[1] / se[1],
@@ -237,6 +233,7 @@ pub fn probabilistic_misclass_rates(
 
 #[cfg(test)]
 mod tests {
+    use super::super::roles::Pairs;
     use super::*;
     use crate::bias::Dist;
     use epistat_core::{Bootstrap, Level, Seed};
@@ -254,7 +251,7 @@ mod tests {
 
     #[test]
     fn the_correction_inverts_the_misclassification() {
-        let m = Misclass {
+        let m = Pairs {
             se: [0.9, 0.8],
             sp: [0.97, 0.95],
         };
@@ -272,7 +269,7 @@ mod tests {
             exposed_time: c,
             unexposed_time: d,
         };
-        let corrected = correct_exposure_rates(&observed, &m).unwrap();
+        let corrected = correct_exposure_rates(&observed, &m.rates()).unwrap();
         let t = corrected.table.unwrap();
         assert!(CLOSE.accepts(t.exposed_events, TRUE.exposed_events));
         assert!(CLOSE.accepts(t.unexposed_time, TRUE.unexposed_time));
@@ -281,9 +278,23 @@ mod tests {
 
     #[test]
     fn equal_ppv_and_sensitivity_leave_the_rate_ratio() {
-        let c = correct_outcome_rates_ppv(&TRUE, [0.9, 0.9], [0.8, 0.8]).unwrap();
+        let c = correct_outcome_rates_ppv(
+            &TRUE,
+            &ByExposure {
+                exposed: PpvSe::new(0.9, 0.8).unwrap(),
+                unexposed: PpvSe::new(0.9, 0.8).unwrap(),
+            },
+        )
+        .unwrap();
         assert!(CLOSE.accepts(c.rate_ratio.unwrap(), TRUE.rate_ratio().unwrap()));
-        let d = correct_outcome_rates_ppv(&TRUE, [0.9, 0.9], [0.9, 0.75]).unwrap();
+        let d = correct_outcome_rates_ppv(
+            &TRUE,
+            &ByExposure {
+                exposed: PpvSe::new(0.9, 0.9).unwrap(),
+                unexposed: PpvSe::new(0.9, 0.75).unwrap(),
+            },
+        )
+        .unwrap();
         assert!(CLOSE.accepts(
             d.rate_ratio.unwrap(),
             TRUE.rate_ratio().unwrap() * 0.75 / 0.9
@@ -292,11 +303,11 @@ mod tests {
 
     #[test]
     fn constant_parameters_give_the_simple_correction() {
-        let m = Misclass {
+        let m = Pairs {
             se: [0.9, 0.85],
             sp: [0.99, 0.98],
         };
-        let simple = correct_exposure_rates(&TRUE, &m).unwrap();
+        let simple = correct_exposure_rates(&TRUE, &m.rates()).unwrap();
         let r = probabilistic_misclass_rates(
             &TRUE,
             &Pair::Independent([Dist::Constant(0.9), Dist::Constant(0.85)]),

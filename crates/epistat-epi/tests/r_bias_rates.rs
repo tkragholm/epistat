@@ -12,7 +12,8 @@
 use epistat_core::{Bootstrap, Estimate, Level, Seed};
 use epistat_epi::PersonTime2;
 use epistat_epi::bias::{
-    Dist, Misclass, Pair, ProbOptions, correct_exposure_rates, probabilistic_misclass_rates,
+    Dist, Pair, ProbOptions, RateMisclass, SeSp, correct_exposure_rates,
+    probabilistic_misclass_rates,
 };
 use epistat_testkit::load_json;
 use serde::Deserialize;
@@ -71,10 +72,7 @@ fn the_correction_of_rates_agrees_with_probsens_irr() {
     for case in &r.deterministic {
         let c = correct_exposure_rates(
             &t,
-            &Misclass {
-                se: [case.se; 2],
-                sp: [case.sp; 2],
-            },
+            &RateMisclass::nondifferential(SeSp::new(case.se, case.sp).unwrap()),
         )
         .unwrap();
         let cells = c.table.unwrap();
